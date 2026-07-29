@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import { forbidden } from "../../lib/errors.js";
 import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth, getUserScopedAuth } from "../../lib/request-auth.js";
-import { users } from "../../db/schema.js";
+import { proactiveTriggers, users } from "../../db/schema.js";
+import { recordProactiveEvent } from "./proactive-metrics.js";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
 import {
   buildTaskUnderstanding,
@@ -89,7 +91,70 @@ async function assertAdmin(
   }
 }
 
+const proactiveAckBodySchema = z.object({
+  triggerId: z.string().uuid(),
+  action: z.enum(["opened", "dismissed"]),
+  surface: z.string().min(1).max(40).optional(),
+});
+
+async function readOwnedProactiveTrigger(
+  app: FastifyInstance,
+  input: { userId: string; triggerId: string },
+): Promise<{ id: string; kind: string } | null> {
+  const rows = await app.db
+    .select({ id: proactiveTriggers.id, kind: proactiveTriggers.kind })
+    .from(proactiveTriggers)
+    .where(
+      and(
+        eq(proactiveTriggers.id, input.triggerId),
+        eq(proactiveTriggers.userId, input.userId),
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export const brainRoutes: FastifyPluginAsync = async (app) => {
+  /**
+   * Client-side outcome of a proactive message: the user opened it, or waved
+   * it away. Without this the only thing measurable is that Elyan spoke —
+   * never whether speaking was welcome.
+   *
+   * Fire-and-forget by design: a failure here must not surface as an error in
+   * a screen the user opened for another reason.
+   */
+  app.post("/proactive/ack", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const body = proactiveAckBodySchema.parse(request.body);
+    const auth = getUserAuth(request);
+    // The trigger must belong to the caller; an ack is not a way to probe
+    // whether someone else's trigger id exists.
+    const owned = await readOwnedProactiveTrigger(app, {
+      userId: auth.sub,
+      triggerId: body.triggerId,
+    });
+    if (!owned) {
+      reply.code(404);
+      return { error: "trigger_not_found" };
+    }
+
+    await recordProactiveEvent(app, {
+      userId: auth.sub,
+      event: body.action,
+      kind: owned.kind,
+      triggerId: owned.id,
+      source: "user",
+      detail: body.surface ? { surface: body.surface } : {},
+    });
+
+    return { ok: true };
+  });
+
   app.get("/profile", async (request, reply) => {
     await app.authenticateUserOrRuntime(request, reply);
 

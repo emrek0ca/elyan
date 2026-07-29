@@ -15,6 +15,18 @@ export const registerMobileDeviceBodySchema = z.object({
   buildMetadata: boundedJsonRecordSchema.optional(),
 });
 
+/**
+ * FCM rotates registration tokens independently of app launches, so the client
+ * needs a cheap way to push just the token without replaying the whole
+ * registration payload.
+ */
+export const updatePushTokenBodySchema = z.object({
+  externalDeviceId: z.string().min(1).max(160),
+  pushToken: z.string().min(1).max(4096).nullable(),
+  pushProvider: z.string().min(1).max(40).optional(),
+  notificationAuthorizationStatus: z.string().min(1).max(40).optional(),
+});
+
 export const deviceParamsSchema = z.object({
   deviceId: z.string().uuid(),
 });

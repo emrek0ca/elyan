@@ -1,11 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildMaterializedPlanResponseSchema,
+  buildAllowedCapabilities,
   buildPlanningPrompt,
+  clearPlanningCatalogCacheForTests,
+  getPlanningCatalogCacheStats,
+  markDesktopPlanPrepared,
+  maybeMaterializeDesktopPlan,
+  MATERIALIZE_PROMPT_MAX_BYTES,
   normalizeMaterializedSteps,
+  readPlanningGatePrompt,
   renderPlanningFewShots,
+  validateMaterializedPlanContracts,
 } from "./materialize-plan.js";
 import type { DesktopWorkOrder } from "./desktop-work-order.js";
+import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 
 function workOrder(
   summary: string,
@@ -38,6 +48,100 @@ function workOrder(
     },
   };
 }
+
+test("an already materialized server plan remains dispatchable on retry", async () => {
+  const order = workOrder("Masaüstünü listele", ["directory_tree"]);
+  order.planPreview = {
+    ...order.planPreview,
+    planSource: "server_materialized",
+    contract: "elyan.compiled_plan.v1",
+    steps: [
+      {
+        id: "list",
+        capability: "directory_tree",
+        description: "Masaüstünü listele",
+        args: { path: "~/Desktop" },
+      },
+    ],
+  };
+  order.materializedCapabilityScope = ["directory_tree"];
+  const task = {
+    id: "task-retry-ready-plan",
+    userId: "user-1",
+    payload: { desktopWorkOrder: order },
+  };
+
+  const materialized = await maybeMaterializeDesktopPlan(
+    { log: { warn() { throw new Error("retry must not invoke planning"); } } } as never,
+    task as never,
+  );
+
+  assert.equal(materialized, true);
+});
+
+test("an incomplete server-plan marker fails closed on retry", async () => {
+  const order = workOrder("Masaüstünü listele", ["directory_tree"]);
+  order.planPreview = {
+    ...order.planPreview,
+    planSource: "server_materialized",
+    steps: [
+      {
+        id: "list",
+        capability: "directory_tree",
+        description: "Masaüstünü listele",
+        args: {},
+      },
+    ],
+  };
+
+  assert.equal(
+    await maybeMaterializeDesktopPlan(
+      { log: { warn() {} } } as never,
+      {
+        id: "task-retry-invalid-plan",
+        userId: "user-1",
+        payload: { desktopWorkOrder: order },
+      } as never,
+    ),
+    false,
+  );
+});
+
+test("semantic privacy authority bounds model capabilities without keyword scope", () => {
+  const publicOrder = workOrder("Yerel bir hesap yap", ["file_read"]);
+  publicOrder.capabilityAuthorization = {
+    source: "semantic_router",
+    allowPrivateRead: false,
+    sideEffectsRequireApproval: true,
+  };
+  const publicAllowed = buildAllowedCapabilities(publicOrder);
+  assert.equal(publicAllowed.includes("file_read"), false);
+  assert.equal(publicAllowed.includes("text_analyze"), true);
+  assert.equal(publicAllowed.includes("document_write"), true);
+
+  publicOrder.capabilityAuthorization.allowPrivateRead = true;
+  assert.equal(
+    buildAllowedCapabilities(publicOrder).includes("file_read"),
+    true,
+  );
+});
+
+test("planning safety gate inspects the real user goal, not the capability catalog", () => {
+  const order = workOrder("Fallback summary");
+  order.contextPack = {
+    sourceReference: "current_prompt",
+    conversationState: {
+      currentGoal: "Masaüstü klasörümü listele",
+    },
+  };
+
+  assert.equal(readPlanningGatePrompt(order), "Masaüstü klasörümü listele");
+  const prompt = buildPlanningPrompt(order, ["directory_tree"]);
+  assert.match(prompt, /GOAL:\nMasaüstü klasörümü listele/);
+  assert.doesNotMatch(prompt, /GOAL:\nFallback summary/);
+  delete order.contextPack;
+  assert.equal(readPlanningGatePrompt(order), "Fallback summary");
+});
 
 test("desktop materialization prompt teaches concrete calculation research writer chains", () => {
   const prompt = buildPlanningPrompt(
@@ -201,7 +305,7 @@ test("desktop materialization prompt exposes skills through run_skill contract",
   assert.match(prompt, /execute them ONLY through capability run_skill with args\.skillId and args\.payload/);
   assert.match(prompt, /capability":"run_skill"/);
   assert.match(prompt, /"skillId":"document\.docx_from_context"/);
-  assert.match(prompt, /"payload":\{"title":"Profesyonel Rapor","text":"\{\{steps\.s1\.output\}\}","outputPath":"Profesyonel Rapor\.docx"\}/);
+  assert.match(prompt, /"payload":\{"title":"Profesyonel Rapor","text":"\{\{steps\.s1\.output\}\}","outputPath":"workspace\/Profesyonel Rapor\.docx"\}/);
   assert.match(prompt, /Do not invent capability names from skill ids/);
 });
 
@@ -419,6 +523,162 @@ test("planning prompt no longer demands two steps", () => {
   ]);
   assert.ok(!prompt.includes(">=2 steps"), "iki adım dayatması geri gelmiş");
   assert.ok(prompt.includes("single-step plan is valid"));
+  assert.match(prompt, /args.*JSON-encoded object/);
+});
+
+test("materialized plan schema binds capability names and transports open args safely", () => {
+  const schema = buildMaterializedPlanResponseSchema([
+    "directory_tree",
+    "document_read",
+    "directory_tree",
+    "INVALID CAPABILITY",
+  ]) as {
+    additionalProperties: boolean;
+    properties: {
+      steps: {
+        items: {
+          additionalProperties: boolean;
+          properties: {
+            capability: { enum: string[] };
+            args: { type: string };
+          };
+        };
+      };
+    };
+  };
+
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(schema.properties.steps.items.additionalProperties, false);
+  assert.deepEqual(
+    schema.properties.steps.items.properties.capability.enum,
+    ["directory_tree", "document_read"],
+  );
+  assert.equal(schema.properties.steps.items.properties.args.type, "string");
+});
+
+test("normalizer decodes strict-schema argument JSON before desktop dispatch", () => {
+  const steps = normalizeMaterializedSteps(
+    {
+      steps: [
+        {
+          id: "s1",
+          capability: "directory_tree",
+          args: JSON.stringify({ path: "~/Desktop", maxDepth: 2 }),
+          dependsOn: [],
+          description: "Masaüstü ağacını çıkar",
+        },
+      ],
+    },
+    ["directory_tree"],
+  );
+
+  assert.deepEqual(steps?.[0]?.args, { path: "~/Desktop", maxDepth: 2 });
+  assert.equal(
+    normalizeMaterializedSteps(
+      {
+        steps: [
+          {
+            id: "s1",
+            capability: "directory_tree",
+            args: "not-json",
+          },
+        ],
+      },
+      ["directory_tree"],
+    ),
+    null,
+  );
+});
+
+test("plan contract validation rejects missing required args and ungrounded paths", () => {
+  assert.deepEqual(
+    validateMaterializedPlanContracts([
+      {
+        id: "s1",
+        capability: "directory_tree",
+        args: { path: "." },
+        dependsOn: [],
+        description: "Listele",
+      },
+      {
+        id: "s2",
+        capability: "file_read",
+        args: { path: "notlar.txt" },
+        dependsOn: ["s1"],
+        description: "Oku",
+      },
+      {
+        id: "s3",
+        capability: "text_analyze",
+        args: { text: "{{steps.s2.output}}" },
+        dependsOn: ["s2"],
+        description: "Özetle",
+      },
+    ]),
+    [
+      's1: args.path must use an explicit root such as ~/Desktop, workspace/, an absolute path, or a prior-step reference; received "."',
+      's2: args.path must use an explicit root such as ~/Desktop, workspace/, an absolute path, or a prior-step reference; received "notlar.txt"',
+      "s3: text_analyze requires args.prompt",
+    ],
+  );
+
+  assert.deepEqual(
+    validateMaterializedPlanContracts([
+      {
+        id: "s1",
+        capability: "file_read",
+        args: { path: "~/Desktop/notlar.txt" },
+        dependsOn: [],
+        description: "Oku",
+      },
+      {
+        id: "s2",
+        capability: "text_analyze",
+        args: {
+          prompt: "Kısa özet çıkar",
+          sourceContext: "{{steps.s1.output}}",
+        },
+        dependsOn: ["s1"],
+        description: "Özetle",
+      },
+    ]),
+    [],
+  );
+});
+
+test("planning prompt stays below the backend request budget with the full catalog", () => {
+  clearPlanningCatalogCacheForTests();
+  const prompt = buildPlanningPrompt(
+    workOrder("Karmaşık bir masaüstü görevi için doğrulanabilir plan hazırla"),
+    DESKTOP_CAPABILITY_MANIFEST.map((entry) => entry.name),
+  );
+
+  assert.ok(Buffer.byteLength(prompt, "utf8") <= MATERIALIZE_PROMPT_MAX_BYTES);
+  assert.match(prompt, /TOOL CAPABILITY CATALOG/);
+  assert.match(prompt, /Output EXACTLY ONE valid json object/);
+  clearPlanningCatalogCacheForTests();
+});
+
+test("planning prompt reuses compiled catalog sections without caching user text", () => {
+  clearPlanningCatalogCacheForTests();
+  const allowed = ["document_write", "text_analyze", "web_research"];
+  const first = buildPlanningPrompt(
+    workOrder("Gizli müşteri planını Word raporu yap", allowed),
+    allowed,
+  );
+  const second = buildPlanningPrompt(
+    workOrder("Başka bir hedef için aynı araç kapsamını kullan", allowed),
+    allowed,
+  );
+  const stats = getPlanningCatalogCacheStats();
+  const serializedStats = JSON.stringify(stats);
+
+  assert.notEqual(first, second);
+  assert.equal(stats.entries, 1);
+  assert.equal(stats.hits, 1);
+  assert.doesNotMatch(serializedStats, /Gizli müşteri/u);
+  assert.doesNotMatch(serializedStats, /Başka bir hedef/u);
+  clearPlanningCatalogCacheForTests();
 });
 
 test("a plan with no usable capability still returns nothing", () => {
@@ -427,4 +687,172 @@ test("a plan with no usable capability still returns nothing", () => {
     normalizeMaterializedSteps({ steps: [{ capability: "uydurma_yetenek" }] }),
     null,
   );
+});
+
+test("desktop preparation marker persists safe readiness after planning settles", async () => {
+  let writtenPayload: unknown = null;
+  let storedPayload: unknown = null;
+  const deletedBlobIds: string[] = [];
+  const task = {
+    id: "task-prepare-1",
+    userId: "user-1",
+    payloadBlobId: "blob-old",
+    payload: {
+      desktopWorkOrder: {
+        planPreview: {
+          planSource: "heuristic",
+          planPreparation: { status: "pending" },
+          steps: [{ id: "stale", capability: "desktop_operator.run", args: {} }],
+        },
+      },
+    },
+  };
+  const latestTask = {
+    ...task,
+    payload: {
+      desktopWorkOrder: {
+        planPreview: {
+          planSource: "server_materialized",
+          planPreparation: { status: "pending" },
+          steps: [{ id: "s1", capability: "directory_tree", args: {} }],
+        },
+      },
+    },
+  };
+  const app = {
+    db: {
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return { limit: async () => [latestTask] };
+              },
+            };
+          },
+        };
+      },
+      update() {
+        return {
+          set(values: { payload: unknown; payloadBlobId?: string }) {
+            writtenPayload = values.payload;
+            assert.equal(values.payloadBlobId, "blob-new");
+            return { where: async () => undefined };
+          },
+        };
+      },
+    },
+    services: {
+      blobs: {
+        async storeJson(input: { value: unknown }) {
+          storedPayload = input.value;
+          return { blobId: "blob-new" };
+        },
+        async deleteOwnedReference(input: { blobId: string }) {
+          deletedBlobIds.push(input.blobId);
+          return true;
+        },
+      },
+    },
+  };
+
+  // A retry may observe an already-persisted server plan even when this worker
+  // did not perform the original model call.
+  await markDesktopPlanPrepared(app as never, task as never, false);
+
+  const payload = writtenPayload as {
+    desktopWorkOrder: {
+      planPreview: {
+        planSource: string;
+        planPreparation: {
+          status: string;
+          outcome: string;
+          preparedAt?: string;
+        };
+      };
+    };
+  };
+  assert.deepEqual(
+    payload.desktopWorkOrder.planPreview.planPreparation,
+    {
+      status: "ready",
+      outcome: "materialized",
+      preparedAt:
+        payload.desktopWorkOrder.planPreview.planPreparation.preparedAt,
+    },
+  );
+  assert.match(
+    payload.desktopWorkOrder.planPreview.planPreparation.preparedAt ?? "",
+    /^\d{4}-\d{2}-\d{2}T/,
+  );
+  assert.equal(
+    payload.desktopWorkOrder.planPreview.planSource,
+    "server_materialized",
+  );
+  assert.deepEqual(storedPayload, writtenPayload);
+  assert.equal(task.payload, writtenPayload);
+  assert.equal(task.payloadBlobId, "blob-new");
+  assert.deepEqual(deletedBlobIds, ["blob-old"]);
+});
+
+test("desktop preparation marker fails closed when no model plan is available", async () => {
+  let writtenPayload: unknown = null;
+  const task = {
+    id: "task-prepare-failed",
+    userId: "user-1",
+    payloadBlobId: null,
+    payload: {
+      desktopWorkOrder: {
+        planPreview: {
+          planSource: "heuristic",
+          planPreparation: { status: "pending" },
+          steps: [
+            { id: "unsafe", capability: "desktop_operator.run", args: {} },
+          ],
+        },
+      },
+    },
+  };
+  const app = {
+    db: {
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return { limit: async () => [task] };
+              },
+            };
+          },
+        };
+      },
+      update() {
+        return {
+          set(values: { payload: unknown }) {
+            writtenPayload = values.payload;
+            return { where: async () => undefined };
+          },
+        };
+      },
+    },
+    services: {
+      blobs: {
+        async storeJson() {
+          return null;
+        },
+      },
+    },
+  };
+
+  await markDesktopPlanPrepared(app as never, task as never, false);
+
+  const preparation = (
+    writtenPayload as {
+      desktopWorkOrder: {
+        planPreview: { planPreparation: Record<string, unknown> };
+      };
+    }
+  ).desktopWorkOrder.planPreview.planPreparation;
+  assert.equal(preparation.status, "failed");
+  assert.equal(preparation.outcome, "model_plan_unavailable");
 });

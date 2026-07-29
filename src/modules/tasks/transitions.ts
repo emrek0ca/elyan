@@ -8,7 +8,14 @@ const allowedTransitions: Record<TaskStatus, TaskStatus[]> = {
   // rapor 409 alıyor ve sonuç kalıcı kayboluyordu; runtime'ın gerçek sonucu
   // kazanır (ensureTaskRuntimeOwnership dönen runtime'ın görevi yeniden
   // sahiplenmesine zaten izin verir).
-  queued: ["planning", "running", "completed", "failed", "canceled"],
+  queued: [
+    "planning",
+    "running",
+    "waiting_approval",
+    "completed",
+    "failed",
+    "canceled",
+  ],
   planning: ["running", "waiting_approval", "completed", "failed", "canceled"],
   running: ["planning", "waiting_approval", "completed", "failed", "canceled"],
   waiting_approval: ["planning", "running", "completed", "failed", "canceled"],

@@ -22,12 +22,16 @@ type TaskTraceSource = {
   createdAt?: Date | null;
   updatedAt?: Date | null;
   completedAt?: Date | null;
+  dispatchLeaseIssuedAt?: Date | null;
+  dispatchAckAt?: Date | null;
+  runtimeConnectionId?: string | null;
 };
 
 const STEP_LABELS: Record<ElyanTaskTraceStepId, string> = {
   intent: "İstek analizi",
   route: "Yönlendirme",
   plan: "Plan",
+  delivery: "Masaüstü teslimatı",
   context: "Bağlam",
   tool: "Araç akışı",
   verify: "Kontrol",
@@ -116,6 +120,106 @@ function isoOrNull(value: Date | null | undefined): string | undefined {
   return value instanceof Date && !Number.isNaN(value.getTime())
     ? value.toISOString()
     : undefined;
+}
+
+function safeRuntimeDate(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
+function runtimeExecutionTraceBlock(input: {
+  task: TaskTraceSource;
+  fallback: ElyanTaskTraceBlock;
+}): ElyanTaskTraceBlock | null {
+  const result = readRecord(input.task.result);
+  const executionTrace = readRecord(result?.executionTrace);
+  const rawSteps = Array.isArray(executionTrace?.steps)
+    ? executionTrace.steps
+    : Array.isArray(executionTrace?.stepStates)
+      ? executionTrace.stepStates
+      : [];
+  if (rawSteps.length === 0) return null;
+
+  const validId = /^[a-zA-Z0-9_-]{1,80}$/;
+  const seen = new Set<string>();
+  const steps = rawSteps.flatMap((value, index): ElyanTaskTraceStep[] => {
+    const step = readRecord(value);
+    if (!step) return [];
+    const candidateId = readString(step, "id") ?? `step_${index + 1}`;
+    const id = validId.test(candidateId) && !seen.has(candidateId)
+      ? candidateId
+      : `step_${index + 1}`;
+    if (seen.has(id)) return [];
+    seen.add(id);
+    const rawStatus = readString(step, "status")?.toLowerCase();
+    const status: ElyanTaskTraceStepStatus = rawStatus === "completed"
+      ? "completed"
+      : rawStatus === "failed"
+        ? "failed"
+        : rawStatus === "waiting_approval"
+          ? "waiting_approval"
+          : rawStatus === "skipped" || rawStatus === "canceled"
+            ? "skipped"
+            : rawStatus === "running"
+              ? "running"
+              : "pending";
+    const capability = compactDetail(readString(step, "capability"), 120);
+    const label = compactDetail(readString(step, "label"), 120)
+      ?? (capability ? appLabelForTool(capability) : `Adım ${index + 1}`);
+    const verificationStatus = readString(step, "verificationStatus");
+    const attemptCount = Math.max(1, Math.min(32, Math.trunc(readNumber(step, "attemptCount") ?? 1)));
+    const startedAt = safeRuntimeDate(step.startedAt);
+    const completedAt = safeRuntimeDate(step.completedAt ?? step.finishedAt);
+    const durationMs = readNumber(step, "durationMs");
+    return [{
+      id,
+      label,
+      status,
+      ...(compactDetail(readString(step, "detail"), 240) ? {
+        detail: compactDetail(readString(step, "detail"), 240),
+      } : {}),
+      ...(compactDetail(readString(step, "resultSummary"), 240) ? {
+        resultSummary: compactDetail(readString(step, "resultSummary"), 240),
+      } : {}),
+      ...(capability ? { capability } : {}),
+      ...(["pending", "passed", "repaired", "failed"].includes(verificationStatus ?? "")
+        ? { verificationStatus: verificationStatus as "pending" | "passed" | "repaired" | "failed" }
+        : {}),
+      ...(attemptCount > 1 ? { attemptCount } : {}),
+      ...(startedAt ? { startedAt } : {}),
+      ...(completedAt ? { completedAt } : {}),
+      ...(durationMs != null && durationMs >= 0 ? { durationMs } : {}),
+    }];
+  }).slice(0, 16);
+  if (steps.length === 0) return null;
+
+  const requestedActiveStepId = readString(executionTrace, "activeStepId");
+  const activeStep = steps.find((step) => step.id === requestedActiveStepId)
+    ?? steps.find((step) => step.status === "running" || step.status === "waiting_approval")
+    ?? steps.find((step) => step.status === "pending");
+  const verification = readRecord(executionTrace?.verification);
+  const verificationStatus = readString(verification, "status");
+  const stopReason = compactDetail(readString(executionTrace, "stopReason"), 160);
+  const repairAttempts = Math.max(
+    0,
+    Math.min(32, Math.trunc(readNumber(executionTrace, "repairAttempts") ?? 0)),
+  );
+
+  return {
+    ...input.fallback,
+    title: compactDetail(readString(executionTrace, "title"), 120)
+      ?? input.fallback.title,
+    phase: activeStep?.id ?? input.fallback.phase,
+    progressLabel: activeStep?.label ?? input.fallback.progressLabel,
+    ...(activeStep ? { activeStepId: activeStep.id } : { activeStepId: undefined }),
+    ...(["pending", "passed", "repaired", "failed"].includes(verificationStatus ?? "")
+      ? { verification: { status: verificationStatus } as ElyanTaskTraceBlock["verification"] }
+      : {}),
+    ...(repairAttempts > 0 ? { repairAttempts } : {}),
+    ...(stopReason ? { stopReason } : {}),
+    steps,
+  };
 }
 
 function describeIntent(intent: string | null): string | undefined {
@@ -549,6 +653,14 @@ function resolveFailureStep(
     return "verify";
   }
   if (
+    normalizedError.includes("dispatch") ||
+    normalizedError.includes("lease") ||
+    normalizedError.includes("offline") ||
+    normalizedError.includes("connection")
+  ) {
+    return "delivery";
+  }
+  if (
     normalizedError.includes("route") ||
     normalizedError.includes("desktop")
   ) {
@@ -582,6 +694,8 @@ function stepLabelForPhase(stepId: ElyanTaskTraceStepId | undefined): string {
       return "Yolu seçiyor";
     case "plan":
       return "Planı kuruyor";
+    case "delivery":
+      return "Masaüstüne aktarıyor";
     case "context":
       return "Bağlamı bağlıyor";
     case "tool":
@@ -605,6 +719,8 @@ function activeStepSummary(stepId: ElyanTaskTraceStepId | undefined): string {
       return "Yol seçiliyor.";
     case "plan":
       return "Plan kuruluyor.";
+    case "delivery":
+      return "Masaüstü teslimatı doğrulanıyor.";
     case "context":
       return "Bağlam bağlanıyor.";
     case "tool":
@@ -712,6 +828,17 @@ export function buildTaskTraceBlock(input: {
       : null;
   const terminalSuccess =
     traceStatus === "completed" || traceStatus === "waiting_approval";
+  const desktopTargeted =
+    routeDecision?.taskRoute?.operationalRoute === "desktop_runtime" ||
+    routeDecision?.route === "desktop_runtime";
+  const desktopDeliveryComplete =
+    desktopTargeted &&
+    (input.task.dispatchAckAt != null ||
+      input.task.status === "running" ||
+      input.task.status === "completed" ||
+      (input.task.status === "waiting_approval" &&
+        input.task.runtimeConnectionId != null));
+  const desktopDeliveryReady = !desktopTargeted || desktopDeliveryComplete;
 
   const steps: ElyanTaskTraceStep[] = [
     buildStep({
@@ -781,13 +908,43 @@ export function buildTaskTraceBlock(input: {
         planDetail != null || terminalSuccess ? input.task.updatedAt : null,
     }),
     buildStep({
+      id: "delivery",
+      status: !desktopTargeted
+        ? "skipped"
+        : failureStep === "delivery"
+          ? "failed"
+          : desktopDeliveryComplete
+            ? "completed"
+            : input.task.status === "waiting_approval"
+              ? "pending"
+              : "running",
+      detail: !desktopTargeted
+        ? undefined
+        : failureStep === "delivery"
+          ? compactDetail(input.task.error)
+          : desktopDeliveryComplete
+            ? "Masaüstü görevi aldı."
+            : input.task.status === "waiting_approval"
+              ? "Onaydan sonra masaüstüne aktarılacak."
+              : input.task.dispatchLeaseIssuedAt != null
+                ? "Masaüstü teslimatı doğrulanıyor."
+                : "Masaüstü teslimatı hazırlanıyor.",
+      task: input.task,
+      startedAt: input.task.dispatchLeaseIssuedAt ?? input.task.updatedAt,
+      completedAt:
+        input.task.dispatchAckAt ??
+        (desktopDeliveryComplete ? input.task.updatedAt : null),
+    }),
+    buildStep({
       id: "context",
       status:
         failureStep === "context"
           ? "failed"
           : context.needed && context.completed
             ? "completed"
-            : context.needed && traceStatus === "running"
+            : context.needed &&
+                traceStatus === "running" &&
+                desktopDeliveryReady
               ? "running"
               : context.needed
                 ? "pending"
@@ -808,7 +965,9 @@ export function buildTaskTraceBlock(input: {
               (traceStatus === "completed" ||
                 traceStatus === "waiting_approval")
             ? "completed"
-            : tool.needed && traceStatus === "running"
+            : tool.needed &&
+                traceStatus === "running" &&
+                desktopDeliveryReady
               ? "running"
               : tool.needed
                 ? "pending"
@@ -831,7 +990,9 @@ export function buildTaskTraceBlock(input: {
             ? "completed"
             : traceStatus === "failed"
               ? "failed"
-              : traceStatus === "running" || traceStatus === "waiting_approval"
+              : (traceStatus === "running" ||
+                  traceStatus === "waiting_approval") &&
+                desktopDeliveryReady
                 ? "running"
                 : "pending",
       detail:
@@ -893,7 +1054,7 @@ export function buildTaskTraceBlock(input: {
     error: input.task.error,
   });
 
-  return {
+  const fallback: ElyanTaskTraceBlock = {
     type: "task_trace",
     stableBlockId: `task_trace_${input.task.id}`,
     taskId: input.task.id,
@@ -913,6 +1074,7 @@ export function buildTaskTraceBlock(input: {
     ...(activeStep ? { activeStepId: activeStep.id } : {}),
     steps,
   };
+  return runtimeExecutionTraceBlock({ task: input.task, fallback }) ?? fallback;
 }
 
 export function enrichTaskTraceWithAgentPlan(input: {

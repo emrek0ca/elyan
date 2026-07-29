@@ -1,4 +1,5 @@
 export const VISION_LOG_REDACTION_PATHS = [
+  "req.body.inputRefs",
   "req.body.ephemeralVision",
   "req.body.metadata.ephemeralVision",
   "req.body.metadata.attachments[*].base64Thumbnail",

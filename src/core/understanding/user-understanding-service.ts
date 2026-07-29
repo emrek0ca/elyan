@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { and, eq, inArray } from "drizzle-orm";
+import { normalizePersonalName } from "./identity-name.js";
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
 import { maybeQueueMemoryExtractionJob } from "../../modules/brain/memory.js";
@@ -413,6 +415,31 @@ export async function persistLearningSignals(
       return signals.length;
     }
 
+    // Identity is single-valued: a new "my name is X" statement *replaces* the
+    // old fact, it does not sit beside it. Without this sweep the stale row
+    // ("En") stays live indefinitely and competes with the correction at read
+    // time — recency scoring only papers over that race, expiry ends it.
+    const identityKeysBeingWritten = [
+      ...new Set(
+        signals
+          .filter((signal) => signal.type === "identity")
+          .map((signal) => signal.key),
+      ),
+    ];
+    if (identityKeysBeingWritten.length > 0) {
+      await app.db
+        .update(learningEvents)
+        .set({ expiresAt: new Date(now) })
+        .where(
+          and(
+            eq(learningEvents.userId, input.userId),
+            eq(learningEvents.type, "identity"),
+            inArray(learningEvents.key, identityKeysBeingWritten),
+          ),
+        )
+        .catch(() => undefined);
+    }
+
     await app.db.insert(learningEvents).values(
       signals.map((signal) => ({
         userId: input.userId,
@@ -590,8 +617,18 @@ export function buildMemoryOpsFromUnderstandingCandidates(
     // Kullanıcı açıkça söylemediyse hatırlama: çıkarılmış "tercih" uydurmadır.
     if (!candidate.explicit) continue;
     const key = candidate.key.trim();
-    const value = candidate.value.trim();
+    let value = candidate.value.trim();
     if (!key || !value) continue;
+    // Kimlik anahtarları TEK kapıdan doğrulanır — aday ister zarfın
+    // deterministik çıkarıcısından, ister modelin kendi anlayışından gelsin.
+    // "bundan" bir gün adın kendisi olarak yazıldı; hangi yol yazdıysa yazsın,
+    // fonksiyon kelimesi içeren bir "ad" burada düşer. Çıkarıcılar yer bulur,
+    // adın ne olduğuna yalnız identity-name.ts karar verir.
+    if (key === "name" || key === "preferred_name") {
+      const normalized = normalizePersonalName(value);
+      if (!normalized) continue;
+      value = normalized;
+    }
     // Aynı anahtar için tek yazım: aday listesi kendi içinde çelişirse ilki kazanır.
     if (seen.has(key)) continue;
     seen.add(key);

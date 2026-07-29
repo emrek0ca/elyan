@@ -400,7 +400,10 @@ export const elyanTaskTraceStepSchema = z.object({
   status: elyanTaskTraceStepStatusSchema,
   detail: z.string().max(240).optional(),
   resultSummary: z.string().max(240).optional(),
+  capability: z.string().min(1).max(120).optional(),
   tool: z.string().min(1).max(120).optional(),
+  verificationStatus: z.enum(["pending", "passed", "repaired", "failed"]).optional(),
+  attemptCount: z.number().int().min(1).max(32).optional(),
   approval: z.object({
     token: z.string().min(1).max(512),
     tool: z.string().min(1).max(120),
@@ -432,6 +435,11 @@ export const elyanTaskTraceBlockSchema = z.object({
   progressLabel: z.string().min(1).max(80).optional(),
   routeReason: z.string().min(1).max(240).optional(),
   activeStepId: elyanTaskTraceStepIdSchema.optional(),
+  verification: z.object({
+    status: z.enum(["pending", "passed", "repaired", "failed"]),
+  }).passthrough().optional(),
+  repairAttempts: z.number().int().min(0).max(32).optional(),
+  stopReason: z.string().min(1).max(160).optional(),
   steps: z.array(elyanTaskTraceStepSchema).min(1),
 });
 const elyanAssistantBlockBaseSchema = z.object({

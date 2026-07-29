@@ -317,6 +317,12 @@ services:
       RELIABILITY_REDIS_REQUIRED: "true"
       ELYAN_MEMORY_WORKER_DISABLED: "true"
       ELYAN_PROACTIVE_ENGINE_ENABLED: "true"
+      # Night watch and the observer default to off and are turned on from
+      # .env once push delivery has been verified end to end. Speaking
+      # unprompted before the delivery channel is proven would mean the user
+      # never sees what Elyan did.
+      ELYAN_NIGHT_WATCH_ENABLED: ${ELYAN_NIGHT_WATCH_ENABLED:-false}
+      ELYAN_PROACTIVE_OBSERVER_ENABLED: ${ELYAN_PROACTIVE_OBSERVER_ENABLED:-false}
     command: ["node", "dist/workers/proactive-scheduler.js"]
 
   ml-worker:

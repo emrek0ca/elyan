@@ -208,10 +208,14 @@ export async function runAgentToolLoop(
       }
       const deadline = startedAt + budgetMs;
       let latest = snapshot;
+      let pollDelayMs = 100;
       while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 75));
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(pollDelayMs, Math.max(0, deadline - Date.now()))),
+        );
         latest = await agentEngineRepository(app).loadRun(input.context.userId, snapshot.run.id);
         if (["completed", "waiting_approval", "waiting_evidence", "blocked", "failed", "canceled"].includes(latest.run.state)) break;
+        pollDelayMs = Math.min(400, Math.ceil(pollDelayMs * 1.6));
       }
       const results = latest.steps.flatMap((step): AgentToolResult[] => {
         const value = step.toolResult;

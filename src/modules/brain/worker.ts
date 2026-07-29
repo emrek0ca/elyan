@@ -21,11 +21,25 @@ import {
 } from "./memory.js";
 import {
   buildProactiveComposePrompt,
+  buildProactiveOpeningCompose,
+  DIGEST_KIND,
   sweepDueProactiveTriggers,
   type ProactiveComposeResult,
   type ProactiveTriggerRow,
   type ProactiveTriggerSweepResult,
 } from "./proactive-engine.js";
+import {
+  buildMorningDigest,
+  emptyNightWatchSweep,
+  listNightWatchJobs,
+  runNightWatchSweep,
+  type NightWatchSweepResult,
+} from "./night-watch.js";
+import {
+  emptyObserverSweep,
+  runProactiveObserverSweep,
+  type ObserverSweepResult,
+} from "./proactive-observer.js";
 import {
   processContinuousLearningDailyBuild,
   type ContinuousLearningBuildResult,
@@ -940,10 +954,49 @@ export async function processCognitiveMutationOutbox(
   });
 }
 
+/**
+ * The morning digest is assembled from settled job rows, never generated.
+ *
+ * A model asked to "summarise last night" with a thin context is exactly the
+ * setup that produces a confident account of work that never happened — and
+ * the user cannot check it, because they were asleep.
+ */
+async function composeMorningDigestMessage(
+  app: FastifyInstance,
+  trigger: ProactiveTriggerRow,
+): Promise<ProactiveComposeResult> {
+  const payload =
+    trigger.payload && typeof trigger.payload === "object"
+      ? (trigger.payload as Record<string, unknown>)
+      : {};
+  const nightDate =
+    typeof payload.nightDate === "string" ? payload.nightDate : "";
+  if (!nightDate) {
+    return { text: "" };
+  }
+  const jobs = await listNightWatchJobs(app, {
+    userId: trigger.userId,
+    nightDate,
+  });
+  const digest = buildMorningDigest(jobs);
+  return { text: digest.text };
+}
+
 export async function composeProactiveTriggerMessage(
   app: FastifyInstance,
   trigger: ProactiveTriggerRow,
 ): Promise<ProactiveComposeResult> {
+  if (trigger.kind === DIGEST_KIND) {
+    return composeMorningDigestMessage(app, trigger);
+  }
+
+  // Observer suggestions already carry a complete, evidence-bound sentence.
+  // Handing it to a model to "make it nicer" is the one step where the
+  // grounding could quietly be lost, and it buys nothing.
+  if (trigger.createdBy === "observer") {
+    return buildProactiveOpeningCompose(trigger);
+  }
+
   const reply = await generateSharedBrainReply(app, {
     userId: trigger.userId,
     prompt: buildProactiveComposePrompt(trigger),
@@ -990,6 +1043,50 @@ export async function processDueProactiveTriggers(
       input.compose ??
       ((trigger) => composeProactiveTriggerMessage(app, trigger)),
   });
+}
+
+/**
+ * Night watch entry point for the scheduler loop. Kept separate from
+ * `processDueProactiveTriggers` so the two flags can be rolled out apart:
+ * delivering follow-ups and working overnight are different promises to the
+ * user and should be switchable independently.
+ */
+export async function runNightWatchWave(
+  app: FastifyInstance,
+  input: { now?: Date } = {},
+): Promise<NightWatchSweepResult> {
+  if (app.config?.ELYAN_NIGHT_WATCH_ENABLED !== true) {
+    return emptyNightWatchSweep();
+  }
+  return runNightWatchSweep(app, { now: input.now });
+}
+
+/**
+ * The observer runs on its own, much slower cadence.
+ *
+ * Noticing things is not urgent — and the cost of noticing too often is not
+ * CPU, it is the temptation to say something every time. Once every quarter
+ * hour is plenty for "is a deadline approaching".
+ */
+let lastObserverRunAtMs = 0;
+
+export async function runProactiveObserverWave(
+  app: FastifyInstance,
+  input: { now?: Date; force?: boolean } = {},
+): Promise<ObserverSweepResult> {
+  if (app.config?.ELYAN_PROACTIVE_OBSERVER_ENABLED !== true) {
+    return emptyObserverSweep();
+  }
+  const now = input.now ?? new Date();
+  const intervalMs = Math.max(
+    60_000,
+    app.config?.ELYAN_PROACTIVE_OBSERVER_INTERVAL_MS ?? 15 * 60_000,
+  );
+  if (!input.force && now.getTime() - lastObserverRunAtMs < intervalMs) {
+    return emptyObserverSweep();
+  }
+  lastObserverRunAtMs = now.getTime();
+  return runProactiveObserverSweep(app, { now });
 }
 
 export async function processBrainWorkerIteration(
@@ -1157,6 +1254,33 @@ export async function runProactiveScheduler(
       }
     } catch (error) {
       app.log.error?.({ error }, "proactive scheduler iteration failed");
+    }
+
+    // The night sweep is intentionally in the same loop but independently
+    // guarded: a failure to plan tonight's work must not stop due follow-ups
+    // from firing, and vice versa.
+    try {
+      const nightResult = await runNightWatchWave(app);
+      if (
+        nightResult.planned > 0 ||
+        nightResult.settled > 0 ||
+        nightResult.digestsScheduled > 0
+      ) {
+        app.log.info?.(nightResult, "night watch sweep");
+        processed = true;
+      }
+    } catch (error) {
+      app.log.error?.({ error }, "night watch sweep failed");
+    }
+
+    try {
+      const observed = await runProactiveObserverWave(app);
+      if (observed.created > 0) {
+        app.log.info?.(observed, "proactive observer created suggestions");
+        processed = true;
+      }
+    } catch (error) {
+      app.log.error?.({ error }, "proactive observer sweep failed");
     }
     if (options.once) {
       break;

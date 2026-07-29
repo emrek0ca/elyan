@@ -57,6 +57,94 @@ test("comparison preserves one context frame per physical image", () => {
   assert.doesNotMatch(prompt, /imageId|imageId=a|imageId=b/);
 });
 
+test("speech-boundary frames produce a bounded temporal comparison contract", () => {
+  const carrier = ephemeralVisionCarrierSchema.parse({
+    version: 1,
+    retention: "request_ephemeral",
+    privacy: { metadataStripped: true, userAuthorizedCloud: true, localSensitivity: "personal" },
+    images: [
+      {
+        imageId: "start",
+        kind: "full_frame",
+        mimeType: "image/jpeg",
+        base64Data: encoded,
+        width: 800,
+        height: 600,
+        mediaIntent: "live_camera",
+        temporalRole: "speech_start",
+        temporalSequence: 0,
+      },
+      {
+        imageId: "sample",
+        kind: "full_frame",
+        mimeType: "image/jpeg",
+        base64Data: encoded,
+        width: 800,
+        height: 600,
+        mediaIntent: "live_camera",
+        temporalRole: "speech_sample",
+        temporalSequence: 1,
+      },
+      {
+        imageId: "end",
+        kind: "full_frame",
+        mimeType: "image/jpeg",
+        base64Data: encoded,
+        width: 800,
+        height: 600,
+        mediaIntent: "live_camera",
+        temporalRole: "speech_end",
+        temporalSequence: 2,
+      },
+    ],
+  });
+  const prompt = buildEphemeralVisionPromptBlock(carrier.images) ?? "";
+  assert.match(prompt, /speech_start is the earlier snapshot/);
+  assert.match(prompt, /latest bounded intermediate observation/);
+  assert.match(prompt, /do not imply continuous video or unseen events/);
+});
+
+test("one speech-boundary frame forbids before-after claims", () => {
+  const carrier = ephemeralVisionCarrierSchema.parse({
+    version: 1,
+    retention: "request_ephemeral",
+    privacy: { metadataStripped: true, userAuthorizedCloud: true, localSensitivity: "personal" },
+    images: [{
+      imageId: "end",
+      kind: "full_frame",
+      mimeType: "image/jpeg",
+      base64Data: encoded,
+      width: 800,
+      height: 600,
+      mediaIntent: "screen_context",
+      temporalRole: "speech_end",
+      temporalSequence: 2,
+    }],
+  });
+  const prompt = buildEphemeralVisionPromptBlock(carrier.images) ?? "";
+  assert.match(prompt, /Only one verified speech-boundary snapshot/);
+  assert.match(prompt, /do not claim before\/after change/);
+});
+
+test("temporal role and sequence must agree", () => {
+  const parsed = ephemeralVisionCarrierSchema.safeParse({
+    version: 2,
+    retention: "request_ephemeral",
+    privacy: { metadataStripped: true, userAuthorizedCloud: true, localSensitivity: "personal" },
+    inputRefs: [{
+      inputRef: "r".repeat(32),
+      name: "frame.jpg",
+      contentType: "image/jpeg",
+      byteLength: 120,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      mediaIntent: "live_camera",
+      temporalRole: "speech_start",
+      temporalSequence: 1,
+    }],
+  });
+  assert.equal(parsed.success, false);
+});
+
 test("ephemeral vision prioritizes task-specific crops", () => {
   const carrier = ephemeralVisionCarrierSchema.parse({
     version: 1,

@@ -10,34 +10,50 @@ const taskPayloadSchema = z
   })
   .passthrough();
 
-export const createTaskBodySchema = z.object({
-  targetDeviceId: z.string().uuid().optional(),
-  title: z.string().trim().min(1).max(200),
-  payload: taskPayloadSchema,
-  requestedCapabilities: z
-    .array(z.string().trim().min(1).max(80))
-    .max(20)
-    .transform((values) => [...new Set(values)]),
-}).superRefine((input, ctx) => {
-  if (hasRawBinaryUploadHint(input.payload)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["payload"],
-      message: "raw binary upload payload is not accepted; send processed data only",
-    });
-  }
+export const createTaskBodySchema = z
+  .object({
+    targetDeviceId: z.string().uuid().optional(),
+    title: z.string().trim().min(1).max(200),
+    payload: taskPayloadSchema,
+    requestedCapabilities: z
+      .array(z.string().trim().min(1).max(80))
+      .max(20)
+      .transform((values) => [...new Set(values)]),
+  })
+  .superRefine((input, ctx) => {
+    if (hasRawBinaryUploadHint(input.payload)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload"],
+        message:
+          "raw binary upload payload is not accepted; send processed data only",
+      });
+    }
 
-  if (hasRawBinaryUploadHint(input.payload?.metadata)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["payload", "metadata"],
-      message: "raw binary upload payload is not accepted; send processed data only",
-    });
-  }
-});
+    if (hasRawBinaryUploadHint(input.payload?.metadata)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "metadata"],
+        message:
+          "raw binary upload payload is not accepted; send processed data only",
+      });
+    }
+  });
 
 export const taskParamsSchema = z.object({
   taskId: z.string().uuid(),
+});
+
+export const taskControlBodySchema = z.object({
+  kind: z.literal("redirect"),
+  instruction: z.string().trim().min(1).max(1_200),
+  anchorStepId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
+    .optional(),
 });
 
 export const taskArtifactParamsSchema = z.object({

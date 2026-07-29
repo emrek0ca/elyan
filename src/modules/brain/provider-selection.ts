@@ -184,6 +184,9 @@ function buildHostedProviderCandidates(
   const groqCompoundModel = compoundEligible
     ? resolveGroqCompoundModel(app.config, workload)
     : "";
+  const structuredFallbackModel = structuredOutputRequired
+    ? groqCatalog.fastModel
+    : "";
   if (groqApiKey && groqBaseUrl && groqPrimaryModel) {
     hostedCandidates.push({
       provider: "groq",
@@ -191,6 +194,7 @@ function buildHostedProviderCandidates(
       preferredModels: [
         groqCompoundModel,
         groqPrimaryModel,
+        structuredFallbackModel,
         groqFallbackModel,
       ].filter(
         (model, index, values): model is string =>

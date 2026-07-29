@@ -321,6 +321,56 @@ test("buildTaskTraceBlock describes the active running phase", () => {
   assert.equal(block.summary, "İstek netleşiyor.");
 });
 
+test("buildTaskTraceBlock preserves live desktop execution steps", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-live-desktop",
+      status: "running",
+      payload: {},
+      result: {
+        executionTrace: {
+          title: "Rapor hazırlanıyor",
+          activeStepId: "write",
+          verification: { status: "pending", privateRuntimeNote: "secret" },
+          repairAttempts: 1,
+          steps: [
+            {
+              id: "research",
+              label: "Kaynakları araştırıyorum",
+              status: "completed",
+              capability: "web_research",
+              verificationStatus: "passed",
+              attemptCount: 1,
+            },
+            {
+              id: "write",
+              label: "Raporu yazıyorum",
+              status: "running",
+              capability: "document_write",
+              attemptCount: 2,
+              detail: "Özel içerik taşınmayan güvenli durum",
+            },
+          ],
+        },
+      },
+      createdAt: new Date("2026-07-27T09:00:00.000Z"),
+      updatedAt: new Date("2026-07-27T09:00:01.000Z"),
+    },
+    assistantContent: "",
+  });
+
+  assert.equal(block.activeStepId, "write");
+  assert.equal(block.progressLabel, "Raporu yazıyorum");
+  assert.equal(block.steps.length, 2);
+  assert.equal(block.steps[0]?.id, "research");
+  assert.equal(block.steps[0]?.capability, "web_research");
+  assert.equal(block.steps[0]?.verificationStatus, "passed");
+  assert.equal(block.steps[1]?.attemptCount, 2);
+  assert.equal(block.verification?.status, "pending");
+  assert.equal(block.repairAttempts, 1);
+  assert.doesNotMatch(JSON.stringify(block), /privateRuntimeNote|secret/);
+});
+
 function toolStepOf(block: ReturnType<typeof buildTaskTraceBlock>) {
   return block.steps.find((step) => step.id === "tool");
 }

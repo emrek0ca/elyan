@@ -1,9 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { Queue, Worker, type Job } from "bullmq";
 import type { FastifyInstance } from "fastify";
+import { recordBridgeLearningSignals } from "../../core/understanding/user-understanding-service.js";
+import { syncChatTaskLifecycle } from "../chat/task-sync.js";
 import { activeTaskStatuses } from "./queue.js";
-import { maybeMaterializeDesktopPlan } from "./materialize-plan.js";
-import { issueTaskDispatchLease, getTaskById } from "./service.js";
+import {
+  markDesktopPlanPrepared,
+  maybeMaterializeDesktopPlan,
+  maybePauseForDesktopPlanApproval,
+} from "./materialize-plan.js";
+import {
+  failQueuedDesktopPlanTask,
+  issueTaskDispatchLease,
+  getTaskById,
+  releaseUnacceptedTaskDispatchLease,
+} from "./service.js";
 
 export type TaskDispatchJobData = {
   taskId: string;
@@ -16,6 +27,23 @@ type TaskDispatchResources = {
 
 const TASK_DISPATCH_QUEUE_NAME = "elyan-task-dispatch";
 const dispatchResources = new WeakMap<FastifyInstance, TaskDispatchResources>();
+const localDispatches = new WeakMap<FastifyInstance, Set<string>>();
+
+type DispatchTask = NonNullable<Awaited<ReturnType<typeof getTaskById>>>;
+
+type ClaimedDispatchOperations = {
+  materialize: typeof maybeMaterializeDesktopPlan;
+  markPrepared: typeof markDesktopPlanPrepared;
+  gatePlanApproval?: typeof maybePauseForDesktopPlanApproval;
+  failPlanning: typeof failQueuedDesktopPlanTask;
+  syncLifecycle: typeof syncChatTaskLifecycle;
+  issueLease: typeof issueTaskDispatchLease;
+  releaseLease: typeof releaseUnacceptedTaskDispatchLease;
+  sendToRuntime: (
+    deviceId: string,
+    message: unknown,
+  ) => boolean | Promise<boolean>;
+};
 
 function createRedisConnectionOptions(redisUrl: string) {
   return {
@@ -26,49 +54,191 @@ function createRedisConnectionOptions(redisUrl: string) {
   };
 }
 
-async function processTaskDispatchJob(app: FastifyInstance, job: Job<TaskDispatchJobData>) {
-  const task = await getTaskById(app, job.data.taskId);
-  if (!task || task.status !== "queued" || !activeTaskStatuses.includes(task.status)) {
+export async function dispatchClaimedTask(
+  app: FastifyInstance,
+  task: DispatchTask,
+  operations: ClaimedDispatchOperations = {
+    materialize: maybeMaterializeDesktopPlan,
+    markPrepared: markDesktopPlanPrepared,
+    gatePlanApproval: maybePauseForDesktopPlanApproval,
+    failPlanning: failQueuedDesktopPlanTask,
+    syncLifecycle: syncChatTaskLifecycle,
+    issueLease: issueTaskDispatchLease,
+    releaseLease: releaseUnacceptedTaskDispatchLease,
+    sendToRuntime: app.services.realtimeHub.sendToRuntimeDistributed.bind(
+      app.services.realtimeHub,
+    ),
+  },
+): Promise<
+  "dispatched" | "awaiting_approval" | "planning_failed" | "not_dispatched"
+> {
+  const materialized = await operations.materialize(app, task);
+  await operations.markPrepared(app, task, materialized);
+  if (!materialized) {
+    await operations.failPlanning(app, { task });
+    return "planning_failed";
+  }
+  const approvalTask = operations.gatePlanApproval
+    ? await operations.gatePlanApproval(app, task)
+    : null;
+  if (approvalTask) {
+    await operations
+      .syncLifecycle(app, {
+        originalTask: task,
+        updatedTask: approvalTask,
+        message: "Masaüstü planı hazır. Devam etmek için onay gerekiyor.",
+      })
+      .catch((error) => {
+        app.log.warn(
+          { taskId: task.id, error },
+          "desktop plan approval could not be synced to chat",
+        );
+      });
+    return "awaiting_approval";
+  }
+  if (materialized) {
+    await operations
+      .syncLifecycle(app, {
+        originalTask: task,
+        updatedTask: task,
+        message: "Plan hazır. Masaüstü yürütmeye geçiliyor.",
+      })
+      .catch((error) => {
+        app.log.warn(
+          { taskId: task.id, error },
+          "materialized desktop plan could not be synced to chat",
+        );
+      });
+  }
+
+  const leaseResult = await operations.issueLease(app, {
+    taskId: task.id,
+    runtimeConnectionId: task.runtimeConnectionId ?? null,
+  });
+  if (!leaseResult) {
+    return "not_dispatched";
+  }
+  const lease = leaseResult.lease;
+  if (!lease) {
+    return "not_dispatched";
+  }
+
+  const sent = await operations.sendToRuntime(task.targetDeviceId, {
+    type: "task.dispatch",
+    task: leaseResult.task,
+    leaseId: lease.leaseId,
+    leaseExpiresAt: lease.expiresAt,
+  });
+  if (sent) {
+    return "dispatched";
+  }
+  await operations.releaseLease(app, {
+    taskId: task.id,
+    leaseId: lease.leaseId,
+  });
+  return "not_dispatched";
+}
+
+async function processTaskDispatch(
+  app: FastifyInstance,
+  taskId: string,
+  claimOwner: string,
+): Promise<void> {
+  const task = await getTaskById(app, taskId);
+  if (
+    !task ||
+    task.status !== "queued" ||
+    !activeTaskStatuses.includes(task.status)
+  ) {
     return;
   }
 
-  const claimOwner = `bullmq:${job.id ?? job.data.taskId}:${randomUUID()}`;
-  const acquired = await app.services.reliability.acquireTaskDispatchLock(task.id, claimOwner);
+  const acquired = await app.services.reliability.acquireTaskDispatchLock(
+    task.id,
+    claimOwner,
+  );
   if (!acquired) {
     return;
   }
 
-  // Hibrit sunucu-materyalizasyonu: karmaşık desktop görevlerinde work-order
-  // planını dispatch'ten HEMEN önce (create yolundan uzak) tam bağımlılık-graflı
-  // veriye derleyip task satırına persist eder → issueTaskDispatchLease güncel
-  // planı DB'den okur ve dispatch envelope'u taşır. Fail-safe: hata → heuristik.
-  await maybeMaterializeDesktopPlan(app, task);
-
-  const leaseResult = await issueTaskDispatchLease(app, {
-    taskId: task.id,
-    runtimeConnectionId: task.runtimeConnectionId ?? null,
-  });
-  if (!leaseResult || leaseResult.reused) {
-    await app.services.reliability.releaseTaskDispatchLock(task.id, claimOwner);
-    return;
+  let keepClaim = false;
+  try {
+    // Tek dispatch sahibi: plan önce model tarafından kalıcılaştırılır, canlı
+    // chat izi güncellenir, lease bundan sonra üretilir. Böylece çevrimiçi
+    // runtime bile başlangıç/heuristik planı yarışla alamaz.
+    const outcome = await dispatchClaimedTask(app, task);
+    keepClaim = outcome === "dispatched";
+    if (outcome === "dispatched") {
+      await recordBridgeLearningSignals(app, {
+        userId: task.userId,
+        accountId: task.userId,
+        taskId: task.id,
+        target: "desktop",
+        outcome: "dispatched",
+        readiness: "ready",
+        routingMode: "desktop_first_when_available",
+      }).catch((error) => {
+        app.log.warn(
+          { taskId: task.id, error },
+          "desktop dispatch learning signal could not be recorded",
+        );
+      });
+    }
+    if (outcome === "not_dispatched") {
+      throw new Error("runtime_offline_or_lease_unavailable");
+    }
+  } finally {
+    if (!keepClaim) {
+      await app.services.reliability.releaseTaskDispatchLock(
+        task.id,
+        claimOwner,
+      );
+    }
   }
-
-  const dispatched = app.services.realtimeHub.sendToRuntime(task.targetDeviceId, {
-    type: "task.dispatch",
-    task: leaseResult.task,
-    leaseId: leaseResult.lease.leaseId,
-    leaseExpiresAt: leaseResult.lease.expiresAt,
-  });
-
-  if (dispatched) {
-    return;
-  }
-
-  await app.services.reliability.releaseTaskDispatchLock(task.id, claimOwner);
-  throw new Error("runtime_offline");
 }
 
-export async function ensureTaskDispatchWorker(app: FastifyInstance): Promise<void> {
+async function processTaskDispatchJob(
+  app: FastifyInstance,
+  job: Job<TaskDispatchJobData>,
+) {
+  await processTaskDispatch(
+    app,
+    job.data.taskId,
+    `bullmq:${job.id ?? job.data.taskId}:${randomUUID()}`,
+  );
+}
+
+function scheduleLocalTaskDispatch(
+  app: FastifyInstance,
+  taskId: string,
+): boolean {
+  const pending = localDispatches.get(app) ?? new Set<string>();
+  if (pending.has(taskId)) {
+    return true;
+  }
+  pending.add(taskId);
+  localDispatches.set(app, pending);
+  setImmediate(() => {
+    void processTaskDispatch(app, taskId, `local:${taskId}:${randomUUID()}`)
+      .catch((error) => {
+        app.log.warn(
+          { taskId, error },
+          "local task dispatch attempt failed; runtime polling remains available",
+        );
+      })
+      .finally(() => {
+        pending.delete(taskId);
+        if (pending.size === 0) {
+          localDispatches.delete(app);
+        }
+      });
+  });
+  return true;
+}
+
+export async function ensureTaskDispatchWorker(
+  app: FastifyInstance,
+): Promise<void> {
   if (dispatchResources.has(app) || !app.config.REDIS_URL) {
     return;
   }
@@ -91,7 +261,7 @@ export async function ensureTaskDispatchWorker(app: FastifyInstance): Promise<vo
     async (job) => processTaskDispatchJob(app, job as Job<TaskDispatchJobData>),
     {
       connection: createRedisConnectionOptions(app.config.REDIS_URL) as never,
-      concurrency: 2,
+      concurrency: app.config.ELYAN_TASK_DISPATCH_WORKER_CONCURRENCY,
     },
   );
 
@@ -158,21 +328,33 @@ export async function ensureTaskDispatchWorker(app: FastifyInstance): Promise<vo
   });
 }
 
-export async function enqueueTaskDispatch(app: FastifyInstance, taskId: string): Promise<boolean> {
+export async function enqueueTaskDispatch(
+  app: FastifyInstance,
+  taskId: string,
+  options: { jobId?: string } = {},
+): Promise<boolean> {
   const resources = dispatchResources.get(app);
   if (!resources) {
-    return false;
+    return scheduleLocalTaskDispatch(app, taskId);
   }
 
-  await resources.queue.add(
-    TASK_DISPATCH_QUEUE_NAME,
-    {
-      taskId,
-    },
-    {
-      jobId: taskId,
-    },
-  );
+  try {
+    await resources.queue.add(
+      TASK_DISPATCH_QUEUE_NAME,
+      {
+        taskId,
+      },
+      {
+        jobId: options.jobId?.trim() || taskId,
+      },
+    );
+  } catch (error) {
+    app.log.warn(
+      { taskId, error },
+      "task dispatch queue unavailable; using local async dispatch",
+    );
+    return scheduleLocalTaskDispatch(app, taskId);
+  }
 
   return true;
 }

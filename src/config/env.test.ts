@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getBaseUrlReachability, getDatabaseReachability, loadEnv } from "./env.js";
+import {
+  getBaseUrlReachability,
+  getDatabaseReachability,
+  loadEnv,
+} from "./env.js";
 
 test("loadEnv derives iyzico public base url from app base url", () => {
   const env = loadEnv({
@@ -30,8 +34,15 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   assert.equal(env.GROQ_FAST_MODEL, "openai/gpt-oss-20b");
   assert.equal(env.GROQ_FALLBACK_MODEL, "qwen/qwen3.6-27b");
   assert.equal(env.GROQ_BASE_URL, "https://api.groq.com/openai/v1");
-  assert.equal(env.GEMINI_BASE_URL, "https://generativelanguage.googleapis.com/v1beta/openai");
-  assert.equal(env.GEMINI_INTERACTIONS_BASE_URL, "https://generativelanguage.googleapis.com/v1beta");
+  assert.equal(env.GROQ_TRANSCRIBE_MODEL, "whisper-large-v3-turbo");
+  assert.equal(
+    env.GEMINI_BASE_URL,
+    "https://generativelanguage.googleapis.com/v1beta/openai",
+  );
+  assert.equal(
+    env.GEMINI_INTERACTIONS_BASE_URL,
+    "https://generativelanguage.googleapis.com/v1beta",
+  );
   assert.equal(env.GEMINI_TEXT_MODEL, "gemini-3.5-flash");
   assert.equal(env.GEMINI_FAST_MODEL, "gemini-3.1-flash-lite");
   assert.equal(env.GEMINI_REASONING_MODEL, "gemini-3.5-flash");
@@ -47,6 +58,8 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   assert.equal(env.ELYAN_CHAT_WORKER_CONCURRENCY, 4);
   assert.equal(env.ELYAN_CHAT_PRIMARY_GLOBAL_CONCURRENCY, 6);
   assert.equal(env.ELYAN_CHAT_FALLBACK_GLOBAL_CONCURRENCY, 4);
+  assert.equal(env.ELYAN_PLAN_REVISION_GLOBAL_CONCURRENCY, 6);
+  assert.equal(env.ELYAN_PLAN_REVISION_USER_CONCURRENCY, 1);
   assert.equal(env.ELYAN_CHAT_GLOBAL_BACKLOG_MAX, 1_000);
   assert.equal(env.ELYAN_CHAT_USER_BACKLOG_MAX, 3);
   assert.equal(env.ELYAN_GROQ_RPM_LIMIT, 30);
@@ -55,8 +68,14 @@ test("loadEnv derives iyzico public base url from app base url", () => {
   assert.equal(env.GEMINI_PAID_FALLBACK_ENABLED, false);
   assert.equal(env.GEMINI_PAID_DATA_PROCESSING_ATTESTED, false);
   assert.equal(env.ELYAN_SHARED_BRAIN_FAST_MODEL, "qwen2.5-coder:3b");
-  assert.equal(env.ELYAN_SHARED_BRAIN_BALANCED_MODEL, "qwen2.5:7b-instruct-q5_K_M");
-  assert.equal(env.ELYAN_SHARED_BRAIN_PLANNING_MODEL, "qwen2.5:7b-instruct-q5_K_M");
+  assert.equal(
+    env.ELYAN_SHARED_BRAIN_BALANCED_MODEL,
+    "qwen2.5:7b-instruct-q5_K_M",
+  );
+  assert.equal(
+    env.ELYAN_SHARED_BRAIN_PLANNING_MODEL,
+    "qwen2.5:7b-instruct-q5_K_M",
+  );
   assert.equal(env.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED, true);
   assert.equal(env.ELYAN_MODEL_CANARY_ENABLED, false);
   assert.equal(env.ELYAN_MODEL_PRIMARY_ENABLED, false);

@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   boolean,
   customType,
+  date,
   index,
   integer,
   jsonb,
@@ -222,6 +223,13 @@ export const devices = pgTable(
     runtimeVersion: varchar("runtime_version", { length: 80 }),
     appVersion: varchar("app_version", { length: 80 }),
     clientMetadata: jsonb("client_metadata").notNull().default(sql`'{}'::jsonb`),
+    pushToken: text("push_token"),
+    pushProvider: varchar("push_provider", { length: 40 }),
+    pushTokenUpdatedAt: timestamp("push_token_updated_at", { withTimezone: true }),
+    pushInvalidatedAt: timestamp("push_invalidated_at", { withTimezone: true }),
+    notificationAuthorizationStatus: varchar("notification_authorization_status", {
+      length: 40,
+    }),
     deviceKeyHash: text("device_key_hash"),
     isActive: boolean("is_active").notNull().default(true),
     pairedAt: timestamp("paired_at", { withTimezone: true }),
@@ -1312,6 +1320,9 @@ export const proactiveTriggers = pgTable(
     payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
     status: varchar("status", { length: 32 }).notNull().default("pending"),
     createdBy: varchar("created_by", { length: 32 }).notNull().default("model"),
+    /** Stable identity of the *subject*, so an observer sweep cannot pile up
+     * duplicates of the same suggestion. Unique only while unresolved. */
+    dedupeKey: varchar("dedupe_key", { length: 160 }),
     firedAt: timestamp("fired_at", { withTimezone: true }),
     canceledAt: timestamp("canceled_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1322,6 +1333,84 @@ export const proactiveTriggers = pgTable(
     sessionDueIdx: index("proactive_triggers_session_due_idx").on(table.sessionId, table.due),
     statusDueIdx: index("proactive_triggers_status_due_idx").on(table.status, table.due),
     kindStatusIdx: index("proactive_triggers_kind_status_idx").on(table.kind, table.status),
+  }),
+);
+
+/**
+ * One row per unit of work Elyan takes on while the user is asleep.
+ *
+ * `evidence` is not nullable by design: a job whose origin cannot be traced
+ * back to something observable is the fabrication failure mode, not a feature.
+ */
+export const nightWatchJobs = pgTable(
+  "night_watch_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    nightDate: date("night_date").notNull(),
+    deviceId: uuid("device_id").references(() => devices.id, { onDelete: "set null" }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    sessionId: uuid("session_id").references(() => chatSessions.id, {
+      onDelete: "set null",
+    }),
+    title: varchar("title", { length: 200 }).notNull(),
+    prompt: text("prompt").notNull(),
+    capabilities: jsonb("capabilities").notNull().default(sql`'[]'::jsonb`),
+    evidence: jsonb("evidence").notNull(),
+    fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("planned"),
+    statusReason: varchar("status_reason", { length: 120 }),
+    resultSummary: text("result_summary"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userNightFingerprintUniqueIdx: uniqueIndex(
+      "night_watch_jobs_user_night_fingerprint_uidx",
+    ).on(table.userId, table.nightDate, table.fingerprint),
+    userNightIdx: index("night_watch_jobs_user_night_idx").on(
+      table.userId,
+      table.nightDate,
+    ),
+    statusIdx: index("night_watch_jobs_status_idx").on(table.status),
+  }),
+);
+
+/** Proactive telemetry. See `drizzle/0050_proactive_events.sql`. */
+export const proactiveEvents = pgTable(
+  "proactive_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    triggerId: uuid("trigger_id").references(() => proactiveTriggers.id, {
+      onDelete: "set null",
+    }),
+    event: varchar("event", { length: 32 }).notNull(),
+    kind: varchar("kind", { length: 48 }).notNull(),
+    source: varchar("source", { length: 32 }).notNull().default("system"),
+    reason: varchar("reason", { length: 120 }),
+    detail: jsonb("detail").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userCreatedIdx: index("proactive_events_user_created_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+    eventCreatedIdx: index("proactive_events_event_created_idx").on(
+      table.event,
+      table.createdAt,
+    ),
+    kindCreatedIdx: index("proactive_events_kind_created_idx").on(
+      table.kind,
+      table.createdAt,
+    ),
   }),
 );
 

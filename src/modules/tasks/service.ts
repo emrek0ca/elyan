@@ -1,4 +1,9 @@
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 import { ensureUserFacingMessage } from "../brain/capability-label-guard.js";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
@@ -136,7 +141,11 @@ import {
   compactMessagePreview,
   getLastAssistantMessageText,
 } from "../chat/task-sync.js";
-import { buildTaskTraceBlock, advanceTaskTraceApproval, enrichTaskTraceWithAgentPlan } from "../chat/task-trace.js";
+import {
+  buildTaskTraceBlock,
+  advanceTaskTraceApproval,
+  enrichTaskTraceWithAgentPlan,
+} from "../chat/task-trace.js";
 import {
   chatStreamEventStatusRank,
   isAssistantMessageTerminallyFenced,
@@ -149,10 +158,6 @@ import {
 } from "../chat/service.js";
 import { applyGoalProgressBlocks } from "../goals/service.js";
 import { startStage } from "../../lib/perf-telemetry.js";
-import {
-  detectGoalChatCommand,
-  executeGoalChatCommand,
-} from "../goals/chat-goal-commands.js";
 import {
   getUserDevice,
   RUNTIME_CONNECTION_STALE_AFTER_MS,
@@ -180,6 +185,11 @@ import {
 } from "../quota/service.js";
 import { activeTaskStatuses, resequenceDeviceQueue } from "./queue.js";
 import {
+  materializeDesktopPlanRevision,
+  type MaterializedDesktopPlanRevision,
+} from "./materialize-plan.js";
+import { reservePlanRevisionAdmission } from "./plan-revision-admission.js";
+import {
   canonicalTaskTitle,
   createStaleRuntimeConnectionError,
   createTaskFingerprint,
@@ -201,6 +211,8 @@ import {
   TASK_APPROVAL_TTL_MS,
   MAX_ACTIVE_USER_APPROVALS,
   MAX_TASK_DISPATCH_ATTEMPTS,
+  approvalRequestRevision,
+  buildTaskApprovalResolution,
   buildTaskApprovalResumeUpdate,
   buildTaskCancellationUpdate,
   buildTaskDispatchExhaustedUpdate,
@@ -217,6 +229,8 @@ import {
 import {
   buildDesktopWorkOrder,
   isDeterministicDesktopFastWorkOrder,
+  MAX_WORK_ORDER_STEPS,
+  readAutonomyEnvelope,
 } from "./desktop-work-order.js";
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
@@ -310,9 +324,7 @@ export function buildAssistantRevisionMetadata(input: {
     !onlyTransientContent &&
     normalizeRevisionComparableText(input.finalContent) !==
       normalizeRevisionComparableText(previousContent);
-  return revised
-    ? { revised: true, previousContent }
-    : { revised: false };
+  return revised ? { revised: true, previousContent } : { revised: false };
 }
 
 export function stripPromptEchoFromAssistantText(input: {
@@ -366,7 +378,10 @@ function buildPromptEchoRecoveryAnswer(prompt: string) {
 
   const asksAnimalName =
     /\bhayvan\b/u.test(normalized) &&
-    unicodeWordPattern(String.raw`\b(isim|ismi|ad|adı|adi|soyle|söyle|oner|öner|bul)\b`, "").test(normalized);
+    unicodeWordPattern(
+      String.raw`\b(isim|ismi|ad|adı|adi|soyle|söyle|oner|öner|bul)\b`,
+      "",
+    ).test(normalized);
   if (asksAnimalName) {
     return "Yıldız burunlu köstebek. Burnunda yıldız şeklinde 22 dokunaç bulunan, çok az bilinen ve oldukça sıra dışı görünümlü bir memeli.";
   }
@@ -420,7 +435,9 @@ type PersistableArtifactInput = ArtifactInput & {
   binaryBody?: Uint8Array;
 };
 
-function hostedImageSources(carrier?: EphemeralVisionCarrier): HostedImageSource[] {
+function hostedImageSources(
+  carrier?: EphemeralVisionCarrier,
+): HostedImageSource[] {
   const seen = new Set<string>();
   const result: HostedImageSource[] = [];
   for (const image of carrier?.images ?? []) {
@@ -447,6 +464,13 @@ function bindAuthorizedMediaInputRefs(
       contentType: ref.contentType,
       byteLength: ref.byteLength,
       expiresAt: ref.expiresAt,
+      ...(ref.mediaIntent ? { mediaIntent: ref.mediaIntent } : {}),
+      ...(ref.temporalRole
+        ? {
+            temporalRole: ref.temporalRole,
+            temporalSequence: ref.temporalSequence,
+          }
+        : {}),
     }));
     metadata.mediaInputPrivacy = {
       localSensitivity: carrier.privacy.localSensitivity,
@@ -514,7 +538,10 @@ export function resolveSharedBrainChatDispatchPolicy(
 export function restoreQueuedEphemeralVisionCarrier(
   metadata: Record<string, unknown>,
 ): EphemeralVisionCarrier | undefined {
-  if (!Array.isArray(metadata.mediaInputRefs) || metadata.mediaInputRefs.length === 0) {
+  if (
+    !Array.isArray(metadata.mediaInputRefs) ||
+    metadata.mediaInputRefs.length === 0
+  ) {
     return undefined;
   }
   const privacy = readRecord(metadata.mediaInputPrivacy);
@@ -838,7 +865,8 @@ export function summarizeToolFlowForTrace(
       readInferenceString(record, "errorCode") ??
       readInferenceString(error ?? {}, "code");
     const rawDurationMs = readInferenceNumber(record, "durationMs");
-    const durationMs = rawDurationMs != null && rawDurationMs >= 0 ? rawDurationMs : null;
+    const durationMs =
+      rawDurationMs != null && rawDurationMs >= 0 ? rawDurationMs : null;
     tools.push({ name, ok, resultCount, errorCode, durationMs });
     if (tools.length >= 8) {
       break;
@@ -1642,7 +1670,9 @@ export function buildRouteDecisionLogEntry(input: {
     selectedDeviceIgnored:
       Boolean(String(input.requestedTargetDeviceId ?? "").trim()) &&
       !needsDesktop,
-    ...(input.routeDecision?.qualityGuard ? { qualityGuard: input.routeDecision.qualityGuard } : {}),
+    ...(input.routeDecision?.qualityGuard
+      ? { qualityGuard: input.routeDecision.qualityGuard }
+      : {}),
   };
 }
 
@@ -1842,12 +1872,18 @@ function buildQuantumTaskSnapshot(input: {
   };
 }
 
-function readOptimizationNumber(record: Record<string, unknown> | null, key: string): number | null {
+function readOptimizationNumber(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | null {
   const value = record?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function readOptimizationString(record: Record<string, unknown> | null, key: string): string | null {
+function readOptimizationString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -1900,7 +1936,13 @@ export function buildQuantumDispatchOptimization(input: {
       ? learnedAdmissionWeight
       : 0;
   const admissionWeight = qualified
-    ? Math.max(0.02, Math.min(0.15, Number(Math.max(benchmarkWeight, feedbackWeight).toFixed(4))))
+    ? Math.max(
+        0.02,
+        Math.min(
+          0.15,
+          Number(Math.max(benchmarkWeight, feedbackWeight).toFixed(4)),
+        ),
+      )
     : 0;
 
   return {
@@ -1909,8 +1951,11 @@ export function buildQuantumDispatchOptimization(input: {
     active: qualified,
     score: Number(score.toFixed(4)),
     classicalBaselineScore:
-      classicalBaselineScore === null ? null : Number(classicalBaselineScore.toFixed(4)),
-    advantageScore: advantageScore === null ? null : Number(advantageScore.toFixed(4)),
+      classicalBaselineScore === null
+        ? null
+        : Number(classicalBaselineScore.toFixed(4)),
+    advantageScore:
+      advantageScore === null ? null : Number(advantageScore.toFixed(4)),
     qualified,
     benchmarkSource: "measured" as const,
     admissionWeight,
@@ -1971,7 +2016,12 @@ export function buildQuantumLivenessGuardPolicy(input: {
   const qualified =
     learning?.latestQuantumDispatchLivenessQualified === true ||
     quantum?.dispatchLivenessQualified === true;
-  if (!qualified || livenessScore === null || livenessScore < 0 || livenessScore > 1) {
+  if (
+    !qualified ||
+    livenessScore === null ||
+    livenessScore < 0 ||
+    livenessScore > 1
+  ) {
     return null;
   }
   const learnedTimeoutRiskRaw =
@@ -1984,16 +2034,18 @@ export function buildQuantumLivenessGuardPolicy(input: {
       ? learnedTimeoutRiskRaw
       : null;
   const learnedRepairAttemptCount =
-    readOptimizationNumber(learning, "latestQuantumLivenessRepairAttemptCount") ??
-    readOptimizationNumber(quantum, "livenessRepairAttemptCount");
+    readOptimizationNumber(
+      learning,
+      "latestQuantumLivenessRepairAttemptCount",
+    ) ?? readOptimizationNumber(quantum, "livenessRepairAttemptCount");
   const scoreTimeoutRisk: "low" | "medium" | "high" =
-    livenessScore < 0.72 ? "high" :
-      livenessScore < 0.88 ? "medium" :
-        "low";
+    livenessScore < 0.72 ? "high" : livenessScore < 0.88 ? "medium" : "low";
   const timeoutRisk: "low" | "medium" | "high" =
     scoreTimeoutRisk === "high" || learnedTimeoutRisk === "high"
       ? "high"
-      : scoreTimeoutRisk === "medium" || learnedTimeoutRisk === "medium" || (learnedRepairAttemptCount ?? 0) > 0
+      : scoreTimeoutRisk === "medium" ||
+          learnedTimeoutRisk === "medium" ||
+          (learnedRepairAttemptCount ?? 0) > 0
         ? "medium"
         : "low";
   const active = timeoutRisk !== "low";
@@ -2048,6 +2100,55 @@ function compactJsonEnvelope(value: unknown): Record<string, unknown> | null {
   const documentIds = readAttachmentDocumentIds(
     record.attachmentDocumentIds,
   ).slice(0, 8);
+  const control = readRecord(record.control);
+  const controlId = readSafeString(control, "id", 80);
+  const controlKind = readSafeString(control, "kind", 40);
+  const controlState = readSafeString(control, "state", 40);
+  const redirectDuplicateHash = readSafeString(
+    control,
+    "redirectDuplicateHash",
+    80,
+  );
+  const controlPlanRevision = readTaskControlPlanRevisionSummary(
+    control?.planRevision,
+  );
+  const compactControl =
+    controlId &&
+    controlKind === "redirect" &&
+    controlState &&
+    ["requested", "accepted", "applied", "rejected", "failed"].includes(
+      controlState,
+    )
+      ? {
+          id: controlId,
+          kind: controlKind,
+          state: controlState,
+          ...(readSafeString(control, "instruction", 1_200)
+            ? { instruction: readSafeString(control, "instruction", 1_200) }
+            : {}),
+          ...(readSafeString(control, "requestedAt", 80)
+            ? { requestedAt: readSafeString(control, "requestedAt", 80) }
+            : {}),
+          ...(readSafeString(control, "acknowledgedAt", 80)
+            ? {
+                acknowledgedAt: readSafeString(control, "acknowledgedAt", 80),
+              }
+            : {}),
+          ...(readSafeString(control, "message", 300)
+            ? { message: readSafeString(control, "message", 300) }
+            : {}),
+          ...(readSafeString(control, "idempotencyKey", 160)
+            ? {
+                idempotencyKey: readSafeString(control, "idempotencyKey", 160),
+              }
+            : {}),
+          ...(redirectDuplicateHash &&
+          /^[A-Za-z0-9_-]{43}$/.test(redirectDuplicateHash)
+            ? { redirectDuplicateHash }
+            : {}),
+          ...(controlPlanRevision ? { planRevision: controlPlanRevision } : {}),
+        }
+      : null;
 
   const compact = {
     ...(typeof record.route === "string" ? { route: record.route } : {}),
@@ -2090,6 +2191,7 @@ function compactJsonEnvelope(value: unknown): Record<string, unknown> | null {
       : {}),
     ...(documentIds.length > 0 ? { attachmentDocumentIds: documentIds } : {}),
     ...(artifactIds.length > 0 ? { artifactIds } : {}),
+    ...(compactControl ? { control: compactControl } : {}),
   };
 
   return Object.keys(compact).length > 0 ? compact : null;
@@ -2136,9 +2238,10 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 function resolveImageGenerationFallbackText(
   metadata: Record<string, unknown>,
 ): string {
-  const reason = typeof metadata.imageGenerationBlockedReason === "string"
-    ? metadata.imageGenerationBlockedReason
-    : "";
+  const reason =
+    typeof metadata.imageGenerationBlockedReason === "string"
+      ? metadata.imageGenerationBlockedReason
+      : "";
   if (reason === "image_generation_limit_reached") {
     return "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin.";
   }
@@ -2164,10 +2267,11 @@ function extractUnderstandingEnvelopeFromMetadata(
 function readSafeString(
   record: Record<string, unknown> | null,
   key: string,
+  maxLength = 160,
 ): string | null {
   const value = record?.[key];
   return typeof value === "string" && value.trim()
-    ? value.trim().slice(0, 160)
+    ? value.trim().slice(0, maxLength)
     : null;
 }
 
@@ -2203,7 +2307,9 @@ export function extractRuntimeQuantumBenchmarkAttestation(
       continue;
     }
     const verified = readVerifiedQuantumBenchmark(
-      candidate.quantumBenchmarkAttestation ? candidate : { quantumBenchmarkAttestation: candidate },
+      candidate.quantumBenchmarkAttestation
+        ? candidate
+        : { quantumBenchmarkAttestation: candidate },
     );
     if (verified) {
       return verified;
@@ -2216,7 +2322,9 @@ export function extractRuntimeQuantumBenchmarkAttestation(
 function readSafeStringArray(value: unknown, maxItems = 16): string[] {
   return Array.isArray(value)
     ? value
-        .map((item) => (typeof item === "string" ? item.trim().slice(0, 120) : ""))
+        .map((item) =>
+          typeof item === "string" ? item.trim().slice(0, 120) : "",
+        )
         .filter(Boolean)
         .slice(0, maxItems)
     : [];
@@ -2236,7 +2344,9 @@ function deriveQuantumDispatchPolicyOutcome(input: {
   if (input.boostedStepCount > 0) {
     return "runtime_observed_without_backend" as const;
   }
-  return input.hasBenchmark ? "benchmark_only" as const : "no_signal" as const;
+  return input.hasBenchmark
+    ? ("benchmark_only" as const)
+    : ("no_signal" as const);
 }
 
 function deriveQuantumResponsivePolicyOutcome(input: {
@@ -2253,7 +2363,9 @@ function deriveQuantumResponsivePolicyOutcome(input: {
   if (input.responsiveBoostedStepCount > 0) {
     return "runtime_responsive_observed_without_backend" as const;
   }
-  return input.hasLivenessBenchmark ? "liveness_benchmark_only" as const : "no_signal" as const;
+  return input.hasLivenessBenchmark
+    ? ("liveness_benchmark_only" as const)
+    : ("no_signal" as const);
 }
 
 export function extractRuntimeDispatchPolicyFeedback(
@@ -2265,7 +2377,8 @@ export function extractRuntimeDispatchPolicyFeedback(
   if (!scheduler) {
     const progressLiveness = readRecord(executionTrace?.quantumLiveness);
     if (
-      readSafeString(progressLiveness, "strategy") !== "quantum_runtime_liveness_snapshot_v1" ||
+      readSafeString(progressLiveness, "strategy") !==
+        "quantum_runtime_liveness_snapshot_v1" ||
       readSafeString(progressLiveness, "source") !== "desktop_runtime_progress"
     ) {
       return null;
@@ -2327,7 +2440,10 @@ export function extractRuntimeDispatchPolicyFeedback(
         "livenessGuardEffectiveMaxReplans",
       ),
       livenessGuardMaxReplans: null,
-      repairAttemptCount: readSafeNumber(progressLiveness, "repairAttemptCount"),
+      repairAttemptCount: readSafeNumber(
+        progressLiveness,
+        "repairAttemptCount",
+      ),
     };
   }
   const backendOptimization = readRecord(scheduler.backendDispatchOptimization);
@@ -2342,13 +2458,20 @@ export function extractRuntimeDispatchPolicyFeedback(
     livenessRecord ? { quantumBenchmarkAttestation: livenessRecord } : null,
   );
   const boostedStepIds = readSafeStringArray(scheduler.quantumBoostedStepIds);
-  const responsiveBoostedStepIds = readSafeStringArray(scheduler.responsiveBoostedStepIds);
+  const responsiveBoostedStepIds = readSafeStringArray(
+    scheduler.responsiveBoostedStepIds,
+  );
   const orderedStepIds = readSafeStringArray(scheduler.orderedStepIds);
   const backendActive = backendOptimization?.active === true;
-  const backendResponsiveExecution = readRecord(scheduler.backendResponsiveExecution);
+  const backendResponsiveExecution = readRecord(
+    scheduler.backendResponsiveExecution,
+  );
   const backendResponsiveActive = backendResponsiveExecution?.active === true;
   const backendStrategy = readSafeString(backendOptimization, "strategy");
-  const admissionWeight = readSafeNumber(backendOptimization, "admissionWeight");
+  const admissionWeight = readSafeNumber(
+    backendOptimization,
+    "admissionWeight",
+  );
 
   if (!benchmark && boostedStepIds.length === 0 && !backendActive) {
     return null;
@@ -2370,7 +2493,8 @@ export function extractRuntimeDispatchPolicyFeedback(
     responsivePolicyOutcome: deriveQuantumResponsivePolicyOutcome({
       backendActive: backendResponsiveActive,
       responsiveBoostedStepCount: responsiveBoostedStepIds.length,
-      hasLivenessBenchmark: livenessBenchmark?.metric === "responsive_execution_liveness",
+      hasLivenessBenchmark:
+        livenessBenchmark?.metric === "responsive_execution_liveness",
     }),
     responsiveBoostedStepIds,
     responsiveBoostedStepCount: responsiveBoostedStepIds.length,
@@ -2403,15 +2527,24 @@ export function extractRuntimeDispatchPolicyFeedback(
       livenessBenchmark?.metric === "responsive_execution_liveness"
         ? livenessBenchmark.runId
         : null,
-    parallelReadCandidateCount: readSafeNumber(livenessRecord, "parallelReadCandidateCount"),
+    parallelReadCandidateCount: readSafeNumber(
+      livenessRecord,
+      "parallelReadCandidateCount",
+    ),
     blockedStepCount: readSafeNumber(livenessRecord, "blockedStepCount"),
     writeStepCount: readSafeNumber(livenessRecord, "writeStepCount"),
-    deadlinePressureStepCount: readSafeNumber(livenessRecord, "deadlinePressureStepCount"),
+    deadlinePressureStepCount: readSafeNumber(
+      livenessRecord,
+      "deadlinePressureStepCount",
+    ),
     livenessGuardActive: livenessGuard?.active === true,
     livenessGuardTimeoutRisk:
       readSafeString(livenessGuard, "timeoutRisk") ??
       readSafeString(backendLivenessGuard, "timeoutRisk"),
-    livenessGuardEffectiveMaxReplans: readSafeNumber(livenessGuard, "effectiveMaxReplans"),
+    livenessGuardEffectiveMaxReplans: readSafeNumber(
+      livenessGuard,
+      "effectiveMaxReplans",
+    ),
     livenessGuardMaxReplans:
       readSafeNumber(livenessGuard, "maxReplans") ??
       readSafeNumber(backendLivenessGuard, "maxReplans"),
@@ -2438,7 +2571,9 @@ export function computeRuntimeDispatchPolicyFeedbackConfidence(
   }
   if (signal.responsivePolicyOutcome === "backend_active_responsive_boosted") {
     confidence += 5;
-  } else if (signal.responsivePolicyOutcome === "backend_active_no_responsive_boost") {
+  } else if (
+    signal.responsivePolicyOutcome === "backend_active_no_responsive_boost"
+  ) {
     confidence -= 3;
   }
   if (signal.livenessGuardActive) {
@@ -2690,6 +2825,8 @@ async function insertTaskEvent(
     status: TaskStatus;
     message?: string;
     payload?: Record<string, unknown>;
+    privatePayload?: Record<string, unknown>;
+    requirePrivateBlob?: boolean;
   },
 ) {
   const eventId = randomUUID();
@@ -2697,16 +2834,24 @@ async function insertTaskEvent(
     ? sanitizePublicTaskEventPayload(input.payload)
     : null;
   const publicPayloadRecord = readRecord(publicPayload);
-  const payloadBlob = input.payload
-    ? await app.services?.blobs?.storeJson({
-        ownerType: "task_event",
-        ownerId: eventId,
-        userId: input.userId,
-        slot: "payload",
-        scope: "task_event_payload",
-        value: publicPayloadRecord ?? publicPayload,
-      })
-    : null;
+  const payloadBlob =
+    input.payload || input.privatePayload
+      ? await app.services?.blobs?.storeJson({
+          ownerType: "task_event",
+          ownerId: eventId,
+          userId: input.userId,
+          slot: "payload",
+          scope: "task_event_payload",
+          value: input.privatePayload ?? publicPayloadRecord ?? publicPayload,
+        })
+      : null;
+  if (input.requirePrivateBlob && !payloadBlob?.blobId) {
+    throw new AppError(
+      503,
+      "task_control_plan_store_unavailable",
+      "Güncellenen çalışma planı güvenli biçimde saklanamadı.",
+    );
+  }
   await app.db.insert(taskEvents).values({
     id: eventId,
     taskId: input.taskId,
@@ -2963,7 +3108,12 @@ async function persistSessionArtifactMemory(
       `,
       updatedAt: new Date(),
     })
-    .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, input.userId)));
+    .where(
+      and(
+        eq(chatSessions.id, sessionId),
+        eq(chatSessions.userId, input.userId),
+      ),
+    );
 }
 
 async function readSessionArtifactMemory(
@@ -2975,7 +3125,12 @@ async function readSessionArtifactMemory(
   const rows = await app.db
     .select({ metadata: chatSessions.metadata })
     .from(chatSessions)
-    .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, input.userId)))
+    .where(
+      and(
+        eq(chatSessions.id, sessionId),
+        eq(chatSessions.userId, input.userId),
+      ),
+    )
     .limit(1);
   const metadata = readRecord(rows[0]?.metadata);
   const sessionArtifacts = Array.isArray(metadata?.sessionArtifacts)
@@ -3424,7 +3579,7 @@ async function dispatchRuntimeTaskLease(
     } as const;
   }
 
-  const dispatched = app.services.realtimeHub.sendToRuntime(
+  const dispatched = await app.services.realtimeHub.sendToRuntimeDistributed(
     input.task.targetDeviceId,
     buildRuntimeTaskDispatchEnvelope(leaseResult.task, lease),
   );
@@ -3527,6 +3682,30 @@ export async function issueTaskDispatchLease(
   } as const;
 }
 
+export async function releaseUnacceptedTaskDispatchLease(
+  app: FastifyInstance,
+  input: { taskId: string; leaseId: string },
+): Promise<boolean> {
+  const rows = await app.db
+    .update(tasks)
+    .set({
+      dispatchLeaseId: null,
+      dispatchLeaseIssuedAt: null,
+      dispatchLeaseExpiresAt: null,
+      runtimeConnectionId: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(tasks.id, input.taskId),
+        eq(tasks.dispatchLeaseId, input.leaseId),
+        isNull(tasks.dispatchAckAt),
+      ),
+    )
+    .returning({ id: tasks.id });
+  return rows.length > 0;
+}
+
 export async function acknowledgeTaskDispatchLease(
   app: FastifyInstance,
   auth: RuntimeAuthTokenPayload,
@@ -3537,6 +3716,9 @@ export async function acknowledgeTaskDispatchLease(
   },
 ) {
   const task = await getTaskForRuntime(app, input.taskId, auth);
+  if (isTerminalTaskStatus(task.status)) {
+    throw conflict("Task dispatch lease is no longer active");
+  }
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);
 
   if (
@@ -3561,9 +3743,18 @@ export async function acknowledgeTaskDispatchLease(
         acceptedAt,
       }),
     )
-    .where(eq(tasks.id, ownedTask.id))
+    .where(
+      and(
+        eq(tasks.id, ownedTask.id),
+        eq(tasks.status, ownedTask.status),
+        eq(tasks.dispatchLeaseId, input.leaseId),
+      ),
+    )
     .returning();
-  const updatedTask = rows[0] ?? ownedTask;
+  const updatedTask = rows[0];
+  if (!updatedTask) {
+    throw conflict("Task state changed before runtime lease acknowledgement");
+  }
   const effectiveAcceptedAt =
     updatedTask.dispatchAckAt?.toISOString() ??
     acceptedAt?.toISOString() ??
@@ -3588,6 +3779,18 @@ export async function acknowledgeTaskDispatchLease(
     acceptedAt: effectiveAcceptedAt,
     acceptanceMode: "local_journal_persisted",
   });
+  try {
+    await syncChatTaskLifecycle(app, {
+      originalTask: ownedTask,
+      updatedTask,
+      message: "Masaüstü görevi aldı",
+    });
+  } catch (error) {
+    app.log.warn(
+      { err: error, taskId: updatedTask.id },
+      "Runtime acknowledgement chat sync failed",
+    );
+  }
 
   return {
     task: updatedTask,
@@ -3630,10 +3833,20 @@ async function ensureTaskRuntimeOwnership(
           runtimeConnectionId: activeConnection.id,
         }),
       )
-      .where(eq(tasks.id, task.id))
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, task.status),
+          isNull(tasks.runtimeConnectionId),
+        ),
+      )
       .returning();
 
-    return rows[0] ?? { ...task, runtimeConnectionId: activeConnection.id };
+    const reboundTask = rows[0];
+    if (!reboundTask) {
+      throw conflict("Task state changed before runtime ownership was bound");
+    }
+    return reboundTask;
   }
 
   const previousRows = await app.db
@@ -3662,12 +3875,20 @@ async function ensureTaskRuntimeOwnership(
         runtimeConnectionId: activeConnection.id,
       }),
     )
-    .where(eq(tasks.id, task.id))
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        eq(tasks.status, task.status),
+        eq(tasks.runtimeConnectionId, task.runtimeConnectionId),
+      ),
+    )
     .returning();
 
-  return (
-    reboundRows[0] ?? { ...task, runtimeConnectionId: activeConnection.id }
-  );
+  const reboundTask = reboundRows[0];
+  if (!reboundTask) {
+    throw conflict("Task state changed before runtime ownership was rebound");
+  }
+  return reboundTask;
 }
 
 function shouldSkipDuplicateRuntimeTerminalUpdate(
@@ -3675,6 +3896,48 @@ function shouldSkipDuplicateRuntimeTerminalUpdate(
   nextStatus: TaskStatus,
 ): boolean {
   return isTerminalTaskStatus(task.status) && task.status === nextStatus;
+}
+
+function shouldSkipDuplicateRuntimeProgressUpdate(input: {
+  task: Pick<
+    typeof tasks.$inferSelect,
+    "status" | "summary" | "error" | "approvalRequest" | "result"
+  >;
+  status: TaskStatus;
+  message?: string;
+  summary?: string;
+  error?: string;
+  approvalRequest?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  artifactCount: number;
+}): boolean {
+  if (
+    isTerminalTaskStatus(input.status) ||
+    input.task.status !== input.status ||
+    input.artifactCount > 0 ||
+    input.message?.trim()
+  ) {
+    return false;
+  }
+  if (
+    input.summary !== undefined &&
+    input.summary !== (input.task.summary ?? undefined)
+  ) {
+    return false;
+  }
+  if (
+    input.error !== undefined &&
+    input.error !== (input.task.error ?? undefined)
+  ) {
+    return false;
+  }
+  const sameJson = (current: unknown, next: unknown) =>
+    next === undefined ||
+    JSON.stringify(current ?? null) === JSON.stringify(next);
+  return (
+    sameJson(input.task.approvalRequest, input.approvalRequest) &&
+    sameJson(input.task.result, input.result)
+  );
 }
 
 async function publishTaskEvent(
@@ -3764,9 +4027,7 @@ function isDurableChatGenerationTask(
   task: Pick<typeof tasks.$inferSelect, "payload">,
 ): boolean {
   const payload = readRecord(task.payload) ?? {};
-  const chatGeneration = readRecord(
-    getPayloadMetadata(payload).chatGeneration,
-  );
+  const chatGeneration = readRecord(getPayloadMetadata(payload).chatGeneration);
   return chatGeneration?.queued === true;
 }
 
@@ -3904,7 +4165,8 @@ export async function reconcileStaleRuntimeTasks(
       }
 
       if ((task.dispatchAttemptCount ?? 0) >= MAX_TASK_DISPATCH_ATTEMPTS) {
-        const message = "Desktop görevi birkaç denemeden sonra teslim edilemedi. Lütfen desktop bağlantısını kontrol edip tekrar deneyin.";
+        const message =
+          "Desktop görevi birkaç denemeden sonra teslim edilemedi. Lütfen desktop bağlantısını kontrol edip tekrar deneyin.";
         const rows = await app.db
           .update(tasks)
           .set(buildTaskDispatchExhaustedUpdate({ now, message }))
@@ -4374,7 +4636,9 @@ async function completeServerBrainTask(
       {
         sourceAuthority: artifactPipeline.spec?.metadata?.sourceAuthority,
         validationOk: false,
-        errorCodes: artifactPipeline.validation.errors.map((error) => error.code),
+        errorCodes: artifactPipeline.validation.errors.map(
+          (error) => error.code,
+        ),
       },
     );
   }
@@ -4392,29 +4656,33 @@ async function completeServerBrainTask(
   const hasVisualDataBlock = resolvedAssistantBlocks.some((block) =>
     VISUAL_DATA_BLOCK_TYPES.has(block.type),
   );
-  const referencedSourceImages = await resolveMediaInputSources(app, input.userId, payloadMetadata);
-  const effectiveSourceImages = referencedSourceImages.length > 0
-    ? referencedSourceImages
-    : input.sourceImages;
+  const referencedSourceImages = await resolveMediaInputSources(
+    app,
+    input.userId,
+    payloadMetadata,
+  );
+  const effectiveSourceImages =
+    referencedSourceImages.length > 0
+      ? referencedSourceImages
+      : input.sourceImages;
   const generatedImageArtifact =
     artifactPipeline.kind === "evidence_required" ||
     artifactPipeline.kind === "validation_failed" ||
     hasVisualDataBlock
-    ? null
-    : await maybeGenerateHostedImageArtifact(app, {
-        prompt,
-        metadata: payloadMetadata,
-        userId: input.userId,
-        taskId: input.taskId,
-        sourceImages: effectiveSourceImages,
-      });
+      ? null
+      : await maybeGenerateHostedImageArtifact(app, {
+          prompt,
+          metadata: payloadMetadata,
+          userId: input.userId,
+          taskId: input.taskId,
+          sourceImages: effectiveSourceImages,
+        });
   const imageGenerationRequested =
     artifactPipeline.kind !== "evidence_required" &&
     artifactPipeline.kind !== "validation_failed" &&
-    !hasVisualDataBlock && (
-      isHostedImageGenerationRequest(prompt) ||
-      isHostedImageEditRequest(prompt, effectiveSourceImages?.length ?? 0)
-    );
+    !hasVisualDataBlock &&
+    (isHostedImageGenerationRequest(prompt) ||
+      isHostedImageEditRequest(prompt, effectiveSourceImages?.length ?? 0));
   if (generatedImageArtifact) {
     visibleResponseText = generatedImageArtifact.previewText;
     resolvedAssistantBlocks = [];
@@ -4441,25 +4709,25 @@ async function completeServerBrainTask(
     artifactPipeline.kind === "validation_failed"
       ? null
       : generatedImageArtifact
-    ? null
-    : visibleResponseText || artifactPipeline.kind === "rendered"
-      ? buildLocalRenderRecipe({
-          prompt,
-          responseText: visibleResponseText,
-          assistantBlocks: resolvedAssistantBlocks,
-          authoritativeTextBlocks:
-            artifactPipeline.kind === "rendered"
-              ? artifactSpecToRenderRecipeBlocks(artifactPipeline.spec)
-              : undefined,
-          metadata: renderRecipeMetadata,
-          renderOn:
-            typeof payload.source === "string" &&
-            payload.source.trim().toLowerCase() === "desktop"
-              ? "desktop"
-              : "mobile",
-          taskId: task.id,
-        })
-      : null;
+        ? null
+        : visibleResponseText || artifactPipeline.kind === "rendered"
+          ? buildLocalRenderRecipe({
+              prompt,
+              responseText: visibleResponseText,
+              assistantBlocks: resolvedAssistantBlocks,
+              authoritativeTextBlocks:
+                artifactPipeline.kind === "rendered"
+                  ? artifactSpecToRenderRecipeBlocks(artifactPipeline.spec)
+                  : undefined,
+              metadata: renderRecipeMetadata,
+              renderOn:
+                typeof payload.source === "string" &&
+                payload.source.trim().toLowerCase() === "desktop"
+                  ? "desktop"
+                  : "mobile",
+              taskId: task.id,
+            })
+          : null;
   const structuredSummary = summarizeStructuredAssistantBlocks(
     resolvedAssistantBlocks,
   );
@@ -4583,7 +4851,7 @@ async function completeServerBrainTask(
                     .slice(0, 16),
                 },
               }
-          : {}),
+            : {}),
     imageArtifactGenerated: Boolean(generatedImageArtifact),
     ...(input.toolFlow ? { toolFlow: input.toolFlow } : {}),
     ...(input.connectorWriteApproval
@@ -5054,7 +5322,11 @@ async function markServerBrainTaskRunning(
     return task;
   }
   if (isTerminalTaskStatus(task.status) || task.status === "waiting_approval") {
-    throw new AppError(409, "task_not_processable", "Görev artık çalıştırılamıyor.");
+    throw new AppError(
+      409,
+      "task_not_processable",
+      "Görev artık çalıştırılamıyor.",
+    );
   }
 
   const now = new Date();
@@ -5081,7 +5353,11 @@ async function markServerBrainTaskRunning(
     if (latestTask?.status === "running") {
       return latestTask;
     }
-    throw new AppError(409, "task_not_processable", "Görev artık çalıştırılamıyor.");
+    throw new AppError(
+      409,
+      "task_not_processable",
+      "Görev artık çalıştırılamıyor.",
+    );
   }
 
   const updatedTask = rows[0];
@@ -5411,7 +5687,9 @@ async function processSharedBrainChatTask(
     const sourceImages = hostedImageSources(hydratedEphemeralVision);
     const imageEditIntent = isHostedImageEditIntent(input.prompt);
     const imageEditHasSessionImage = sessionArtifacts.some((artifact) => {
-      const type = String(artifact.artifactType ?? artifact.type ?? "").toLowerCase();
+      const type = String(
+        artifact.artifactType ?? artifact.type ?? "",
+      ).toLowerCase();
       const family = String(artifact.contentFamily ?? "").toLowerCase();
       return type === "image" || family === "image";
     });
@@ -5420,8 +5698,7 @@ async function processSharedBrainChatTask(
       countDistinctEphemeralImages(hydratedEphemeralVision) === 0 &&
       !imageEditHasSessionImage;
     const imageGenerationRequested =
-      isHostedImageGenerationRequest(input.prompt) ||
-      imageEditIntent;
+      isHostedImageGenerationRequest(input.prompt) || imageEditIntent;
 
     if (imageGenerationRequested) {
       await assertSharedBrainExecutionActive(input);
@@ -5565,7 +5842,10 @@ async function processSharedBrainChatTask(
           blocks: completedResultBlocks,
         });
         // Prettier-ignore -- source-level regression contract verifies this render seam.
-        const visibleText = imageResultBlocks.length > 0 ? "" : ensureUserFacingMessage(completedResultText);
+        const visibleText =
+          imageResultBlocks.length > 0
+            ? ""
+            : ensureUserFacingMessage(completedResultText);
         const finalBlocks = composeAssistantMessageBlocks({
           content: visibleText,
           blocks: imageResultBlocks,
@@ -5636,23 +5916,6 @@ async function processSharedBrainChatTask(
         });
       }
       return;
-    }
-    // Deterministik hedef komutu: "hedef oluştur/tamamla" model beklemeden
-    // sunucuda uygulanır. Model yolu (turn envelope goal_ops) bunu dışlamaz;
-    // bu yol flag'siz, her mesajda mikrosaniyede çalışan garanti halka.
-    const goalCommand = detectGoalChatCommand(input.prompt);
-    const goalCommandResult = goalCommand
-      ? await executeGoalChatCommand(app, {
-          userId: input.userId,
-          sessionId: chatStreaming?.sessionId ?? null,
-          taskId: runningTask.id,
-          command: goalCommand,
-        })
-      : null;
-    if (goalCommandResult && input.understanding.context) {
-      // Modele yeni hedefi [GOAL] bloğu üzerinden duyur — cevap metni hedefi
-      // isim ve adım sayısıyla referans alabilsin.
-      input.understanding.context.activeGoal = goalCommandResult.goal;
     }
     const ackText = buildSharedBrainAckText(selectedWorkload);
     const ackTaskTrace = buildTaskTraceBlock({
@@ -5833,10 +6096,8 @@ async function processSharedBrainChatTask(
             ],
             loadSheddingConcurrencyOverride:
               input.providerStage === "primary"
-                ? getChatGenerationQueueLimits(app)
-                    .primaryGlobalConcurrency
-                : getChatGenerationQueueLimits(app)
-                    .fallbackGlobalConcurrency,
+                ? getChatGenerationQueueLimits(app).primaryGlobalConcurrency
+                : getChatGenerationQueueLimits(app).fallbackGlobalConcurrency,
           }
         : {}),
       shouldAbort: shouldAbortQueuedTask,
@@ -5844,12 +6105,10 @@ async function processSharedBrainChatTask(
       onDelta: chatStreaming
         ? async (delta) => {
             if (shouldAbortQueuedTask && (await shouldAbortQueuedTask())) {
-              throw new AppError(
-                409,
-                "task_canceled",
-                "Görev iptal edildi.",
-                { transient: false, retrySuggested: false },
-              );
+              throw new AppError(409, "task_canceled", "Görev iptal edildi.", {
+                transient: false,
+                retrySuggested: false,
+              });
             }
             // Provider reasoning is internal-only; only content can stream to chat.
             const incomingVisibleContent = sanitizeAssistantVisibleText(
@@ -5961,7 +6220,7 @@ async function processSharedBrainChatTask(
       responseText: resolveNonEchoAssistantText({
         prompt: input.prompt,
         responseText: inference.text,
-          policy: visibleTextPolicy,
+        policy: visibleTextPolicy,
       }),
       provider: inference.provider,
       model: inference.model,
@@ -5994,7 +6253,7 @@ async function processSharedBrainChatTask(
       assistantReply: resolveNonEchoAssistantText({
         prompt: input.prompt,
         responseText: inference.text,
-          policy: visibleTextPolicy,
+        policy: visibleTextPolicy,
       }),
       intent: input.understanding.intent.primaryIntent,
       requestId: input.requestId,
@@ -6002,9 +6261,7 @@ async function processSharedBrainChatTask(
         typeof readRecord(input.currentTask.payload)?.source === "string"
           ? String(readRecord(input.currentTask.payload)?.source)
           : undefined,
-      metadata: getPayloadMetadata(
-        readRecord(input.currentTask.payload) ?? {},
-      ),
+      metadata: getPayloadMetadata(readRecord(input.currentTask.payload) ?? {}),
       volatileExternalData:
         typeof inference.metadata.freshDataDomain === "string" &&
         !["general", "url_review"].includes(inference.metadata.freshDataDomain),
@@ -6018,7 +6275,7 @@ async function processSharedBrainChatTask(
         assistantReply: resolveNonEchoAssistantText({
           prompt: input.prompt,
           responseText: inference.text,
-            policy: visibleTextPolicy,
+          policy: visibleTextPolicy,
         }),
       }).catch(() => undefined);
     }
@@ -6070,20 +6327,6 @@ async function processSharedBrainChatTask(
       const visibleText = ensureUserFacingMessage(
         inferenceResolved.text || completedResultText,
       );
-      // Deterministik hedef bloğu: model kendi goal_progress bloğunu ürettiyse
-      // duplike etme — aynı goalId için tek kart.
-      const goalBlock =
-        goalCommandResult &&
-        !inferenceBlocks.some(
-          (block) =>
-            block &&
-            typeof block === "object" &&
-            (block as Record<string, unknown>).type === "goal_progress" &&
-            (block as Record<string, unknown>).goalId ===
-              goalCommandResult.block.goalId,
-        )
-          ? [goalCommandResult.block]
-          : [];
       const finalBlocks = composeAssistantMessageBlocks({
         content: visibleText,
         blocks: [unifiedTaskTrace, ...visibleInferenceBlocks],
@@ -6095,7 +6338,7 @@ async function processSharedBrainChatTask(
       });
       void applyGoalProgressBlocks(app, {
         userId: input.userId,
-        blocks: [...goalBlock, ...goalProgressBlocks],
+        blocks: goalProgressBlocks,
       });
       // Persist final blocks + cleaned content to the chat_messages row so a
       // later GET /messages (user leaves and reopens) returns the same
@@ -6219,10 +6462,7 @@ async function processSharedBrainChatTask(
 function isTransientSharedBrainFailure(error: unknown): boolean {
   if (error instanceof AppError) {
     const details = readRecord(error.details);
-    if (
-      details?.retrySuggested === false ||
-      details?.transient === false
-    ) {
+    if (details?.retrySuggested === false || details?.transient === false) {
       return false;
     }
     return (
@@ -6241,10 +6481,7 @@ function isTransientSharedBrainFailure(error: unknown): boolean {
 
 async function finalizeSharedBrainChatFailure(
   app: FastifyInstance,
-  input: Pick<
-    SharedBrainChatTaskInput,
-    "currentTask" | "userId" | "requestId"
-  >,
+  input: Pick<SharedBrainChatTaskInput, "currentTask" | "userId" | "requestId">,
   error: unknown,
 ) {
   if (await completeSafeChatContinuityFallback(app, input, error)) {
@@ -6366,13 +6603,11 @@ async function finalizeSharedBrainChatFailure(
 
 async function completeSafeChatContinuityFallback(
   app: FastifyInstance,
-  input: Pick<
-    SharedBrainChatTaskInput,
-    "currentTask" | "userId" | "requestId"
-  >,
+  input: Pick<SharedBrainChatTaskInput, "currentTask" | "userId" | "requestId">,
   error: unknown,
 ): Promise<boolean> {
-  const task = (await getTaskById(app, input.currentTask.id)) ?? input.currentTask;
+  const task =
+    (await getTaskById(app, input.currentTask.id)) ?? input.currentTask;
   if (task.userId !== input.userId || isChatGenerationSettled(task.status)) {
     return false;
   }
@@ -6384,7 +6619,9 @@ async function completeSafeChatContinuityFallback(
   const errorCode =
     error instanceof AppError ? error.code : "server_brain_unavailable";
   const workload = String(
-    routeDecision?.selectedWorkload ?? metadata.selectedWorkload ?? "mobile_chat_fast",
+    routeDecision?.selectedWorkload ??
+      metadata.selectedWorkload ??
+      "mobile_chat_fast",
   );
   const responseText = resolveSafeChatContinuityReply({
     prompt: getTaskPrompt(payload),
@@ -6586,8 +6823,7 @@ export async function getQueuedSharedBrainChatTask(
       title: row.title,
       message: prompt,
       routeContext: "tasks.chat_queue",
-      source:
-        typeof payload.source === "string" ? payload.source : undefined,
+      source: typeof payload.source === "string" ? payload.source : undefined,
       deviceId: row.targetDeviceId,
       metadata,
     }).catch(() =>
@@ -6598,8 +6834,7 @@ export async function getQueuedSharedBrainChatTask(
         title: row.title,
         message: prompt,
         routeContext: "tasks.chat_queue",
-        source:
-          typeof payload.source === "string" ? payload.source : undefined,
+        source: typeof payload.source === "string" ? payload.source : undefined,
         deviceId: row.targetDeviceId,
         metadata,
       }),
@@ -6761,6 +6996,110 @@ export async function failQueuedSharedBrainChatTask(
   );
 }
 
+export async function failQueuedDesktopPlanTask(
+  app: FastifyInstance,
+  input: { task: typeof tasks.$inferSelect },
+): Promise<typeof tasks.$inferSelect | null> {
+  const message =
+    "Görevin güvenilir yürütme planı hazırlanamadı. Lütfen birkaç saniye sonra tekrar deneyin.";
+  const rows = await app.db
+    .update(tasks)
+    .set({
+      status: "failed",
+      error: message,
+      summary: message,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+      queuePosition: 0,
+    })
+    .where(
+      and(
+        eq(tasks.id, input.task.id),
+        eq(tasks.userId, input.task.userId),
+        eq(tasks.status, "queued"),
+      ),
+    )
+    .returning();
+  const failedTask = rows[0] ?? null;
+  if (!failedTask) return null;
+
+  await insertTaskEvent(app, {
+    taskId: failedTask.id,
+    userId: failedTask.userId,
+    status: "failed",
+    message,
+    payload: {
+      route: "desktop_runtime",
+      failureClass: "model_plan_unavailable",
+      retryable: true,
+    },
+  });
+  await publishTaskEvent(app, failedTask, "task.updated", {
+    task: shapeTaskFeedItem(failedTask),
+  });
+  await syncChatTaskLifecycle(app, {
+    originalTask: input.task,
+    updatedTask: failedTask,
+    message,
+  });
+  return failedTask;
+}
+
+type TaskInterventionContext = {
+  supersedesTaskId: string;
+  previousPrompt: string;
+  previousTitle: string;
+  previousTargetDeviceId: string | null;
+};
+
+async function resolveTaskInterventionContext(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    metadata: Record<string, unknown>;
+  },
+): Promise<TaskInterventionContext | null> {
+  const intervention = readRecord(input.metadata.intervention);
+  const supersedesTaskId = String(intervention?.supersedesTaskId ?? "").trim();
+  if (
+    intervention?.kind !== "redirect_after_cancel" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      supersedesTaskId,
+    )
+  ) {
+    delete input.metadata.intervention;
+    return null;
+  }
+  const previousTask = await getTaskForUser(
+    app,
+    supersedesTaskId,
+    input.userId,
+  );
+  if (previousTask.status !== "canceled") {
+    throw conflict("Task must be canceled before it can be redirected");
+  }
+  const previousPayload = readRecord(previousTask.payload) ?? {};
+  const previousPrompt = getTaskPrompt(previousPayload).trim();
+  if (!previousPrompt) {
+    throw conflict("Canceled task has no redirectable goal");
+  }
+  input.metadata.intervention = {
+    kind: "redirect_after_cancel",
+    supersedesTaskId,
+  };
+  return {
+    supersedesTaskId,
+    previousPrompt: previousPrompt.slice(0, 20_000),
+    previousTitle: String(previousTask.title ?? "")
+      .trim()
+      .slice(0, 200),
+    previousTargetDeviceId:
+      typeof previousTask.targetDeviceId === "string"
+        ? previousTask.targetDeviceId
+        : null,
+  };
+}
+
 export async function createTask(
   app: FastifyInstance,
   input: {
@@ -6783,28 +7122,45 @@ export async function createTask(
   const prompt = getTaskPrompt(input.payload);
   const payloadMetadata = getPayloadMetadata(input.payload);
   bindAuthorizedMediaInputRefs(payloadMetadata, input.ephemeralVision);
-  const [usageAccess, remoteMcpResolution] = await Promise.all([
-    getUserUsageAccessTruth(app.db, input.userId),
-    input.requestedCapabilitiesResolved
-      ? Promise.resolve({
-          requestedCapabilities: input.requestedCapabilities,
-          selection: normalizeRemoteMcpSelectionMetadata(
-            payloadMetadata.remoteMcpSelection,
-          ),
-        })
-      : resolveRemoteMcpRequest(app, {
-          userId: input.userId,
-          prompt,
-          requestedCapabilities: input.requestedCapabilities,
-        }),
-  ]);
+  const [usageAccess, remoteMcpResolution, interventionContext] =
+    await Promise.all([
+      getUserUsageAccessTruth(app.db, input.userId),
+      input.requestedCapabilitiesResolved
+        ? Promise.resolve({
+            requestedCapabilities: input.requestedCapabilities,
+            selection: normalizeRemoteMcpSelectionMetadata(
+              payloadMetadata.remoteMcpSelection,
+            ),
+          })
+        : resolveRemoteMcpRequest(app, {
+            userId: input.userId,
+            prompt,
+            requestedCapabilities: input.requestedCapabilities,
+          }),
+      resolveTaskInterventionContext(app, {
+        userId: input.userId,
+        metadata: payloadMetadata,
+      }),
+    ]);
+  const planningPrompt = interventionContext
+    ? [
+        "Continue the canceled desktop task with the user's new direction.",
+        `Previous goal: ${interventionContext.previousPrompt}`,
+        `New direction: ${prompt}`,
+      ].join("\n")
+    : prompt;
+  const preferredDesktopTargetDeviceId =
+    input.targetDeviceId ??
+    interventionContext?.previousTargetDeviceId ??
+    undefined;
   const effectiveRequestedCapabilities =
     remoteMcpResolution.requestedCapabilities;
   const remoteMcpSelection = remoteMcpResolution.selection;
-  const remoteMcpRequested = effectiveRequestedCapabilities.includes(
-    "mcp_call_tool",
-  );
-  const extractedRouteDecision = extractRouteDecision(input.payload);
+  const remoteMcpRequested =
+    effectiveRequestedCapabilities.includes("mcp_call_tool");
+  const extractedRouteDecision = interventionContext
+    ? null
+    : extractRouteDecision(input.payload);
   const extractedRouteIsStale = isRemoteMcpRouteDecisionStale(
     extractedRouteDecision,
     effectiveRequestedCapabilities,
@@ -6813,7 +7169,7 @@ export async function createTask(
     (!extractedRouteIsStale ? extractedRouteDecision : null) ??
     (await decideCommandRoute(app, {
       userId: input.userId,
-      message: prompt,
+      message: planningPrompt,
       source:
         typeof input.payload.source === "string" &&
         input.payload.source === "desktop"
@@ -6826,8 +7182,20 @@ export async function createTask(
               (payloadMetadata.chat as Record<string, unknown>).sessionId ?? "",
             )
           : undefined,
-      selectedDeviceId: input.targetDeviceId,
-      metadata: payloadMetadata,
+      selectedDeviceId: preferredDesktopTargetDeviceId,
+      metadata: {
+        ...payloadMetadata,
+        ...(interventionContext
+          ? {
+              interventionContext: {
+                supersedesTaskId: interventionContext.supersedesTaskId,
+                previousTitle: interventionContext.previousTitle,
+                previousTargetDeviceId:
+                  interventionContext.previousTargetDeviceId,
+              },
+            }
+          : {}),
+      },
       desktopAllowed: canUseDesktopConnections(usageAccess.planCode),
       requestedCapabilities: effectiveRequestedCapabilities,
       bootstrap: undefined,
@@ -6839,7 +7207,7 @@ export async function createTask(
     : effectiveRequestedCapabilities;
   const routeOrigin = normalizeRouteOrigin(input.payload.source);
   const routeSelectedTargetDeviceId =
-    input.requestedTargetDeviceId ?? input.targetDeviceId;
+    input.requestedTargetDeviceId ?? preferredDesktopTargetDeviceId;
   const needsDesktop = resolveTaskRouteNeedsDesktop(routeDecision);
   const routeBlocked =
     needsDesktop &&
@@ -6857,7 +7225,7 @@ export async function createTask(
     ? await resolvePendingDesktopQueueTarget(
         app,
         input.userId,
-        input.targetDeviceId,
+        preferredDesktopTargetDeviceId,
         routeCapabilities,
       )
     : null;
@@ -6868,7 +7236,7 @@ export async function createTask(
       : await resolveCommandTarget(
           app,
           input.userId,
-          input.targetDeviceId,
+          preferredDesktopTargetDeviceId,
           "task",
           routeCapabilities,
         )
@@ -6967,7 +7335,7 @@ export async function createTask(
   });
   const useDirectDesktopFastPath = isDeterministicDesktopFastWorkOrder(
     routeDecision,
-    prompt,
+    planningPrompt,
   );
   // SÜREKLİLİK KAYNAĞI: "bunu belge yap" derken belgelenecek içerik önceki
   // asistan cevabıdır. O cevap ne mobilde ne masaüstünde durur — burada durur.
@@ -6976,7 +7344,9 @@ export async function createTask(
   // türetmiyordu). Oturumdan türetiyoruz; yoksa alan hiç eklenmez (uydurma yok).
   const activeChatSessionId =
     typeof payloadMetadata.chat === "object" && payloadMetadata.chat !== null
-      ? String((payloadMetadata.chat as Record<string, unknown>).sessionId ?? "").trim()
+      ? String(
+          (payloadMetadata.chat as Record<string, unknown>).sessionId ?? "",
+        ).trim()
       : "";
   const carriedAssistantText = activeChatSessionId
     ? await getLastAssistantMessageText(app, {
@@ -6988,7 +7358,7 @@ export async function createTask(
     userId: input.userId,
     accountId: input.userId,
     title: canonicalTitle,
-    message: prompt,
+    message: planningPrompt,
     routeContext: "tasks.create" as const,
     source:
       typeof input.payload.source === "string"
@@ -7013,7 +7383,7 @@ export async function createTask(
       );
   const desktopWorkOrder = isDesktopRoute
     ? buildDesktopWorkOrder({
-        message: prompt,
+        message: planningPrompt,
         title: canonicalTitle,
         routeDecision,
         requestedCapabilities: routeCapabilities,
@@ -7022,14 +7392,15 @@ export async function createTask(
         responsiveExecution: responsiveExecution ?? undefined,
         livenessGuard: livenessGuard ?? undefined,
         understandingEnvelope: understanding.envelope,
-        inputRefs: (
-          Array.isArray(payloadMetadata.mediaInputRefs)
-            ? payloadMetadata.mediaInputRefs
-            : []
+        autonomy: readAutonomyEnvelope(payloadMetadata),
+        inputRefs: (Array.isArray(payloadMetadata.mediaInputRefs)
+          ? payloadMetadata.mediaInputRefs
+          : []
         )
           .map((item) => readRecord(item)?.inputRef)
-          .filter((value): value is string =>
-            typeof value === "string" && value.length > 0
+          .filter(
+            (value): value is string =>
+              typeof value === "string" && value.length > 0,
           )
           .slice(0, 4),
         source:
@@ -7052,7 +7423,7 @@ export async function createTask(
         intent: routeDecision.taskRoute?.target ?? "desktop_runtime",
         requiresCapabilities:
           desktopWorkOrder?.requiredCapabilities ?? routeCapabilities,
-        naturalLanguageGoal: prompt,
+        naturalLanguageGoal: planningPrompt,
         workOrderSchema: desktopWorkOrder?.schema ?? null,
         structuredSteps: desktopWorkOrder?.planPreview.steps ?? null,
         ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
@@ -7355,6 +7726,23 @@ export async function createTask(
             inArray(tasks.status, activeTaskStatuses),
           ),
         );
+      const activeTargetTaskCount = Number(activeCounts[0]?.count ?? 0);
+      if (
+        isDesktopRoute &&
+        activeTargetTaskCount >=
+          app.config.ELYAN_DESKTOP_TASK_DEVICE_BACKLOG_MAX
+      ) {
+        throw new AppError(
+          429,
+          "desktop_queue_full",
+          "Bu masaüstünde çok sayıda görev bekliyor. Mevcut görevlerden biri tamamlandıktan sonra tekrar dene.",
+          {
+            retryAfterMs: 5_000,
+            retrySuggested: true,
+            queueReason: "device_backpressure",
+          },
+        );
+      }
       const createdTaskId = randomUUID();
 
       if (chatQueueAdmissionRequired) {
@@ -7415,7 +7803,7 @@ export async function createTask(
         reservedChatTaskId = createdTaskId;
       }
 
-      const queuePosition = Number(activeCounts[0]?.count ?? 0) + 1;
+      const queuePosition = activeTargetTaskCount + 1;
       const payloadBlob = await storeTaskJsonBlob(app, {
         taskId: createdTaskId,
         userId: input.userId,
@@ -7653,6 +8041,14 @@ export async function createTask(
     message: "Task queued",
     payload: {
       understanding: summarizeUnderstandingForSafeTelemetry(understanding),
+      ...(interventionContext
+        ? {
+            intervention: {
+              kind: "redirect_after_cancel",
+              supersedesTaskId: interventionContext.supersedesTaskId,
+            },
+          }
+        : {}),
     },
   });
 
@@ -7671,6 +8067,7 @@ export async function createTask(
       targetDeviceId,
       requestedCapabilities: routeCapabilities,
       idempotencyKey: input.idempotencyKey ?? null,
+      supersedesTaskId: interventionContext?.supersedesTaskId ?? null,
       understanding: summarizeUnderstandingForSafeTelemetry(understanding),
     },
   });
@@ -7707,11 +8104,9 @@ export async function createTask(
       const sourceImages = hostedImageSources(input.ephemeralVision);
       const imageEditIntent = isHostedImageEditIntent(prompt);
       const imageEditNeedsSource =
-        imageEditIntent && countDistinctEphemeralImages(input.ephemeralVision) === 0;
-      if (
-        isHostedImageGenerationRequest(prompt) ||
-        imageEditIntent
-      ) {
+        imageEditIntent &&
+        countDistinctEphemeralImages(input.ephemeralVision) === 0;
+      if (isHostedImageGenerationRequest(prompt) || imageEditIntent) {
         const startedAtMs = Date.now();
         const completedTask = await completeServerBrainTask(app, {
           taskId: runningTask.id,
@@ -7937,84 +8332,11 @@ export async function createTask(
   // Desktop dispatch never receives the cloud-only ephemeral carrier.
   clearEphemeralVisionCarrier(input.ephemeralVision);
 
-  const dispatchOwner = `backend:ws:${input.requestId}`;
-  const dispatchLockAcquired =
-    await app.services.reliability.acquireTaskDispatchLock(
-      currentTask.id,
-      dispatchOwner,
-    );
-  let dispatched = true;
-  if (dispatchLockAcquired) {
-    const leaseResult = await issueTaskDispatchLease(app, {
-      taskId: currentTask.id,
-      runtimeConnectionId: currentTask.runtimeConnectionId ?? null,
-      leaseMs: TASK_DISPATCH_LEASE_MS,
-    });
-    const lease = leaseResult?.lease ?? null;
-    const taskForDispatch = leaseResult?.task ?? currentTask;
-    const payload = buildRuntimeTaskDispatchEnvelope(taskForDispatch, lease);
-    dispatched = app.services.realtimeHub.sendToRuntime(
-      currentTask.targetDeviceId,
-      payload,
-    );
-    if (!dispatched) {
-      const rows = await app.db
-        .update(tasks)
-        .set(
-          buildTaskDispatchLeaseReleaseUpdate({
-            clearRuntimeConnection: true,
-          }),
-        )
-        .where(eq(tasks.id, currentTask.id))
-        .returning();
-      const releasedTask = rows[0] ?? currentTask;
-      await insertTaskEvent(app, {
-        taskId: releasedTask.id,
-        userId: releasedTask.userId,
-        status: "queued",
-        message: "Runtime offline; task returned to queue",
-        payload: {
-          reason: "runtime_offline",
-          lease,
-        },
-      });
-      await publishTaskEvent(app, releasedTask, "command.queued", {
-        task: shapeTaskFeedItem(releasedTask),
-        reason: "runtime_offline",
-        lease,
-      });
-      await syncChatTaskLifecycle(app, {
-        originalTask: currentTask,
-        updatedTask: releasedTask,
-        message: "Runtime offline; task returned to queue",
-      });
-      await app.services.reliability.releaseTaskDispatchLock(
-        currentTask.id,
-        dispatchOwner,
-      );
-      await enqueueTaskDispatch(app, releasedTask.id);
-    } else {
-      await publishTaskEvent(app, taskForDispatch, "command.routed", {
-        task: shapeTaskFeedItem(taskForDispatch),
-        lease,
-        route: "desktop_runtime",
-      });
-    }
-  }
-  await recordBridgeLearningSignals(app, {
-    userId: input.userId,
-    accountId: input.userId,
-    taskId: currentTask.id,
-    target: "desktop",
-    outcome: dispatched ? "dispatched" : "failed",
-    readiness: dispatched ? "ready" : "degraded",
-    routingMode: "desktop_first_when_available",
-    requestId: input.requestId,
-  });
+  // HTTP create yolu yalnız görevi kabul eder. Model planı, chat trace ve
+  // runtime lease aynı asenkron dispatch sahibi tarafından sırayla üretilir;
+  // doğrudan WebSocket hızlı yolu plan materyalizasyonunu yarışla atlamaz.
+  const accepted = await enqueueTaskDispatch(app, currentTask.id);
 
-  if (!isSharedBrain) {
-    await enqueueTaskDispatch(app, currentTask.id);
-  }
   await logRouteDecision(app, {
     taskId: currentTask.id,
     routeDecision,
@@ -8025,7 +8347,8 @@ export async function createTask(
 
   return {
     task: shapeTaskFeedItem(currentTask, { selectedDesktopOnline }),
-    dispatched,
+    dispatched: false,
+    accepted,
     reused: false,
     selectedDesktopOnline,
     renderRecipe: null,
@@ -8116,11 +8439,16 @@ export async function getTaskDetail(
   const events = scalableStateReads
     ? (eventWindowRows ?? []).slice(0, 200).reverse()
     : await eventQuery.orderBy(taskEvents.createdAt);
-  const taskArtifacts = await app.db
+  const artifactQuery = app.db
     .select()
     .from(artifacts)
-    .where(eq(artifacts.taskId, task.id))
-    .orderBy(artifacts.createdAt);
+    .where(eq(artifacts.taskId, task.id));
+  const artifactWindowRows = scalableStateReads
+    ? await artifactQuery.orderBy(desc(artifacts.createdAt)).limit(201)
+    : null;
+  const taskArtifacts = scalableStateReads
+    ? (artifactWindowRows ?? []).slice(0, 200).reverse()
+    : await artifactQuery.orderBy(artifacts.createdAt);
   const hydratedTask = {
     ...task,
     payload: await hydrateTaskJsonValue(app, task.payload, task.payloadBlobId, {
@@ -8158,7 +8486,7 @@ export async function getTaskDetail(
     events: await Promise.all(
       events.map(async (event) => ({
         ...event,
-        payload: sanitizePublicInferenceValue(
+        payload: sanitizePublicTaskEventPayload(
           await hydrateTaskJsonValue(app, event.payload, event.payloadBlobId, {
             userId,
             ownerType: "task_event",
@@ -8172,6 +8500,14 @@ export async function getTaskDetail(
           limit: 200,
           returned: events.length,
           truncated: (eventWindowRows?.length ?? 0) > 200,
+          order: "ascending",
+        }
+      : undefined,
+    artifactWindow: scalableStateReads
+      ? {
+          limit: 200,
+          returned: taskArtifacts.length,
+          truncated: (artifactWindowRows?.length ?? 0) > 200,
           order: "ascending",
         }
       : undefined,
@@ -8368,14 +8704,778 @@ export async function cancelTask(
     readRecord(canceledPayload.metadata) ?? {},
   ).catch(() => undefined);
 
-  app.services.realtimeHub.sendToRuntime(updatedTask.targetDeviceId, {
-    type: "task.cancel",
-    taskId: updatedTask.id,
-  });
+  await app.services.realtimeHub.sendToRuntimeDistributed(
+    updatedTask.targetDeviceId,
+    {
+      type: "task.cancel",
+      taskId: updatedTask.id,
+    },
+  );
 
   return {
     task: shapeTaskFeedItem(updatedTask),
   };
+}
+
+const TASK_CONTROL_REQUEST_MESSAGE = "Yeni yön masaüstüne iletilmeyi bekliyor.";
+const TASK_CONTROL_MAX_PER_TASK = 12;
+const TASK_CONTROL_EVENT_WINDOW = 64;
+
+type TaskControlState =
+  "requested" | "accepted" | "applied" | "rejected" | "failed";
+
+type TaskControl = {
+  id: string;
+  kind: "redirect";
+  instruction?: string;
+  state: TaskControlState;
+  requestedAt?: string;
+  acknowledgedAt?: string;
+  message?: string;
+  idempotencyKey?: string;
+  idempotencyHash?: string;
+  redirectDuplicateHash?: string;
+  anchorStepId?: string;
+  transportDelivered?: boolean;
+  planRevision?: TaskControlPlanRevisionSummary;
+  runtimePlan?: MaterializedDesktopPlanRevision;
+};
+
+type TaskControlPlanRevisionSummary = {
+  contract: "elyan.compiled_plan_revision.v1";
+  revision: number;
+  generatedAt: string;
+  stepCount: number;
+  addedStepCount: number;
+  removedStepCount: number;
+  changedStepCount: number;
+  anchorApplied: boolean;
+  capabilityScope: string[];
+  skillScope: string[];
+  approvalRequired: boolean;
+  approvalCapabilities: string[];
+  privacyClasses: string[];
+};
+
+function summarizeTaskControlPlanRevision(
+  revision: MaterializedDesktopPlanRevision,
+): TaskControlPlanRevisionSummary {
+  return {
+    contract: revision.contract,
+    revision: revision.revision,
+    generatedAt: revision.generatedAt,
+    stepCount: revision.steps.length,
+    addedStepCount: revision.diff.addedStepIds.length,
+    removedStepCount: revision.diff.removedStepIds.length,
+    changedStepCount: revision.diff.changedStepIds.length,
+    anchorApplied: Boolean(revision.anchorStepId),
+    capabilityScope: revision.capabilityScope.slice(0, 16),
+    skillScope: revision.skillScope.slice(0, 16),
+    approvalRequired: revision.approval.required,
+    approvalCapabilities: revision.approval.capabilities.slice(0, 16),
+    privacyClasses: revision.privacyClasses.slice(0, 8),
+  };
+}
+
+function readTaskControlPlanRevisionSummary(
+  value: unknown,
+): TaskControlPlanRevisionSummary | null {
+  const revision = readRecord(value);
+  if (
+    revision?.contract !== "elyan.compiled_plan_revision.v1" ||
+    typeof revision.revision !== "number" ||
+    !Number.isInteger(revision.revision) ||
+    revision.revision < 1 ||
+    typeof revision.generatedAt !== "string"
+  ) {
+    return null;
+  }
+  const boundedCount = (key: string) => {
+    const value = revision[key];
+    return typeof value === "number" && Number.isInteger(value)
+      ? Math.max(0, Math.min(MAX_WORK_ORDER_STEPS, value))
+      : 0;
+  };
+  return {
+    contract: revision.contract,
+    revision: revision.revision,
+    generatedAt: revision.generatedAt,
+    stepCount: boundedCount("stepCount"),
+    addedStepCount: boundedCount("addedStepCount"),
+    removedStepCount: boundedCount("removedStepCount"),
+    changedStepCount: boundedCount("changedStepCount"),
+    anchorApplied: revision.anchorApplied === true,
+    capabilityScope: readSafeStringArray(revision.capabilityScope),
+    skillScope: readSafeStringArray(revision.skillScope),
+    approvalRequired: revision.approvalRequired === true,
+    approvalCapabilities: readSafeStringArray(revision.approvalCapabilities),
+    privacyClasses: readSafeStringArray(revision.privacyClasses, 8),
+  };
+}
+
+function readTaskControlRuntimePlan(
+  value: unknown,
+): MaterializedDesktopPlanRevision | null {
+  const revision = readRecord(value);
+  if (
+    revision?.contract !== "elyan.compiled_plan_revision.v1" ||
+    typeof revision.revision !== "number" ||
+    !Number.isInteger(revision.revision) ||
+    revision.revision < 1 ||
+    typeof revision.generatedAt !== "string" ||
+    !Array.isArray(revision.steps) ||
+    revision.steps.length < 1 ||
+    revision.steps.length > MAX_WORK_ORDER_STEPS ||
+    (revision.anchorStepId !== undefined &&
+      (typeof revision.anchorStepId !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(revision.anchorStepId)))
+  ) {
+    return null;
+  }
+  return revision as MaterializedDesktopPlanRevision;
+}
+
+function readTaskControl(value: unknown): TaskControl | null {
+  const control = readRecord(readRecord(value)?.control);
+  const id = typeof control?.id === "string" ? control.id.trim() : "";
+  const kind = control?.kind;
+  const state = control?.state;
+  if (
+    !control ||
+    !id ||
+    kind !== "redirect" ||
+    !["requested", "accepted", "applied", "rejected", "failed"].includes(
+      String(state),
+    )
+  ) {
+    return null;
+  }
+  return {
+    id,
+    kind,
+    state: state as TaskControlState,
+    ...(typeof control.instruction === "string"
+      ? { instruction: control.instruction }
+      : {}),
+    ...(typeof control.requestedAt === "string"
+      ? { requestedAt: control.requestedAt }
+      : {}),
+    ...(typeof control.acknowledgedAt === "string"
+      ? { acknowledgedAt: control.acknowledgedAt }
+      : {}),
+    ...(typeof control.message === "string"
+      ? { message: control.message }
+      : {}),
+    ...(typeof control.idempotencyKey === "string"
+      ? { idempotencyKey: control.idempotencyKey }
+      : {}),
+    ...(typeof control.idempotencyHash === "string" &&
+    /^[A-Za-z0-9_-]{43}$/.test(control.idempotencyHash)
+      ? { idempotencyHash: control.idempotencyHash }
+      : {}),
+    ...(typeof control.redirectDuplicateHash === "string" &&
+    /^[A-Za-z0-9_-]{43}$/.test(control.redirectDuplicateHash)
+      ? { redirectDuplicateHash: control.redirectDuplicateHash }
+      : {}),
+    ...(typeof control.anchorStepId === "string"
+      ? { anchorStepId: control.anchorStepId }
+      : {}),
+    ...(typeof control.transportDelivered === "boolean"
+      ? { transportDelivered: control.transportDelivered }
+      : {}),
+    ...(readTaskControlPlanRevisionSummary(control.planRevision)
+      ? {
+          planRevision: readTaskControlPlanRevisionSummary(
+            control.planRevision,
+          )!,
+        }
+      : {}),
+    ...(readTaskControlRuntimePlan(control.runtimePlan)
+      ? { runtimePlan: readTaskControlRuntimePlan(control.runtimePlan)! }
+      : {}),
+  };
+}
+
+function shapeRuntimeTaskControl(control: TaskControl) {
+  if (!control.runtimePlan || !control.planRevision) return null;
+  return {
+    id: control.id,
+    kind: control.kind,
+    state: control.state,
+    ...(control.instruction ? { instruction: control.instruction } : {}),
+    ...(control.requestedAt ? { requestedAt: control.requestedAt } : {}),
+    planRevision: control.runtimePlan,
+    planRevisionSummary: control.planRevision,
+  };
+}
+
+async function readRecentTaskControls(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+): Promise<TaskControl[]> {
+  const rows = await app.db
+    .select()
+    .from(taskEvents)
+    .where(
+      and(
+        eq(taskEvents.taskId, task.id),
+        sql`${taskEvents.payload} -> 'control' ->> 'id' is not null`,
+      ),
+    )
+    .orderBy(desc(taskEvents.createdAt))
+    .limit(TASK_CONTROL_EVENT_WINDOW);
+  const controls: TaskControl[] = [];
+  for (const event of rows) {
+    const payload = await hydrateTaskJsonValue(
+      app,
+      event.payload,
+      event.payloadBlobId,
+      {
+        userId: task.userId,
+        ownerType: "task_event",
+        ownerId: event.id,
+      },
+    );
+    const control = readTaskControl(payload);
+    if (control) controls.push(control);
+  }
+  return controls;
+}
+
+async function findTaskControlByIdempotencyKey(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  idempotencyKey: string,
+): Promise<TaskControl | null> {
+  const fingerprint = taskControlIdempotencyFingerprint(app, idempotencyKey);
+  const [event] = await app.db
+    .select()
+    .from(taskEvents)
+    .where(
+      and(
+        eq(taskEvents.taskId, task.id),
+        sql`${taskEvents.payload} -> 'control' ->> 'idempotencyHash' = ${fingerprint}`,
+      ),
+    )
+    .orderBy(desc(taskEvents.createdAt))
+    .limit(1);
+  if (!event) return null;
+  const payload = await hydrateTaskJsonValue(
+    app,
+    event.payload,
+    event.payloadBlobId,
+    {
+      userId: task.userId,
+      ownerType: "task_event",
+      ownerId: event.id,
+    },
+  );
+  const control = readTaskControl(payload);
+  return control?.idempotencyKey === idempotencyKey ? control : null;
+}
+
+function taskControlIdempotencyFingerprint(
+  app: FastifyInstance,
+  idempotencyKey: string,
+): string {
+  const secret = String(
+    app.config.TOKEN_ENCRYPTION_KEY ||
+      app.config.BLOB_HMAC_SECRET ||
+      app.config.JWT_SECRET ||
+      "",
+  );
+  return createHmac("sha256", secret)
+    .update("elyan.task_control.idempotency.v1\0")
+    .update(idempotencyKey)
+    .digest("base64url");
+}
+
+function normalizeTaskControlInstructionForDuplicate(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase("tr-TR");
+}
+
+export function taskControlRedirectDuplicateFingerprint(input: {
+  instruction: string;
+  anchorStepId?: string;
+}): string {
+  return createHash("sha256")
+    .update("elyan.task_control.redirect_duplicate.v1\0")
+    .update(normalizeTaskControlInstructionForDuplicate(input.instruction))
+    .update("\0")
+    .update(input.anchorStepId?.trim() ?? "")
+    .digest("base64url");
+}
+
+function isDuplicateTaskControlState(state: TaskControlState): boolean {
+  return state === "requested" || state === "accepted" || state === "applied";
+}
+
+async function findTaskControlByRedirectDuplicate(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  input: { instruction: string; anchorStepId?: string },
+): Promise<TaskControl | null> {
+  const fingerprint = taskControlRedirectDuplicateFingerprint(input);
+  const [event] = await app.db
+    .select()
+    .from(taskEvents)
+    .where(
+      and(
+        eq(taskEvents.taskId, task.id),
+        sql`${taskEvents.payload} -> 'control' ->> 'redirectDuplicateHash' = ${fingerprint}`,
+      ),
+    )
+    .orderBy(desc(taskEvents.createdAt))
+    .limit(1);
+  if (event) {
+    const payload = await hydrateTaskJsonValue(
+      app,
+      event.payload,
+      event.payloadBlobId,
+      {
+        userId: task.userId,
+        ownerType: "task_event",
+        ownerId: event.id,
+      },
+    );
+    const control = readTaskControl(payload);
+    if (
+      control?.redirectDuplicateHash === fingerprint &&
+      isDuplicateTaskControlState(control.state) &&
+      control.planRevision
+    ) {
+      return control;
+    }
+  }
+  const controls = await readRecentTaskControls(app, task);
+  return (
+    controls.find(
+      (control) =>
+        isDuplicateTaskControlState(control.state) &&
+        Boolean(control.planRevision) &&
+        taskControlRedirectDuplicateFingerprint({
+          instruction: control.instruction ?? "",
+          anchorStepId: control.anchorStepId,
+        }) === fingerprint,
+    ) ?? null
+  );
+}
+
+export async function requestTaskControl(
+  app: FastifyInstance,
+  input: {
+    taskId: string;
+    userId: string;
+    kind: "redirect";
+    instruction: string;
+    anchorStepId?: string;
+    ipAddress?: string;
+    userAgent?: string;
+    requestId?: string;
+    idempotencyKey?: string;
+  },
+) {
+  const task = await getTaskForUser(app, input.taskId, input.userId);
+  if (task.status !== "running") {
+    throw new AppError(
+      409,
+      "task_control_not_running",
+      "Canlı yönlendirme yalnız çalışan masaüstü görevlerinde kullanılabilir.",
+    );
+  }
+  const target = await getUserDevice(app, task.userId, task.targetDeviceId);
+  const runtimeCapabilities = new Set(target?.runtime.capabilities ?? []);
+  if (!runtimeCapabilities.has("task.control.redirect.v2")) {
+    throw new AppError(
+      409,
+      "task_control_unsupported",
+      "Bu masaüstü sürümü güvenli canlı plan revizyonunu desteklemiyor.",
+    );
+  }
+  const idempotencyKey = input.idempotencyKey?.trim() ?? "";
+  const idempotencyHash = idempotencyKey
+    ? taskControlIdempotencyFingerprint(app, idempotencyKey)
+    : "";
+  const redirectDuplicateHash = taskControlRedirectDuplicateFingerprint({
+    instruction: input.instruction,
+    anchorStepId: input.anchorStepId,
+  });
+  const lockKey = `lock:task-control:${task.id}`;
+  const lockOwner = randomUUID();
+  const lockAcquired = await app.services.reliability.store.acquireLock(
+    lockKey,
+    lockOwner,
+    45_000,
+  );
+  if (!lockAcquired) {
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const duplicate = idempotencyKey
+      ? await findTaskControlByIdempotencyKey(app, task, idempotencyKey)
+      : await findTaskControlByRedirectDuplicate(app, task, {
+          instruction: input.instruction,
+          anchorStepId: input.anchorStepId,
+        });
+    if (duplicate) {
+      return {
+        task: shapeTaskFeedItem(task),
+        control: {
+          id: duplicate.id,
+          kind: duplicate.kind,
+          state: duplicate.state,
+          requestedAt: duplicate.requestedAt,
+          planRevision: duplicate.planRevision,
+          transportDelivered: duplicate.transportDelivered ?? null,
+        },
+        duplicate: true,
+      };
+    }
+    throw new AppError(
+      409,
+      "task_control_in_progress",
+      "Bu canlı yönlendirme zaten işleniyor.",
+      { retryAfterMs: 500, transient: true },
+    );
+  }
+
+  let control: TaskControl | null = null;
+  try {
+    if (idempotencyKey) {
+      const duplicateControl = await findTaskControlByIdempotencyKey(
+        app,
+        task,
+        idempotencyKey,
+      );
+      if (duplicateControl) {
+        return {
+          task: shapeTaskFeedItem(task),
+          control: {
+            id: duplicateControl.id,
+            kind: duplicateControl.kind,
+            state: duplicateControl.state,
+            requestedAt: duplicateControl.requestedAt,
+            planRevision: duplicateControl.planRevision,
+            transportDelivered: duplicateControl.transportDelivered ?? null,
+          },
+          duplicate: true,
+        };
+      }
+    }
+    if (!idempotencyKey) {
+      const duplicateControl = await findTaskControlByRedirectDuplicate(
+        app,
+        task,
+        {
+          instruction: input.instruction,
+          anchorStepId: input.anchorStepId,
+        },
+      );
+      if (duplicateControl) {
+        return {
+          task: shapeTaskFeedItem(task),
+          control: {
+            id: duplicateControl.id,
+            kind: duplicateControl.kind,
+            state: duplicateControl.state,
+            requestedAt: duplicateControl.requestedAt,
+            planRevision: duplicateControl.planRevision,
+            transportDelivered: duplicateControl.transportDelivered ?? null,
+          },
+          duplicate: true,
+        };
+      }
+    }
+    const existingRequests = await app.db
+      .select({ id: taskEvents.id })
+      .from(taskEvents)
+      .where(
+        and(
+          eq(taskEvents.taskId, task.id),
+          eq(taskEvents.message, TASK_CONTROL_REQUEST_MESSAGE),
+        ),
+      )
+      .limit(TASK_CONTROL_MAX_PER_TASK + 1);
+    if (existingRequests.length >= TASK_CONTROL_MAX_PER_TASK) {
+      throw new AppError(
+        429,
+        "task_control_limit_reached",
+        "Bu görev için canlı yönlendirme sınırına ulaşıldı.",
+      );
+    }
+
+    const planAdmission = await reservePlanRevisionAdmission(app, task.userId);
+    let planRevision: MaterializedDesktopPlanRevision | null = null;
+    try {
+      planRevision = await materializeDesktopPlanRevision(app, task, {
+        instruction: input.instruction,
+        revision: existingRequests.length + 1,
+        anchorStepId: input.anchorStepId,
+      });
+    } finally {
+      await planAdmission.release();
+    }
+    if (!planRevision) {
+      throw new AppError(
+        503,
+        "task_control_plan_unavailable",
+        "Yeni yön güvenli bir çalışma planına dönüştürülemedi.",
+        { transient: true },
+      );
+    }
+    control = {
+      id: randomUUID(),
+      kind: input.kind,
+      instruction: input.instruction.replace(/\s+/g, " ").trim(),
+      state: "requested",
+      requestedAt: new Date().toISOString(),
+      ...(planRevision.anchorStepId
+        ? { anchorStepId: planRevision.anchorStepId }
+        : {}),
+      planRevision: summarizeTaskControlPlanRevision(planRevision),
+      runtimePlan: planRevision,
+      redirectDuplicateHash,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(idempotencyHash ? { idempotencyHash } : {}),
+    };
+    const publicControl = {
+      id: control.id,
+      kind: control.kind,
+      state: control.state,
+      requestedAt: control.requestedAt,
+      planRevision: control.planRevision,
+      redirectDuplicateHash: control.redirectDuplicateHash,
+      ...(control.idempotencyHash
+        ? { idempotencyHash: control.idempotencyHash }
+        : {}),
+    };
+    await insertTaskEvent(app, {
+      taskId: task.id,
+      userId: task.userId,
+      status: task.status,
+      message: TASK_CONTROL_REQUEST_MESSAGE,
+      payload: { control: publicControl },
+      privatePayload: { control },
+      requirePrivateBlob: true,
+    });
+  } finally {
+    if (lockAcquired) {
+      await app.services.reliability.store
+        .releaseLock(lockKey, lockOwner)
+        .catch(() => false);
+    }
+  }
+  if (!control) {
+    throw new AppError(
+      503,
+      "task_control_unavailable",
+      "Canlı yönlendirme şu anda kullanılamıyor.",
+    );
+  }
+  const commandId = control.id;
+  const requestedAt = control.requestedAt!;
+  const runtimeControl = shapeRuntimeTaskControl(control);
+  if (!runtimeControl) {
+    throw new AppError(
+      503,
+      "task_control_plan_unavailable",
+      "Güncellenen çalışma planı runtime için hazırlanamadı.",
+    );
+  }
+  const delivered = await app.services.realtimeHub.sendToRuntimeDistributed(
+    task.targetDeviceId,
+    {
+      type: "task.control",
+      taskId: task.id,
+      control: runtimeControl,
+    },
+  );
+  const deliveredControl = {
+    id: commandId,
+    kind: control.kind,
+    state: control.state,
+    requestedAt,
+    planRevision: control.planRevision,
+    transportDelivered: delivered,
+    ...(control.idempotencyHash
+      ? { idempotencyHash: control.idempotencyHash }
+      : {}),
+  };
+  await insertTaskEvent(app, {
+    taskId: task.id,
+    userId: task.userId,
+    status: task.status,
+    message: delivered
+      ? "Yeni yön masaüstüne iletildi."
+      : "Yeni yön kaydedildi; masaüstü bağlantısı bekleniyor.",
+    payload: { control: deliveredControl },
+  }).catch(() => {
+    app.log.warn(
+      { taskId: task.id, commandId },
+      "task control delivery outcome could not be persisted",
+    );
+  });
+  await createAuditLog(app, {
+    userId: task.userId,
+    actorType: "user",
+    actorId: task.userId,
+    action: "task.control.request",
+    resourceType: "task",
+    resourceId: task.id,
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    requestId: input.requestId,
+    payload: {
+      commandId,
+      kind: input.kind,
+      planRevision: control.planRevision?.revision,
+      approvalRequired: control.planRevision?.approvalRequired,
+      transportDelivered: delivered,
+      anchoredStep: Boolean(control.anchorStepId),
+    },
+  });
+  await publishTaskEvent(app, task, "task.control.requested", {
+    task: shapeTaskFeedItem(task),
+    control: {
+      id: commandId,
+      kind: input.kind,
+      state: "requested",
+      requestedAt,
+      planRevision: control.planRevision,
+      transportDelivered: delivered,
+    },
+  });
+  return {
+    task: shapeTaskFeedItem(task),
+    control: {
+      id: commandId,
+      kind: input.kind,
+      state: "requested",
+      requestedAt,
+      planRevision: control.planRevision,
+      transportDelivered: delivered,
+    },
+  };
+}
+
+export async function getPendingTaskControlsForRuntime(
+  app: FastifyInstance,
+  auth: RuntimeAuthTokenPayload,
+  taskId: string,
+) {
+  const task = await getTaskForRuntime(app, taskId, auth);
+  const latestById = new Map<string, TaskControl>();
+  for (const control of await readRecentTaskControls(app, task)) {
+    if (!latestById.has(control.id)) {
+      latestById.set(control.id, control);
+      continue;
+    }
+    const latest = latestById.get(control.id)!;
+    if (
+      (!latest.instruction && control.instruction) ||
+      (!latest.anchorStepId && control.anchorStepId) ||
+      (!latest.planRevision && control.planRevision) ||
+      (!latest.runtimePlan && control.runtimePlan)
+    ) {
+      latestById.set(control.id, {
+        ...latest,
+        ...(latest.instruction
+          ? {}
+          : control.instruction
+            ? { instruction: control.instruction }
+            : {}),
+        ...(latest.anchorStepId
+          ? {}
+          : control.anchorStepId
+            ? { anchorStepId: control.anchorStepId }
+            : {}),
+        ...(latest.planRevision
+          ? {}
+          : control.planRevision
+            ? { planRevision: control.planRevision }
+            : {}),
+        ...(latest.runtimePlan
+          ? {}
+          : control.runtimePlan
+            ? { runtimePlan: control.runtimePlan }
+            : {}),
+        requestedAt: latest.requestedAt ?? control.requestedAt,
+      });
+    }
+  }
+  return [...latestById.values()]
+    .filter(
+      (control) =>
+        control.state === "requested" || control.state === "accepted",
+    )
+    .reverse()
+    .slice(0, TASK_CONTROL_MAX_PER_TASK)
+    .map(shapeRuntimeTaskControl)
+    .filter((control): control is NonNullable<typeof control> =>
+      Boolean(control),
+    );
+}
+
+export async function acknowledgeTaskControl(
+  app: FastifyInstance,
+  auth: RuntimeAuthTokenPayload,
+  input: {
+    taskId: string;
+    commandId: string;
+    state: Exclude<TaskControlState, "requested">;
+    message?: string;
+  },
+) {
+  const task = await getTaskForRuntime(app, input.taskId, auth);
+  const controls = await readRecentTaskControls(app, task);
+  const latest = controls.find((control) => control.id === input.commandId);
+  if (!latest) {
+    throw notFound("Task control not found");
+  }
+  if (latest.state === input.state) {
+    return { duplicate: true, control: latest };
+  }
+  const validTransition =
+    (latest.state === "requested" &&
+      ["accepted", "rejected", "failed"].includes(input.state)) ||
+    (latest.state === "accepted" &&
+      ["applied", "failed"].includes(input.state));
+  if (!validTransition) {
+    throw conflict("Task control state changed before acknowledgement");
+  }
+  const acknowledgedAt = new Date().toISOString();
+  const revisionSource = controls.find(
+    (control) =>
+      control.id === input.commandId && control.planRevision !== undefined,
+  );
+  const control: TaskControl = {
+    id: latest.id,
+    kind: latest.kind,
+    state: input.state,
+    acknowledgedAt,
+    ...((latest.planRevision ?? revisionSource?.planRevision)
+      ? { planRevision: latest.planRevision ?? revisionSource!.planRevision }
+      : {}),
+    ...(input.message?.trim() ? { message: input.message.trim() } : {}),
+  };
+  await insertTaskEvent(app, {
+    taskId: task.id,
+    userId: task.userId,
+    status: task.status,
+    message:
+      input.state === "accepted"
+        ? "Masaüstü yeni yönü aldı ve planı güncelliyor."
+        : input.state === "applied"
+          ? "Yeni yön çalışma planına uygulandı."
+          : input.state === "rejected"
+            ? "Masaüstü yeni yönü kabul etmedi."
+            : "Yeni yön masaüstünde uygulanamadı.",
+    payload: { control },
+  });
+  await publishTaskEvent(app, task, "task.control.updated", {
+    task: shapeTaskFeedItem(task),
+    control,
+  });
+  return { duplicate: false, control };
 }
 
 export async function resolveTaskApproval(
@@ -8392,9 +9492,6 @@ export async function resolveTaskApproval(
 ) {
   const task = await getTaskForUser(app, input.taskId, input.userId);
 
-  if (task.status !== "waiting_approval") {
-    throw conflict("Task is not waiting for approval");
-  }
   if (isApprovalAlreadyResolved(task.approvalRequest)) {
     const resolution = readRecord(readRecord(task.approvalRequest)?.resolution);
     return {
@@ -8404,6 +9501,9 @@ export async function resolveTaskApproval(
       duplicate: true,
       task: shapeTaskFeedItem(task),
     };
+  }
+  if (task.status !== "waiting_approval") {
+    throw conflict("Task is not waiting for approval");
   }
   if (isApprovalRequestExpired(task.approvalRequest)) {
     return cancelTask(app, task.id, task.userId, {
@@ -8421,6 +9521,100 @@ export async function resolveTaskApproval(
     });
   }
 
+  const approvalRequest = readRecord(task.approvalRequest);
+  if (
+    approvalRequest?.source === "backend_plan" &&
+    approvalRequest.kind === "desktop_plan"
+  ) {
+    const now = new Date();
+    const approvalRows = await app.db
+      .update(tasks)
+      .set({
+        status: "queued",
+        approvalRequest: buildTaskApprovalResolution(task.approvalRequest, {
+          approved: true,
+          notes: input.notes,
+          now,
+        }),
+        summary: "Plan onaylandı. Masaüstüne aktarılıyor.",
+        error: null,
+        queuePosition: 0,
+        dispatchLeaseId: null,
+        dispatchLeaseIssuedAt: null,
+        dispatchLeaseExpiresAt: null,
+        dispatchAckAt: null,
+        runtimeConnectionId: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, "waiting_approval" as TaskStatus),
+        ),
+      )
+      .returning();
+
+    const updatedTask = approvalRows[0];
+    if (!updatedTask) {
+      const latest = await getTaskForUser(app, input.taskId, input.userId);
+      if (isApprovalAlreadyResolved(latest.approvalRequest)) {
+        return {
+          taskId: latest.id,
+          status: latest.status,
+          approved: true,
+          duplicate: true,
+          task: shapeTaskFeedItem(latest),
+        };
+      }
+      throw conflict("Task approval changed before resolution");
+    }
+
+    await insertTaskEvent(app, {
+      taskId: updatedTask.id,
+      userId: updatedTask.userId,
+      status: "queued",
+      message: "Plan onaylandı. Masaüstüne aktarılıyor.",
+      payload: { approvalSource: "backend_plan" },
+    });
+    await createAuditLog(app, {
+      userId: input.userId,
+      actorType: "user",
+      actorId: input.userId,
+      action: "task.plan_approval.resolve",
+      resourceType: "task",
+      resourceId: updatedTask.id,
+      status: "success",
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      payload: { approved: true },
+      requestId: input.requestId,
+    });
+    await publishTaskEvent(app, updatedTask, "task.approval_granted", {
+      task: shapeTaskFeedItem(updatedTask),
+      taskId: updatedTask.id,
+      approved: true,
+      approvalSource: "backend_plan",
+    });
+    await syncChatTaskLifecycle(app, {
+      originalTask: task,
+      updatedTask,
+      message: "Plan onaylandı. Masaüstüne aktarılıyor.",
+    });
+
+    const accepted = await enqueueTaskDispatch(app, updatedTask.id, {
+      jobId: `${updatedTask.id}-plan-${approvalRequestRevision(
+        updatedTask.approvalRequest,
+      )}`,
+    });
+    return {
+      taskId: updatedTask.id,
+      status: updatedTask.status,
+      approved: true,
+      accepted,
+      task: shapeTaskFeedItem(updatedTask),
+    };
+  }
+
   const approvalRows = await app.db
     .update(tasks)
     .set(buildTaskApprovalResumeUpdate(task, { notes: input.notes }))
@@ -8436,7 +9630,9 @@ export async function resolveTaskApproval(
   if (!updatedTask) {
     const latest = await getTaskForUser(app, input.taskId, input.userId);
     if (isApprovalAlreadyResolved(latest.approvalRequest)) {
-      const resolution = readRecord(readRecord(latest.approvalRequest)?.resolution);
+      const resolution = readRecord(
+        readRecord(latest.approvalRequest)?.resolution,
+      );
       return {
         taskId: latest.id,
         status: latest.status,
@@ -8488,12 +9684,15 @@ export async function resolveTaskApproval(
     message: "Onay alındı. Görev devam ediyor.",
   });
 
-  app.services.realtimeHub.sendToRuntime(updatedTask.targetDeviceId, {
-    type: "task.approval",
-    taskId: updatedTask.id,
-    approved: true,
-    notes: input.notes,
-  });
+  await app.services.realtimeHub.sendToRuntimeDistributed(
+    updatedTask.targetDeviceId,
+    {
+      type: "task.approval",
+      taskId: updatedTask.id,
+      approved: true,
+      notes: input.notes,
+    },
+  );
 
   await resumeAgentRunAfterApproval({
     app,
@@ -8656,15 +9855,33 @@ export async function resolveConnectorWriteApproval(
   const finishedAt = new Date();
   const previousResult = readRecord(task.result) ?? {};
   const remainingApprovals = Array.isArray(approval.remainingApprovals)
-    ? approval.remainingApprovals.map(readRecord).filter((item): item is Record<string, unknown> => item != null)
+    ? approval.remainingApprovals
+        .map(readRecord)
+        .filter((item): item is Record<string, unknown> => item != null)
     : [];
-  const nextApprovalCandidate = result.ok ? (remainingApprovals[0] ?? null) : null;
-  const nextCall = readCanonicalConnectorWriteApprovalCall(nextApprovalCandidate);
-  const nextApproval: Record<string, unknown> | null = nextApprovalCandidate && nextCall &&
-    nextApprovalCandidate.userId === input.userId && nextApprovalCandidate.taskId === task.id
-    ? { ...nextApprovalCandidate, ...(remainingApprovals.length > 1 ? { remainingApprovals: remainingApprovals.slice(1) } : {}) }
+  const nextApprovalCandidate = result.ok
+    ? (remainingApprovals[0] ?? null)
     : null;
-  const finalStatus: TaskStatus = result.ok ? (nextApproval ? "waiting_approval" : "completed") : "failed";
+  const nextCall = readCanonicalConnectorWriteApprovalCall(
+    nextApprovalCandidate,
+  );
+  const nextApproval: Record<string, unknown> | null =
+    nextApprovalCandidate &&
+    nextCall &&
+    nextApprovalCandidate.userId === input.userId &&
+    nextApprovalCandidate.taskId === task.id
+      ? {
+          ...nextApprovalCandidate,
+          ...(remainingApprovals.length > 1
+            ? { remainingApprovals: remainingApprovals.slice(1) }
+            : {}),
+        }
+      : null;
+  const finalStatus: TaskStatus = result.ok
+    ? nextApproval
+      ? "waiting_approval"
+      : "completed"
+    : "failed";
   const safeError = result.ok
     ? null
     : (result.error?.message ?? "Connector işlemi tamamlanamadı.");
@@ -8678,14 +9895,17 @@ export async function resolveConnectorWriteApproval(
     },
   };
   const nextDraft = readRecord(nextApproval?.draft);
-  const nextPublicApproval = nextApproval && nextCall && nextDraft ? {
-    token: nextApproval.token,
-    tool: nextCall.tool,
-    title: nextDraft.title,
-    appLabel: nextDraft.appLabel,
-    expiresAt: nextApproval.expiresAt,
-    lines: nextDraft.lines,
-  } : null;
+  const nextPublicApproval =
+    nextApproval && nextCall && nextDraft
+      ? {
+          token: nextApproval.token,
+          tool: nextCall.tool,
+          title: nextDraft.title,
+          appLabel: nextDraft.appLabel,
+          expiresAt: nextApproval.expiresAt,
+          lines: nextDraft.lines,
+        }
+      : null;
   const updatedAssistantBlocks = advanceTaskTraceApproval({
     blocks: previousResult.assistantBlocks,
     completedTool: tool,
@@ -8739,7 +9959,8 @@ export async function resolveConnectorWriteApproval(
       payload: {
         tool,
         executionOk: result.ok,
-        errorCode: result.error?.code ?? "approval_state_changed_after_execution",
+        errorCode:
+          result.error?.code ?? "approval_state_changed_after_execution",
       },
     });
     return { status: "executed", tool, result };
@@ -8817,17 +10038,36 @@ export async function updateTaskFromRuntime(
   }
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);
   assertTaskTransition(ownedTask.status, input.status);
-  const normalizedApprovalRequest = input.status === "waiting_approval" && input.approvalRequest
-    ? normalizeTaskApprovalRequest(input.approvalRequest, {
-        taskId: ownedTask.id,
-      })
-    : input.approvalRequest;
+  const normalizedApprovalRequest =
+    input.status === "waiting_approval" && input.approvalRequest
+      ? normalizeTaskApprovalRequest(input.approvalRequest, {
+          taskId: ownedTask.id,
+        })
+      : input.approvalRequest;
   const runtimeResult = input.operator
     ? {
         ...(input.result ?? {}),
         operator: input.operator,
       }
     : input.result;
+  if (
+    shouldSkipDuplicateRuntimeProgressUpdate({
+      task: ownedTask,
+      status: input.status,
+      message: input.message,
+      summary: input.summary,
+      error: input.error,
+      approvalRequest: normalizedApprovalRequest,
+      result: runtimeResult,
+      artifactCount: input.artifacts.length,
+    })
+  ) {
+    return {
+      task: ownedTask,
+      storedArtifacts: [],
+      replaySkipped: true,
+    };
+  }
   const approvalRequestBlob =
     normalizedApprovalRequest === undefined
       ? null
@@ -8869,9 +10109,31 @@ export async function updateTaskFromRuntime(
   const rows = await app.db
     .update(tasks)
     .set(updates)
-    .where(eq(tasks.id, ownedTask.id))
+    .where(
+      and(
+        eq(tasks.id, ownedTask.id),
+        eq(tasks.status, ownedTask.status),
+        eq(tasks.runtimeConnectionId, auth.connectionId),
+      ),
+    )
     .returning();
   let updatedTask = rows[0];
+  if (!updatedTask) {
+    throw conflict("Task state changed before runtime update");
+  }
+  const currentBeforeArtifacts = await getTaskById(app, updatedTask.id);
+  if (
+    !currentBeforeArtifacts ||
+    currentBeforeArtifacts.status !== updatedTask.status ||
+    currentBeforeArtifacts.runtimeConnectionId !== auth.connectionId
+  ) {
+    return {
+      task: currentBeforeArtifacts ?? updatedTask,
+      storedArtifacts: [],
+      replaySkipped: true,
+    };
+  }
+  updatedTask = currentBeforeArtifacts;
   const storedArtifacts = await persistArtifacts(
     app,
     ownedTask.id,
@@ -8892,30 +10154,59 @@ export async function updateTaskFromRuntime(
   const existingApprovalResolution = readRecord(
     existingApprovalRequest?.resolution,
   );
-  const approvalMode = input.status === "waiting_approval"
-    ? await getUserApprovalMode(app, ownedTask.userId)
-    : null;
-  const trustedIdempotentDesktopTask = approvalMode != null &&
+  const approvalMode =
+    input.status === "waiting_approval"
+      ? await getUserApprovalMode(app, ownedTask.userId)
+      : null;
+  const trustedIdempotentDesktopTask =
+    approvalMode != null &&
     shouldAutoApproveDesktopTask({
       status: input.status,
       payload: ownedTask.payload,
       approvalMode,
       approvalRequest: existingApprovalRequest,
-    }) && existingApprovalResolution?.approved !== true;
+    }) &&
+    existingApprovalResolution?.approved !== true;
 
   if (trustedIdempotentDesktopTask) {
     const approvalRows = await app.db
       .update(tasks)
       .set(
         buildTaskApprovalResumeUpdate(updatedTask, {
-          notes:
-            "Güvenli yazma modu: idempotent işlem otomatik onaylandı.",
+          notes: "Güvenli yazma modu: idempotent işlem otomatik onaylandı.",
         }),
       )
-      .where(eq(tasks.id, updatedTask.id))
+      .where(
+        and(
+          eq(tasks.id, updatedTask.id),
+          eq(tasks.status, "waiting_approval"),
+          eq(tasks.runtimeConnectionId, auth.connectionId),
+        ),
+      )
       .returning();
-    updatedTask = approvalRows[0] ?? updatedTask;
+    if (!approvalRows[0]) {
+      const currentTask = await getTaskById(app, updatedTask.id);
+      return {
+        task: currentTask ?? updatedTask,
+        storedArtifacts: [],
+        replaySkipped: true,
+      };
+    }
+    updatedTask = approvalRows[0];
   }
+  const currentBeforePublish = await getTaskById(app, updatedTask.id);
+  if (
+    !currentBeforePublish ||
+    currentBeforePublish.status !== updatedTask.status ||
+    currentBeforePublish.runtimeConnectionId !== auth.connectionId
+  ) {
+    return {
+      task: currentBeforePublish ?? updatedTask,
+      storedArtifacts: [],
+      replaySkipped: true,
+    };
+  }
+  updatedTask = currentBeforePublish;
   await resequenceDeviceQueue(app, updatedTask.targetDeviceId);
 
   await insertTaskEvent(app, {
@@ -8951,12 +10242,15 @@ export async function updateTaskFromRuntime(
       approved: true,
       source: "trusted_idempotent_write",
     });
-    app.services.realtimeHub.sendToRuntime(updatedTask.targetDeviceId, {
-      type: "task.approval",
-      taskId: updatedTask.id,
-      approved: true,
-      notes: "Güvenli yazma modu: idempotent işlem otomatik onaylandı.",
-    });
+    await app.services.realtimeHub.sendToRuntimeDistributed(
+      updatedTask.targetDeviceId,
+      {
+        type: "task.approval",
+        taskId: updatedTask.id,
+        approved: true,
+        notes: "Güvenli yazma modu: idempotent işlem otomatik onaylandı.",
+      },
+    );
     await resumeAgentRunAfterApproval({
       app,
       userId: updatedTask.userId,
@@ -9123,6 +10417,9 @@ export async function appendTaskArtifacts(
   items: ArtifactInput[],
 ) {
   const task = await getTaskForRuntime(app, taskId, auth);
+  if (isTerminalTaskStatus(task.status)) {
+    throw conflict("Task no longer accepts runtime artifacts");
+  }
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);
   const storedArtifacts = await persistArtifacts(
     app,
@@ -9162,16 +10459,32 @@ export async function appendTaskBinaryArtifact(
   app: FastifyInstance,
   auth: RuntimeAuthTokenPayload,
   taskId: string,
-  input: { body: Uint8Array; name: string; contentType: string; sha256: string },
+  input: {
+    body: Uint8Array;
+    name: string;
+    contentType: string;
+    sha256: string;
+  },
 ) {
   const task = await getTaskForRuntime(app, taskId, auth);
+  if (isTerminalTaskStatus(task.status)) {
+    throw conflict("Task no longer accepts runtime artifacts");
+  }
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);
   const contentType = input.contentType.toLowerCase().split(";", 1)[0]!.trim();
   if (!["image/png", "image/jpeg", "image/webp"].includes(contentType)) {
-    throw new AppError(400, "artifact_type_invalid", "Only PNG, JPEG and WebP image artifacts are accepted");
+    throw new AppError(
+      400,
+      "artifact_type_invalid",
+      "Only PNG, JPEG and WebP image artifacts are accepted",
+    );
   }
   if (!input.body.byteLength || input.body.byteLength > 25 * 1024 * 1024) {
-    throw new AppError(400, "artifact_size_invalid", "Artifact must be between 1 byte and 25 MB");
+    throw new AppError(
+      400,
+      "artifact_size_invalid",
+      "Artifact must be between 1 byte and 25 MB",
+    );
   }
   try {
     const { default: sharp } = await import("sharp");
@@ -9179,45 +10492,79 @@ export async function appendTaskBinaryArtifact(
       failOn: "warning",
       limitInputPixels: 150_000_000,
     }).metadata();
-    const detectedType = metadata.format === "png"
-      ? "image/png"
-      : metadata.format === "webp"
-        ? "image/webp"
-        : metadata.format === "jpeg"
-          ? "image/jpeg"
-          : "";
+    const detectedType =
+      metadata.format === "png"
+        ? "image/png"
+        : metadata.format === "webp"
+          ? "image/webp"
+          : metadata.format === "jpeg"
+            ? "image/jpeg"
+            : "";
     if (detectedType !== contentType || !metadata.width || !metadata.height) {
       throw new Error("artifact image type mismatch");
     }
   } catch {
-    throw new AppError(400, "artifact_image_invalid", "Artifact is not a valid declared image");
+    throw new AppError(
+      400,
+      "artifact_image_invalid",
+      "Artifact is not a valid declared image",
+    );
   }
   const digest = createHash("sha256").update(input.body).digest("hex");
-  if (!/^[a-f0-9]{64}$/i.test(input.sha256) || digest !== input.sha256.toLowerCase()) {
-    throw new AppError(400, "artifact_hash_mismatch", "Artifact hash verification failed");
+  if (
+    !/^[a-f0-9]{64}$/i.test(input.sha256) ||
+    digest !== input.sha256.toLowerCase()
+  ) {
+    throw new AppError(
+      400,
+      "artifact_hash_mismatch",
+      "Artifact hash verification failed",
+    );
   }
-  const name = String(input.name || "elyan-image.png")
-    .replace(/[\\/\0\r\n]/g, "_")
-    .trim()
-    .slice(0, 255) || "elyan-image.png";
-  const storedArtifacts = await persistArtifacts(app, ownedTask.id, ownedTask.userId, [{
-    kind: "file",
-    name,
-    contentType,
-    textContent: "Görsel hazır.",
-    payload: { previewText: "Görsel hazır.", mimeType: contentType, source: "elyan_desktop_image" },
-    metadata: { sourceType: "task_artifact", contentFamily: "image", viewerHint: "image", mimeType: contentType },
-    binaryBody: input.body,
-  }]);
+  const name =
+    String(input.name || "elyan-image.png")
+      .replace(/[\\/\0\r\n]/g, "_")
+      .trim()
+      .slice(0, 255) || "elyan-image.png";
+  const storedArtifacts = await persistArtifacts(
+    app,
+    ownedTask.id,
+    ownedTask.userId,
+    [
+      {
+        kind: "file",
+        name,
+        contentType,
+        textContent: "Görsel hazır.",
+        payload: {
+          previewText: "Görsel hazır.",
+          mimeType: contentType,
+          source: "elyan_desktop_image",
+        },
+        metadata: {
+          sourceType: "task_artifact",
+          contentFamily: "image",
+          viewerHint: "image",
+          mimeType: contentType,
+        },
+        binaryBody: input.body,
+      },
+    ],
+  );
   const shapedArtifacts = await Promise.all(
-    storedArtifacts.map((artifact) => shapePublicArtifactRecord(app, artifact, ownedTask.userId)),
+    storedArtifacts.map((artifact) =>
+      shapePublicArtifactRecord(app, artifact, ownedTask.userId),
+    ),
   );
   await insertTaskEvent(app, {
     taskId: ownedTask.id,
     userId: ownedTask.userId,
     status: ownedTask.status,
     message: "Binary artifact appended",
-    payload: { artifactCount: shapedArtifacts.length, artifacts: shapedArtifacts },
+    payload: {
+      artifactCount: shapedArtifacts.length,
+      artifacts: shapedArtifacts,
+    },
   });
   await publishTaskEvent(app, ownedTask, "task.artifacts", {
     taskId: ownedTask.id,
@@ -9233,12 +10580,17 @@ export async function getTaskMediaInputForRuntime(
   inputRef: string,
 ) {
   const task = await getTaskForRuntime(app, taskId, auth);
+  if (isTerminalTaskStatus(task.status)) {
+    throw conflict("Task media input is no longer available to the runtime");
+  }
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);
   const payload = readRecord(ownedTask.payload) ?? {};
   const metadata = readRecord(payload.metadata) ?? {};
-  const refs = Array.isArray(metadata.mediaInputRefs) ? metadata.mediaInputRefs : [];
-  const belongsToTask = refs.some((item) =>
-    readRecord(item)?.inputRef === inputRef
+  const refs = Array.isArray(metadata.mediaInputRefs)
+    ? metadata.mediaInputRefs
+    : [];
+  const belongsToTask = refs.some(
+    (item) => readRecord(item)?.inputRef === inputRef,
   );
   if (!belongsToTask) {
     throw new AppError(404, "media_input_not_found", "Media input not found");

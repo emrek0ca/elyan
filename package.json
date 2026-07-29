@@ -10,7 +10,8 @@
   "scripts": {
     "compile:nlp": "mkdir -p bin && gcc -O2 -Wall -o bin/elyan_nlp src/native/elyan_nlp.c -lm",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean:dist && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "training:worker": "tsx src/workers/training-worker.ts",
     "brain:worker": "tsx src/workers/brain-worker.ts",
@@ -66,6 +67,7 @@
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.0.1",
     "franc-min": "^6.2.0",
+    "groq-sdk": "^1.4.0",
     "ioredis": "^5.11.0",
     "jose": "^5.10.0",
     "linkedom": "^0.18.12",

@@ -1,13 +1,44 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import type { TaskStatus } from "../../contracts/domain.js";
 import { getRequestContext, serializeZodError } from "../../lib/http.js";
 import { getIdempotencyKey } from "../../lib/idempotency.js";
+import { assertRequestBudget } from "../../lib/reliability/request-budget.js";
 import { getUserAuth, getUserScopedAuth } from "../../lib/request-auth.js";
-import { approvalBodySchema, createTaskBodySchema, feedbackBodySchema, listTasksQuerySchema, taskArtifactParamsSchema, taskParamsSchema } from "./schemas.js";
-import { cancelTask, createTask, getTaskArtifact, getTaskArtifactContent, getTaskArtifactRawContent, getTaskDetail, listTasks, resolveTaskApproval, submitTaskFeedback } from "./service.js";
-import { storeMediaInput } from "./media-inputs.js";
+import {
+  approvalBodySchema,
+  createTaskBodySchema,
+  feedbackBodySchema,
+  listTasksQuerySchema,
+  taskControlBodySchema,
+  taskArtifactParamsSchema,
+  taskParamsSchema,
+} from "./schemas.js";
+import {
+  cancelTask,
+  createTask,
+  getTaskArtifact,
+  getTaskArtifactContent,
+  getTaskArtifactRawContent,
+  getTaskDetail,
+  listTasks,
+  requestTaskControl,
+  resolveTaskApproval,
+  submitTaskFeedback,
+} from "./service.js";
+import { releaseMediaInputRefs, storeMediaInput } from "./media-inputs.js";
 
-function parseTaskParamsOrReply(request: FastifyRequest, reply: FastifyReply): { taskId: string } | null {
+const releaseMediaInputsBodySchema = z.object({
+  inputRefs: z
+    .array(z.object({ inputRef: z.string().min(1).max(4096) }).passthrough())
+    .min(1)
+    .max(4),
+});
+
+function parseTaskParamsOrReply(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): { taskId: string } | null {
   const parsed = taskParamsSchema.safeParse(request.params);
   if (!parsed.success) {
     reply.status(400).send({
@@ -45,16 +76,76 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     (_request, body, done) => done(null, body),
   );
 
-  app.post("/media-inputs", async (request, reply) => {
+  app.post(
+    "/media-inputs",
+    {
+      bodyLimit: 12 * 1024 * 1024,
+      onRequest: async (request, reply) => {
+        await app.authenticateUser(request, reply);
+        if (reply.sent) return;
+        const auth = getUserAuth(request);
+        await Promise.all([
+          assertRequestBudget(app, {
+            scope: "media_input_ip",
+            identity: request.ip,
+            max: 80,
+            windowMs: app.config.REQUEST_BUDGET_WINDOW_MS,
+          }),
+          assertRequestBudget(app, {
+            scope: "media_input_user",
+            identity: auth.sub,
+            max: 60,
+            windowMs: app.config.REQUEST_BUDGET_WINDOW_MS,
+          }),
+        ]);
+      },
+    },
+    async (request, reply) => {
+      if (!Buffer.isBuffer(request.body)) {
+        return reply.status(400).send({
+          error: "validation_error",
+          message: "Binary image body required",
+        });
+      }
+      const auth = getUserAuth(request);
+      const contentType =
+        String(request.headers["content-type"] ?? "").split(";", 1)[0] ?? "";
+      const name = String(request.headers["x-elyan-file-name"] ?? "image");
+      const intent = String(
+        request.headers["x-elyan-media-intent"] ?? "attachment",
+      );
+      const temporalRole = request.headers["x-elyan-media-temporal-role"];
+      const temporalSequence = request.headers["x-elyan-media-sequence"];
+      return storeMediaInput(app, {
+        userId: auth.sub,
+        body: request.body,
+        contentType,
+        name,
+        intent,
+        temporalRole:
+          typeof temporalRole === "string" ? temporalRole : undefined,
+        temporalSequence:
+          typeof temporalSequence === "string" ? temporalSequence : undefined,
+      });
+    },
+  );
+
+  app.delete("/media-inputs", async (request, reply) => {
     await app.authenticateUser(request, reply);
     if (reply.sent) return;
-    if (!Buffer.isBuffer(request.body)) {
-      return reply.status(400).send({ error: "validation_error", message: "Binary image body required" });
+
+    const parsed = releaseMediaInputsBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "validation_error",
+        message: "Invalid media input references",
+        details: serializeZodError(parsed.error),
+        requestId: request.id,
+      });
     }
     const auth = getUserAuth(request);
-    const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0] ?? "";
-    const name = String(request.headers["x-elyan-file-name"] ?? "image");
-    return storeMediaInput(app, { userId: auth.sub, body: request.body, contentType, name });
+    await releaseMediaInputRefs(app, auth.sub, parsed.data.inputRefs);
+    return reply.status(204).send();
   });
 
   app.post("/", async (request, reply) => {
@@ -79,7 +170,6 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
       requestId: context.requestId,
-      idempotencyKey,
     });
   });
 
@@ -139,22 +229,34 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     return getTaskArtifact(app, params.taskId, params.artifactId, auth.sub);
   });
 
-  app.get("/:taskId/artifacts/:artifactId/content/raw", async (request, reply) => {
-    const params = parseTaskArtifactParamsOrReply(request, reply);
-    if (!params) {
-      return;
-    }
-    const query = request.query && typeof request.query === "object"
-      ? (request.query as Record<string, unknown>)
-      : {};
-    const token = typeof query.token === "string" ? query.token : null;
-    const content = await getTaskArtifactRawContent(app, params.taskId, params.artifactId, token);
-    reply
-      .header("Cache-Control", "private, max-age=600")
-      .header("Content-Disposition", `inline; filename="${content.fileName.replace(/"/g, "")}"`)
-      .type(content.contentType)
-      .send(content.body);
-  });
+  app.get(
+    "/:taskId/artifacts/:artifactId/content/raw",
+    async (request, reply) => {
+      const params = parseTaskArtifactParamsOrReply(request, reply);
+      if (!params) {
+        return;
+      }
+      const query =
+        request.query && typeof request.query === "object"
+          ? (request.query as Record<string, unknown>)
+          : {};
+      const token = typeof query.token === "string" ? query.token : null;
+      const content = await getTaskArtifactRawContent(
+        app,
+        params.taskId,
+        params.artifactId,
+        token,
+      );
+      reply
+        .header("Cache-Control", "private, max-age=600")
+        .header(
+          "Content-Disposition",
+          `inline; filename="${content.fileName.replace(/"/g, "")}"`,
+        )
+        .type(content.contentType)
+        .send(content.body);
+    },
+  );
 
   app.get("/:taskId/artifacts/:artifactId/content", async (request, reply) => {
     await app.authenticateUser(request, reply);
@@ -168,7 +270,12 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return;
     }
     const auth = getUserAuth(request);
-    return getTaskArtifactContent(app, params.taskId, params.artifactId, auth.sub);
+    return getTaskArtifactContent(
+      app,
+      params.taskId,
+      params.artifactId,
+      auth.sub,
+    );
   });
 
   app.post("/:taskId/cancel", async (request, reply) => {
@@ -188,6 +295,35 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
       requestId: context.requestId,
+    });
+  });
+
+  app.post("/:taskId/control", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+    if (reply.sent) return;
+
+    const params = parseTaskParamsOrReply(request, reply);
+    if (!params) return;
+    const auth = getUserAuth(request);
+    const context = getRequestContext(request);
+    const idempotencyKey = getIdempotencyKey(request);
+    const body = taskControlBodySchema.parse(request.body);
+    await assertRequestBudget(app, {
+      scope: "task_control",
+      identity: auth.sub,
+      max: 30,
+      windowMs: app.config.REQUEST_BUDGET_WINDOW_MS,
+    });
+    return requestTaskControl(app, {
+      taskId: params.taskId,
+      userId: auth.sub,
+      kind: body.kind,
+      instruction: body.instruction,
+      anchorStepId: body.anchorStepId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
+      idempotencyKey,
     });
   });
 

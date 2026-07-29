@@ -250,7 +250,10 @@ async function findRecentDuplicateChatTurn(
         .select()
         .from(tasks)
         .where(
-          and(eq(tasks.id, assistantRow.taskId), eq(tasks.userId, input.userId)),
+          and(
+            eq(tasks.id, assistantRow.taskId),
+            eq(tasks.userId, input.userId),
+          ),
         )
         .limit(1);
       task = taskRows[0] ?? null;
@@ -575,7 +578,10 @@ function sanitizeWorldSignalDigest(value: unknown) {
       const summary = readString(item, "summary");
       const confidence = readNumber(item, "confidence");
       const fusionEvidenceCount = readNumber(item, "fusionEvidenceCount");
-      const conflictSuppressedCount = readNumber(item, "conflictSuppressedCount");
+      const conflictSuppressedCount = readNumber(
+        item,
+        "conflictSuppressedCount",
+      );
       const createdAt = readString(item, "createdAt");
       const facts = sanitizeCompactContextRecord(item.facts);
       const privacy = sanitizeCompactContextRecord(item.privacy);
@@ -1399,6 +1405,20 @@ async function assertOwnedChatSession(
   userId: string,
   sessionId: string,
 ) {
+  const session = await findOwnedChatSession(app, userId, sessionId);
+
+  if (!session) {
+    throw notFound("Chat session not found");
+  }
+
+  return session;
+}
+
+async function findOwnedChatSession(
+  app: FastifyInstance,
+  userId: string,
+  sessionId: string,
+) {
   const rows = await app.db
     .select()
     .from(chatSessions)
@@ -1406,12 +1426,22 @@ async function assertOwnedChatSession(
     .limit(1);
 
   const session = rows[0];
+  return session ?? null;
+}
 
-  if (!session) {
-    throw notFound("Chat session not found");
-  }
-
-  return session;
+function readRouteContinuity(
+  metadata: unknown,
+): "server_brain" | "desktop_runtime" | undefined {
+  const routeDecision = readRecord(readRecord(metadata)?.routeDecision);
+  const taskRoute = readRecord(routeDecision?.taskRoute);
+  const operationalRoute =
+    typeof taskRoute?.operationalRoute === "string"
+      ? taskRoute.operationalRoute
+      : routeDecision?.route;
+  return operationalRoute === "desktop_runtime" ||
+    operationalRoute === "server_brain"
+    ? operationalRoute
+    : undefined;
 }
 
 export async function listChatSessions(
@@ -1982,6 +2012,9 @@ export async function createChatMessage(
     idempotencyKey?: string;
   },
 ) {
+  const existingSession = input.sessionId
+    ? await findOwnedChatSession(app, input.userId, input.sessionId)
+    : null;
   const [usageAccess, remoteMcpResolution] = await Promise.all([
     getUserUsageAccessTruth(app.db, input.userId),
     resolveRemoteMcpRequest(app, {
@@ -1997,6 +2030,7 @@ export async function createChatMessage(
     message: input.content,
     source: input.source,
     activeChatSessionId: input.sessionId,
+    routeContinuity: readRouteContinuity(existingSession?.metadata),
     selectedDeviceId: input.targetDeviceId,
     metadata: input.metadata,
     desktopAllowed: canUseDesktopConnections(usageAccess.planCode),
@@ -2050,7 +2084,8 @@ export async function createChatMessage(
     input.targetDeviceId,
   );
   const session = input.sessionId
-    ? await resolveOwnedOrCreateChatSession(app, {
+    ? (existingSession ??
+      (await resolveOwnedOrCreateChatSession(app, {
         userId: input.userId,
         sessionId: input.sessionId,
         targetDeviceId: sessionTargetDeviceId,
@@ -2063,7 +2098,7 @@ export async function createChatMessage(
         requestId: input.requestId,
         ipAddress: input.ipAddress,
         userAgent: input.userAgent,
-      })
+      })))
     : await createChatSession(app, {
         userId: input.userId,
         targetDeviceId: sessionTargetDeviceId,
@@ -2319,8 +2354,11 @@ export async function createChatMessage(
       .set({
         title: titleFromChatPreview(session.title, input.content),
         metadata: buildChatSessionMetadata(
-          readRecord((session as Record<string, unknown>).metadata) ??
-            requestChatMetadata,
+          {
+            ...(readRecord((session as Record<string, unknown>).metadata) ??
+              {}),
+            ...requestChatMetadata,
+          },
           {
             titleHint: titleFromChatPreview(session.title, input.content),
             preview: initialPreview,
@@ -2338,8 +2376,10 @@ export async function createChatMessage(
       ...session,
       title: titleFromChatPreview(session.title, input.content),
       metadata: buildChatSessionMetadata(
-        readRecord((session as Record<string, unknown>).metadata) ??
-          requestChatMetadata,
+        {
+          ...(readRecord((session as Record<string, unknown>).metadata) ?? {}),
+          ...requestChatMetadata,
+        },
         {
           titleHint: titleFromChatPreview(session.title, input.content),
           preview: initialPreview,

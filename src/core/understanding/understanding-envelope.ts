@@ -13,6 +13,7 @@ import type {
   UnderstandingSuccessCriterion,
 } from "./types.js";
 import { understandingEnvelopeSchema } from "./types.js";
+import { normalizePersonalName } from "./identity-name.js";
 import { isExplicitTableRequest } from "./structured-output-policy.js";
 import {
   compileOutputContract,
@@ -562,19 +563,36 @@ function extractMemoryCandidates(text: string, promptInjection: boolean): Unders
   }
 
   const candidates: UnderstandingMemoryCandidate[] = [];
+  // The captures take up to three words on purpose: "benim adım bundan sonra
+  // Osman" must reach the normalizer whole. The old single-word capture
+  // grabbed "bundan" and wrote it as the user's name — the greeting bug. The
+  // shared normalizer strips the discourse ("bundan sonra") and rejects
+  // function words, so what survives is the actual name or nothing. Patterns
+  // here only *locate* a statement; deciding what a name is belongs to
+  // `identity-name.ts` alone.
+  const nameCapture = String.raw`([\p{L}'’-]+(?:\s+[\p{L}'’-]+){0,2})`;
   const preferredNamePatterns = [
-    /(?:bundan\s+sonra\s+)?(?:bana|beni)\s+([A-ZÇĞİÖŞÜa-zçğıöşü][\p{L}'’-]{1,40})\s+(?:diye\s+)?(?:seslen|hitap\s+et|çağır|cagir|de)\b/giu,
-    /(?:beni|bana)\s+(?:artık|artik\s+)?([A-ZÇĞİÖŞÜa-zçğıöşü][\p{L}'’-]{1,40})\s+(?:olarak\s+)?(?:çağır|cagir|an|hitap\s+et)\b/giu,
+    new RegExp(
+      String.raw`(?:bana|beni)\s+${nameCapture}\s+(?:diye\s+)?(?:seslen|hitap\s+et|çağır|cagir|de)\b`,
+      "giu",
+    ),
+    new RegExp(
+      String.raw`(?:beni|bana)\s+${nameCapture}\s+(?:olarak\s+)?(?:çağır|cagir|an|hitap\s+et)\b`,
+      "giu",
+    ),
   ];
   const namePatterns = [
-    /(?:benim\s+adım|benim\s+adim|adım|adim|ismim)\s+([A-ZÇĞİÖŞÜa-zçğıöşü][\p{L}'’-]{1,40})\b/giu,
+    new RegExp(
+      String.raw`(?:benim\s+adım|benim\s+adim|adım|adim|ismim)\s+${nameCapture}`,
+      "giu",
+    ),
     /\bben\s+([A-ZÇĞİÖŞÜa-zçğıöşü][\p{L}'’-]{1,40})['’]?(?:yim|yım|yum|yüm|im|ım|um|üm)\b/giu,
   ];
 
   for (const pattern of preferredNamePatterns) {
     for (const match of text.matchAll(pattern)) {
-      const value = cleanCapturedText(match[1] ?? "");
-      if (value.length > 1) {
+      const value = normalizePersonalName(cleanCapturedText(match[1] ?? ""));
+      if (value) {
         candidates.push({
           op: "update",
           kind: "preference",
@@ -591,8 +609,8 @@ function extractMemoryCandidates(text: string, promptInjection: boolean): Unders
 
   for (const pattern of namePatterns) {
     for (const match of text.matchAll(pattern)) {
-      const value = cleanCapturedText(match[1] ?? "");
-      if (value.length > 1) {
+      const value = normalizePersonalName(cleanCapturedText(match[1] ?? ""));
+      if (value) {
         candidates.push({
           op: "update",
           kind: "fact",

@@ -146,6 +146,11 @@ export class EventBus {
     }
 
     await this.options.fanout.start((message) => {
+      // A client may connect to this worker after the remote publish reached
+      // Redis but before its SSE subscription was attached. Keep the same
+      // short-lived connect-race snapshot on every worker, not only the one
+      // that originally published the volatile event.
+      this.recordVolatileSnapshot([message.channel], message.event);
       this.emitChannel(message.channel, message.event);
     });
     this.fanoutStarted = true;

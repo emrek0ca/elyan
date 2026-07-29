@@ -1,24 +1,39 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
-import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
+import type {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyRequest,
+} from "fastify";
 import { ZodError } from "zod";
 import { z } from "zod";
 import type { RawData } from "ws";
 import { chatSessions, devices, tasks } from "../../db/schema.js";
 import { recordMobileSyncRecoverySignals } from "../../core/understanding/user-understanding-service.js";
-import { AppError, badRequest, notFound, unauthorized } from "../../lib/errors.js";
+import {
+  AppError,
+  badRequest,
+  notFound,
+  unauthorized,
+} from "../../lib/errors.js";
 import { extractBearerToken, getUserAuth } from "../../lib/request-auth.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
 import type { DomainEvent } from "./event-bus.js";
 import {
   acknowledgeTaskDispatchLease,
+  acknowledgeTaskControl,
   appendTaskArtifacts,
   buildRuntimeTaskDispatchEnvelope,
   issueTaskDispatchLease,
   updateTaskFromRuntime,
 } from "../tasks/service.js";
 import { runtimeSocketMessageSchema } from "../runtime/schemas.js";
-import { disconnectRuntime, heartbeatRuntime, listAssignedRuntimeTasks, markRuntimeConnected } from "../runtime/service.js";
+import {
+  disconnectRuntime,
+  heartbeatRuntime,
+  listAssignedRuntimeTasks,
+  markRuntimeConnected,
+} from "../runtime/service.js";
 import {
   getRealtimeReplayAvailability,
   listRealtimeEventsForStream,
@@ -83,18 +98,32 @@ const SSE_MAX_PENDING_EVENTS = 64;
 const SSE_DROPPED_BACKPRESSURE_METRIC_KEY =
   "metrics:sse_dropped_connections_total:reason:backpressure";
 
-export function realtimeStreamChannelForUser(userId: string, query: RealtimeStreamQuery): string {
-  return query.taskId ? `task:${query.taskId}` : query.deviceId ? `device:${query.deviceId}` : `user:${userId}`;
+export function realtimeStreamChannelForUser(
+  userId: string,
+  query: RealtimeStreamQuery,
+): string {
+  return query.taskId
+    ? `task:${query.taskId}`
+    : query.deviceId
+      ? `device:${query.deviceId}`
+      : `user:${userId}`;
 }
 
 export function activeRealtimeStreamCountForUser(userId: string): number {
   return activeRealtimeStreamsByUser.get(userId) ?? 0;
 }
 
-export function acquireRealtimeStreamSlot(userId: string, maxStreams: number): () => void {
+export function acquireRealtimeStreamSlot(
+  userId: string,
+  maxStreams: number,
+): () => void {
   const current = activeRealtimeStreamCountForUser(userId);
   if (current >= maxStreams) {
-    throw new AppError(429, "too_many_realtime_streams", "Too many realtime streams are already open.");
+    throw new AppError(
+      429,
+      "too_many_realtime_streams",
+      "Too many realtime streams are already open.",
+    );
   }
 
   activeRealtimeStreamsByUser.set(userId, current + 1);
@@ -117,7 +146,11 @@ function parseSseEventCursor(
   request: FastifyRequest,
   queryCursor?: number,
 ): number | null {
-  if (typeof queryCursor === "number" && Number.isFinite(queryCursor) && queryCursor > 0) {
+  if (
+    typeof queryCursor === "number" &&
+    Number.isFinite(queryCursor) &&
+    queryCursor > 0
+  ) {
     return Math.floor(queryCursor);
   }
 
@@ -140,7 +173,11 @@ function writeSseEvent(
   },
 ): boolean {
   const lines: string[] = [];
-  if (typeof input.id === "number" && Number.isFinite(input.id) && input.id > 0) {
+  if (
+    typeof input.id === "number" &&
+    Number.isFinite(input.id) &&
+    input.id > 0
+  ) {
     lines.push(`id: ${input.id}`);
   }
   lines.push(`event: ${input.event}`);
@@ -159,7 +196,8 @@ export function shouldDropSlowSseClient(
   raw: { writableLength?: number },
   maxBufferedBytes: number,
 ): boolean {
-  const buffered = typeof raw.writableLength === "number" ? raw.writableLength : 0;
+  const buffered =
+    typeof raw.writableLength === "number" ? raw.writableLength : 0;
   return buffered > Math.max(1, maxBufferedBytes);
 }
 
@@ -237,10 +275,12 @@ async function markChatSessionReconnectPending(
   await app.db
     .update(chatSessions)
     .set({
-      metadata: sql`coalesce(${chatSessions.metadata}, '{}'::jsonb) || ${JSON.stringify({
-        realtimeDeliveryState: "reconnect-pending",
-        realtimeReconnectPendingAt: now.toISOString(),
-      })}::jsonb`,
+      metadata: sql`coalesce(${chatSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
+        {
+          realtimeDeliveryState: "reconnect-pending",
+          realtimeReconnectPendingAt: now.toISOString(),
+        },
+      )}::jsonb`,
       updatedAt: now,
     })
     .where(
@@ -279,7 +319,9 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       const ownedDevice = await app.db
         .select({ id: devices.id })
         .from(devices)
-        .where(and(eq(devices.id, query.deviceId), eq(devices.userId, auth.sub)))
+        .where(
+          and(eq(devices.id, query.deviceId), eq(devices.userId, auth.sub)),
+        )
         .limit(1);
 
       if (!ownedDevice[0]) {
@@ -289,7 +331,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
     const channel = realtimeStreamChannelForUser(auth.sub, query);
     const cursor = parseSseEventCursor(request, query.cursor);
-    const releaseStreamSlot = acquireRealtimeStreamSlot(auth.sub, app.config.SSE_MAX_STREAMS_PER_USER);
+    const releaseStreamSlot = acquireRealtimeStreamSlot(
+      auth.sub,
+      app.config.SSE_MAX_STREAMS_PER_USER,
+    );
 
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -324,13 +369,19 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       }
     };
 
-    const writeOrClose = (input: { event: string; data: unknown; id?: number }) => {
+    const writeOrClose = (input: {
+      event: string;
+      data: unknown;
+      id?: number;
+    }) => {
       if (closed) {
         return false;
       }
       // Yavaş client: yazma buffer'ı sınırı aştıysa bağlantıyı kes; client
       // Last-Event-ID ile yeniden bağlanıp replay'den devam eder.
-      if (shouldDropSlowSseClient(reply.raw, app.config.SSE_MAX_BUFFERED_BYTES)) {
+      if (
+        shouldDropSlowSseClient(reply.raw, app.config.SSE_MAX_BUFFERED_BYTES)
+      ) {
         recordSseDroppedBackpressure(app);
         void markChatSessionReconnectPending(app, {
           userId: auth.sub,
@@ -343,7 +394,8 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         closeStream();
         return false;
       }
-      lastChatSessionId = readSessionIdFromSseData(input.data) ?? lastChatSessionId;
+      lastChatSessionId =
+        readSessionIdFromSseData(input.data) ?? lastChatSessionId;
       const writable = writeSseEvent(reply.raw, input);
       if (!writable && !pendingWriteState.waitingDrain) {
         pendingWriteState.waitingDrain = true;
@@ -377,19 +429,22 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
     request.raw.on("close", closeStream);
 
-    if (!writeOrClose({
-      event: "ready",
-      data: {
-        channel,
-        cursor,
-        replaySupported: true,
-        realtimeReady: true,
-        resumeCursorTtlSeconds: app.config.REALTIME_EVENT_RETENTION_HOURS * 60 * 60,
-        sessionHydrationMode: "realtime_then_authoritative_refresh",
-        degradedReason: null,
-        timestamp: new Date().toISOString(),
-      },
-    })) {
+    if (
+      !writeOrClose({
+        event: "ready",
+        data: {
+          channel,
+          cursor,
+          replaySupported: true,
+          realtimeReady: true,
+          resumeCursorTtlSeconds:
+            app.config.REALTIME_EVENT_RETENTION_HOURS * 60 * 60,
+          sessionHydrationMode: "realtime_then_authoritative_refresh",
+          degradedReason: null,
+          timestamp: new Date().toISOString(),
+        },
+      })
+    ) {
       return;
     }
 
@@ -398,6 +453,24 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         return;
       }
       if (!replayCompleted) {
+        lastChatSessionId =
+          readSessionIdFromSseData(event.payload) ?? lastChatSessionId;
+        if (bufferedEvents.length >= SSE_MAX_PENDING_EVENTS) {
+          recordSseDroppedBackpressure(app);
+          void markChatSessionReconnectPending(app, {
+            userId: auth.sub,
+            sessionId: lastChatSessionId,
+          });
+          app.log.warn(
+            {
+              channel,
+              bufferedEvents: bufferedEvents.length,
+            },
+            "sse replay buffer exceeded; dropping connection (resume via replay)",
+          );
+          closeStream();
+          return;
+        }
         bufferedEvents.push(event);
         return;
       }
@@ -407,7 +480,11 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         id: typeof event.id === "number" ? event.id : undefined,
         data: shapeRealtimeEventEnvelope(event),
       });
-      if (typeof event.id === "number" && Number.isFinite(event.id) && event.id > lastSentEventId) {
+      if (
+        typeof event.id === "number" &&
+        Number.isFinite(event.id) &&
+        event.id > lastSentEventId
+      ) {
         lastSentEventId = event.id;
       }
     });
@@ -435,7 +512,8 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
           data: {
             reason: "cursor_expired",
             cursor,
-            earliestAvailableEventId: replayAvailability.earliestAvailableEventId,
+            earliestAvailableEventId:
+              replayAvailability.earliestAvailableEventId,
             latestAvailableEventId: replayAvailability.latestAvailableEventId,
           },
         });
@@ -452,11 +530,13 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       });
 
       for (const event of replayEvents) {
-        if (!writeOrClose({
-          event: event.topic,
-          id: event.id,
-          data: shapeRealtimeEventEnvelope(event),
-        })) {
+        if (
+          !writeOrClose({
+            event: event.topic,
+            id: event.id,
+            data: shapeRealtimeEventEnvelope(event),
+          })
+        ) {
           return;
         }
         lastSentEventId = event.id;
@@ -469,12 +549,15 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       // kanal başına son snapshot'ları kısa TTL ile tutuyor; burada teslim
       // ediyoruz. delta payload'ı kümülatif otoriter snapshot taşıdığı ve
       // mobil bunu idempotent uyguladığı için duplicate zararsızdır.
-      const missedSnapshots = app.services.eventBus.recentVolatileSnapshots(channel);
+      const missedSnapshots =
+        app.services.eventBus.recentVolatileSnapshots(channel);
       for (const event of missedSnapshots) {
-        if (!writeOrClose({
-          event: event.topic,
-          data: shapeRealtimeEventEnvelope(event),
-        })) {
+        if (
+          !writeOrClose({
+            event: event.topic,
+            data: shapeRealtimeEventEnvelope(event),
+          })
+        ) {
           return;
         }
       }
@@ -497,25 +580,34 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       while (!closed && bufferedEvents.length > 0) {
         const pending = bufferedEvents.splice(0);
         const persisted = pending
-          .filter((event): event is DomainEvent & { id: number } => typeof event.id === "number" && event.id > lastSentEventId)
+          .filter(
+            (event): event is DomainEvent & { id: number } =>
+              typeof event.id === "number" && event.id > lastSentEventId,
+          )
           .sort((a, b) => a.id - b.id);
-        const volatile = pending.filter((event) => typeof event.id !== "number");
+        const volatile = pending.filter(
+          (event) => typeof event.id !== "number",
+        );
 
         for (const event of persisted) {
-          if (!writeOrClose({
-            event: event.topic,
-            id: event.id,
-            data: shapeRealtimeEventEnvelope(event),
-          })) {
+          if (
+            !writeOrClose({
+              event: event.topic,
+              id: event.id,
+              data: shapeRealtimeEventEnvelope(event),
+            })
+          ) {
             return;
           }
           lastSentEventId = event.id;
         }
         for (const event of volatile) {
-          if (!writeOrClose({
-            event: event.topic,
-            data: shapeRealtimeEventEnvelope(event),
-          })) {
+          if (
+            !writeOrClose({
+              event: event.topic,
+              data: shapeRealtimeEventEnvelope(event),
+            })
+          ) {
             return;
           }
         }
@@ -526,25 +618,34 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       while (!closed && bufferedEvents.length > 0) {
         const pending = bufferedEvents.splice(0);
         const persisted = pending
-          .filter((event): event is DomainEvent & { id: number } => typeof event.id === "number" && event.id > lastSentEventId)
+          .filter(
+            (event): event is DomainEvent & { id: number } =>
+              typeof event.id === "number" && event.id > lastSentEventId,
+          )
           .sort((a, b) => a.id - b.id);
-        const volatile = pending.filter((event) => typeof event.id !== "number");
+        const volatile = pending.filter(
+          (event) => typeof event.id !== "number",
+        );
 
         for (const event of persisted) {
-          if (!writeOrClose({
-            event: event.topic,
-            id: event.id,
-            data: shapeRealtimeEventEnvelope(event),
-          })) {
+          if (
+            !writeOrClose({
+              event: event.topic,
+              id: event.id,
+              data: shapeRealtimeEventEnvelope(event),
+            })
+          ) {
             return;
           }
           lastSentEventId = event.id;
         }
         for (const event of volatile) {
-          if (!writeOrClose({
-            event: event.topic,
-            data: shapeRealtimeEventEnvelope(event),
-          })) {
+          if (
+            !writeOrClose({
+              event: event.topic,
+              data: shapeRealtimeEventEnvelope(event),
+            })
+          ) {
             return;
           }
         }
@@ -572,6 +673,7 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/runtime", { websocket: true }, async (socket, request) => {
+    let attachedDeviceId: string | null = null;
     try {
       const token = extractBearerToken(request);
       const payload = (await app.jwt.verify(token)) as RuntimeAuthTokenPayload;
@@ -586,6 +688,15 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         userId: payload.sub,
         deviceId: payload.deviceId,
       });
+      attachedDeviceId = payload.deviceId;
+      await app.services.realtimeHub
+        .registerRuntimePresence(payload.deviceId)
+        .catch((error) => {
+          app.log.warn(
+            { error, deviceId: payload.deviceId },
+            "runtime distributed presence could not be registered",
+          );
+        });
       await markRuntimeConnected(app, payload, socketSessionId);
 
       const queuedTasks = await listAssignedRuntimeTasks(app, payload);
@@ -604,15 +715,33 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
           continue;
         }
 
-        socket.send(JSON.stringify(buildRuntimeTaskDispatchEnvelope(leaseResult.task, leaseResult.lease)));
+        socket.send(
+          JSON.stringify(
+            buildRuntimeTaskDispatchEnvelope(
+              leaseResult.task,
+              leaseResult.lease,
+            ),
+          ),
+        );
       }
 
       socket.on("message", async (raw: RawData) => {
         try {
-          const parsed = runtimeSocketMessageSchema.parse(JSON.parse(raw.toString()));
+          const parsed = runtimeSocketMessageSchema.parse(
+            JSON.parse(raw.toString()),
+          );
 
           if (parsed.type === "heartbeat") {
             await heartbeatRuntime(app, payload, parsed);
+            await app.services.realtimeHub
+              .touchRuntimePresence(payload.deviceId)
+              .catch((error) => {
+                app.log.warn(
+                  { error, deviceId: payload.deviceId },
+                  "runtime distributed presence could not be renewed",
+                );
+                return false;
+              });
             return;
           }
 
@@ -626,14 +755,38 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
           }
 
           if (parsed.type === "task.update") {
-            await updateTaskFromRuntime(app, payload, parsed.taskId, parsed.body);
+            await updateTaskFromRuntime(
+              app,
+              payload,
+              parsed.taskId,
+              parsed.body,
+            );
             return;
           }
 
           if (parsed.type === "task.artifacts") {
-            await appendTaskArtifacts(app, payload, parsed.taskId, parsed.artifacts);
+            await appendTaskArtifacts(
+              app,
+              payload,
+              parsed.taskId,
+              parsed.artifacts,
+            );
+            return;
+          }
+
+          if (parsed.type === "task.control.ack") {
+            await acknowledgeTaskControl(app, payload, {
+              taskId: parsed.taskId,
+              commandId: parsed.commandId,
+              state: parsed.state,
+              message: parsed.message,
+            });
           }
         } catch (error) {
+          if (error instanceof AppError && error.statusCode === 401) {
+            socket.close(4401, "Runtime session is stale or replaced");
+            return;
+          }
           const message =
             error instanceof ZodError
               ? "Invalid runtime socket message"
@@ -652,26 +805,44 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
       socket.on("close", async () => {
         app.services.realtimeHub.detachRuntime(payload.deviceId, socket);
+        if (!app.services.realtimeHub.isRuntimeConnected(payload.deviceId)) {
+          await app.services.realtimeHub
+            .releaseRuntimePresence(payload.deviceId)
+            .catch(() => undefined);
+        }
 
         try {
-          await disconnectRuntime(app, payload);
+          await disconnectRuntime(app, payload, { closeSocket: false });
         } catch {
-          // A replaced runtime may already have invalidated this connection;
-          // still notify mobile so it can refresh device status.
-          await app.services.eventBus.publishVolatile({
-            topic: "device.status_changed",
-            userId: payload.sub,
-            deviceId: payload.deviceId,
-            payload: {
+          // The database row may have been removed during account/device
+          // teardown. Emit a conservative refresh signal only in that case.
+          await app.services.eventBus
+            .publishVolatile({
+              topic: "device.status_changed",
+              userId: payload.sub,
               deviceId: payload.deviceId,
-              isOnline: false,
-              reason: "ws_closed",
-            },
-          }).catch(() => undefined);
+              payload: {
+                deviceId: payload.deviceId,
+                isOnline: false,
+                reason: "ws_closed",
+              },
+            })
+            .catch(() => undefined);
         }
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Runtime websocket authentication failed";
+      if (attachedDeviceId) {
+        app.services.realtimeHub.detachRuntime(attachedDeviceId, socket);
+        if (!app.services.realtimeHub.isRuntimeConnected(attachedDeviceId)) {
+          await app.services.realtimeHub
+            .releaseRuntimePresence(attachedDeviceId)
+            .catch(() => undefined);
+        }
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Runtime websocket authentication failed";
       socket.close(4401, message);
     }
   });

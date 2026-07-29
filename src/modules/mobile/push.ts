@@ -25,6 +25,17 @@ export type MobilePushDeliveryResult = {
 
 type ApplePushEnvironment = "sandbox" | "production";
 
+type MobilePushMessage = {
+  title: string;
+  body: string;
+  silent: boolean;
+  collapseId: string;
+  dedupeKey: string;
+};
+
+const PUSH_DEDUPE_TTL_MS = 15 * 60_000;
+const PUSH_DEDUPE_MAX_ENTRIES = 20_000;
+
 function readString(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -141,60 +152,56 @@ export function buildAndroidAssetLinksPayload(
   ];
 }
 
-function buildPushMessage(event: DomainEvent): { title: string; body: string; silent: boolean } | null {
+export function buildPushMessage(event: DomainEvent): MobilePushMessage | null {
   const topic = safeEventTopic(event.topic);
   const payload = readRecord(event.payload);
   const task = readRecord(payload.task);
   const session = readRecord(payload.session);
   const title = safeText(task.title ?? session.title ?? payload.title, "Elyan");
 
-  if (topic === "chat.message.created") {
-    return {
-      title: "Elyan",
-      body: title !== "Elyan" ? `${title} için yeni yanıt hazır.` : "Yeni sohbet yanıtı hazır.",
-      silent: false,
-    };
-  }
-
-  if (topic === "chat.session.created") {
-    return {
-      title: "Elyan",
-      body: title !== "Elyan" ? `${title} oluşturuldu.` : "Yeni sohbet oluşturuldu.",
-      silent: false,
-    };
-  }
-
-  if (topic === "chat.session.updated") {
-    return {
-      title: "Elyan",
-      body: title !== "Elyan" ? `${title} güncellendi.` : "Sohbet güncellendi.",
-      silent: false,
-    };
-  }
-
-  if (topic === "task.created") {
-    return {
-      title: "Elyan",
-      body: title !== "Elyan" ? `${title} oluşturuldu.` : "Yeni görev oluşturuldu.",
-      silent: false,
-    };
-  }
-
   if (topic === "task.updated") {
     const status = readString(task.status ?? payload.status).toLowerCase();
     const label = title !== "Elyan" ? title : "Görev";
+    const taskId = readString(event.taskId ?? task.id ?? payload.taskId) || "task";
+    const approval = readRecord(task.approvalRequest ?? payload.approvalRequest);
+    const approvalKind = readString(approval.kind).toLowerCase();
+    const approvalKey = readString(approval.approvalKey ?? approval.token);
+    const approvalRevision = readString(approval.revision) || "1";
+    const resolution = readRecord(approval.resolution);
+    const resolutionState = readString(resolution.state ?? resolution.status).toLowerCase();
+
+    if (status === "waiting_approval") {
+      if (resolutionState && resolutionState !== "pending") {
+        return null;
+      }
+      const isClarification = approvalKind === "clarification";
+      const identity = approvalKey || `${taskId}:${approvalRevision}:${approvalKind || "approval"}`;
+      return {
+        title: "Elyan",
+        body: isClarification ? `${label} için ek bilgi gerekiyor.` : `${label} onay bekliyor.`,
+        silent: false,
+        collapseId: `task-${taskId}-${isClarification ? "question" : "approval"}`,
+        dedupeKey: `waiting:${identity}`,
+      };
+    }
+
+    if (!["completed", "failed", "canceled", "cancelled"].includes(status)) {
+      return null;
+    }
+
+    const terminalStatus = status === "cancelled" ? "canceled" : status;
     const body =
-      status === "completed"
+      terminalStatus === "completed"
         ? `${label} tamamlandı.`
-        : status === "waiting_approval"
-          ? `${label} onay bekliyor.`
-          : status === "failed"
-            ? `${label} başarısız oldu.`
-            : `${label} güncellendi.`;
+        : terminalStatus === "failed"
+          ? `${label} başarısız oldu.`
+          : `${label} iptal edildi.`;
     return {
       title: "Elyan",
       body,
       silent: false,
+      collapseId: `task-${taskId}-result`,
+      dedupeKey: `terminal:${taskId}:${terminalStatus}`,
     };
   }
 
@@ -203,13 +210,20 @@ function buildPushMessage(event: DomainEvent): { title: string; body: string; si
       title: "Elyan",
       body: "Desktop eşleştirmesi hazır.",
       silent: true,
+      collapseId: "desktop-pairing",
+      dedupeKey: `pair:${readString(event.deviceId) || readString(event.id) || topic}`,
     };
   }
 
   return null;
 }
 
-class ApplePushClient {
+/**
+ * Exported so the proactive sender can reuse the same Apple leg instead of
+ * standing up a second one. There must be exactly one place that knows how to
+ * talk to APNs.
+ */
+export class ApplePushClient {
   private cachedPrivateKeySource = "";
   private cachedPrivateKeyPem = "";
   private cachedSigningKey: Awaited<ReturnType<typeof importPKCS8>> | null = null;
@@ -334,7 +348,6 @@ class ApplePushClient {
               title: input.title,
               body: input.body,
             },
-            sound: "default",
             badge: input.badge,
           },
       elyan: input.extra ?? {},
@@ -469,6 +482,8 @@ function mapApnsErrorCode(reason: string): string {
 
 export class MobilePushDispatcher {
   private unsubscribe: (() => void) | null = null;
+  private readonly recentlyDispatched = new Map<string, number>();
+  private lastDedupeSweepAt = 0;
 
   public constructor(
     private readonly app: FastifyInstance,
@@ -496,6 +511,7 @@ export class MobilePushDispatcher {
   public close(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.recentlyDispatched.clear();
   }
 
   public status() {
@@ -515,6 +531,20 @@ export class MobilePushDispatcher {
         skipped: 0,
         failed: 0,
         reasons: message ? ["missing_user"] : ["unhandled_topic"],
+      };
+    }
+
+    const now = Date.now();
+    this.sweepDedupe(now);
+    const userDedupeKey = `${event.userId}:${message.dedupeKey}`;
+    const lastDispatchedAt = this.recentlyDispatched.get(userDedupeKey);
+    if (lastDispatchedAt !== undefined && now - lastDispatchedAt < PUSH_DEDUPE_TTL_MS) {
+      return {
+        attempted: 0,
+        delivered: 0,
+        skipped: 1,
+        failed: 0,
+        reasons: ["duplicate_event"],
       };
     }
 
@@ -568,6 +598,7 @@ export class MobilePushDispatcher {
         title: message.title,
         body: message.body,
         silent: message.silent,
+        collapseId: message.collapseId,
         extra: {
           topic: event.topic,
           userId: event.userId,
@@ -591,6 +622,10 @@ export class MobilePushDispatcher {
       }
     }
 
+    if (delivered > 0) {
+      this.recentlyDispatched.set(userDedupeKey, now);
+    }
+
     return {
       attempted,
       delivered,
@@ -599,9 +634,26 @@ export class MobilePushDispatcher {
       reasons: [...reasons],
     };
   }
+
+  private sweepDedupe(now: number): void {
+    if (now - this.lastDedupeSweepAt >= PUSH_DEDUPE_TTL_MS) {
+      for (const [key, dispatchedAt] of this.recentlyDispatched) {
+        if (now - dispatchedAt >= PUSH_DEDUPE_TTL_MS) {
+          this.recentlyDispatched.delete(key);
+        }
+      }
+      this.lastDedupeSweepAt = now;
+    }
+    while (this.recentlyDispatched.size >= PUSH_DEDUPE_MAX_ENTRIES) {
+      const oldestKey = this.recentlyDispatched.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.recentlyDispatched.delete(oldestKey);
+    }
+  }
 }
 
 export function createMobilePushDispatcher(app: FastifyInstance) {
   return new MobilePushDispatcher(app);
 }
-

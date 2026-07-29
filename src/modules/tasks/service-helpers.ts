@@ -2,6 +2,8 @@ import type { TaskStatus } from "../../contracts/domain.js";
 import { createIdempotencyFingerprint } from "../../lib/idempotency.js";
 import { AppError, unprocessableEntity } from "../../lib/errors.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
+import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
+import { DESKTOP_SKILL_MANIFEST } from "./desktop-skill-manifest.js";
 
 type IdempotentTaskRow = {
   id: string;
@@ -125,6 +127,8 @@ export function shapeTaskFeedItem(
   const quantum = extractTaskQuantumSnapshot(task);
   const presentation = extractTaskPresentation(task.payload);
   const routeDecision = extractTaskRouteDecision(task.payload);
+  const planningEvidence = extractTaskPlanningEvidence(task.payload);
+  const supersedesTaskId = extractTaskSupersedesTaskId(task.payload);
   const operator = extractTaskOperatorSummary(task.result);
   const brain = extractTaskBrainMetadata(task.result);
   const resultRecord =
@@ -145,6 +149,7 @@ export function shapeTaskFeedItem(
     status: task.status,
     targetDeviceId: task.targetDeviceId,
     chatSessionId: extractTaskChatSessionId(task.payload),
+    supersedesTaskId,
     presentation,
     queuePosition: task.queuePosition,
     requestedCapabilities: Array.isArray(task.requestedCapabilities)
@@ -161,6 +166,7 @@ export function shapeTaskFeedItem(
     deliveryState: deriveTaskDeliveryState(task),
     selectedDesktopOnline: options?.selectedDesktopOnline ?? null,
     routeDecision,
+    ...(planningEvidence ? { planningEvidence } : {}),
     ...(brain ? { brain } : {}),
     ...(operator ? { operator } : {}),
     ...(quantum ? { quantum } : {}),
@@ -173,6 +179,71 @@ export function shapeTaskFeedItem(
     completedAt: task.completedAt ?? null,
     canceledAt: task.canceledAt ?? null,
     updatedAt: task.updatedAt,
+  };
+}
+
+const PUBLIC_CAPABILITY_BY_NAME = new Map(
+  DESKTOP_CAPABILITY_MANIFEST.map((entry) => [entry.name, entry] as const),
+);
+const PUBLIC_SKILL_BY_ID = new Map(
+  DESKTOP_SKILL_MANIFEST.map((entry) => [entry.id, entry] as const),
+);
+
+function extractTaskPlanningEvidence(payloadValue: unknown) {
+  const payload = readRecord(payloadValue);
+  const workOrder = readRecord(payload?.desktopWorkOrder);
+  const planPreview = readRecord(workOrder?.planPreview);
+  if (
+    !planPreview ||
+    readString(planPreview, "planSource") !== "server_materialized" ||
+    readString(planPreview, "contract") !== "elyan.compiled_plan.v1"
+  ) {
+    return null;
+  }
+
+  const rawSteps = Array.isArray(planPreview.steps)
+    ? planPreview.steps.slice(0, 16)
+    : [];
+  const capabilities = new Set<string>();
+  const skills = new Set<string>();
+  const privacyClasses = new Set<string>();
+  let approvalStepCount = 0;
+
+  for (const rawStep of rawSteps) {
+    const step = readRecord(rawStep);
+    const capabilityName = readString(step, "capability");
+    const capability = capabilityName
+      ? PUBLIC_CAPABILITY_BY_NAME.get(capabilityName)
+      : null;
+    if (!capability) continue;
+    capabilities.add(capability.name);
+    privacyClasses.add(capability.privacyClass);
+
+    let requiresApproval = capability.requiresApproval;
+    if (capability.name === "run_skill") {
+      const args = readRecord(step?.args);
+      const skillId = readString(args, "skillId");
+      const skill = skillId ? PUBLIC_SKILL_BY_ID.get(skillId) : null;
+      if (skill) {
+        skills.add(skill.id);
+        requiresApproval ||= skill.requiresConfirmation;
+      }
+    }
+    if (requiresApproval) approvalStepCount += 1;
+  }
+
+  if (capabilities.size === 0) return null;
+  const preparation = readRecord(planPreview.planPreparation);
+  const status = readString(preparation, "status");
+  return {
+    source: "server_materialized",
+    contract: "elyan.compiled_plan.v1",
+    status: status === "failed" ? "failed" : "ready",
+    stepCount: rawSteps.length,
+    capabilities: [...capabilities],
+    skills: [...skills],
+    approvalStepCount,
+    privacyClasses: [...privacyClasses],
   };
 }
 
@@ -526,6 +597,7 @@ const INTERNAL_INFERENCE_KEYS = new Set([
   "agentEngineVersion",
   "visionBlock",
   "visionblock",
+  "runtimePlan",
 ]);
 
 function normalizePublicInferenceKey(value: string): string {
@@ -564,6 +636,7 @@ const INTERNAL_EVENT_PAYLOAD_KEYS = new Set([
   "rawProviderResponse",
   "reasoning",
   "reasoningTrace",
+  "runtimePlan",
   "stackTrace",
   "systemPrompt",
   "toolRequests",
@@ -614,7 +687,9 @@ function clipPublicString(value: string, maxLength: number): string {
     : `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-function sanitizePublicModelRoute(value: unknown): Record<string, unknown> | null {
+function sanitizePublicModelRoute(
+  value: unknown,
+): Record<string, unknown> | null {
   const route = readRecord(value);
   if (!route) return null;
   const provider = readString(route, "provider");
@@ -754,7 +829,9 @@ function readString(
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function readPublicSkillId(record: Record<string, unknown> | null): string | null {
+function readPublicSkillId(
+  record: Record<string, unknown> | null,
+): string | null {
   const value = readString(record, "skillId");
   return value && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(value)
     ? value
@@ -833,12 +910,19 @@ function normalizeTaskQuantumLivenessSnapshot(value: unknown) {
     source: "desktop_runtime_progress",
     score: readNumber(record, "score"),
     qualified: readBoolean(record, "qualified") ?? false,
-    backendResponsiveActive: readBoolean(record, "backendResponsiveActive") ?? false,
-    responsiveBoostedStepCount: readNumber(record, "responsiveBoostedStepCount") ?? 0,
-    responsiveBoostedStepIds: readStringList(record, "responsiveBoostedStepIds").slice(0, 16),
+    backendResponsiveActive:
+      readBoolean(record, "backendResponsiveActive") ?? false,
+    responsiveBoostedStepCount:
+      readNumber(record, "responsiveBoostedStepCount") ?? 0,
+    responsiveBoostedStepIds: readStringList(
+      record,
+      "responsiveBoostedStepIds",
+    ).slice(0, 16),
     livenessGuardActive: readBoolean(record, "livenessGuardActive") ?? false,
     livenessGuardTimeoutRisk:
-      timeoutRisk === "low" || timeoutRisk === "medium" || timeoutRisk === "high"
+      timeoutRisk === "low" ||
+      timeoutRisk === "medium" ||
+      timeoutRisk === "high"
         ? timeoutRisk
         : null,
     livenessGuardEffectiveMaxReplans:
@@ -904,6 +988,21 @@ export function extractTaskChatSessionId(payload: unknown): string | null {
   const sessionId = (chat as Record<string, unknown>).sessionId;
   return typeof sessionId === "string" && sessionId.trim().length > 0
     ? sessionId.trim()
+    : null;
+}
+
+export function extractTaskSupersedesTaskId(payload: unknown): string | null {
+  const metadata = readRecord(readRecord(payload)?.metadata);
+  const intervention = readRecord(metadata?.intervention);
+  if (readString(intervention, "kind") !== "redirect_after_cancel") {
+    return null;
+  }
+  const taskId = readString(intervention, "supersedesTaskId");
+  return taskId &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      taskId,
+    )
+    ? taskId
     : null;
 }
 
@@ -1158,7 +1257,11 @@ export function resolveSafeChatContinuityReply(input: {
     risk?.side_effect === true ||
     (Array.isArray(envelope?.required_capabilities) &&
       envelope.required_capabilities.some((capability) => {
-        if (!capability || typeof capability !== "object" || Array.isArray(capability)) {
+        if (
+          !capability ||
+          typeof capability !== "object" ||
+          Array.isArray(capability)
+        ) {
           return true;
         }
         return (capability as Record<string, unknown>).name !== "chat.reply";

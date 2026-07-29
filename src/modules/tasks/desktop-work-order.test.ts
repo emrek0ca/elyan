@@ -4,6 +4,7 @@ import {
   buildDesktopWorkOrder,
   isDeterministicDesktopAppWorkOrder,
   isDeterministicDesktopFastWorkOrder,
+  isDesktopPlanPreparationPending,
   parseDirectDesktopAppCommand,
   parseDirectImageFetchCommand,
 } from "./desktop-work-order.js";
@@ -59,6 +60,28 @@ test("buildDesktopWorkOrder turns a mobile dispatch prompt into typed execution 
   assert.equal(workOrder.workType, "screen_action");
   assert.equal(workOrder.execution.approvalPolicy, "single_full_access_surface");
   assert.equal(Array.isArray(workOrder.planPreview.liveNarrationPlan), true);
+  assert.deepEqual(workOrder.planPreview.planPreparation, { status: "pending" });
+});
+
+test("desktop plan preparation gate blocks pending v1.7 work without an age escape", () => {
+  const payload = {
+    desktopWorkOrder: {
+      planPreview: { planPreparation: { status: "pending" } },
+    },
+  };
+
+  assert.equal(isDesktopPlanPreparationPending(payload), true);
+  assert.equal(
+    isDesktopPlanPreparationPending(
+      {
+        desktopWorkOrder: {
+          planPreview: { planPreparation: { status: "ready" } },
+        },
+      },
+    ),
+    false,
+  );
+  assert.equal(isDesktopPlanPreparationPending({}), false);
 });
 
 test("buildDesktopWorkOrder carries safe quantum dispatch optimization hints", () => {

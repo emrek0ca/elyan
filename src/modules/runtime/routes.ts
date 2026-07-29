@@ -2,9 +2,30 @@ import type { FastifyPluginAsync } from "fastify";
 import { ZodError } from "zod";
 import { getRuntimeAuth } from "../../lib/request-auth.js";
 import { serializeZodError } from "../../lib/http.js";
-import { appendTaskArtifacts, appendTaskBinaryArtifact, getTaskMediaInputForRuntime, updateTaskFromRuntime } from "../tasks/service.js";
-import { registerRuntimeBodySchema, runtimeHeartbeatBodySchema, runtimeTaskArtifactsBodySchema, runtimeTaskParamsSchema, runtimeTaskUpdateBodySchema } from "./schemas.js";
-import { disconnectRuntime, getRuntimeSessionSnapshot, heartbeatRuntime, listAssignedRuntimeTasks, registerRuntime } from "./service.js";
+import {
+  acknowledgeTaskControl,
+  appendTaskArtifacts,
+  appendTaskBinaryArtifact,
+  getPendingTaskControlsForRuntime,
+  getTaskMediaInputForRuntime,
+  updateTaskFromRuntime,
+} from "../tasks/service.js";
+import {
+  registerRuntimeBodySchema,
+  runtimeHeartbeatBodySchema,
+  runtimeTaskArtifactsBodySchema,
+  runtimeTaskControlAckBodySchema,
+  runtimeTaskControlParamsSchema,
+  runtimeTaskParamsSchema,
+  runtimeTaskUpdateBodySchema,
+} from "./schemas.js";
+import {
+  disconnectRuntime,
+  getRuntimeSessionSnapshot,
+  heartbeatRuntime,
+  listAssignedRuntimeTasks,
+  registerRuntime,
+} from "./service.js";
 
 export const runtimeRoutes: FastifyPluginAsync = async (app) => {
   app.addContentTypeParser(
@@ -100,6 +121,34 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
     return updateTaskFromRuntime(app, auth, params.taskId, body);
   });
 
+  app.get("/tasks/:taskId/controls", async (request, reply) => {
+    await app.authenticateRuntime(request, reply);
+    if (reply.sent) return;
+    const params = runtimeTaskParamsSchema.parse(request.params);
+    const auth = getRuntimeAuth(request);
+    return {
+      controls: await getPendingTaskControlsForRuntime(
+        app,
+        auth,
+        params.taskId,
+      ),
+    };
+  });
+
+  app.post("/tasks/:taskId/controls/:commandId/ack", async (request, reply) => {
+    await app.authenticateRuntime(request, reply);
+    if (reply.sent) return;
+    const params = runtimeTaskControlParamsSchema.parse(request.params);
+    const body = runtimeTaskControlAckBodySchema.parse(request.body);
+    const auth = getRuntimeAuth(request);
+    return acknowledgeTaskControl(app, auth, {
+      taskId: params.taskId,
+      commandId: params.commandId,
+      state: body.state,
+      message: body.message,
+    });
+  });
+
   app.post("/tasks/:taskId/artifacts", async (request, reply) => {
     await app.authenticateRuntime(request, reply);
 
@@ -118,7 +167,10 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
     await app.authenticateRuntime(request, reply);
     if (reply.sent) return;
     if (!Buffer.isBuffer(request.body)) {
-      return reply.status(400).send({ error: "validation_error", message: "Binary artifact body required" });
+      return reply.status(400).send({
+        error: "validation_error",
+        message: "Binary artifact body required",
+      });
     }
     const params = runtimeTaskParamsSchema.parse(request.params);
     const auth = getRuntimeAuth(request);
@@ -136,10 +188,18 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { taskId?: string; inputRef?: string };
     const task = runtimeTaskParamsSchema.parse({ taskId: params.taskId });
     const auth = getRuntimeAuth(request);
-    const resolved = await getTaskMediaInputForRuntime(app, auth, task.taskId, String(params.inputRef ?? ""));
+    const resolved = await getTaskMediaInputForRuntime(
+      app,
+      auth,
+      task.taskId,
+      String(params.inputRef ?? ""),
+    );
     reply
       .header("Cache-Control", "no-store")
-      .header("Content-Disposition", `attachment; filename="${resolved.descriptor.name.replace(/"/g, "")}"`)
+      .header(
+        "Content-Disposition",
+        `attachment; filename="${resolved.descriptor.name.replace(/"/g, "")}"`,
+      )
       .type(resolved.descriptor.contentType)
       .send(Buffer.from(resolved.body));
   });

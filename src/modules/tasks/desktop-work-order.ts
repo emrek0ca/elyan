@@ -9,6 +9,33 @@ import type { RemoteMcpSelectionMetadata } from "../integrations/provider-regist
 // Desktop planner MAX_PLAN_STEPS=16 ile hizalandı (runtime/desktop_work_order.py
 // MAX_STEPS ile birlikte güncellenir).
 export const MAX_WORK_ORDER_STEPS = 16;
+export function isDesktopPlanPreparationPending(
+  payload: unknown,
+): boolean {
+  const root =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  const order =
+    root?.desktopWorkOrder &&
+    typeof root.desktopWorkOrder === "object" &&
+    !Array.isArray(root.desktopWorkOrder)
+      ? (root.desktopWorkOrder as Record<string, unknown>)
+      : null;
+  const preview =
+    order?.planPreview &&
+    typeof order.planPreview === "object" &&
+    !Array.isArray(order.planPreview)
+      ? (order.planPreview as Record<string, unknown>)
+      : null;
+  const preparation =
+    preview?.planPreparation &&
+    typeof preview.planPreparation === "object" &&
+    !Array.isArray(preview.planPreparation)
+      ? (preview.planPreparation as Record<string, unknown>)
+      : null;
+  return preparation?.status === "pending";
+}
 
 export type DesktopWorkOrderStep = {
   id: string;
@@ -37,6 +64,20 @@ export type DesktopWorkOrder = {
     language: "tr" | "en" | "unknown";
     sourceTextHash: string;
   };
+  semanticGoal?: {
+    contract: "elyan.semantic_task_contract.v1";
+    objective: string;
+    constraints: string[];
+    successCriteria: string[];
+    requiredCapabilities: string[];
+    forbiddenCapabilities: string[];
+    ambiguityPolicy: "ask" | "safe_assumption" | "fail_closed";
+    risk: {
+      localPrivate: boolean;
+      sideEffect: boolean;
+      irreversible: boolean;
+    };
+  };
   entities: Array<{
     type: "url" | "email" | "file_hint" | "app_hint" | "topic";
     value: string;
@@ -44,6 +85,12 @@ export type DesktopWorkOrder = {
   constraints: string[];
   workType?: "data_workflow" | "screen_action" | "mixed" | "decision_support";
   requiredCapabilities: string[];
+  capabilityAuthorization?: {
+    source: "semantic_router";
+    allowPrivateRead: boolean;
+    sideEffectsRequireApproval: true;
+  };
+  materializedCapabilityScope?: string[];
   localContextNeeded: string[];
   expectedOutputs: Array<{
     kind: "chat_result" | "artifact" | "file_update" | "browser_state" | "system_state";
@@ -84,6 +131,12 @@ export type DesktopWorkOrder = {
     retryOnRecoverableToolError: boolean;
     stopOnIrreversibleRisk: boolean;
     safeUserMessage: string;
+    taxonomy?: Array<{
+      code: string;
+      class: "dependency" | "permission" | "capability" | "verification" | "model" | "timeout" | "cancelled";
+      retryable: boolean;
+      replanAllowed: boolean;
+    }>;
   };
   replanContext?: {
     includeCompletedOutputs: boolean;
@@ -95,6 +148,21 @@ export type DesktopWorkOrder = {
     coveredPermissions: string[];
     separateApprovalFor: string[];
     ttlSeconds: number;
+  };
+  /**
+   * Present only for work Elyan started on its own while nobody was watching.
+   *
+   * The desktop treats this as a hard ceiling: only `allowedCapabilities` may
+   * run, and anything that would normally pause for approval stops instead —
+   * there is no one there to answer. Absent means "the user is present",
+   * which is the normal, unrestricted case.
+   */
+  autonomy?: {
+    mode: "night_watch";
+    unattended: true;
+    jobId: string;
+    allowedCapabilities: string[];
+    evidence: { source: string; ref: string; note: string };
   };
   planPreview: {
     summary: string;
@@ -141,6 +209,28 @@ export type DesktopWorkOrder = {
      * desktop tarafı mevcut (heuristik) davranışı korur → geriye dönük uyumlu.
      */
     planSource?: "heuristic" | "server_materialized";
+    /**
+     * New tasks are not deliverable while model planning is pending. Older
+     * work orders without this field remain ready for backward compatibility.
+     */
+    planPreparation?: {
+      status: "pending" | "ready" | "failed";
+      outcome?: "materialized" | "model_plan_unavailable";
+      preparedAt?: string;
+    };
+    planCache?: {
+      contract: "elyan.plan_cache.v1";
+      status: "hit" | "stored";
+      keyHash: string;
+      source: "memory_lru" | "reliability_store";
+      cachedAt: string;
+      fingerprints?: {
+        goalDeltaHash: string;
+        capabilityManifestHash: string;
+        skillManifestHash?: string;
+      };
+      hitCount?: number;
+    };
     /** Sunucu-materyalize planlarda kanonik yürütme sözleşmesi. */
     contract?: "elyan.compiled_plan.v1";
     liveNarrationPlan?: Array<{
@@ -571,6 +661,100 @@ function inferExpectedOutputs(
   return outputs;
 }
 
+function semanticSuccessCriteria(
+  expectedOutputs: DesktopWorkOrder["expectedOutputs"],
+  verificationRules: DesktopWorkOrder["verificationRules"],
+  envelope?: UnderstandingEnvelope,
+): string[] {
+  const criteria = new Set<string>();
+  for (const criterion of envelope?.success_criteria ?? []) {
+    const description = compactText(criterion.description, 240);
+    if (description) criteria.add(description);
+  }
+  for (const output of expectedOutputs) {
+    if (!output.required) continue;
+    if (output.kind === "chat_result") {
+      criteria.add("User-visible result is delivered through Elyan blocks/task result.");
+    } else if (output.kind === "artifact") {
+      criteria.add(`Required artifact is produced and returned as ${output.format}.`);
+    } else if (output.kind === "file_update") {
+      criteria.add("File/output update is backed by artifact or state readback evidence.");
+    } else {
+      criteria.add(`${output.kind} is verified with tool or state evidence.`);
+    }
+  }
+  for (const rule of verificationRules) {
+    if (rule.description) criteria.add(rule.description);
+  }
+  return [...criteria].slice(0, 10);
+}
+
+function forbiddenCapabilitiesForWorkOrder(input: {
+  workType: DesktopWorkOrder["workType"];
+  capabilities: string[];
+  autonomy?: DesktopWorkOrder["autonomy"];
+  envelope?: UnderstandingEnvelope;
+}): string[] {
+  const forbidden = new Set<string>();
+  if (input.autonomy) {
+    for (const capability of [
+      "shell_run",
+      "shell_session_run",
+      "delete_calendar_event",
+      "email_send",
+      "send_whatsapp_message",
+      "file_patch",
+      "git_commit",
+      "git_branch",
+      "desktop_operator.execute_action",
+      "desktop_operator.run",
+    ]) {
+      if (!input.autonomy.allowedCapabilities.includes(capability)) {
+        forbidden.add(capability);
+      }
+    }
+  }
+  if (
+    input.workType === "data_workflow" &&
+    !input.capabilities.some((capability) =>
+      capability === "desktop_operator.observe_screen" ||
+      capability === "analyze_screen"
+    )
+  ) {
+    forbidden.add("desktop_operator.execute_action");
+    forbidden.add("desktop_operator.run");
+  }
+  if (input.envelope?.privacy_routing?.maySendPrivateContextToServer === false) {
+    forbidden.add("private_context_to_web_research");
+  }
+  return [...forbidden].slice(0, 20);
+}
+
+function ambiguityPolicyForWorkOrder(
+  envelope: UnderstandingEnvelope | undefined,
+  workType: DesktopWorkOrder["workType"],
+): NonNullable<DesktopWorkOrder["semanticGoal"]>["ambiguityPolicy"] {
+  if ((envelope?.ambiguities ?? []).length > 0) return "ask";
+  if (envelope?.risk.side_effect) return "fail_closed";
+  return workType === "screen_action" || workType === "mixed" ? "safe_assumption" : "safe_assumption";
+}
+
+function failureTaxonomy(): NonNullable<DesktopWorkOrder["failurePolicy"]>["taxonomy"] {
+  return [
+    { code: "DEPENDENCY_UNAVAILABLE", class: "dependency", retryable: false, replanAllowed: false },
+    { code: "OS_PERMISSION_REQUIRED", class: "permission", retryable: false, replanAllowed: false },
+    { code: "PERMISSION_REQUIRED", class: "permission", retryable: false, replanAllowed: false },
+    { code: "CAPABILITY_UNAVAILABLE", class: "capability", retryable: false, replanAllowed: true },
+    { code: "CAPABILITY_SCOPE_MISMATCH", class: "capability", retryable: false, replanAllowed: false },
+    { code: "WORK_ORDER_BINDING_MISMATCH", class: "capability", retryable: false, replanAllowed: false },
+    { code: "TOOL_EXECUTION_FAILED", class: "verification", retryable: true, replanAllowed: true },
+    { code: "WORK_ORDER_EVIDENCE_MISSING", class: "verification", retryable: true, replanAllowed: true },
+    { code: "GOAL_VERIFICATION_FAILED", class: "model", retryable: true, replanAllowed: true },
+    { code: "TASK_EXECUTION_TIMEOUT", class: "timeout", retryable: true, replanAllowed: true },
+    { code: "EXECUTION_CANCELLED", class: "cancelled", retryable: false, replanAllowed: false },
+  ];
+}
+
 function inferCalculationExpression(message: string): string {
   const amounts: string[] = [];
   for (const match of message.matchAll(/(?<![%\p{L}\p{N}])(\d+(?:[.,]\d+)?)\s*(?:tl|try|₺|usd|eur)\b/giu)) {
@@ -835,6 +1019,49 @@ function buildSteps(input: {
   return steps.slice(0, MAX_WORK_ORDER_STEPS);
 }
 
+/**
+ * Read the unattended envelope out of task metadata, fail-closed.
+ *
+ * Anything malformed yields `undefined`, which means "attended" — the strict
+ * ceiling is simply not applied to a normal user-initiated task. The unsafe
+ * direction would be inventing an autonomy envelope, and that cannot happen
+ * here: every field must be present and well-formed.
+ */
+export function readAutonomyEnvelope(
+  metadata: Record<string, unknown> | null | undefined,
+): DesktopWorkOrder["autonomy"] | undefined {
+  const raw = metadata?.autonomy;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  if (record.mode !== "night_watch" || record.unattended !== true) return undefined;
+  const jobId = typeof record.jobId === "string" ? record.jobId.trim() : "";
+  if (!jobId) return undefined;
+  const allowedCapabilities = Array.isArray(record.allowedCapabilities)
+    ? record.allowedCapabilities
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean)
+        .slice(0, 40)
+    : [];
+  if (allowedCapabilities.length === 0) return undefined;
+  const evidenceRaw =
+    record.evidence && typeof record.evidence === "object" && !Array.isArray(record.evidence)
+      ? (record.evidence as Record<string, unknown>)
+      : null;
+  const evidence = {
+    source: typeof evidenceRaw?.source === "string" ? evidenceRaw.source : "",
+    ref: typeof evidenceRaw?.ref === "string" ? evidenceRaw.ref : "",
+    note: typeof evidenceRaw?.note === "string" ? evidenceRaw.note : "",
+  };
+  if (!evidence.source || !evidence.ref) return undefined;
+  return {
+    mode: "night_watch",
+    unattended: true,
+    jobId,
+    allowedCapabilities,
+    evidence,
+  };
+}
+
 export function buildDesktopWorkOrder(input: {
   message: string;
   title: string;
@@ -847,6 +1074,7 @@ export function buildDesktopWorkOrder(input: {
   dispatchOptimization?: DesktopWorkOrder["planPreview"]["dispatchOptimization"];
   responsiveExecution?: DesktopWorkOrder["planPreview"]["responsiveExecution"];
   livenessGuard?: DesktopWorkOrder["planPreview"]["livenessGuard"];
+  autonomy?: DesktopWorkOrder["autonomy"];
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
   const kind = inferKind(input.routeDecision, message);
@@ -912,6 +1140,17 @@ export function buildDesktopWorkOrder(input: {
         ]
       : []),
   ];
+  const successCriteria = semanticSuccessCriteria(
+    expectedOutputs,
+    verificationRules,
+    input.understandingEnvelope,
+  );
+  const forbiddenCapabilities = forbiddenCapabilitiesForWorkOrder({
+    workType,
+    capabilities,
+    autonomy: input.autonomy,
+    envelope: input.understandingEnvelope,
+  });
   const steps = buildSteps({
     title: input.title,
     summary,
@@ -940,10 +1179,40 @@ export function buildDesktopWorkOrder(input: {
       language: detectLanguage(message),
       sourceTextHash: sourceHash(message),
     },
+    semanticGoal: {
+      contract: "elyan.semantic_task_contract.v1",
+      objective: compactText(
+        input.understandingEnvelope?.intent.topic || message || summary,
+        1_000,
+      ),
+      constraints,
+      successCriteria,
+      requiredCapabilities: capabilities,
+      forbiddenCapabilities,
+      ambiguityPolicy: ambiguityPolicyForWorkOrder(
+        input.understandingEnvelope,
+        workType,
+      ),
+      risk: {
+        localPrivate: Boolean(input.understandingEnvelope?.risk.local_private || localContextNeeded.length > 0),
+        sideEffect: Boolean(
+          input.understandingEnvelope?.risk.side_effect ||
+            input.routeDecision.privacyClass === "side_effect",
+        ),
+        irreversible: false,
+      },
+    },
     entities,
     constraints,
     workType,
     requiredCapabilities: capabilities,
+    capabilityAuthorization: {
+      source: "semantic_router",
+      allowPrivateRead: Boolean(
+        input.routeDecision.taskRoute?.needsPrivateDesktopData,
+      ),
+      sideEffectsRequireApproval: true,
+    },
     localContextNeeded,
     expectedOutputs,
     verificationRules,
@@ -976,18 +1245,39 @@ export function buildDesktopWorkOrder(input: {
       retryOnRecoverableToolError: true,
       stopOnIrreversibleRisk: true,
       safeUserMessage: "Görevi tamamlarken bir adım doğrulanamadı; güvenli şekilde yeniden deniyorum.",
+      taxonomy: failureTaxonomy(),
     },
     replanContext: {
       includeCompletedOutputs: true,
       includeLastError: true,
       includeScreenObservation: workType === "screen_action" || workType === "mixed",
     },
-    permissionEnvelope: {
-      mode: "single_full_access_surface",
-      coveredPermissions: ["read", "idempotent_write", "browser_control", "computer_control"],
-      separateApprovalFor: ["delete", "overwrite", "send_message", "send_email", "payment", "external_side_effect"],
-      ttlSeconds: 900,
-    },
+    permissionEnvelope: input.autonomy
+      ? {
+          // Unattended work gets a read-shaped envelope: everything that could
+          // reach outside the machine needs a human, and there is none.
+          mode: "single_full_access_surface",
+          coveredPermissions: ["read"],
+          separateApprovalFor: [
+            "idempotent_write",
+            "browser_control",
+            "computer_control",
+            "delete",
+            "overwrite",
+            "send_message",
+            "send_email",
+            "payment",
+            "external_side_effect",
+          ],
+          ttlSeconds: 900,
+        }
+      : {
+          mode: "single_full_access_surface",
+          coveredPermissions: ["read", "idempotent_write", "browser_control", "computer_control"],
+          separateApprovalFor: ["delete", "overwrite", "send_message", "send_email", "payment", "external_side_effect"],
+          ttlSeconds: 900,
+        },
+    ...(input.autonomy ? { autonomy: input.autonomy } : {}),
     planPreview: {
       summary,
       privacyClass:
@@ -1005,6 +1295,7 @@ export function buildDesktopWorkOrder(input: {
       // Varsayılan: heuristik sentez. Dispatch worker karmaşık görevlerde bunu
       // "server_materialized" ile üzerine yazar (materialize-plan.ts).
       planSource: "heuristic",
+      planPreparation: { status: "pending" },
       ...(input.dispatchOptimization
         ? { dispatchOptimization: input.dispatchOptimization }
         : {}),

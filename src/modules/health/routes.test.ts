@@ -2,6 +2,47 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Fastify from "fastify";
 import { healthRoutes } from "./routes.js";
+import {
+  buildPlanningPrompt,
+  clearPlanningCatalogCacheForTests,
+} from "../tasks/materialize-plan.js";
+import type { DesktopWorkOrder } from "../tasks/desktop-work-order.js";
+
+function desktopWorkOrder(summary: string): DesktopWorkOrder {
+  return {
+    schema: "elyan.desktop_work_order.v1",
+    source: "mobile_chat_dispatch",
+    goal: {
+      kind: "desktop_cowork",
+      summary,
+      language: "tr",
+      sourceTextHash: "b".repeat(24),
+    },
+    entities: [],
+    constraints: [],
+    requiredCapabilities: ["text_analyze", "document_write"],
+    localContextNeeded: [],
+    expectedOutputs: [{ kind: "artifact", format: "docx", required: true }],
+    verificationRules: [],
+    execution: {
+      mode: "cowork_dispatch",
+      approvalPolicy: "capability_policy",
+      maxSteps: 16,
+    },
+    contextPack: {
+      sourceReference: "current_prompt",
+      conversationState: {
+        turnKind: "new_task",
+        currentGoal: summary,
+      },
+    },
+    planPreview: {
+      summary,
+      privacyClass: "local_private",
+      steps: [],
+    },
+  };
+}
 
 test("control-plane health alias returns minimal public diagnostics", async () => {
   const originalFetch = globalThis.fetch;
@@ -44,4 +85,36 @@ test("control-plane health alias returns minimal public diagnostics", async () =
 
   await app.close();
   globalThis.fetch = originalFetch;
+});
+
+test("internal perf exposes content-free desktop planning cache stats", async () => {
+  clearPlanningCatalogCacheForTests();
+  buildPlanningPrompt(desktopWorkOrder("Gizli teklif özetini rapora çevir"), [
+    "text_analyze",
+    "document_write",
+  ]);
+  buildPlanningPrompt(desktopWorkOrder("Başka hedef için aynı katalog"), [
+    "text_analyze",
+    "document_write",
+  ]);
+  const app = Fastify();
+
+  await app.register(healthRoutes);
+
+  const response = await app.inject({
+    method: "GET",
+    url: "/internal/perf",
+  });
+  const payload = response.json();
+  const serialized = JSON.stringify(payload);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(payload.desktopPlanningCatalogCache.entries, 1);
+  assert.equal(payload.desktopPlanningCatalogCache.hits, 1);
+  assert.equal(typeof payload.desktopPlanCache.reads, "number");
+  assert.doesNotMatch(serialized, /Gizli teklif/u);
+  assert.doesNotMatch(serialized, /Başka hedef/u);
+
+  await app.close();
+  clearPlanningCatalogCacheForTests();
 });

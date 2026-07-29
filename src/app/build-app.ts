@@ -29,6 +29,8 @@ import { taskRoutes } from "../modules/tasks/routes.js";
 import { realtimeRoutes } from "../modules/realtime/routes.js";
 import { deviceRoutes } from "../modules/devices/routes.js";
 import { mobileRoutes } from "../modules/mobile/routes.js";
+import { speechRoutes } from "../modules/speech/routes.js";
+import { speechStreamRoutes } from "../modules/speech/stream-routes.js";
 import { billingRoutes } from "../modules/billing/routes.js";
 import { brainRoutes } from "../modules/brain/routes.js";
 import { chatRoutes } from "../modules/chat/routes.js";
@@ -309,10 +311,22 @@ export async function buildApp(envInput?: AppEnv) {
   await eventBus.startFanout().catch((error) => {
     app.log.warn({ error }, "realtime redis fanout unavailable; using local-only fanout");
   });
+  const realtimeHub = new RealtimeHub({
+    redisUrl: env.REDIS_URL,
+    channelPrefix: env.REALTIME_REDIS_CHANNEL_PREFIX,
+    onError: (error) =>
+      app.log.warn({ error }, "runtime command redis bridge error"),
+  });
+  await realtimeHub.start().catch((error) => {
+    app.log.warn(
+      { error },
+      "runtime command redis bridge unavailable; using local-only delivery",
+    );
+  });
 
   const services = {
     eventBus,
-    realtimeHub: new RealtimeHub(),
+    realtimeHub,
     reliability,
     blobs,
   };
@@ -420,6 +434,7 @@ export async function buildApp(envInput?: AppEnv) {
     stopRealtimePruner();
     stopMemoryWorker();
     nlpDaemon.stop();
+    await realtimeHub.close();
     await eventBus.close();
     await reliability.store.close();
   });
@@ -445,6 +460,10 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(realtimeRoutes, { prefix: "/v1/realtime" });
   await app.register(deviceRoutes, { prefix: "/v1/devices" });
   await app.register(mobileRoutes, { prefix: "/v1/mobile" });
+  await app.register(speechRoutes, { prefix: "/v1/speech" });
+  if (env.ELYAN_VOICE_STREAMING_ENABLED) {
+    await app.register(speechStreamRoutes, { prefix: "/v1/speech" });
+  }
   await app.register(billingRoutes, { prefix: "/v1/billing" });
   await app.register(brainRoutes, { prefix: "/v1/brain" });
   await app.register(chatRoutes, { prefix: "/v1/chat" });

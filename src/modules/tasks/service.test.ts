@@ -23,12 +23,32 @@ import {
   extractRuntimeDispatchPolicyFeedback,
   extractRuntimeQuantumBenchmarkAttestation,
   summarizeToolFlowForTrace,
+  taskControlRedirectDuplicateFingerprint,
   updateTaskFromRuntime,
 } from "./service.js";
 import {
   QUANTUM_BENCHMARK_PRODUCER,
   QUANTUM_BENCHMARK_VERSION,
 } from "../brain/quantum-benchmark.js";
+
+test("task-control redirect duplicate fingerprint is normalized and content-free", () => {
+  const first = taskControlRedirectDuplicateFingerprint({
+    instruction: "  Planı   PDF olarak güncelle ",
+    anchorStepId: "s2",
+  });
+  const second = taskControlRedirectDuplicateFingerprint({
+    instruction: "planı pdf olarak güncelle",
+    anchorStepId: "s2",
+  });
+  const differentAnchor = taskControlRedirectDuplicateFingerprint({
+    instruction: "planı pdf olarak güncelle",
+    anchorStepId: "s3",
+  });
+
+  assert.equal(first, second);
+  assert.notEqual(first, differentAnchor);
+  assert.doesNotMatch(first, /Planı|PDF|güncelle/u);
+});
 
 test("shared-brain chat uses the durable queue whenever it is configured", () => {
   const queueApp = {
@@ -1698,6 +1718,13 @@ test("reconcileStaleRuntimeTasks re-dispatches expired planning tasks to a ready
       },
       realtimeHub: {
         sendToRuntime(_deviceId: string, payload: Record<string, unknown>) {
+          runtimeDispatches.push(payload);
+          return true;
+        },
+        async sendToRuntimeDistributed(
+          _deviceId: string,
+          payload: Record<string, unknown>,
+        ) {
           runtimeDispatches.push(payload);
           return true;
         },

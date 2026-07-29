@@ -8,6 +8,8 @@ import {
   proactiveTriggers,
   userProactivePrefs,
 } from "../../db/schema.js";
+import { sendUserPush } from "../notifications/push-sender.js";
+import { recordProactiveEvent } from "./proactive-metrics.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
 
 type FollowUp = TurnEnvelope["follow_ups"][number];
@@ -38,10 +40,51 @@ export async function applyTurnProactiveOps(
   const existing = await readProactivePolicy(app, input.userId);
   let next: ProactivePolicy = { ...existing, mutedKinds: [...existing.mutedKinds] };
   for (const op of ops) {
-    if (op.op === "enable") next.enabled = true;
-    if (op.op === "disable") next.enabled = false;
-    if (op.op === "mute" && op.kind && !next.mutedKinds.includes(op.kind)) next.mutedKinds.push(op.kind);
-    if (op.op === "unmute" && op.kind) next.mutedKinds = next.mutedKinds.filter((kind) => kind !== op.kind);
+    // Muting is the signal that matters most, so it is recorded as a
+    // first-class user event rather than inferred later from a prefs diff.
+    if (op.op === "enable") {
+      next.enabled = true;
+      if (!existing.enabled) {
+        await recordProactiveEvent(app, {
+          userId: input.userId,
+          event: "enabled",
+          kind: "all",
+          source: "user",
+        });
+      }
+    }
+    if (op.op === "disable") {
+      next.enabled = false;
+      if (existing.enabled) {
+        await recordProactiveEvent(app, {
+          userId: input.userId,
+          event: "disabled",
+          kind: "all",
+          source: "user",
+        });
+      }
+    }
+    if (op.op === "mute" && op.kind && !next.mutedKinds.includes(op.kind)) {
+      next.mutedKinds.push(op.kind);
+      await recordProactiveEvent(app, {
+        userId: input.userId,
+        event: "muted",
+        kind: op.kind,
+        source: "user",
+      });
+    }
+    if (op.op === "unmute" && op.kind) {
+      const wasMuted = next.mutedKinds.includes(op.kind);
+      next.mutedKinds = next.mutedKinds.filter((kind) => kind !== op.kind);
+      if (wasMuted) {
+        await recordProactiveEvent(app, {
+          userId: input.userId,
+          event: "unmuted",
+          kind: op.kind,
+          source: "user",
+        });
+      }
+    }
     if (op.op === "set_daily_limit" && op.max_daily != null) next.maxDaily = op.max_daily;
     if (op.op === "set_quiet_hours" && op.quiet_start_hour != null && op.quiet_end_hour != null) {
       next.quietStartHour = op.quiet_start_hour;
@@ -108,6 +151,9 @@ export type ProactivePolicyDecision =
   | { allowed: true }
   | { allowed: false; reason: "disabled" | "muted_kind" | "daily_limit" | "quiet_hours" };
 
+/** Trigger kind carrying the night-watch report. See `night-watch.ts`. */
+export const DIGEST_KIND = "morning_digest";
+
 const DEFAULT_PROACTIVE_POLICY: ProactivePolicy = {
   enabled: true,
   maxDaily: 3,
@@ -140,7 +186,16 @@ export function evaluateProactivePolicy(input: {
   const policy = { ...DEFAULT_PROACTIVE_POLICY, ...(input.policy ?? {}) };
   if (!policy.enabled) return { allowed: false, reason: "disabled" };
   if (policy.mutedKinds.includes(input.kind)) return { allowed: false, reason: "muted_kind" };
-  if (input.firedToday >= Math.max(0, policy.maxDaily)) return { allowed: false, reason: "daily_limit" };
+  // The morning digest is a report on work already done on the user's behalf,
+  // not a nudge competing for attention. Letting the daily cap swallow it
+  // would mean Elyan worked all night and then said nothing. It still obeys
+  // `enabled` and an explicit mute of this kind — the user can always say no.
+  if (
+    input.kind !== DIGEST_KIND &&
+    input.firedToday >= Math.max(0, policy.maxDaily)
+  ) {
+    return { allowed: false, reason: "daily_limit" };
+  }
   const hour = localHour(input.now ?? new Date(), policy.timezone);
   const quiet = policy.quietStartHour === policy.quietEndHour
     ? false
@@ -150,7 +205,7 @@ export function evaluateProactivePolicy(input: {
   return quiet ? { allowed: false, reason: "quiet_hours" } : { allowed: true };
 }
 
-async function readProactivePolicy(app: FastifyInstance, userId: string): Promise<ProactivePolicy> {
+export async function readProactivePolicy(app: FastifyInstance, userId: string): Promise<ProactivePolicy> {
   const rows = await app.db.select().from(userProactivePrefs).where(eq(userProactivePrefs.userId, userId)).limit(1);
   const row = rows[0];
   if (!row || typeof row.enabled !== "boolean") return DEFAULT_PROACTIVE_POLICY;
@@ -267,6 +322,12 @@ export async function recordTurnFollowUps(
       status: "pending",
       createdBy: "model",
       updatedAt: now,
+    });
+    await recordProactiveEvent(app, {
+      userId: input.userId,
+      event: "created",
+      kind: "follow_up",
+      detail: { topic: payload.data.topic },
     });
     result.created += 1;
   }
@@ -453,12 +514,150 @@ async function deferQuietHoursTrigger(
     .where(eq(proactiveTriggers.id, triggerId));
 }
 
+/**
+ * Notification title. Deliberately constant: the interesting part belongs in
+ * the body, and a stable title is what makes iOS/Android group Elyan's
+ * notifications together.
+ */
+const PROACTIVE_PUSH_TITLE = "Elyan";
+
+/**
+ * Shown instead of a preview when the trigger was derived from data the user
+ * has not marked shareable. The message itself is unchanged in the app; only
+ * the lock screen stays vague.
+ */
+const SENSITIVE_PUSH_BODY = "Sana bir önerim var.";
+
+function triggerPrefersOpaquePush(trigger: ProactiveTriggerRow): boolean {
+  const payload =
+    trigger.payload && typeof trigger.payload === "object" && !Array.isArray(trigger.payload)
+      ? (trigger.payload as Record<string, unknown>)
+      : {};
+  return payload.privacy === "sensitive";
+}
+
+/**
+ * A trigger the policy refused. Quiet hours only postpone; every other reason
+ * retires the trigger. Both paths are recorded so the suppression mix is
+ * visible — "we never speak because of the daily cap" and "we never speak
+ * because everything is muted" are very different problems.
+ */
+async function settleDeniedProactiveTrigger(
+  app: FastifyInstance,
+  input: {
+    trigger: ProactiveTriggerRow;
+    reason: Exclude<ProactivePolicyDecision, { allowed: true }>["reason"];
+    now: Date;
+  },
+): Promise<ProcessProactiveTriggerResult> {
+  const { trigger, reason, now } = input;
+  await recordProactiveEvent(app, {
+    userId: trigger.userId,
+    event: "suppressed",
+    kind: trigger.kind,
+    triggerId: trigger.id,
+    reason,
+  });
+
+  if (reason === "quiet_hours") {
+    await deferQuietHoursTrigger(app, trigger.id, now);
+    return { status: "deferred", triggerId: trigger.id, reason: "quiet_hours" };
+  }
+
+  await markTrigger(app, {
+    triggerId: trigger.id,
+    status: "expired",
+    now,
+    reason,
+  });
+  return { status: "expired", triggerId: trigger.id, reason };
+}
+
+/**
+ * Push carries a preview and ids, never the full message. See the contract in
+ * `modules/notifications/push-sender.ts`.
+ */
+async function deliverProactivePush(
+  app: FastifyInstance,
+  input: {
+    trigger: ProactiveTriggerRow;
+    sessionId: string;
+    messageId: string;
+    content: string;
+  },
+): Promise<void> {
+  const result = await sendUserPush(app, {
+    userId: input.trigger.userId,
+    kind: `proactive.${input.trigger.kind}`,
+    title: PROACTIVE_PUSH_TITLE,
+    body: triggerPrefersOpaquePush(input.trigger)
+      ? SENSITIVE_PUSH_BODY
+      : input.content,
+    collapseKey: `proactive:${input.sessionId}`,
+    // `sessionId` alone is what the mobile deep-link parser needs to open the
+    // right conversation; nothing else about the content travels.
+    data: {
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      triggerId: input.trigger.id,
+    },
+  }).catch((error) => {
+    app.log.debug?.(
+      { error, triggerId: input.trigger.id },
+      "proactive push delivery threw",
+    );
+    return null;
+  });
+
+  if (!result) {
+    await recordProactiveEvent(app, {
+      userId: input.trigger.userId,
+      event: "push_failed",
+      kind: input.trigger.kind,
+      triggerId: input.trigger.id,
+      reason: "sender_threw",
+    });
+    return;
+  }
+
+  if (result.status === "sent") {
+    await recordProactiveEvent(app, {
+      userId: input.trigger.userId,
+      event: "push_sent",
+      kind: input.trigger.kind,
+      triggerId: input.trigger.id,
+      detail: { delivered: result.delivered, attempted: result.attempted },
+    });
+    return;
+  }
+
+  app.log.debug?.(
+    { triggerId: input.trigger.id, status: result.status, reason: result.reason },
+    "proactive push not delivered",
+  );
+  await recordProactiveEvent(app, {
+    // "no push target" and "push not configured" are not failures of the
+    // notification itself — the message still landed in the session.
+    userId: input.trigger.userId,
+    event: result.status === "failed" ? "push_failed" : "push_skipped",
+    kind: input.trigger.kind,
+    triggerId: input.trigger.id,
+    reason: result.reason ?? result.status,
+  });
+}
+
 export async function publishProactiveAssistantMessage(
   app: FastifyInstance,
   input: {
     trigger: ProactiveTriggerRow;
     compose: ProactiveComposeResult;
     now?: Date;
+    /**
+     * `false` when the user is demonstrably looking at this session right now
+     * (the in-session path) — the SSE stream already delivered it and a push
+     * would just buzz the phone in their hand.
+     */
+    notify?: boolean;
   },
 ): Promise<ProcessProactiveTriggerResult> {
   const now = input.now ?? new Date();
@@ -542,6 +741,15 @@ export async function publishProactiveAssistantMessage(
     triggerId: input.trigger.id,
     status: "fired",
     now,
+  });
+
+  await recordProactiveEvent(app, {
+    userId: input.trigger.userId,
+    event: "fired",
+    kind: input.trigger.kind,
+    triggerId: input.trigger.id,
+    source: input.trigger.createdBy === "observer" ? "observer" : "system",
+    detail: { sessionId: session.id, notified: input.notify !== false },
   });
 
   const assistantMessage = buildAssistantPayload({
@@ -630,6 +838,15 @@ export async function publishProactiveAssistantMessage(
     },
   });
 
+  if (input.notify !== false) {
+    await deliverProactivePush(app, {
+      trigger: input.trigger,
+      sessionId: session.id,
+      messageId,
+      content,
+    });
+  }
+
   return { status: "fired", triggerId: input.trigger.id, messageId };
 }
 
@@ -655,17 +872,7 @@ export async function processDueProactiveTriggerForSession(
   const firedToday = await countFiredToday(app, trigger.userId, now).catch(() => 0);
   const decision = evaluateProactivePolicy({ policy, kind: trigger.kind, firedToday, now });
   if (!decision.allowed) {
-    if (decision.reason === "quiet_hours") {
-      await deferQuietHoursTrigger(app, trigger.id, now);
-      return { status: "deferred", triggerId: trigger.id, reason: "quiet_hours" };
-    }
-    await markTrigger(app, {
-      triggerId: trigger.id,
-      status: "expired",
-      now,
-      reason: decision.reason,
-    });
-    return { status: "expired", triggerId: trigger.id, reason: decision.reason };
+    return settleDeniedProactiveTrigger(app, { trigger, reason: decision.reason, now });
   }
   const compose = await (input.compose ?? (async (item) => buildProactiveOpeningCompose(item)))(trigger).catch(async () => {
     await markTrigger(app, {
@@ -683,6 +890,8 @@ export async function processDueProactiveTriggerForSession(
     trigger,
     compose,
     now,
+    // In-session path: the user is on this screen, the stream already shows it.
+    notify: false,
   });
 }
 
@@ -702,17 +911,7 @@ export async function processNextDueProactiveTrigger(
   const firedToday = await countFiredToday(app, trigger.userId, now).catch(() => 0);
   const decision = evaluateProactivePolicy({ policy, kind: trigger.kind, firedToday, now });
   if (!decision.allowed) {
-    if (decision.reason === "quiet_hours") {
-      await deferQuietHoursTrigger(app, trigger.id, now);
-      return { status: "deferred", triggerId: trigger.id, reason: "quiet_hours" };
-    }
-    await markTrigger(app, {
-      triggerId: trigger.id,
-      status: "expired",
-      now,
-      reason: decision.reason,
-    });
-    return { status: "expired", triggerId: trigger.id, reason: decision.reason };
+    return settleDeniedProactiveTrigger(app, { trigger, reason: decision.reason, now });
   }
   const compose = await input.compose(trigger).catch(async () => {
     await markTrigger(app, {

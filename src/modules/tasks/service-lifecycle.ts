@@ -299,6 +299,11 @@ export function buildTaskCancellationUpdate(now = new Date()) {
     status: "canceled" as TaskStatus,
     queuePosition: 0,
     canceledAt: now,
+    dispatchLeaseId: null,
+    dispatchLeaseIssuedAt: null,
+    dispatchLeaseExpiresAt: null,
+    dispatchAckAt: null,
+    runtimeConnectionId: null,
     updatedAt: now,
   } satisfies Partial<typeof tasks.$inferInsert>;
 }

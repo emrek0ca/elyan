@@ -20,8 +20,13 @@ import {
 import { normalizeAssistantMessageBlocks } from "../chat/message-blocks.js";
 
 test("hosted image chat requests bypass text inference and streaming prose", () => {
-  const serviceSource = readFileSync(path.join(process.cwd(), "src/modules/tasks/service.ts"), "utf8");
-  const processStart = serviceSource.indexOf("async function processSharedBrainChatTask");
+  const serviceSource = readFileSync(
+    path.join(process.cwd(), "src/modules/tasks/service.ts"),
+    "utf8",
+  );
+  const processStart = serviceSource.indexOf(
+    "async function processSharedBrainChatTask",
+  );
   assert.notEqual(processStart, -1);
   const imageBranchStart = serviceSource.indexOf(
     "const imageGenerationRequested =",
@@ -34,15 +39,17 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   assert.ok(imageBranchStart > processStart);
   assert.ok(inferenceStart > imageBranchStart);
 
-  const imageBranchEnd = serviceSource.indexOf("\n    // Deterministik hedef komutu", imageBranchStart);
+  const imageBranchEnd = inferenceStart;
   assert.ok(imageBranchEnd > imageBranchStart);
   const imageBranch = serviceSource.slice(imageBranchStart, imageBranchEnd);
-  assert.ok(imageBranch.includes("isHostedImageGenerationRequest(input.prompt)"));
+  assert.ok(
+    imageBranch.includes("isHostedImageGenerationRequest(input.prompt)"),
+  );
   assert.ok(imageBranch.includes("imageEditIntent"));
   assert.equal(imageBranch.includes("generateGovernedSharedBrainReply"), false);
   assert.ok(imageBranch.includes('event: "message.delta"'));
   assert.ok(imageBranch.includes('delta: ""'));
-  assert.ok(imageBranch.includes('reset: true'));
+  assert.ok(imageBranch.includes("reset: true"));
   assert.ok(imageBranch.includes('event: "heartbeat"'));
   assert.ok(imageBranch.includes('event: "message.completed"'));
   // Niyet aynı: görüntü dalı metin çıkarımını ATLAR. Tek fark, çıkan metnin
@@ -59,7 +66,6 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   assert.equal(imageBranch.includes('answerSource: "model"'), false);
   assert.equal(imageBranch.includes("selectedProfile"), false);
   assert.equal(serviceSource.includes('answerSource: "backend_ack"'), false);
-
 });
 
 test("generated image artifact blocks survive assistant block normalization", () => {
@@ -81,7 +87,10 @@ test("generated image artifact blocks survive assistant block normalization", ()
 
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.type, "artifact");
-  assert.equal((blocks[0] as { url?: string }).url?.includes("/content/raw?token="), true);
+  assert.equal(
+    (blocks[0] as { url?: string }).url?.includes("/content/raw?token="),
+    true,
+  );
 });
 
 test("createInvalidTargetDeviceError keeps the target-device validation contract", () => {
@@ -207,12 +216,15 @@ test("assertOwnedDesktopTaskTarget rejects stale runtimes with a safe unavailabl
     (error: unknown) => {
       assert.equal((error as { statusCode?: number }).statusCode, 409);
       assert.equal((error as { code?: string }).code, "runtime_unavailable");
-      assert.equal((error as { details?: { targetStatus?: string } }).details?.targetStatus, "runtime_stale");
+      assert.equal(
+        (error as { details?: { targetStatus?: string } }).details
+          ?.targetStatus,
+        "runtime_stale",
+      );
       return true;
     },
   );
 });
-
 
 test("resolveIdempotentTaskMatch reuses matching payloads", () => {
   const existingTask = {
@@ -283,23 +295,23 @@ test("extractSharedBrainConversation keeps only valid conversation items", () =>
 });
 
 test("getSharedBrainFallbackMessage preserves explicit error text and default fallback", () => {
-  const fallback = "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.";
+  const fallback =
+    "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.";
   assert.equal(
     getSharedBrainFallbackMessage(new Error("  Shared brain failed  ")),
     "Shared brain failed",
   );
   assert.equal(
-    getSharedBrainFallbackMessage(new Error("Provider endpoint http://127.0.0.1:11434 failed")),
+    getSharedBrainFallbackMessage(
+      new Error("Provider endpoint http://127.0.0.1:11434 failed"),
+    ),
     fallback,
   );
   assert.equal(
     getSharedBrainFallbackMessage(new Error("fetch failed")),
     fallback,
   );
-  assert.equal(
-    getSharedBrainFallbackMessage({}),
-    fallback,
-  );
+  assert.equal(getSharedBrainFallbackMessage({}), fallback);
 });
 
 test("resolveSafeChatContinuityReply keeps public chat alive after provider exhaustion", () => {
@@ -324,7 +336,10 @@ test("resolveSafeChatContinuityReply keeps public chat alive after provider exha
     failureClass: "invalid_output",
   });
 
-  assert.match(reply ?? "", /model yanıtı tamamlanamadı|arka planda yeniden deniyorum/u);
+  assert.match(
+    reply ?? "",
+    /model yanıtı tamamlanamadı|arka planda yeniden deniyorum/u,
+  );
   assert.doesNotMatch(reply ?? "", /aynı mesajı|tekrar gönder|yanıt servisi/iu);
 });
 
@@ -351,11 +366,17 @@ test("resolveSafeChatContinuityReply never bypasses tools, private context, appr
   };
 
   assert.equal(
-    resolveSafeChatContinuityReply({ ...base, routeCapabilities: ["drive.search"] }),
+    resolveSafeChatContinuityReply({
+      ...base,
+      routeCapabilities: ["drive.search"],
+    }),
     null,
   );
   assert.equal(
-    resolveSafeChatContinuityReply({ ...base, privacyClass: "private_context" }),
+    resolveSafeChatContinuityReply({
+      ...base,
+      privacyClass: "private_context",
+    }),
     null,
   );
   assert.equal(
@@ -420,7 +441,11 @@ test("shapeTaskFeedItem preserves chat session truth from task payload", () => {
     requestedCapabilities: [],
     payload: {
       metadata: {
-        routeDecision: { route: "server_brain", mode: "chat", privacyClass: "public_text" },
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          privacyClass: "public_text",
+        },
         chat: { sessionId: "chat-session-1" },
       },
     },
@@ -436,7 +461,10 @@ test("shapeTaskFeedItem preserves chat session truth from task payload", () => {
   assert.equal(item.deliveryState, "acked");
   assert.equal(item.runtimeConnectionId, "runtime-1");
   assert.equal(item.routeDecision?.route, "server_brain");
-  assert.equal(item.lastDispatchAttemptAt?.toISOString(), "2030-01-01T00:00:00.000Z");
+  assert.equal(
+    item.lastDispatchAttemptAt?.toISOString(),
+    "2030-01-01T00:00:00.000Z",
+  );
 });
 
 test("shapeTaskFeedItem exposes render recipe from completed task result", () => {
@@ -534,11 +562,16 @@ test("shapeTaskFeedItem exposes public-safe quality metadata from server brain r
   assert.equal(item.brain?.responseLanguage, "tr");
   assert.equal(item.brain?.evidenceSufficiency, "weak");
   assert.equal(item.brain?.dataConfidence, "low");
-  assert.deepEqual(item.brain?.dataQualityWarnings, ["insufficient_external_evidence"]);
+  assert.deepEqual(item.brain?.dataQualityWarnings, [
+    "insufficient_external_evidence",
+  ]);
   assert.equal(item.brain?.responseBudgetState, "normal");
   assert.equal(item.brain?.responseBudgetReason, "standard");
   assert.equal(item.brain?.contextPacketCount, 5);
-  assert.deepEqual(item.brain?.contextPacketKinds, ["health_context", "calendar_context"]);
+  assert.deepEqual(item.brain?.contextPacketKinds, [
+    "health_context",
+    "calendar_context",
+  ]);
   assert.equal(item.brain?.healthContextUsed, true);
 });
 
@@ -610,11 +643,17 @@ test("extractTaskRouteDecision round-trips the richer taskRoute metadata", () =>
       target: "hybrid",
       operationalRoute: "server_brain",
       executionPlan: ["mobile_local", "server_brain"],
-      reason: "Belge önce mobilde hazırlanıp sonra beyin tarafında çözülebilir.",
+      reason:
+        "Belge önce mobilde hazırlanıp sonra beyin tarafında çözülebilir.",
       needsDesktop: false,
       needsPrivateDesktopData: false,
       needsUserApproval: false,
-      requiredCapabilities: ["document_parse", "transform_chunks", "summarize", "reason"],
+      requiredCapabilities: [
+        "document_parse",
+        "transform_chunks",
+        "summarize",
+        "reason",
+      ],
     },
     mode: "chat",
     intent: "normal_chat",
@@ -654,11 +693,14 @@ test("extractTaskRouteDecision round-trips the richer taskRoute metadata", () =>
   });
 
   assert.deepEqual(item.routeDecision?.taskRoute, routeDecision.taskRoute);
-  assert.deepEqual(extractTaskRouteDecision({
-    metadata: {
-      routeDecision,
-    },
-  })?.taskRoute, routeDecision.taskRoute);
+  assert.deepEqual(
+    extractTaskRouteDecision({
+      metadata: {
+        routeDecision,
+      },
+    })?.taskRoute,
+    routeDecision.taskRoute,
+  );
 });
 
 test("shapeTaskArtifact adds viewer hints and compact previews", () => {
@@ -799,7 +841,10 @@ test("sanitizePublicInferenceValue bounds public JSON and strips internal varian
     createdAt: new Date("2030-01-01T00:00:00.000Z"),
     selected_workload: "planning",
     toolTrace: { raw: "secret" },
-    blocks: Array.from({ length: 250 }, (_, index) => ({ type: "text", markdown: `row-${index}` })),
+    blocks: Array.from({ length: 250 }, (_, index) => ({
+      type: "text",
+      markdown: `row-${index}`,
+    })),
     public: {
       ok: true,
       nested: {
@@ -832,6 +877,18 @@ test("sanitizePublicTaskEventPayload preserves public routing contract while str
       provider: "private-provider",
       toolTrace: "secret",
     },
+    control: {
+      id: "control-1",
+      redirectDuplicateHash: "a".repeat(43),
+      planRevision: {
+        contract: "elyan.compiled_plan_revision.v1",
+        revision: 2,
+        stepCount: 3,
+      },
+      runtimePlan: {
+        steps: [{ args: { privatePath: "/Users/private/report.docx" } }],
+      },
+    },
     artifacts: Array.from({ length: 250 }, (_, index) => ({
       id: `artifact-${index}`,
       previewText: "p".repeat(9_000),
@@ -847,6 +904,14 @@ test("sanitizePublicTaskEventPayload preserves public routing contract while str
   assert.equal("provider" in task, false);
   assert.equal("toolTrace" in task, false);
   assert.equal("reasoning" in sanitized, false);
+  const control = sanitized.control as Record<string, unknown>;
+  assert.equal("runtimePlan" in control, false);
+  assert.equal(control.redirectDuplicateHash, "a".repeat(43));
+  assert.deepEqual(control.planRevision, {
+    contract: "elyan.compiled_plan_revision.v1",
+    revision: 2,
+    stepCount: 3,
+  });
   const artifacts = sanitized.artifacts as Array<Record<string, unknown>>;
   assert.equal(artifacts.length, 200);
   assert.equal(String(artifacts[0]?.previewText).endsWith("…"), true);

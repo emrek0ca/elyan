@@ -10,6 +10,7 @@ import { invalidateBrainProfileCache } from "../brain/profile-cache.js";
 import {
   normalizeRuntimeCapabilities,
   summarizeRuntimeCapabilities,
+  summarizeRuntimeCapabilityReadiness,
 } from "../runtime/capabilities.js";
 
 export const RUNTIME_CONNECTION_STALE_AFTER_MS = 300_000; // 5 minutes — relay sends heartbeats every 2-5s so this is very forgiving
@@ -191,6 +192,8 @@ export function shapeUserDevice(
             capabilitySummary: summarizeRuntimeCapabilities(
               normalizedCapabilities,
             ),
+            capabilityReadinessSummary:
+              summarizeRuntimeCapabilityReadiness(runtime.capabilityStates),
             currentTaskId: runtime.currentTaskId,
             connectedAt: runtime.connectedAt,
             lastHeartbeatAt: runtime.lastHeartbeatAt,
@@ -208,6 +211,8 @@ export function shapeUserDevice(
             capabilitySummary: summarizeRuntimeCapabilities(
               normalizedCapabilities,
             ),
+            capabilityReadinessSummary:
+              summarizeRuntimeCapabilityReadiness(runtime?.capabilityStates ?? {}),
             currentTaskId: runtime?.currentTaskId ?? null,
             connectedAt: runtime?.connectedAt ?? null,
             lastHeartbeatAt: runtime?.lastHeartbeatAt ?? null,
@@ -600,6 +605,9 @@ export async function registerMobileDevice(
     .limit(1);
 
   const now = new Date();
+  // The token is duplicated into client_metadata on purpose: the dedicated
+  // columns are authoritative, but a deployment whose 0048 migration has not
+  // run yet still needs a place for the sender to read from.
   const clientMetadata = {
     pushToken: input.pushToken ?? null,
     pushProvider: input.pushProvider ?? null,
@@ -610,6 +618,22 @@ export async function registerMobileDevice(
     backgroundRefreshEnabled: input.backgroundRefreshEnabled ?? false,
     buildMetadata: input.buildMetadata ?? {},
   };
+  // A fresh token from the same install clears an earlier "provider says this
+  // token is dead" mark; without this the device would stay silent forever
+  // after one transient unregister.
+  const pushColumns = input.pushToken
+    ? {
+        pushToken: input.pushToken,
+        pushProvider: input.pushProvider ?? "fcm",
+        pushTokenUpdatedAt: now,
+        pushInvalidatedAt: null,
+        notificationAuthorizationStatus:
+          input.notificationAuthorizationStatus ?? null,
+      }
+    : {
+        notificationAuthorizationStatus:
+          input.notificationAuthorizationStatus ?? null,
+      };
 
   if (existingRows[0]) {
     let updatedRows;
@@ -621,6 +645,7 @@ export async function registerMobileDevice(
           platform: input.platform,
           appVersion: input.appVersion,
           clientMetadata,
+          ...pushColumns,
           lastSeenAt: now,
           updatedAt: now,
         })
@@ -680,6 +705,7 @@ export async function registerMobileDevice(
         platform: input.platform,
         appVersion: input.appVersion,
         clientMetadata,
+        ...pushColumns,
         pairedAt: now,
         lastSeenAt: now,
       })
@@ -775,6 +801,110 @@ export async function registerMobileDevice(
 
   invalidateBrainProfileCache(app, input.userId);
   return insertedRows[0];
+}
+
+/**
+ * Token-only update path. Returns `registered: false` when the device is not
+ * known yet — the client then falls back to a full registration instead of
+ * silently believing push is on.
+ */
+export async function updateDevicePushToken(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    externalDeviceId: string;
+    pushToken: string | null;
+    pushProvider?: string;
+    notificationAuthorizationStatus?: string;
+  },
+): Promise<{ registered: boolean; pushEnabled: boolean }> {
+  const rows = await app.db
+    .select({
+      id: devices.id,
+      platform: devices.platform,
+      clientMetadata: devices.clientMetadata,
+    })
+    .from(devices)
+    .where(
+      and(
+        eq(devices.userId, input.userId),
+        eq(devices.type, "mobile"),
+        eq(devices.externalDeviceId, input.externalDeviceId),
+      ),
+    )
+    .limit(1);
+
+  const existing = rows[0];
+  if (!existing) {
+    return { registered: false, pushEnabled: false };
+  }
+
+  const now = new Date();
+  // The provider must describe the token we are storing. Defaulting to "fcm"
+  // on an iOS device would make the APNs dispatcher skip it as an unsupported
+  // provider — silently, forever.
+  const defaultProvider = String(existing.platform ?? "")
+    .toLowerCase()
+    .includes("ios")
+    ? "apns"
+    : "fcm";
+  const metadata =
+    existing.clientMetadata && typeof existing.clientMetadata === "object"
+      ? (existing.clientMetadata as Record<string, unknown>)
+      : {};
+  const nextMetadata = {
+    ...metadata,
+    pushToken: input.pushToken,
+    pushProvider: input.pushToken ? (input.pushProvider ?? defaultProvider) : null,
+    notificationAuthorizationStatus:
+      input.notificationAuthorizationStatus ??
+      (metadata.notificationAuthorizationStatus as string | undefined) ??
+      null,
+  };
+
+  const columns = input.pushToken
+    ? {
+        pushToken: input.pushToken,
+        pushProvider: input.pushProvider ?? defaultProvider,
+        pushTokenUpdatedAt: now,
+        pushInvalidatedAt: null,
+      }
+    : {
+        // Explicit revoke (user turned notifications off): drop the token
+        // rather than marking it invalid, so we never treat it as a
+        // provider-side failure.
+        pushToken: null,
+        pushProvider: null,
+        pushTokenUpdatedAt: now,
+        pushInvalidatedAt: null,
+      };
+
+  try {
+    await app.db
+      .update(devices)
+      .set({
+        ...columns,
+        notificationAuthorizationStatus:
+          input.notificationAuthorizationStatus ?? null,
+        clientMetadata: nextMetadata,
+        lastSeenAt: now,
+        updatedAt: now,
+      })
+      .where(eq(devices.id, existing.id));
+  } catch (error) {
+    if (!isUndefinedColumnError(error)) {
+      throw error;
+    }
+    app.log.warn(
+      "devices.push_token migration missing; storing push token in client_metadata only",
+    );
+    await app.db
+      .update(devices)
+      .set({ clientMetadata: nextMetadata, lastSeenAt: now, updatedAt: now })
+      .where(eq(devices.id, existing.id));
+  }
+
+  return { registered: true, pushEnabled: Boolean(input.pushToken) };
 }
 
 export function isUndefinedColumnError(error: unknown): boolean {

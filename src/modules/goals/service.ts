@@ -400,17 +400,20 @@ export async function advanceGoal(
   const blockers = input.blocker
     ? [...(progress.blockers ?? []), compactText(input.blocker, 400)].slice(-maxSteps)
     : (progress.blockers ?? []);
+  const reachedStepLimit = nextStep >= maxSteps;
   const status: SessionGoalStatus = input.done
     ? "done"
     : input.blocker
       ? "paused"
-      : nextStep >= maxSteps
-        ? "canceled"
+      : reachedStepLimit
+        ? "paused"
         : "active";
   const nextEngineState: GoalEngineState = input.done
     ? "completed"
     : input.blocker
       ? "blocked"
+      : reachedStepLimit
+        ? "waiting"
       : "executing";
   if (app.config?.ELYAN_GOAL_STATE_V2_ENABLED === true) {
     assertGoalTransition(previousEngineState, nextEngineState);

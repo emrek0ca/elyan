@@ -491,7 +491,7 @@ test("composeAssistantMessageBlocks drops protected task route rationale", () =>
   assert.doesNotMatch(JSON.stringify(blocks), /openai|gpt|internal routing/i);
 });
 
-test("shapeAssistantMessagePayload removes internal task and security blocks from public payloads", () => {
+test("shapeAssistantMessagePayload exposes safe task progress but removes security blocks", () => {
   const payload = shapeAssistantMessagePayload({
     role: "assistant",
     content: "Güvenli cevap.",
@@ -512,8 +512,10 @@ test("shapeAssistantMessagePayload removes internal task and security blocks fro
       ],
     },
   }) as { blocks?: Array<{ type: string }> };
-  assert.equal(payload.blocks?.length, 1);
-  assert.equal(payload.blocks?.[0]?.type, "text");
+  assert.equal(payload.blocks?.length, 2);
+  assert.equal(payload.blocks?.[0]?.type, "task_trace");
+  assert.equal(payload.blocks?.[1]?.type, "text");
+  assert.equal(payload.blocks?.some((block) => block.type === "security_decision"), false);
 });
 
 test("sanitizeAssistantVisibleText strips internal reasoning and keeps the final user-facing answer", () => {

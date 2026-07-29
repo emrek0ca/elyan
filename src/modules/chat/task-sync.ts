@@ -293,7 +293,36 @@ function extractResultAssistantBlocks(
   task: typeof tasks.$inferSelect,
 ): AssistantMessageBlock[] {
   return normalizeResultAssistantBlocks(task).filter(
-    (block) => block.type !== "text",
+    (block) => block.type !== "text" && block.type !== "task_trace",
+  );
+}
+
+function extractConnectorTaskTraceBlock(
+  task: typeof tasks.$inferSelect,
+): AssistantMessageBlock | null {
+  const result =
+    task.result && typeof task.result === "object" && !Array.isArray(task.result)
+      ? (task.result as Record<string, unknown>)
+      : null;
+  const approval =
+    task.approvalRequest &&
+    typeof task.approvalRequest === "object" &&
+    !Array.isArray(task.approvalRequest)
+      ? (task.approvalRequest as Record<string, unknown>)
+      : null;
+  const connectorTraceIsAuthoritative =
+    (task.status === "waiting_approval" &&
+      approval?.kind === "connector_write") ||
+    (result?.connectorWriteExecution != null &&
+      typeof result.connectorWriteExecution === "object" &&
+      !Array.isArray(result.connectorWriteExecution));
+  if (!connectorTraceIsAuthoritative) {
+    return null;
+  }
+  return (
+    normalizeResultAssistantBlocks(task).find(
+      (block) => block.type === "task_trace",
+    ) ?? null
   );
 }
 
@@ -494,10 +523,13 @@ export async function syncChatTaskLifecycle(
       fallbackMessage: input.message,
     }),
   );
-  const taskTraceBlock = buildTaskTraceBlock({
+  const generatedTaskTraceBlock = buildTaskTraceBlock({
     task: input.updatedTask,
     assistantContent,
   });
+  const taskTraceBlock =
+    extractConnectorTaskTraceBlock(input.updatedTask) ??
+    generatedTaskTraceBlock;
   const assistantMetadata = buildAssistantMetadataFromTask(input.updatedTask);
   const assistantBlocks = composeAssistantMessageBlocks({
     content: assistantContent,
@@ -507,6 +539,10 @@ export async function syncChatTaskLifecycle(
       taskTraceBlock,
       resultBlocks: extractResultAssistantBlocks(input.updatedTask),
     }),
+  });
+  const nextAssistantMetadata = withAssistantBlocksMetadata(assistantMetadata, {
+    content: assistantContent,
+    blocks: assistantBlocks,
   });
   if (input.updatedTask.status === "completed") {
     void applyGoalProgressBlocks(app, {
@@ -518,8 +554,9 @@ export async function syncChatTaskLifecycle(
   // hazırlanıyor." / "Yanıt yeniden deneniyor." gibi kuyruk/faz metinleri
   // non-terminal güncellemelerde chat satırının content'ine ASLA yazılmaz —
   // aksi hâlde REST history/dispatch cevabı bu metni "cevap" olarak taşır ve
-  // eski istemciler akan cevabın üstüne yazar. Satırda yalnız status/error
-  // ilerletilir; content, blocks ve preview olduğu gibi kalır.
+  // eski istemciler akan cevabın üstüne yazar. Satırda content ve preview
+  // korunur; canlı task-trace blokları ise metadata üzerinden ilerlemeye devam
+  // eder.
   const preserveExistingContent =
     !isTerminalChatMessageStatus(assistantStatus) &&
     isTransientChatProgressMessage(assistantContent);
@@ -541,6 +578,9 @@ export async function syncChatTaskLifecycle(
       status: assistantStatus,
       error: input.updatedTask.error,
       updatedAt: new Date(),
+      metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
+        nextAssistantMetadata,
+      )}::jsonb`,
       ...(preserveExistingContent
         ? {}
         : {
@@ -548,12 +588,6 @@ export async function syncChatTaskLifecycle(
             contentBlobId: contentBlob?.blobId ?? null,
             preview: compactMessagePreview(assistantContent),
             tokenCount: estimateMessageTokens(assistantContent),
-            metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
-              withAssistantBlocksMetadata(assistantMetadata, {
-                content: assistantContent,
-                blocks: assistantBlocks,
-              }),
-            )}::jsonb`,
           }),
     })
     .where(
@@ -561,7 +595,7 @@ export async function syncChatTaskLifecycle(
         eq(chatMessages.id, assistantMessageId),
         eq(chatMessages.sessionId, sessionId),
         eq(chatMessages.userId, input.updatedTask.userId),
-        sql`${chatMessages.status} <> 'completed'`,
+        sql`${chatMessages.status} not in ('completed', 'failed', 'canceled')`,
       ),
     )
     .returning();
@@ -648,17 +682,10 @@ export async function syncChatTaskLifecycle(
       statusRank: chatMessageStatusRank(assistantStatus),
       terminal: isTerminalChatMessageStatus(assistantStatus),
       presentation: extractTaskPresentation(input.updatedTask.payload),
-      assistantMessage: shapeAssistantMessagePayload(
-        preserveExistingContent
-          ? assistantMessage
-          : {
-              ...assistantMessage,
-              metadata: withAssistantBlocksMetadata(assistantMetadata, {
-                content: assistantContent,
-                blocks: assistantBlocks,
-              }),
-            },
-      ),
+      assistantMessage: shapeAssistantMessagePayload({
+        ...assistantMessage,
+        metadata: nextAssistantMetadata,
+      }),
       taskStatus: input.updatedTask.status,
       task: shapeTaskFeedItem(input.updatedTask),
     },

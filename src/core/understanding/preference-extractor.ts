@@ -5,6 +5,7 @@ import type {
   TaskUnderstandingInput,
   UnderstandingIntent,
 } from "./types.js";
+import { normalizePersonalName } from "./identity-name.js";
 import { filterLearningSignals } from "./personalization-policy.js";
 import { extractProjectHints } from "./project-context.js";
 import { detectTurkicLanguagePreference } from "./turkic-language.js";
@@ -105,6 +106,8 @@ const implementationBoundaryPattern = unicodeWordPattern(
   String.raw`\b(do not|don't|never|asla|yapma|dokunma|bozma|redesign|replace)\b`,
   "i",
 );
+// Kept for the non-name signals below; NAME candidates now go through the
+// shared normalizer in identity-name.ts, which owns the function-word list.
 const PREFERRED_NAME_STOP_WORDS = new Set([
   "cevap",
   "yanıt",
@@ -339,20 +342,29 @@ function extractIdentitySignals(input: TaskUnderstandingInput): LearningSignal[]
     }
   };
 
+  // The captures include renaming scaffolding ("bundan sonra Osman") because
+  // widening regexes to exclude it re-opens the bottomless pattern list. The
+  // shared normalizer strips discourse and rejects function words; a null here
+  // means the sentence carried no usable name and nothing is written.
   const nameMatch =
     text.match(nameRememberPattern) ??
     text.match(nameStatementPattern) ??
     text.match(englishNameStatementPattern);
-  if (nameMatch?.[1]) {
-    push(buildIdentitySignal({ key: "name", value: nameMatch[1], taskId: input.taskId, confidence: 0.97 }));
+  const normalizedName = normalizePersonalName(nameMatch?.[1]);
+  if (normalizedName) {
+    push(buildIdentitySignal({ key: "name", value: normalizedName, taskId: input.taskId, confidence: 0.97 }));
   }
 
   const preferredNameMatch =
     text.match(preferredNameCallPattern) ??
     text.match(preferredNameAddressPattern) ??
     text.match(englishPreferredNamePattern);
-  if (preferredNameMatch?.[1] && isPlausiblePreferredName(preferredNameMatch[1])) {
-    push(buildIdentitySignal({ key: "preferred_name", value: preferredNameMatch[1], taskId: input.taskId, confidence: 0.96 }));
+  const normalizedPreferredName = normalizePersonalName(preferredNameMatch?.[1]);
+  if (
+    normalizedPreferredName &&
+    isPlausiblePreferredName(normalizedPreferredName)
+  ) {
+    push(buildIdentitySignal({ key: "preferred_name", value: normalizedPreferredName, taskId: input.taskId, confidence: 0.96 }));
   }
 
   const jobMatch =

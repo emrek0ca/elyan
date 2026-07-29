@@ -8,12 +8,14 @@ export const CONSENT_VERSIONS = {
   terms_of_service: "2026-07-04",
   privacy_policy: "2026-07-04",
   ai_data_sharing: "2026-07-04",
+  cloud_speech: "2026-07-28",
 } as const;
 
 export const consentTypeSchema = z.enum([
   "terms_of_service",
   "privacy_policy",
   "ai_data_sharing",
+  "cloud_speech",
 ]);
 
 export type ConsentType = z.infer<typeof consentTypeSchema>;
@@ -37,6 +39,19 @@ export function createAiDataSharingConsentRequiredError(): AppError {
       consentType: "ai_data_sharing",
       consentVersion: CONSENT_VERSIONS.ai_data_sharing,
       recipient: "Elyan AI cloud processing layer",
+    },
+  );
+}
+
+export function createCloudSpeechConsentRequiredError(): AppError {
+  return new AppError(
+    403,
+    "CLOUD_SPEECH_CONSENT_REQUIRED",
+    "Ses kaydını bulutta yazıya çevirmek için açık izin gerekiyor.",
+    {
+      consentType: "cloud_speech",
+      consentVersion: CONSENT_VERSIONS.cloud_speech,
+      recipient: "Elyan cloud speech processing",
     },
   );
 }
@@ -69,6 +84,7 @@ function shapeConsentStatus(
   return {
     required: type === "terms_of_service" || type === "privacy_policy",
     requiredForCloudAI: type === "ai_data_sharing",
+    requiredForCloudSpeech: type === "cloud_speech",
     granted,
     version: CONSENT_VERSIONS[type],
     grantedAt: row?.grantedAt?.toISOString?.() ?? null,
@@ -77,15 +93,17 @@ function shapeConsentStatus(
 }
 
 export async function getConsentStatus(app: FastifyInstance, userId: string) {
-  const [terms, privacy, ai] = await Promise.all([
+  const [terms, privacy, ai, cloudSpeech] = await Promise.all([
     readLatestConsent(app, userId, "terms_of_service"),
     readLatestConsent(app, userId, "privacy_policy"),
     readLatestConsent(app, userId, "ai_data_sharing"),
+    readLatestConsent(app, userId, "cloud_speech"),
   ]);
   return {
     termsOfService: shapeConsentStatus("terms_of_service", terms),
     privacyPolicy: shapeConsentStatus("privacy_policy", privacy),
     aiDataSharing: shapeConsentStatus("ai_data_sharing", ai),
+    cloudSpeech: shapeConsentStatus("cloud_speech", cloudSpeech),
   };
 }
 
@@ -195,6 +213,17 @@ export async function assertAiDataSharingConsent(
   const status = await getConsentStatus(app, userId);
   if (!status.aiDataSharing.granted) {
     throw createAiDataSharingConsentRequiredError();
+  }
+  return true;
+}
+
+export async function assertCloudSpeechConsent(
+  app: FastifyInstance,
+  userId: string,
+): Promise<true> {
+  const row = await readLatestConsent(app, userId, "cloud_speech");
+  if (!shapeConsentStatus("cloud_speech", row).granted) {
+    throw createCloudSpeechConsentRequiredError();
   }
   return true;
 }

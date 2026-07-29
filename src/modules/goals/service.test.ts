@@ -191,7 +191,7 @@ test("goals service bounds steps and maps progress blocks to terminal statuses",
       },
     ],
   });
-  assert.equal(db.rows[0]?.status, "canceled");
+  assert.equal(db.rows[0]?.status, "paused");
   assert.equal(db.rows[0]?.currentStep, 20);
 
   await applyGoalProgressBlocks(app, {

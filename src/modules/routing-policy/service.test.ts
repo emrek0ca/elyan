@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decideCommandRoute, resolveCommandTarget, resolvePendingDesktopQueueTarget } from "./service.js";
+import {
+  buildCommandRouteModelPrompt,
+  decideCommandRoute,
+  resolveCommandTarget,
+  resolvePendingDesktopQueueTarget,
+} from "./service.js";
 
 class FakeQuery<T> {
   constructor(private readonly result: T) {}
@@ -71,40 +76,45 @@ function createApp(
   };
 }
 
-function createDesktopReadyApp(capabilities: string[] = ["filesystem", "document.write", "document.read", "recent.files"]) {
+function createDesktopReadyApp(
+  capabilities: string[] = [
+    "filesystem",
+    "document.write",
+    "document.read",
+    "recent.files",
+  ],
+) {
   const now = new Date("2030-01-01T00:00:00.000Z");
-  return createApp(
+  return createApp([
     [
-      [
-        {
-          id: "desktop-1",
-          type: "desktop",
-          externalDeviceId: null,
-          label: "User Desktop",
-          platform: "macos",
-          runtimeVersion: "1.0.0",
-          appVersion: null,
-          isActive: true,
-          pairedAt: now,
-          lastSeenAt: now,
-          createdAt: now,
-          updatedAt: now,
-        },
-      ],
-      [
-        {
-          id: "runtime-1",
-          deviceId: "desktop-1",
-          status: "online",
-          capabilities,
-          capabilityStates: {},
-          currentTaskId: null,
-          connectedAt: now,
-          lastHeartbeatAt: now,
-        },
-      ],
+      {
+        id: "desktop-1",
+        type: "desktop",
+        externalDeviceId: null,
+        label: "User Desktop",
+        platform: "macos",
+        runtimeVersion: "1.0.0",
+        appVersion: null,
+        isActive: true,
+        pairedAt: now,
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      },
     ],
-  );
+    [
+      {
+        id: "runtime-1",
+        deviceId: "desktop-1",
+        status: "online",
+        capabilities,
+        capabilityStates: {},
+        currentTaskId: null,
+        connectedAt: now,
+        lastHeartbeatAt: now,
+      },
+    ],
+  ]);
 }
 
 test("decideCommandRoute keeps public chat on the shared brain", async () => {
@@ -142,6 +152,7 @@ test("decideCommandRoute sends an explicit remote MCP request to a capable deskt
     userId: "user-1",
     message: "GitHub repolarımı göster",
     source: "mobile",
+    metadata: { desktopDispatch: true },
     selectedDeviceId: "desktop-1",
     requestedCapabilities: ["mcp_call_tool"],
   });
@@ -158,6 +169,7 @@ test("decideCommandRoute fails closed when remote MCP runtime is unavailable", a
     userId: "user-1",
     message: "GitHub repolarımı göster",
     source: "mobile",
+    metadata: { desktopDispatch: true },
     requestedCapabilities: ["mcp_call_tool"],
   });
 
@@ -369,7 +381,12 @@ test("decideCommandRoute upgrades short follow-ups to balanced so prior turn is 
   // referans veriyor; fast modelde bağlamsız yorumlanınca alakasız cevap
   // çıkıyor. Balanced modelde rolling summary + digest bağlamıyla doğru
   // yorumlanıyor.
-  for (const message of ["anlamadım", "devam et", "onu düzelt", "daha kısa yaz"]) {
+  for (const message of [
+    "anlamadım",
+    "devam et",
+    "onu düzelt",
+    "daha kısa yaz",
+  ]) {
     const decision = await decideCommandRoute(app as never, {
       userId: "user-1",
       message,
@@ -399,11 +416,17 @@ test("decideCommandRoute upgrades compact educational reasoning prompts to balan
 });
 
 test("decideCommandRoute sends screen glance requests to desktop analyze_screen", async () => {
-  const app = createDesktopReadyApp(["runtime.status", "analyze_screen", "desktop_operator.observe_screen"]);
+  const app = createDesktopReadyApp([
+    "runtime.status",
+    "analyze_screen",
+    "desktop_operator.observe_screen",
+  ]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
     message: "Ekranda ne var?",
     source: "mobile",
+    metadata: { desktopDispatch: true },
+    requestedCapabilities: ["analyze_screen"],
   });
 
   assert.equal(decision.route, "desktop_runtime");
@@ -411,7 +434,10 @@ test("decideCommandRoute sends screen glance requests to desktop analyze_screen"
   assert.equal(decision.requiredRuntime, "desktop");
   assert.equal(decision.privacyClass, "local_private");
   assert.equal(decision.taskRoute?.operationalRoute, "desktop_runtime");
-  assert.equal(decision.taskRoute?.requiredCapabilities.includes("analyze_screen"), true);
+  assert.equal(
+    decision.taskRoute?.requiredCapabilities.includes("analyze_screen"),
+    true,
+  );
   assert.equal(decision.capabilities.includes("analyze_screen"), true);
 });
 
@@ -421,11 +447,13 @@ test("decideCommandRoute does not answer screen glance as normal chat when deskt
     userId: "user-1",
     message: "Aktif pencere ne?",
     source: "mobile",
+    metadata: { desktopDispatch: true },
+    requestedCapabilities: ["analyze_screen"],
   });
 
   assert.equal(decision.route, "pairing_required");
   assert.equal(decision.requiredRuntime, "desktop");
-  assert.equal(decision.failClosedReason, "desktop_screen_context_unavailable");
+  assert.equal(decision.failClosedReason, "desktop_runtime_unavailable");
   assert.equal(decision.capabilities.includes("analyze_screen"), true);
 });
 
@@ -494,7 +522,8 @@ test("decideCommandRoute ignores weak quantum feedback without liveness risk", a
         latestQuantumBenchmarkQualified: true,
         latestQuantumDispatchFeedbackConfidence: 62,
         latestQuantumDispatchPolicyOutcome: "backend_active_no_boost",
-        latestQuantumResponsivePolicyOutcome: "backend_active_no_responsive_boost",
+        latestQuantumResponsivePolicyOutcome:
+          "backend_active_no_responsive_boost",
         latestQuantumLivenessGuardActive: false,
         latestQuantumLivenessGuardTimeoutRisk: "low",
         latestQuantumLivenessRepairAttemptCount: 0,
@@ -658,7 +687,8 @@ test("decideCommandRoute keeps compact mobile document reads on the shared brain
           name: "report.pdf",
           type: "document",
           summary: "Maliyetler, teslimat ve riskler hakkında kısa özet.",
-          content: "Maliyetler sabit, teslimat iki hafta gecikebilir, riskler düşük.",
+          content:
+            "Maliyetler sabit, teslimat iki hafta gecikebilir, riskler düşük.",
           contentLength: 78,
           chunks: [
             {
@@ -770,7 +800,8 @@ test("decideCommandRoute routes attachment summaries through mobile_local plus s
           name: "report.pdf",
           type: "document",
           summary: "Maliyetler, teslimat ve riskler hakkında kısa özet.",
-          content: "Maliyetler sabit, teslimat iki hafta gecikebilir, riskler düşük.",
+          content:
+            "Maliyetler sabit, teslimat iki hafta gecikebilir, riskler düşük.",
           chunks: [
             {
               text: "Maliyetler sabit, teslimat iki hafta gecikebilir, riskler düşük.",
@@ -848,7 +879,8 @@ test("decideCommandRoute routes PDF important-item extraction through mobile_loc
           name: "brief.pdf",
           type: "document",
           summary: "Kısa proje özeti.",
-          content: "Proje bütçesi sabit, teslim tarihi esnektir, riskler orta düzeydedir.",
+          content:
+            "Proje bütçesi sabit, teslim tarihi esnektir, riskler orta düzeydedir.",
           chunks: [
             {
               text: "Proje bütçesi sabit, teslim tarihi esnektir, riskler orta düzeydedir.",
@@ -868,75 +900,90 @@ test("decideCommandRoute routes PDF important-item extraction through mobile_loc
 
 test("resolvePendingDesktopQueueTarget ignores desktops when the plan does not allow desktop access", async () => {
   const now = new Date("2030-01-01T00:00:00.000Z");
-  const app = createApp([
+  const app = createApp(
     [
-      {
-        id: "desktop-1",
-        type: "desktop",
-        externalDeviceId: null,
-        label: "User Desktop",
-        platform: "macos",
-        runtimeVersion: "1.0.0",
-        appVersion: null,
-        isActive: true,
-        pairedAt: now,
-        lastSeenAt: now,
-        createdAt: now,
-        updatedAt: now,
-      },
+      [
+        {
+          id: "desktop-1",
+          type: "desktop",
+          externalDeviceId: null,
+          label: "User Desktop",
+          platform: "macos",
+          runtimeVersion: "1.0.0",
+          appVersion: null,
+          isActive: true,
+          pairedAt: now,
+          lastSeenAt: now,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      [
+        {
+          id: "runtime-1",
+          deviceId: "desktop-1",
+          status: "online",
+          capabilities: ["runtime.status"],
+          currentTaskId: null,
+          connectedAt: now,
+          lastHeartbeatAt: now,
+        },
+      ],
     ],
     [
-      {
-        id: "runtime-1",
-        deviceId: "desktop-1",
-        status: "online",
-        capabilities: ["runtime.status"],
-        currentTaskId: null,
-        connectedAt: now,
-        lastHeartbeatAt: now,
-      },
+      [
+        {
+          planCode: "free",
+          status: "active",
+          trialEndsAt: null,
+        },
+      ],
     ],
-  ], [
-    [
-      {
-        planCode: "free",
-        status: "active",
-        trialEndsAt: null,
-      },
-    ],
-  ]);
+  );
 
-  const target = await resolvePendingDesktopQueueTarget(app as never, "user-1", "desktop-1", ["web_research"]);
+  const target = await resolvePendingDesktopQueueTarget(
+    app as never,
+    "user-1",
+    "desktop-1",
+    ["web_research"],
+  );
 
   assert.equal(target, null);
 });
 
 test("resolvePendingDesktopQueueTarget keeps pairing-required work attached to an offline paired desktop", async () => {
   const now = new Date("2030-01-01T00:00:00.000Z");
-  const app = createApp([
+  const app = createApp(
     [
-      {
-        id: "desktop-offline-1",
-        type: "desktop",
-        externalDeviceId: "elyan-desktop",
-        label: "Elyan Desktop",
-        platform: "macos",
-        runtimeVersion: "1.0.0",
-        appVersion: null,
-        isActive: true,
-        pairedAt: now,
-        lastSeenAt: now,
-        createdAt: now,
-        updatedAt: now,
-      },
+      [
+        {
+          id: "desktop-offline-1",
+          type: "desktop",
+          externalDeviceId: "elyan-desktop",
+          label: "Elyan Desktop",
+          platform: "macos",
+          runtimeVersion: "1.0.0",
+          appVersion: null,
+          isActive: true,
+          pairedAt: now,
+          lastSeenAt: now,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      [],
+      [],
     ],
-    [],
-    [],
-  ], proSubscriptionRows, { online: false });
+    proSubscriptionRows,
+    { online: false },
+  );
 
-  const target = await resolvePendingDesktopQueueTarget(app as never, "user-1", undefined, [
-    "email_send",
-  ]);
+  const target = await resolvePendingDesktopQueueTarget(
+    app as never,
+    "user-1",
+    undefined,
+    ["email_send"],
+  );
 
   assert.equal(target?.isSharedBrain, false);
   assert.equal(target?.device.id, "desktop-offline-1");
@@ -960,7 +1007,8 @@ test("decideCommandRoute uses public quantum research workload for literature qu
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "QAOA literatüründe güncel kaynaklarla yaklaşım farklarını araştır.",
+    message:
+      "QAOA literatüründe güncel kaynaklarla yaklaşım farklarını araştır.",
     source: "mobile",
   });
 
@@ -974,7 +1022,8 @@ test("decideCommandRoute uses deep public research workload for current source-b
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "2026 AI çip pazarını güncel kaynaklarla kapsamlı rapor olarak araştır.",
+    message:
+      "2026 AI çip pazarını güncel kaynaklarla kapsamlı rapor olarak araştır.",
     source: "mobile",
   });
 
@@ -1008,16 +1057,21 @@ test("decideCommandRoute carries quantum execution capabilities when dispatch is
   const app = createDesktopReadyApp(quantumCapabilities);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
-    message: "Kapasite 5 için QUBO modelle, QAOA çalıştır ve klasik çözümle karşılaştır.",
+    message:
+      "Kapasite 5 için QUBO modelle, QAOA çalıştır ve klasik çözümle karşılaştır.",
     source: "mobile",
     metadata: { desktopDispatch: true },
+    requestedCapabilities: quantumCapabilities,
   });
 
   assert.equal(decision.route, "desktop_runtime");
   assert.equal(decision.targetDeviceId, "desktop-1");
   assert.equal(decision.mode, "executable_task");
   assert.deepEqual(decision.capabilities, quantumCapabilities);
-  assert.deepEqual(decision.taskRoute?.requiredCapabilities, quantumCapabilities);
+  assert.deepEqual(
+    decision.taskRoute?.requiredCapabilities,
+    quantumCapabilities,
+  );
   assert.equal(decision.taskRoute?.needsDesktop, true);
   assert.equal(decision.privacyClass, "public_text");
 });
@@ -1065,7 +1119,12 @@ test("resolveCommandTarget defaults task routing to the first ready desktop", as
     },
   };
 
-  const target = await resolveCommandTarget(app as never, "user-1", undefined, "task");
+  const target = await resolveCommandTarget(
+    app as never,
+    "user-1",
+    undefined,
+    "task",
+  );
 
   assert.equal(target.isSharedBrain, false);
   assert.equal(target.device.id, "desktop-1");
@@ -1137,7 +1196,13 @@ test("resolveCommandTarget prefers a desktop that matches requested capabilities
     },
   };
 
-  const target = await resolveCommandTarget(app as never, "user-1", undefined, "task", ["filesystem"]);
+  const target = await resolveCommandTarget(
+    app as never,
+    "user-1",
+    undefined,
+    "task",
+    ["filesystem"],
+  );
 
   assert.equal(target.isSharedBrain, false);
   assert.equal(target.device.id, "desktop-2");
@@ -1187,10 +1252,16 @@ test("resolveCommandTarget fails closed when the explicit desktop target lacks r
   };
 
   await assert.rejects(
-    () => resolveCommandTarget(app as never, "user-1", "desktop-1", "task", ["filesystem"]),
+    () =>
+      resolveCommandTarget(app as never, "user-1", "desktop-1", "task", [
+        "filesystem",
+      ]),
     (error: unknown) => {
       assert.equal(error instanceof Error, true);
-      assert.equal((error as { code?: string }).code, "runtime_capability_mismatch");
+      assert.equal(
+        (error as { code?: string }).code,
+        "runtime_capability_mismatch",
+      );
       return true;
     },
   );
@@ -1243,11 +1314,18 @@ test("resolveCommandTarget fails closed when the explicit desktop runtime is sta
   };
 
   await assert.rejects(
-    () => resolveCommandTarget(app as never, "user-1", "desktop-1", "task", ["filesystem"]),
+    () =>
+      resolveCommandTarget(app as never, "user-1", "desktop-1", "task", [
+        "filesystem",
+      ]),
     (error: unknown) => {
       assert.equal(error instanceof Error, true);
       assert.equal((error as { code?: string }).code, "runtime_unavailable");
-      assert.equal((error as { details?: { targetStatus?: string } }).details?.targetStatus, "runtime_stale");
+      assert.equal(
+        (error as { details?: { targetStatus?: string } }).details
+          ?.targetStatus,
+        "runtime_stale",
+      );
       return true;
     },
   );
@@ -1295,7 +1373,12 @@ test("resolveCommandTarget keeps chat routing on the shared brain by default", a
     },
   };
 
-  const target = await resolveCommandTarget(app as never, "user-1", undefined, "chat");
+  const target = await resolveCommandTarget(
+    app as never,
+    "user-1",
+    undefined,
+    "chat",
+  );
 
   assert.equal(target.isSharedBrain, true);
   assert.equal(target.device.id, "shared-brain-1");
@@ -1327,12 +1410,13 @@ test("decideCommandRoute keeps public chat on the server when dispatch is on", a
 });
 
 test("decideCommandRoute routes desktop action to the desktop when dispatch is on and ready", async () => {
-  const app = createDesktopReadyApp();
+  const app = createDesktopReadyApp(["browser_control"]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
     message: "Chrome'da yeni sekme aç",
     source: "mobile",
     metadata: { desktopDispatch: true },
+    requestedCapabilities: ["browser_control"],
   });
 
   assert.equal(decision.route, "desktop_runtime");
@@ -1372,19 +1456,208 @@ test("decideCommandRoute keeps everything on the shared brain when the toggle is
   assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
-test("decideCommandRoute keeps chat on the server when dispatch is on but no desktop is ready", async () => {
+test("decideCommandRoute ignores desktop capabilities from mobile when dispatch is off", async () => {
+  const app = createDesktopReadyApp(["filesystem_read"]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "dispatch-off-capability-user",
+    message: "Masaustumdeki raporu oku",
+    source: "mobile",
+    requestedCapabilities: ["filesystem_read"],
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.targetDeviceId, undefined);
+  assert.equal(decision.taskRoute?.needsDesktop, false);
+});
+
+test("decideCommandRoute uses the model decision for dispatch-enabled execution", async () => {
+  const app = createDesktopReadyApp();
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "hybrid" as const,
+        operationalRoute: "desktop_runtime" as const,
+        executionPlan: ["desktop_runtime" as const],
+        reason: "The request requires a private local file.",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: ["filesystem_read"],
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "model-desktop-route-user",
+    message: "Son raporumu inceleyip eksikleri soyle",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.deepEqual(decision.capabilities, []);
+});
+
+test("command route prompt defines semantic local execution without keyword code", () => {
+  const prompt = buildCommandRouteModelPrompt({
+    message: "Masaüstü klasörümdekileri listele",
+    promptSummary: "Desktop dispatch is available.",
+    routeContinuity: "desktop_runtime",
+  });
+
+  assert.match(prompt, /Every field below is required/);
+  assert.match(prompt, /actual computer state/);
+  assert.match(prompt, /asks for advice, not execution/);
+  assert.match(prompt, /"target":"desktop_runtime"/);
+  assert.match(prompt, /Always return requiredCapabilities as an empty array/);
+  assert.match(prompt, /Masaüstü klasörümdekileri listele/);
+  assert.match(prompt, /previous turn used desktop_runtime/);
+  assert.match(prompt, /clear topic change must be routed independently/);
+});
+
+test("model route cache is isolated between chat sessions", async () => {
+  const app = createApp([]);
+  let calls = 0;
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => {
+        calls += 1;
+        return {
+          target: "server_brain" as const,
+          operationalRoute: "server_brain" as const,
+          executionPlan: ["server_brain" as const],
+          reason: "This follow-up remains conversational.",
+          needsDesktop: false,
+          needsPrivateDesktopData: false,
+          needsUserApproval: false,
+          requiredCapabilities: [],
+        };
+      },
+    },
+  });
+  const input = {
+    userId: "session-isolated-route-user",
+    message: "Onu düzelt",
+    source: "mobile" as const,
+  };
+
+  await decideCommandRoute(app as never, {
+    ...input,
+    activeChatSessionId: "11111111-1111-4111-8111-111111111111",
+    routeContinuity: "server_brain",
+  });
+  await decideCommandRoute(app as never, {
+    ...input,
+    activeChatSessionId: "22222222-2222-4222-8222-222222222222",
+    routeContinuity: "desktop_runtime",
+  });
+
+  assert.equal(calls, 2);
+});
+
+test("decideCommandRoute keeps dispatch-enabled conversation on the server when the model does", async () => {
+  const app = createDesktopReadyApp();
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain" as const,
+        operationalRoute: "server_brain" as const,
+        executionPlan: ["server_brain" as const],
+        reason: "This is a conversational request.",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "model-chat-route-user",
+    message: "Bu gorev icin nasil bir yol izlemeliyim?",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
+});
+
+test("decideCommandRoute accepts a schema-valid direct desktop model route", async () => {
+  const app = createDesktopReadyApp(["filesystem_read"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "desktop_runtime" as const,
+        operationalRoute: "desktop_runtime" as const,
+        executionPlan: ["desktop_runtime" as const],
+        reason: "The request requires private desktop execution.",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: ["filesystem_read"],
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "direct-model-route-user",
+    message: "Yerel raporu incele",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.target, "desktop_runtime");
+});
+
+test("decideCommandRoute rejects string booleans from a malformed model route", async () => {
+  const app = createDesktopReadyApp(["filesystem_read"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () =>
+        ({
+          target: "desktop_runtime",
+          operationalRoute: "desktop_runtime",
+          executionPlan: ["desktop_runtime"],
+          reason: "Malformed boolean fields.",
+          needsDesktop: "true",
+          needsPrivateDesktopData: "true",
+          needsUserApproval: "false",
+          requiredCapabilities: ["filesystem_read"],
+        }) as never,
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "malformed-model-route-user",
+    message: "Yerel raporu incele",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.targetDeviceId, undefined);
+});
+
+test("decideCommandRoute fails closed when an explicit desktop capability has no runtime", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
     message: "masaüstümdeki dosyaları aç",
     source: "mobile",
     metadata: { desktopDispatch: true },
+    requestedCapabilities: ["filesystem_read"],
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.requiredRuntime, "server");
-  assert.equal(decision.failClosedReason, null);
-  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.route, "pairing_required");
+  assert.equal(decision.requiredRuntime, "desktop");
+  assert.equal(decision.failClosedReason, "desktop_runtime_unavailable");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
 test("decideCommandRoute keeps chat on the server when dispatch is on but the plan forbids desktop", async () => {
@@ -1395,6 +1668,7 @@ test("decideCommandRoute keeps chat on the server when dispatch is on but the pl
     source: "mobile",
     desktopAllowed: false,
     metadata: { desktopDispatch: true },
+    requestedCapabilities: ["filesystem_read"],
   });
 
   assert.equal(decision.route, "server_brain");

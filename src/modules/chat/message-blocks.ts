@@ -5,6 +5,7 @@ import {
   elyanAssistantConnectorResultBlockSchema,
   elyanAssistantGoalProgressBlockSchema,
   elyanAssistantPassthroughBlockSchema,
+  elyanTaskTraceBlockSchema,
 } from "../../contracts/domain.js";
 import {
   hydrateLegacyAssistantBlockInput,
@@ -1929,8 +1930,26 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
         ...(typeof record.resultSummary === "string" && record.resultSummary.trim()
           ? { resultSummary: record.resultSummary.trim() }
           : {}),
+        ...(typeof record.capability === "string" && record.capability.trim()
+          ? { capability: record.capability.trim().slice(0, 120) }
+          : {}),
         ...(record.approval && typeof record.approval === "object" && !Array.isArray(record.approval)
           ? { approval: record.approval as ElyanTaskTraceBlock["steps"][number]["approval"] }
+          : {}),
+        ...(["pending", "passed", "repaired", "failed"].includes(
+          String(record.verificationStatus ?? "").trim().toLowerCase(),
+        )
+          ? {
+              verificationStatus: String(record.verificationStatus)
+                .trim()
+                .toLowerCase() as ElyanTaskTraceBlock["steps"][number]["verificationStatus"],
+            }
+          : {}),
+        ...(typeof record.attemptCount === "number" &&
+        Number.isInteger(record.attemptCount) &&
+        record.attemptCount >= 1 &&
+        record.attemptCount <= 32
+          ? { attemptCount: record.attemptCount }
           : {}),
         ...(typeof record.startedAt === "string" && record.startedAt.trim()
           ? { startedAt: record.startedAt.trim() }
@@ -1953,12 +1972,58 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
     return null;
   }
 
-  return {
+  const activeStepIdCandidate = String(value.activeStepId ?? "")
+    .trim()
+    .toLowerCase();
+  const activeStepId =
+    /^[a-zA-Z0-9_-]{1,80}$/.test(activeStepIdCandidate) &&
+    steps.some((step) => step.id === activeStepIdCandidate)
+      ? activeStepIdCandidate
+      : null;
+  const verificationRecord =
+    value.verification &&
+    typeof value.verification === "object" &&
+    !Array.isArray(value.verification)
+      ? (value.verification as Record<string, unknown>)
+      : null;
+  const verificationStatus = String(verificationRecord?.status ?? "")
+    .trim()
+    .toLowerCase();
+
+  const candidate = {
     type: "task_trace",
     taskId,
     status: status as ElyanTaskTraceBlock["status"],
     title,
+    ...(normalizeTextValue(value.phase, 80)
+      ? { phase: normalizeTextValue(value.phase, 80)! }
+      : {}),
+    ...(normalizeTextValue(value.summary, 180)
+      ? { summary: normalizeTextValue(value.summary, 180)! }
+      : {}),
+    ...(normalizeTextValue(value.progressLabel, 80)
+      ? { progressLabel: normalizeTextValue(value.progressLabel, 80)! }
+      : {}),
     ...(routeReason ? { routeReason } : {}),
+    ...(activeStepId ? { activeStepId } : {}),
+    ...(["pending", "passed", "repaired", "failed"].includes(verificationStatus)
+      ? {
+          verification: {
+            status: verificationStatus as NonNullable<
+              ElyanTaskTraceBlock["verification"]
+            >["status"],
+          },
+        }
+      : {}),
+    ...(typeof value.repairAttempts === "number" &&
+    Number.isInteger(value.repairAttempts) &&
+    value.repairAttempts >= 0 &&
+    value.repairAttempts <= 32
+      ? { repairAttempts: value.repairAttempts }
+      : {}),
+    ...(normalizeTextValue(value.stopReason, 160)
+      ? { stopReason: normalizeTextValue(value.stopReason, 160)! }
+      : {}),
     steps,
     ...withAssistantBlockDefaults("task_trace", {}, {
       stableBlockId:
@@ -1971,6 +2036,8 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
       renderHints: normalizeRenderHints(value.renderHints),
     }),
   };
+  const parsed = elyanTaskTraceBlockSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
 }
 
 function parseCommonMetadata(value: Record<string, unknown>): AssistantBlockCommon {
@@ -2964,7 +3031,7 @@ function parseAssistantBlocksWithSalvage(blocks: unknown): AssistantMessageBlock
 }
 
 function isInternalOnlyPublicBlock(block: AssistantMessageBlock): boolean {
-  return ["task_trace", "security_decision", "reasoning_trace", "tool_trace"].includes(block.type);
+  return ["security_decision", "reasoning_trace", "tool_trace"].includes(block.type);
 }
 
 function mergeAssistantBlocks(blocks: AssistantMessageBlock[]): AssistantMessageBlock[] {

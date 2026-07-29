@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { devices, runtimeConnections, tasks } from "../../db/schema.js";
 import { signRuntimeAccessToken } from "../../lib/auth-tokens.js";
@@ -7,8 +7,14 @@ import { AppError, conflict, notFound, unauthorized } from "../../lib/errors.js"
 import { verifySecret } from "../../lib/auth-crypto.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
 import { assertDesktopPairingAllowed } from "../billing/service.js";
-import { normalizeRuntimeCapabilities, summarizeRuntimeCapabilities } from "./capabilities.js";
+import {
+  normalizeRuntimeCapabilities,
+  preflightRequestedRuntimeCapabilities,
+  summarizeRuntimeCapabilities,
+  summarizeRuntimeCapabilityReadiness,
+} from "./capabilities.js";
 import { activeTaskStatuses } from "../tasks/queue.js";
+import { isDesktopPlanPreparationPending } from "../tasks/desktop-work-order.js";
 import { deriveTaskDeliveryState, extractTaskRouteDecision } from "../tasks/service-helpers.js";
 import { getUserDevice } from "../devices/service.js";
 
@@ -159,6 +165,9 @@ export async function registerRuntime(
     capabilities: normalizedCapabilities,
     capabilityStates: normalizedCapabilityStates,
     capabilitySummary: summarizeRuntimeCapabilities(normalizedCapabilities),
+    capabilityReadinessSummary: summarizeRuntimeCapabilityReadiness(
+      normalizedCapabilityStates,
+    ),
     tokens: {
       accessToken,
       accessTokenTtl: app.config.RUNTIME_TOKEN_TTL,
@@ -266,11 +275,31 @@ export async function heartbeatRuntime(
     status: input.status,
     capabilityStates: normalizedCapabilityStates ?? {},
     capabilitySummary: summarizeRuntimeCapabilities(normalizedCapabilities ?? []),
+    capabilityReadinessSummary: summarizeRuntimeCapabilityReadiness(
+      normalizedCapabilityStates ?? {},
+    ),
   };
 }
 
-export async function disconnectRuntime(app: FastifyInstance, auth: RuntimeAuthTokenPayload): Promise<void> {
-  await getRuntimeConnectionByAuth(app, auth);
+export async function disconnectRuntime(
+  app: FastifyInstance,
+  auth: RuntimeAuthTokenPayload,
+  options: { closeSocket?: boolean } = {},
+): Promise<void> {
+  const ownedRows = await app.db
+    .select({ id: runtimeConnections.id })
+    .from(runtimeConnections)
+    .where(
+      and(
+        eq(runtimeConnections.id, auth.connectionId),
+        eq(runtimeConnections.deviceId, auth.deviceId),
+        eq(runtimeConnections.userId, auth.sub),
+      ),
+    )
+    .limit(1);
+  if (!ownedRows[0]) {
+    throw unauthorized("Runtime connection not found");
+  }
 
   await app.db
     .update(runtimeConnections)
@@ -278,9 +307,36 @@ export async function disconnectRuntime(app: FastifyInstance, auth: RuntimeAuthT
       status: "offline",
       disconnectedAt: new Date(),
     })
-    .where(eq(runtimeConnections.id, auth.connectionId));
+    .where(
+      and(
+        eq(runtimeConnections.id, auth.connectionId),
+        isNull(runtimeConnections.disconnectedAt),
+      ),
+    );
 
-  app.services.realtimeHub.closeRuntime(auth.deviceId, 4000, "runtime_disconnect");
+  const replacementRows = await app.db
+    .select({ id: runtimeConnections.id })
+    .from(runtimeConnections)
+    .where(
+      and(
+        eq(runtimeConnections.deviceId, auth.deviceId),
+        eq(runtimeConnections.userId, auth.sub),
+        ne(runtimeConnections.id, auth.connectionId),
+        isNull(runtimeConnections.disconnectedAt),
+      ),
+    )
+    .limit(1);
+  if (replacementRows[0]) {
+    return;
+  }
+
+  if (options.closeSocket !== false) {
+    app.services.realtimeHub.closeRuntime(
+      auth.deviceId,
+      4000,
+      "runtime_disconnect",
+    );
+  }
 
   // Notify mobile so it refreshes device status immediately.
   await app.services.eventBus.publishVolatile({
@@ -332,6 +388,11 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
   const claimOwner = `runtime:${auth.connectionId}:poll`;
   const claimable = [];
   for (const row of rows) {
+    // Only v1.7 tasks carry this gate. Legacy rows remain claimable. Pending
+    // model plans are never executable, even after a backend restart.
+    if (isDesktopPlanPreparationPending(row.payload)) {
+      continue;
+    }
     if (row.status !== "queued") {
       claimable.push(row);
       continue;
@@ -355,6 +416,7 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
 export async function getRuntimeSessionSnapshot(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
   const connection = await getRuntimeConnectionByAuth(app, auth);
   const deviceTruth = await getUserDevice(app, auth.sub, auth.deviceId);
+  const assignedTasks = await listAssignedRuntimeTasks(app, auth);
   const deviceRows = await app.db
     .select({
       id: devices.id,
@@ -380,6 +442,21 @@ export async function getRuntimeSessionSnapshot(app: FastifyInstance, auth: Runt
       : null,
     connection,
     capabilitySummary: summarizeRuntimeCapabilities(connection.capabilities),
-    tasks: await listAssignedRuntimeTasks(app, auth),
+    capabilityReadinessSummary: summarizeRuntimeCapabilityReadiness(
+      connection.capabilityStates,
+    ),
+    taskCapabilityPreflights: assignedTasks.slice(0, 8).map((task) => ({
+      taskId: task.id,
+      ...preflightRequestedRuntimeCapabilities({
+        availableCapabilities: connection.capabilities,
+        capabilityStates: connection.capabilityStates,
+        requestedCapabilities: Array.isArray(task.requestedCapabilities)
+          ? task.requestedCapabilities.filter(
+              (capability): capability is string => typeof capability === "string",
+            )
+          : [],
+      }),
+    })),
+    tasks: assignedTasks,
   };
 }

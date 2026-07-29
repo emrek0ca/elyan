@@ -1,5 +1,6 @@
 import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { normalizePersonalName } from "./identity-name.js";
 import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
 import {
   prioritizeCanonicalMemoryState,
@@ -214,31 +215,20 @@ function dedupeIdentityAnchors<
 }
 
 function normalizePersonalNameCandidate(value: string | null | undefined): string | null {
-  const compact = compactText(String(value ?? ""))
-    .replace(/[.,;:!?]+$/g, "")
-    .trim();
-  if (!compact || compact.length > 48) {
-    return null;
-  }
-  const parts = compact.split(/\s+/).filter(Boolean);
-  if (parts.length === 0 || parts.length > 3) {
-    return null;
-  }
-  for (const part of parts) {
-    const lowered = part.toLocaleLowerCase("tr-TR");
-    if (!/^[A-Za-zÇĞİÖŞÜçğıöşü'-]+$/u.test(part)) {
-      return null;
-    }
-    if (part.length < 2 || part.length > 24) {
-      return null;
-    }
-    if (SUSPICIOUS_NAME_TOKENS.has(lowered)) {
+  // Delegates to the shared normalizer so read and write agree on what a name
+  // is — the "bundan" greeting happened precisely because they did not. The
+  // suspicious-token list stays as an extra local guard for greeting words
+  // specific to this surface.
+  const normalized = normalizePersonalName(
+    compactText(String(value ?? "")).replace(/[.,;:!?]+$/g, ""),
+  );
+  if (!normalized) return null;
+  for (const part of normalized.split(" ")) {
+    if (SUSPICIOUS_NAME_TOKENS.has(part.toLocaleLowerCase("tr-TR"))) {
       return null;
     }
   }
-  return parts
-    .map((part) => part.charAt(0).toLocaleUpperCase("tr-TR") + part.slice(1).toLocaleLowerCase("tr-TR"))
-    .join(" ");
+  return normalized;
 }
 
 function extractExplicitSelfIdentifiedName(message: string): string | null {

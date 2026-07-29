@@ -1,8 +1,18 @@
 import type { FastifyPluginAsync } from "fastify";
 import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth } from "../../lib/request-auth.js";
-import { deviceParamsSchema, registerMobileDeviceBodySchema } from "./schemas.js";
-import { deactivateUserDevice, listDeviceTaskBacklog, listUserDevices, registerMobileDevice } from "./service.js";
+import {
+  deviceParamsSchema,
+  registerMobileDeviceBodySchema,
+  updatePushTokenBodySchema,
+} from "./schemas.js";
+import {
+  deactivateUserDevice,
+  listDeviceTaskBacklog,
+  listUserDevices,
+  registerMobileDevice,
+  updateDevicePushToken,
+} from "./service.js";
 import { reconcileStaleRuntimeTasks } from "../tasks/service.js";
 
 export const deviceRoutes: FastifyPluginAsync = async (app) => {
@@ -48,6 +58,31 @@ export const deviceRoutes: FastifyPluginAsync = async (app) => {
       userAgent: context.userAgent,
       requestId: context.requestId,
     });
+  });
+
+  app.post("/mobile/push-token", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const body = updatePushTokenBodySchema.parse(request.body);
+    const auth = getUserAuth(request);
+    const result = await updateDevicePushToken(app, {
+      userId: auth.sub,
+      externalDeviceId: body.externalDeviceId,
+      pushToken: body.pushToken,
+      pushProvider: body.pushProvider,
+      notificationAuthorizationStatus: body.notificationAuthorizationStatus,
+    });
+
+    if (!result.registered) {
+      reply.code(404);
+      return { error: "device_not_registered" };
+    }
+
+    return result;
   });
 
   app.get("/:deviceId/backlog", async (request, reply) => {
