@@ -1,6 +1,13 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { getReadiness } from "./service.js";
 import { getPerfSnapshot } from "../../lib/perf-telemetry.js";
+import { summarizeProactiveHealth } from "../brain/proactive-metrics.js";
+import { getDesktopPlanCacheTelemetry } from "../tasks/plan-cache.js";
+import { getPlanningCatalogCacheStats } from "../tasks/materialize-plan.js";
+import {
+  evaluateVoiceLatencyTargets,
+  getVoiceStreamingTelemetry,
+} from "../speech/voice-metrics.js";
 
 export const healthRoutes: FastifyPluginAsync = async (app) => {
   const shapePublicHealthPayload = (readiness: Awaited<ReturnType<typeof getReadiness>>) => ({
@@ -39,7 +46,31 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
 
   // İç gözlem: event loop lag + stage p95. Kimlik verisi içermez, yalnız
   // süre istatistikleri — operasyonel teşhis için.
-  app.get("/internal/perf", async () => getPerfSnapshot());
+  app.get("/internal/perf", async () => ({
+    ...getPerfSnapshot(),
+    desktopPlanCache: getDesktopPlanCacheTelemetry(),
+    desktopPlanningCatalogCache: getPlanningCatalogCacheStats(),
+    // Live voice (CANLI-SES-PLANI.md §4). The p95 targets live in the stage
+    // table above as voice.first_partial (<400ms) and
+    // voice.final_to_dispatch (<800ms); this adds the revision rate, which is
+    // a ratio rather than a duration.
+    voiceStreaming: {
+      ...getVoiceStreamingTelemetry(),
+      // Verdict, not just numbers: `breached` is what a probe should watch.
+      latencyTargets: evaluateVoiceLatencyTargets(),
+    },
+  }));
+
+  // Proaktif sağlık: fleet geneli, kimlik verisi YOK — yalnız sayımlar ve
+  // oranlar. Bakılacak tek sayı muteRate: yükselirse sorun kodda değil
+  // tasarımdadır (Elyan susması gereken yerde konuşuyor).
+  app.get("/internal/proactive-health", async (request) => {
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const windowDays = Number.parseInt(String(query.windowDays ?? "7"), 10);
+    return summarizeProactiveHealth(app, {
+      windowDays: Number.isFinite(windowDays) ? windowDays : 7,
+    });
+  });
 
   app.get("/livez", async () => ({
     status: "ok",

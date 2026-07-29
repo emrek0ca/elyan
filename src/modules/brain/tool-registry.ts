@@ -8,6 +8,14 @@ import {
   getGoalExecutionContext,
   updateGoal,
 } from "../goals/service.js";
+import { listConnectedCapabilityGrants } from "../integrations/service.js";
+import { listActiveSkillSummaries } from "../skills/registry.js";
+import type { SkillSummary } from "../skills/types.js";
+import {
+  isSemanticSelectableTool,
+  semanticToolConfidence,
+  type CoreToolHint,
+} from "./tool-semantic.js";
 import { searchBrainMemory } from "./memory.js";
 import { recordTurnMemoryOps } from "./memory-fabric.js";
 import { cognitiveMemoryRepository } from "./cognitive-memory-repository.js";
@@ -63,6 +71,12 @@ export type AgentToolSelectionContext = {
   requiredCapabilities?: readonly string[];
   advertisedConnectorTools?: readonly string[];
   connectorReadHint?: { tool: string; score: number } | null;
+  /**
+   * Resolved once per turn by `selectSemanticCoreToolHint` and passed in, since
+   * the transformer call is async and this builder is synchronous — the same
+   * arrangement `connectorReadHint` uses.
+   */
+  coreToolHint?: CoreToolHint | null;
   deterministicToolNames?: readonly string[];
   memoryCandidateCount?: number;
   sideEffectRequested?: boolean;
@@ -234,6 +248,16 @@ type AgentToolDefinition<TArgs extends z.ZodTypeAny> = {
 };
 
 const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
+  "system.capabilities": {
+    purpose:
+      "Inspect Elyan's own installed tools, skills and connected integrations before claiming or refusing a capability.",
+    intents: ["chat", "planning", "automation"],
+    capabilities: [],
+    desiredOutputKinds: ["chat_reply"],
+    resultBlockTypes: ["tool_call"],
+    modelContract:
+      "system.capabilities {section?:\"all\"|\"tools\"|\"skills\"|\"connectors\"}",
+  },
   "web.search": {
     purpose: "Search current public-web evidence for research or time-sensitive questions.",
     intents: ["research", "document"],
@@ -416,6 +440,37 @@ const goalsUpdateArgsSchema = z.object({
 const goalsGetArgsSchema = z.object({
   goalId: z.string().uuid().optional(),
   eventLimit: z.coerce.number().int().min(1).max(50).default(12),
+});
+
+const systemCapabilitiesArgsSchema = z.object({
+  /** Narrow the answer instead of returning the whole inventory. */
+  section: z
+    .enum(["all", "tools", "skills", "connectors"])
+    .default("all"),
+});
+
+const systemCapabilitiesOutputSchema = z.object({
+  tools: z.array(
+    z.object({
+      name: z.string(),
+      permission: z.string(),
+      purpose: z.string(),
+      contract: z.string(),
+      available: z.boolean(),
+      requiresConnection: z.boolean(),
+    }),
+  ),
+  skills: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      purpose: z.string(),
+      slashCommand: z.string().nullable(),
+      produces: z.array(z.string()),
+    }),
+  ),
+  connectedCapabilities: z.array(z.string()),
+  notes: z.array(z.string()),
 });
 
 const webSearchOutputSchema = z.object({
@@ -660,6 +715,91 @@ function resolveGoalProgressText(args: z.output<typeof goalsUpdateArgsSchema>): 
 }
 
 const toolDefinitions = [
+  {
+    /**
+     * Lets Elyan inspect its own installation.
+     *
+     * Without this the assistant can only guess at what it is able to do, which
+     * is why it both refused things it could do and promised things it could
+     * not. The answer is read from the same registries that actually gate
+     * execution — the tool list, the skill registry, and the user's connected
+     * capabilities — so "what can you do" is answered from the system's real
+     * state rather than from prompt text that drifts as features change.
+     */
+    name: "system.capabilities",
+    permission: "read",
+    idempotency: "read_only",
+    timeoutMs: 3_000,
+    outputSchema: systemCapabilitiesOutputSchema,
+    argsSchema: systemCapabilitiesArgsSchema,
+    async execute(app, context, args) {
+      const section = args.section ?? "all";
+      const wantTools = section === "all" || section === "tools";
+      const wantSkills = section === "all" || section === "skills";
+      const wantConnectors = section === "all" || section === "connectors";
+
+      const connected =
+        wantConnectors || wantTools
+          ? await listConnectedCapabilityGrants(app, context.userId).catch(
+              () => [] as Array<{ capabilities: string[] }>,
+            )
+          : [];
+      const connectedCapabilities = [
+        ...new Set(
+          connected.flatMap((grant) =>
+            (grant.capabilities ?? [])
+              .map((capability) => String(capability).trim())
+              .filter(Boolean),
+          ),
+        ),
+      ];
+
+      const tools = !wantTools
+        ? []
+        : listAgentTools().flatMap((entry) => {
+            const metadata = getAgentToolMetadata(entry.name);
+            if (!metadata) return [];
+            const requiredCapability =
+              metadata.selectionHints.connectorCapability ?? null;
+            return [
+              {
+                name: metadata.name,
+                permission: metadata.permission,
+                purpose: metadata.selectionHints.purpose,
+                contract: metadata.selectionHints.modelContract,
+                // A connector tool the user has not linked is real but
+                // unusable; saying so is what stops it being promised.
+                available:
+                  !requiredCapability ||
+                  connectedCapabilities.includes(requiredCapability),
+                requiresConnection: Boolean(requiredCapability),
+              },
+            ];
+          });
+
+      const skills = !wantSkills
+        ? []
+        : (
+            await listActiveSkillSummaries().catch(() => [] as SkillSummary[])
+          ).map((skill) => ({
+            id: skill.id,
+            name: skill.displayName || skill.name,
+            purpose: skill.purpose ?? skill.summary ?? "",
+            slashCommand: skill.slashCommand ?? null,
+            produces: Array.isArray(skill.produces)
+              ? skill.produces.map((item) => String(item))
+              : [],
+          }));
+
+      const notes: string[] = [];
+      if (wantTools && tools.some((tool) => !tool.available)) {
+        notes.push(
+          "Bağlantısı olmayan araçlar listede 'available:false' ile işaretlidir; bunları yapabileceğini söyleme, önce bağlanmasını iste.",
+        );
+      }
+      return { tools, skills, connectedCapabilities, notes };
+    },
+  },
   {
     name: "web.search",
     permission: "read",
@@ -1073,10 +1213,28 @@ function scoreCoreToolForTurn(
     hint.desiredOutputKinds,
   );
 
+  if (tool.name === "system.capabilities") {
+    // Deliberately broad. "Ne yapabiliyorsun", "hangi araçların var", "bunu
+    // yapabilir misin" are the turns where a wrong answer costs the most
+    // trust, and the tool is read-only and cheap, so a false positive is
+    // nearly free while a false negative produces a confident lie.
+    const selfQuery =
+      /(?<!\p{L})(ne\s+yapabil\p{L}*|neler\s+yapabil\p{L}*|yapabilir\s+misin|hangi\s+(araç|arac|yetenek|skill|beceri|özellik|ozellik)\p{L}*|araçlar\p{L}*|yeteneklerin|becerilerin|özelliklerin|ozelliklerin|kendini\s+tanıt|nelere\s+erişebil\p{L}*|erişimin\s+var|bağlı\s+mı|bagli\s+mi|what\s+can\s+you\s+do|your\s+(tools|skills|capabilities)|can\s+you\s+(do|access))(?!\p{L})/iu.test(
+        prompt,
+      );
+    if (!selfQuery && !capabilityMatch) return null;
+    reasons.push(selfQuery ? "self_capability_query" : "capability_match");
+    return { confidence: selfQuery ? 0.94 : 0.78, reasons };
+  }
+
   if (tool.name === "web.search") {
     const explicitResearch =
       intent === "research" ||
-      /(?<!\p{L})(araştır\p{L}*|arastir\p{L}*|research\p{L}*|güncel|guncel|latest|bugün|bugun|kaynak\p{L}*|source\p{L}*|internetten|webden)(?!\p{L})/iu.test(
+      // "bugün"/"latest" alone are time words, not research requests: they fire
+      // on "bugün hava çok güzel" just as readily as on a real query. They now
+      // count only alongside another research signal; the semantic layer covers
+      // the genuine time-sensitive phrasings this drops.
+      /(?<!\p{L})(araştır\p{L}*|arastir\p{L}*|research\p{L}*|güncel|guncel|kaynak\p{L}*|source\p{L}*|internetten|webden)(?!\p{L})/iu.test(
         prompt,
       );
     if (!explicitResearch && !capabilityMatch) return null;
@@ -1144,6 +1302,24 @@ function scoreCoreToolForTurn(
   if (capabilityMatch) reasons.push("capability_match");
   if (outputMatch) reasons.push("output_match");
   return { confidence: 0.72, reasons };
+}
+
+/**
+ * Runs after the deterministic scorer has declined, so an explicit phrasing
+ * always keeps its higher confidence and its reason string. This only rescues
+ * the paraphrases the patterns never anticipated.
+ */
+function scoreCoreToolFallbackSemantic(
+  tool: AgentToolMetadata,
+  input: AgentToolSelectionContext,
+): { confidence: number; reasons: string[] } | null {
+  const hint = input.coreToolHint;
+  if (!hint || hint.tool !== tool.name) return null;
+  if (!isSemanticSelectableTool(tool.name)) return null;
+  return {
+    confidence: semanticToolConfidence(hint.score),
+    reasons: ["semantic_paraphrase_match"],
+  };
 }
 
 function scoreConnectorToolForTurn(
@@ -1245,7 +1421,9 @@ export function buildAgentToolCatalogForTurn(
       if (!advertisedConnectorTools.has(metadata.name)) continue;
       selection = scoreConnectorToolForTurn(metadata, input);
     } else if (input.includeCoreTools !== false) {
-      selection = scoreCoreToolForTurn(metadata, input);
+      selection =
+        scoreCoreToolForTurn(metadata, input) ??
+        scoreCoreToolFallbackSemantic(metadata, input);
     }
 
     if (

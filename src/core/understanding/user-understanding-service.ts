@@ -691,6 +691,26 @@ export async function recordConversationExchangeLearning(
   ]);
 
   // Dil tercihi: C daemon veya regex fallback
+  // Identity stated in plain conversation.
+  //
+  // This used to run only in `recordTaskLearningFromCreation`, i.e. only when
+  // the turn produced a *task*. But people introduce themselves while chatting
+  // ("benim adım Emre"), not while filing work, so the single most important
+  // durable fact about a user was the one path that never captured it — the
+  // name was never written, and every later turn correctly reported that it
+  // knew of none.
+  const identityExtraction = extractPreferenceSignals({
+    userId: input.userId,
+    accountId: input.accountId,
+    taskId: input.taskId,
+    message: input.userMessage,
+  } as never);
+  for (const signal of identityExtraction.signals) {
+    if (signal.type === "identity") {
+      signals.push(signal);
+    }
+  }
+
   const isTurkish = langResult
     ? langResult.lang === "tr" && langResult.confidence >= 0.6
     : /[çğıöşü]/i.test(input.userMessage) || /\b(ve|ile|için|bu|şu|merhaba|tamam|evet|hayır)\b/.test(input.userMessage.toLowerCase());

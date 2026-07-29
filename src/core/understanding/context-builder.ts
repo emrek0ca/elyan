@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
 import {
@@ -158,6 +158,59 @@ async function writeUnderstandingCache(
 
 function isLikelySocialChatMessage(value: string): boolean {
   return SOCIAL_CHAT_FAST_PATH_PATTERN.test(compactText(value));
+}
+
+/**
+ * Facts that must survive every retrieval decision.
+ *
+ * Who the user is is not a *relevant* fact, it is a *constant* one. Retrieval
+ * here is relevance-ranked (BM25 + recency), gated on `isSocialTurn`, capped at
+ * `MAX_HINTS`, and its durable fallback is further capped at the last 40 rows.
+ * The user's name loses on every one of those axes: "nasılsın" is a social turn
+ * so retrieval is skipped entirely; "nasılsın" shares no tokens with
+ * `preferred_name=Emre` so BM25 ranks it last; and a name learned weeks ago
+ * falls out of the 40-row window. The result is an assistant that is told
+ * nothing about who it is talking to precisely when it is being addressed
+ * personally.
+ *
+ * So identity is pinned instead of retrieved. These keys are read
+ * unconditionally and prepended after ranking.
+ */
+const IDENTITY_ANCHOR_KEYS = [
+  "preferred_name",
+  "name",
+  "preferred_language",
+  "timezone",
+] as const;
+
+const IDENTITY_ANCHOR_KEY_SET: ReadonlySet<string> = new Set(
+  IDENTITY_ANCHOR_KEYS,
+);
+
+function isIdentityAnchorMemory(item: { type?: string; key?: string }): boolean {
+  return (
+    item.type === "identity" &&
+    typeof item.key === "string" &&
+    IDENTITY_ANCHOR_KEY_SET.has(item.key)
+  );
+}
+
+/**
+ * Keeps the newest row per identity key. A name stated twice must not occupy
+ * two of the few slots the prompt has, and the later statement is the one the
+ * user meant ("call me Emre" after "my name is Emre Koca").
+ */
+function dedupeIdentityAnchors<
+  T extends { key: string; createdAt: Date; confidence: number },
+>(rows: T[]): T[] {
+  const best = new Map<string, T>();
+  for (const row of rows) {
+    const current = best.get(row.key);
+    if (!current || row.createdAt.getTime() > current.createdAt.getTime()) {
+      best.set(row.key, row);
+    }
+  }
+  return [...best.values()];
 }
 
 function normalizePersonalNameCandidate(value: string | null | undefined): string | null {
@@ -1944,11 +1997,55 @@ export async function buildUserContext(
     .map((row) => ({ ...row, confidence: row.confidence / 100 }))
     .filter((row) => !isWorldDerivedMemory(row as RetrievedMemory));
 
+  // Identity is read on every turn, including social ones and including turns
+  // where `stableMemory` already filled the fallback budget. This is the query
+  // that makes "benim adım Emre" survive into the next conversation.
+  const identityAnchorRows = !memoryEnabled
+    ? []
+    : await app.db
+        .select({
+          id:         learningEvents.id,
+          type:       learningEvents.type,
+          key:        learningEvents.key,
+          value:      learningEvents.value,
+          confidence: learningEvents.confidence,
+          scope:      learningEvents.scope,
+          source:     learningEvents.source,
+          metadata:   learningEvents.metadata,
+          expiresAt:  learningEvents.expiresAt,
+          createdAt:  learningEvents.createdAt,
+        })
+        .from(learningEvents)
+        .where(
+          and(
+            eq(learningEvents.userId, input.userId),
+            eq(learningEvents.type, "identity"),
+            inArray(learningEvents.key, [...IDENTITY_ANCHOR_KEYS]),
+            or(isNull(learningEvents.expiresAt), gt(learningEvents.expiresAt, now)),
+          ),
+        )
+        .orderBy(desc(learningEvents.createdAt))
+        .limit(12)
+        .catch(() => []);
+
+  const identityAnchorMemory = dedupeIdentityAnchors(
+    identityAnchorRows.map((row) => ({
+      ...row,
+      confidence: row.confidence / 100,
+      // Marked pinned so any downstream consumer that honours pinning keeps
+      // these too, not just the ranking bypass below.
+      isPinned: true,
+    })),
+  );
+  const identityAnchorIds = new Set(identityAnchorMemory.map((row) => row.id));
+
   const allMemory = [
     ...stableMemory,
     ...worldDerivedMemory,
     ...durableFallbackMemory,
-  ];
+    // Anything the anchor query already returned is dropped here so the same
+    // fact cannot appear twice once the anchors are prepended after ranking.
+  ].filter((item) => !identityAnchorIds.has((item as { id?: unknown }).id as never));
 
   /* Average document length for BM25 normalization */
   const avgDocLen = allMemory.length > 0
@@ -1990,6 +2087,17 @@ export async function buildUserContext(
       .slice(0, MAX_HINTS);
   }
 
+  // Prepended *after* the cap, not merged before it: identity must not have to
+  // out-score a topically relevant fact to be present. The cap is raised by the
+  // anchor count rather than evicting a ranked hint, since these are a handful
+  // of very short rows.
+  if (identityAnchorMemory.length > 0) {
+    memory = [
+      ...(identityAnchorMemory as unknown as typeof memory),
+      ...memory,
+    ] as typeof memory;
+  }
+
   const legacyContinuitySummary = deriveContinuitySummary(input.metadata, {
     userId: input.userId,
     sessionId,
@@ -2020,7 +2128,17 @@ export async function buildUserContext(
   const derivedPromptMemory = (memory as RetrievedMemory[])
     .filter((item) => isWorldDerivedMemory(item))
     .slice(0, 3);
-  const promptMemory = [...selectedContinuityMemory, ...derivedPromptMemory];
+  // `selectContinuityMemory` re-filters on relevance, so the anchors are
+  // re-attached here as well; otherwise they survive ranking only to be
+  // dropped one step later.
+  const continuityWithoutAnchors = selectedContinuityMemory.filter(
+    (item) => !identityAnchorIds.has((item as { id?: unknown }).id as never),
+  );
+  const promptMemory = [
+    ...(identityAnchorMemory as unknown as RetrievedMemory[]),
+    ...continuityWithoutAnchors,
+    ...derivedPromptMemory,
+  ];
 
   const ctx = buildUserContextFromMemory({
     userId:      input.userId,

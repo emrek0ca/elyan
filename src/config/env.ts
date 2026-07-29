@@ -43,10 +43,14 @@ const optionalBlankableUrl = () =>
   }, z.string().url().optional());
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().positive().default(4000),
-  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  LOG_LEVEL: z
+    .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
+    .default("info"),
   APP_BASE_URL: z.string().url(),
   DATABASE_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
@@ -64,12 +68,24 @@ const envSchema = z.object({
   BLOB_STORAGE_ACCESS_KEY_ID: z.string().optional(),
   BLOB_STORAGE_SECRET_ACCESS_KEY: z.string().optional(),
   BLOB_STORAGE_FORCE_PATH_STYLE: booleanFlag(false),
-  BLOB_STORAGE_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+  BLOB_STORAGE_SIGNED_URL_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(600),
   BLOB_HMAC_SECRET: z.string().optional(),
   RATE_LIMIT_REDIS_ENABLED: booleanFlag(false),
   REALTIME_REDIS_FANOUT_ENABLED: booleanFlag(true),
-  REALTIME_REDIS_CHANNEL_PREFIX: z.string().trim().min(1).default("elyan:realtime"),
-  REALTIME_EVENT_RETENTION_HOURS: z.coerce.number().int().positive().default(48),
+  REALTIME_REDIS_CHANNEL_PREFIX: z
+    .string()
+    .trim()
+    .min(1)
+    .default("elyan:realtime"),
+  REALTIME_EVENT_RETENTION_HOURS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(48),
   SSE_MAX_STREAMS_PER_USER: z.coerce.number().int().positive().default(4),
   SSE_REPLAY_LIMIT: z.coerce.number().int().positive().max(2_000).default(500),
   SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
@@ -81,18 +97,102 @@ const envSchema = z.object({
   DB_POOL_MAX: z.coerce.number().int().positive().max(200).default(20),
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),
   DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(30),
-  BRAIN_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
+  BRAIN_CIRCUIT_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(3),
   BRAIN_CIRCUIT_OPEN_MS: z.coerce.number().int().positive().default(30_000),
-  TASK_DISPATCH_LOCK_TTL_MS: z.coerce.number().int().positive().default(120_000),
+  TASK_DISPATCH_LOCK_TTL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(120_000),
+  ELYAN_TASK_DISPATCH_WORKER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(32)
+    .default(4),
+  ELYAN_DESKTOP_TASK_DEVICE_BACKLOG_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100)
+    .default(8),
+  ELYAN_ROUTE_MODEL_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(256)
+    .default(32),
+  ELYAN_ROUTE_MODEL_USER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(4)
+    .default(1),
+  ELYAN_PLAN_REVISION_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(64)
+    .default(6),
+  ELYAN_PLAN_REVISION_USER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(4)
+    .default(1),
   ELYAN_CHAT_QUEUE_ENABLED: booleanFlag(false),
-  ELYAN_CHAT_WORKER_CONCURRENCY: z.coerce.number().int().positive().max(32).default(4),
-  ELYAN_CHAT_PRIMARY_GLOBAL_CONCURRENCY: z.coerce.number().int().positive().max(64).default(6),
-  ELYAN_CHAT_FALLBACK_GLOBAL_CONCURRENCY: z.coerce.number().int().positive().max(64).default(4),
-  ELYAN_CHAT_GLOBAL_BACKLOG_MAX: z.coerce.number().int().positive().max(200_000).default(1_000),
-  ELYAN_CHAT_USER_BACKLOG_MAX: z.coerce.number().int().positive().max(100).default(3),
-  ELYAN_GROQ_RPM_LIMIT: z.coerce.number().int().positive().max(100_000).default(30),
-  ELYAN_GROQ_TPM_LIMIT: z.coerce.number().int().positive().max(100_000_000).default(8_000),
-  ELYAN_GEMINI_RPM_LIMIT: z.coerce.number().int().positive().max(100_000).default(10),
+  ELYAN_CHAT_WORKER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(32)
+    .default(4),
+  ELYAN_CHAT_PRIMARY_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(64)
+    .default(6),
+  ELYAN_CHAT_FALLBACK_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(64)
+    .default(4),
+  ELYAN_CHAT_GLOBAL_BACKLOG_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(200_000)
+    .default(1_000),
+  ELYAN_CHAT_USER_BACKLOG_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100)
+    .default(3),
+  ELYAN_GROQ_RPM_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100_000)
+    .default(30),
+  ELYAN_GROQ_TPM_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100_000_000)
+    .default(8_000),
+  ELYAN_GEMINI_RPM_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100_000)
+    .default(10),
   REQUEST_BUDGET_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   AUTH_REQUEST_BUDGET_MAX: z.coerce.number().int().positive().default(10),
   CHAT_REQUEST_BUDGET_MAX: z.coerce.number().int().positive().default(60),
@@ -135,7 +235,9 @@ const envSchema = z.object({
   APPLE_APP_STORE_PRIVATE_KEY_PATH: z.string().optional(),
   APPLE_APP_BUNDLE_ID: z.string().optional(),
   APPLE_APP_ID: z.coerce.number().int().positive().optional(),
-  APPLE_SOLO_PRODUCT_ID: z.string().default("com.elyan.elyanMobile.solo.monthly"),
+  APPLE_SOLO_PRODUCT_ID: z
+    .string()
+    .default("com.elyan.elyanMobile.solo.monthly"),
   APPLE_PRO_PRODUCT_ID: z.string().default("com.elyan.elyanMobile.pro.monthly"),
   APNS_KEY_ID: z.string().optional(),
   APNS_PRIVATE_KEY: z.string().optional(),
@@ -155,10 +257,13 @@ const envSchema = z.object({
   ANTHROPIC_BASE_URL: z.string().url().optional(),
   GROQ_API_KEY: z.string().optional(),
   GROQ_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
+  GROQ_TRANSCRIBE_MODEL: z.string().default("whisper-large-v3-turbo"),
   GROQ_REASONING_MODEL: z.string().default("openai/gpt-oss-120b"),
   GROQ_FAST_MODEL: z.string().default("openai/gpt-oss-20b"),
   GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
-  GROQ_VISION_MODEL: z.string().default("meta-llama/llama-4-scout-17b-16e-instruct"),
+  GROQ_VISION_MODEL: z
+    .string()
+    .default("meta-llama/llama-4-scout-17b-16e-instruct"),
   GROQ_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
   // Groq Compound: yerleşik ajan sistemi (web arama + kod yürütme). OpenAI
   // uyumlu /chat/completions üzerinden `groq/compound` (derin) ve
@@ -176,8 +281,14 @@ const envSchema = z.object({
   GROQ_COMPOUND_INCLUDE_DOMAINS: z.string().optional(),
   GROQ_COMPOUND_EXCLUDE_DOMAINS: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
-  GEMINI_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta/openai"),
-  GEMINI_INTERACTIONS_BASE_URL: z.string().url().default("https://generativelanguage.googleapis.com/v1beta"),
+  GEMINI_BASE_URL: z
+    .string()
+    .url()
+    .default("https://generativelanguage.googleapis.com/v1beta/openai"),
+  GEMINI_INTERACTIONS_BASE_URL: z
+    .string()
+    .url()
+    .default("https://generativelanguage.googleapis.com/v1beta"),
   GEMINI_TEXT_MODEL: z.string().default("gemini-3.5-flash"),
   GEMINI_FAST_MODEL: z.string().default("gemini-3.1-flash-lite"),
   GEMINI_REASONING_MODEL: z.string().default("gemini-3.5-flash"),
@@ -187,20 +298,60 @@ const envSchema = z.object({
   GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image-preview"),
   GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("1K"),
   GEMINI_IMAGE_PRO_ENABLED: booleanFlag(false),
-  GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: z.coerce.number().int().positive().max(10_000).default(50),
-  GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT: z.coerce.number().int().positive().max(1_000).default(5),
-  GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT: z.coerce.number().int().positive().max(1_000).default(2),
+  GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10_000)
+    .default(50),
+  GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1_000)
+    .default(5),
+  GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1_000)
+    .default(2),
   ELYAN_GEMINI_FREE_FEATURES_ENABLED: booleanFlag(true),
   GEMINI_FREE_ONLY: booleanFlag(true),
   GEMINI_FREE_DATA_USAGE_ATTESTED: booleanFlag(false),
   GEMINI_PAID_FALLBACK_ENABLED: booleanFlag(false),
   GEMINI_PAID_DATA_PROCESSING_ATTESTED: booleanFlag(false),
   GEMINI_FREE_MODEL_ALLOWLIST: z.string().default("gemini-3.1-flash-lite"),
-  GEMINI_FREE_DAILY_REQUEST_LIMIT: z.coerce.number().int().positive().max(10_000).default(200),
-  GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: z.coerce.number().int().positive().max(10_000_000).default(250_000),
-  GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: z.coerce.number().int().positive().max(2_000_000).default(50_000),
-  GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: z.coerce.number().int().positive().max(1_000).default(25),
-  GEMINI_FREE_UTILITY_SAMPLE_PERCENT: z.coerce.number().int().min(0).max(100).default(10),
+  GEMINI_FREE_DAILY_REQUEST_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10_000)
+    .default(200),
+  GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10_000_000)
+    .default(250_000),
+  GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(2_000_000)
+    .default(50_000),
+  GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(1_000)
+    .default(25),
+  GEMINI_FREE_UTILITY_SAMPLE_PERCENT: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .default(10),
   OPENROUTER_API_KEY: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().optional(),
   IYZICO_API_KEY: z.string().optional(),
@@ -211,8 +362,22 @@ const envSchema = z.object({
   IYZICO_PUBLIC_BASE_URL: z.string().url().optional(),
   IYZICO_LOCALE: z.enum(["tr", "en"]).default("tr"),
   IYZICO_PRODUCT_NAME: z.string().default("Elyan Subscriptions"),
-  ELYAN_SHARED_BRAIN_PROVIDER: z.enum(["ollama", "vllm", "llamacpp", "groq", "gemini", "openai", "claude", "openrouter"]).default("ollama"),
-  ELYAN_SHARED_BRAIN_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
+  ELYAN_SHARED_BRAIN_PROVIDER: z
+    .enum([
+      "ollama",
+      "vllm",
+      "llamacpp",
+      "groq",
+      "gemini",
+      "openai",
+      "claude",
+      "openrouter",
+    ])
+    .default("ollama"),
+  ELYAN_SHARED_BRAIN_BASE_URL: z
+    .string()
+    .url()
+    .default("http://127.0.0.1:11434"),
   ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: z.preprocess(
     (value) => {
       if (typeof value === "string" && value.trim() === "") {
@@ -221,26 +386,62 @@ const envSchema = z.object({
 
       return value;
     },
-    z.enum(["ollama", "vllm", "llamacpp", "groq", "gemini", "openai", "claude", "openrouter"]).optional(),
+    z
+      .enum([
+        "ollama",
+        "vllm",
+        "llamacpp",
+        "groq",
+        "gemini",
+        "openai",
+        "claude",
+        "openrouter",
+      ])
+      .optional(),
   ),
   ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: optionalBlankableUrl(),
   ELYAN_SHARED_BRAIN_MODEL: z.string().default("llama3.2"),
   ELYAN_SHARED_BRAIN_FAST_MODEL: z.string().default("qwen2.5-coder:3b"),
-  ELYAN_SHARED_BRAIN_BALANCED_MODEL: z.string().default("qwen2.5:7b-instruct-q5_K_M"),
-  ELYAN_SHARED_BRAIN_PLANNING_MODEL: z.string().default("qwen2.5:7b-instruct-q5_K_M"),
+  ELYAN_SHARED_BRAIN_BALANCED_MODEL: z
+    .string()
+    .default("qwen2.5:7b-instruct-q5_K_M"),
+  ELYAN_SHARED_BRAIN_PLANNING_MODEL: z
+    .string()
+    .default("qwen2.5:7b-instruct-q5_K_M"),
   ELYAN_SHARED_BRAIN_KEEP_ALIVE: z.string().default("30m"),
   ELYAN_WEB_GROUNDING_ENABLED: booleanFlag(true),
-  ELYAN_WEB_SEARCH_BASE_URL: z.string().url().default("https://html.duckduckgo.com/html/"),
-  ELYAN_WEB_GROUNDING_MAX_RESULTS: z.coerce.number().int().positive().max(8).default(4),
-  ELYAN_WEB_GROUNDING_TIMEOUT_MS: z.coerce.number().int().positive().default(6_500),
-  ELYAN_SEARCH_PROVIDER: z.enum(["duckduckgo_html", "brave", "searxng"]).default("searxng"),
+  ELYAN_WEB_SEARCH_BASE_URL: z
+    .string()
+    .url()
+    .default("https://html.duckduckgo.com/html/"),
+  ELYAN_WEB_GROUNDING_MAX_RESULTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(8)
+    .default(4),
+  ELYAN_WEB_GROUNDING_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(6_500),
+  ELYAN_SEARCH_PROVIDER: z
+    .enum(["duckduckgo_html", "brave", "searxng"])
+    .default("searxng"),
   BRAVE_SEARCH_API_KEY: z.string().optional(),
   SEARXNG_BASE_URL: z.string().url().optional(),
   JINA_READER_ENABLED: booleanFlag(true),
   ELYAN_RAG_SEMANTIC_RERANK_ENABLED: booleanFlag(true),
   ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED: booleanFlag(true),
-  ELYAN_RAG_SEMANTIC_RERANK_MODEL: z.string().default("Xenova/multilingual-e5-small"),
-  ELYAN_RAG_SEMANTIC_RERANK_WINDOW: z.coerce.number().int().positive().max(32).default(8),
+  ELYAN_RAG_SEMANTIC_RERANK_MODEL: z
+    .string()
+    .default("Xenova/multilingual-e5-small"),
+  ELYAN_RAG_SEMANTIC_RERANK_WINDOW: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(32)
+    .default(8),
   ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: z
     .string()
     .default(
@@ -259,6 +460,31 @@ const envSchema = z.object({
   ELYAN_USER_MODEL_V2_ENABLED: booleanFlag(false),
   ELYAN_GOAL_STATE_V2_ENABLED: booleanFlag(false),
   ELYAN_AGENT_LOOP_ENABLED: booleanFlag(false),
+  /**
+   * Whether the model may see the *core* tools (web/memory/goals/system) as
+   * opposed to connector tools only.
+   *
+   * This used to be implied by ELYAN_AGENT_LOOP_ENABLED. That coupling was the
+   * bug: connector tools default on, so the model was told it could call tools
+   * while its catalogue held nothing but Gmail/Calendar/Drive — no web search,
+   * no memory, no goals. Multi-step research and planning were impossible by
+   * construction, not by model quality.
+   *
+   * Kept separate so tool visibility can be turned on without also switching on
+   * the multi-turn loop; otherwise one flag changes three behaviours at once and
+   * a regression cannot be attributed.
+   */
+  ELYAN_CORE_TOOLS_ENABLED: booleanFlag(true),
+  /**
+   * Semantic rescue for tool selection (`selectSemanticCoreToolHint`).
+   *
+   * Off by default because it puts an embedding round-trip on turns the
+   * deterministic scorer declined — measured: `inference.test.ts` went from ~5 s
+   * to over 280 s with it always on. The candidate cache makes the steady state
+   * cheap (~3 ms), but that has only been measured on a warm local worker, not
+   * under production concurrency. Ship the flag off, measure, then enable.
+   */
+  ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED: booleanFlag(false),
   // Enables server-side connector tools (Gmail/Calendar/Drive read) through the
   // agent loop, restricted to connector tool_requests only. Independent of the
   // full agent loop so connectors can ship without turning on write/goal tools.
@@ -278,29 +504,148 @@ const envSchema = z.object({
   // walls off all answers. Re-enable once the consent UX ships.
   ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED: booleanFlag(false),
   ELYAN_PROACTIVE_ENGINE_ENABLED: booleanFlag(false),
+  // Push delivery. The sender stays inert unless FCM credentials are present,
+  // so leaving the flag on in an unconfigured environment is harmless.
+  ELYAN_PUSH_ENABLED: booleanFlag(true),
+  FCM_PROJECT_ID: z.string().optional(),
+  FCM_CLIENT_EMAIL: z.string().optional(),
+  FCM_PRIVATE_KEY: z.string().optional(),
+  // Night watch: work runs during quiet hours, notifications do not.
+  ELYAN_NIGHT_WATCH_ENABLED: booleanFlag(false),
+  ELYAN_NIGHT_WATCH_MAX_JOBS_PER_NIGHT: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(20)
+    .default(4),
+  ELYAN_MORNING_DIGEST_HOUR: z.coerce.number().int().min(0).max(23).default(8),
+  // Autonomous suggestion generation from observed signals.
+  ELYAN_PROACTIVE_OBSERVER_ENABLED: booleanFlag(false),
+  ELYAN_PROACTIVE_OBSERVER_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15 * 60_000),
   ELYAN_CLOUD_VISION_ENABLED: booleanFlag(true),
-  ELYAN_COST_GUARD_ENABLED: booleanFlag(false),
+  ELYAN_COST_GUARD_ENABLED: booleanFlag(true),
   ELYAN_MODEL_CANARY_ENABLED: booleanFlag(false),
   ELYAN_MODEL_PRIMARY_ENABLED: booleanFlag(false),
   ELYAN_WEIGHT_TRAINING_ENABLED: booleanFlag(false),
   ELYAN_BEHAVIOR_LEARNING_ENABLED: booleanFlag(true),
   ELYAN_BLOCKS_V11_ENABLED: booleanFlag(false),
-  ELYAN_SCALABLE_STATE_READS_ENABLED: booleanFlag(false),
+  ELYAN_SCALABLE_STATE_READS_ENABLED: booleanFlag(true),
   ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED: booleanFlag(false),
   ELYAN_COGNITIVE_SHADOW_READ_ENABLED: booleanFlag(false),
   ELYAN_TENANT_RLS_ENFORCEMENT_ENABLED: booleanFlag(false),
-  ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(0),
+  ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .default(0),
   ELYAN_AGENT_ENGINE_V2_ENABLED: booleanFlag(false),
   ELYAN_AGENT_ENGINE_SHADOW_ENABLED: booleanFlag(false),
-  ELYAN_AGENT_ENGINE_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(0),
-  ELYAN_AGENT_ENGINE_GLOBAL_CONCURRENCY: z.coerce.number().int().positive().max(64).default(4),
-  ELYAN_AGENT_ENGINE_USER_CONCURRENCY: z.coerce.number().int().positive().max(8).default(1),
-  ELYAN_AGENT_ENGINE_GLOBAL_BACKPRESSURE_MAX: z.coerce.number().int().positive().max(200_000).default(2_000),
-  ELYAN_AGENT_ENGINE_USER_BACKPRESSURE_MAX: z.coerce.number().int().positive().max(2_000).default(20),
+  ELYAN_AGENT_ENGINE_ROLLOUT_PERCENT: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(100)
+    .default(0),
+  ELYAN_AGENT_ENGINE_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(64)
+    .default(4),
+  ELYAN_AGENT_ENGINE_USER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(8)
+    .default(1),
+  ELYAN_AGENT_ENGINE_GLOBAL_BACKPRESSURE_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(200_000)
+    .default(2_000),
+  ELYAN_AGENT_ENGINE_USER_BACKPRESSURE_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(2_000)
+    .default(20),
+  ELYAN_SPEECH_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(256)
+    .default(24),
+  ELYAN_SPEECH_USER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(4)
+    .default(1),
+  ELYAN_SPEECH_IP_RPM_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(10_000)
+    .default(240),
+  // Live voice. Off by default: while this is false the turn-based
+  // POST /v1/speech/transcriptions path is the only speech route and behaves
+  // exactly as it does today (CANLI-SES-PLANI.md §4, trap 2).
+  ELYAN_VOICE_STREAMING_ENABLED: booleanFlag(false),
+  // A streaming session has no "file" to size-check, so the meter is audio
+  // seconds. Counted per user over a rolling window; the socket is closed the
+  // moment the budget is gone rather than being allowed to bill on.
+  ELYAN_VOICE_STREAMING_USER_SECONDS_PER_HOUR: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(36_000)
+    .default(1_800),
+  // One live mic per user. A second socket would double the provider spend for
+  // a session the user cannot even see twice.
+  ELYAN_VOICE_STREAMING_USER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(4)
+    .default(1),
+  ELYAN_VOICE_STREAMING_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(256)
+    .default(16),
+  ELYAN_MEDIA_NORMALIZE_GLOBAL_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(128)
+    .default(12),
+  ELYAN_MEDIA_NORMALIZE_USER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(8)
+    .default(2),
   ELYAN_CONTINUOUS_LEARNING_V2_ENABLED: booleanFlag(false),
   ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED: booleanFlag(false),
-  ELYAN_CONTINUOUS_LEARNING_DAILY_BATCH_LIMIT: z.coerce.number().int().positive().max(20_000).default(2_000),
-  ELYAN_CONTINUOUS_LEARNING_REPLAY_RATIO: z.coerce.number().int().min(0).max(80).default(20),
+  ELYAN_CONTINUOUS_LEARNING_DAILY_BATCH_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(20_000)
+    .default(2_000),
+  ELYAN_CONTINUOUS_LEARNING_REPLAY_RATIO: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(80)
+    .default(20),
   ELYAN_CLAIM_CONFIDENCE_V1_ENABLED: booleanFlag(false),
   ELYAN_CLAIM_CONFIDENCE_SHADOW_ENABLED: booleanFlag(false),
   ELYAN_SELF_CHECK_MODEL_FALLBACK_ENABLED: booleanFlag(false),
@@ -344,6 +689,7 @@ export type AppEnv = ParsedEnv & {
   ANTHROPIC_BASE_URL: string;
   GROQ_API_KEY: string;
   GROQ_BASE_URL: string;
+  GROQ_TRANSCRIBE_MODEL: string;
   GROQ_REASONING_MODEL: string;
   GROQ_FAST_MODEL: string;
   GROQ_FALLBACK_MODEL: string;
@@ -439,12 +785,23 @@ export type AppEnv = ParsedEnv & {
   ELYAN_USER_MODEL_V2_ENABLED: boolean;
   ELYAN_GOAL_STATE_V2_ENABLED: boolean;
   ELYAN_AGENT_LOOP_ENABLED: boolean;
+  ELYAN_CORE_TOOLS_ENABLED: boolean;
+  ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED: boolean;
   ELYAN_CONNECTOR_TOOLS_ENABLED: boolean;
   ELYAN_MCP_SDK_ENABLED: boolean;
   ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED: boolean;
   ELYAN_TOOL_CALL_BLOCK_ENABLED: boolean;
   ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED: boolean;
   ELYAN_PROACTIVE_ENGINE_ENABLED: boolean;
+  ELYAN_PUSH_ENABLED: boolean;
+  FCM_PROJECT_ID?: string;
+  FCM_CLIENT_EMAIL?: string;
+  FCM_PRIVATE_KEY?: string;
+  ELYAN_NIGHT_WATCH_ENABLED: boolean;
+  ELYAN_NIGHT_WATCH_MAX_JOBS_PER_NIGHT: number;
+  ELYAN_MORNING_DIGEST_HOUR: number;
+  ELYAN_PROACTIVE_OBSERVER_ENABLED: boolean;
+  ELYAN_PROACTIVE_OBSERVER_INTERVAL_MS: number;
   ELYAN_CLOUD_VISION_ENABLED: boolean;
   ELYAN_COST_GUARD_ENABLED: boolean;
   ELYAN_MODEL_CANARY_ENABLED: boolean;
@@ -501,7 +858,9 @@ export function getDatabaseReachability(env: Pick<AppEnv, "DATABASE_URL">): {
   };
 }
 
-export function getBaseUrlReachability(env: Pick<AppEnv, "APP_BASE_URL" | "HOST" | "PORT">): {
+export function getBaseUrlReachability(
+  env: Pick<AppEnv, "APP_BASE_URL" | "HOST" | "PORT">,
+): {
   advertisedBaseUrl: string;
   advertisedHost: string;
   listenHost: string;
@@ -539,7 +898,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     APPLE_APP_STORE_ISSUER_ID: parsed.APPLE_APP_STORE_ISSUER_ID ?? "",
     APPLE_APP_STORE_KEY_ID: parsed.APPLE_APP_STORE_KEY_ID ?? "",
     APPLE_APP_STORE_PRIVATE_KEY: parsed.APPLE_APP_STORE_PRIVATE_KEY ?? "",
-    APPLE_APP_STORE_PRIVATE_KEY_PATH: parsed.APPLE_APP_STORE_PRIVATE_KEY_PATH ?? "",
+    APPLE_APP_STORE_PRIVATE_KEY_PATH:
+      parsed.APPLE_APP_STORE_PRIVATE_KEY_PATH ?? "",
     APPLE_APP_BUNDLE_ID: parsed.APPLE_APP_BUNDLE_ID ?? "",
     APPLE_APP_ID: parsed.APPLE_APP_ID ?? 0,
     APPLE_SOLO_PRODUCT_ID: parsed.APPLE_SOLO_PRODUCT_ID,
@@ -549,9 +909,11 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     APNS_PRIVATE_KEY_PATH: parsed.APNS_PRIVATE_KEY_PATH ?? "",
     APNS_ENVIRONMENT: parsed.APNS_ENVIRONMENT,
     ANDROID_APP_LINK_PACKAGE_NAME: parsed.ANDROID_APP_LINK_PACKAGE_NAME ?? "",
-    ANDROID_SHA256_CERT_FINGERPRINTS: parsed.ANDROID_SHA256_CERT_FINGERPRINTS ?? "",
+    ANDROID_SHA256_CERT_FINGERPRINTS:
+      parsed.ANDROID_SHA256_CERT_FINGERPRINTS ?? "",
     GOOGLE_PLAY_PACKAGE_NAME: parsed.GOOGLE_PLAY_PACKAGE_NAME ?? "",
-    GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL: parsed.GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL ?? "",
+    GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL:
+      parsed.GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL ?? "",
     GOOGLE_PLAY_PRIVATE_KEY: parsed.GOOGLE_PLAY_PRIVATE_KEY ?? "",
     BLOB_STORAGE_BUCKET: parsed.BLOB_STORAGE_BUCKET ?? "",
     BLOB_STORAGE_REGION: parsed.BLOB_STORAGE_REGION ?? "",
@@ -559,7 +921,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     BLOB_STORAGE_ACCESS_KEY_ID: parsed.BLOB_STORAGE_ACCESS_KEY_ID ?? "",
     BLOB_STORAGE_SECRET_ACCESS_KEY: parsed.BLOB_STORAGE_SECRET_ACCESS_KEY ?? "",
     BLOB_STORAGE_FORCE_PATH_STYLE: parsed.BLOB_STORAGE_FORCE_PATH_STYLE,
-    BLOB_STORAGE_SIGNED_URL_TTL_SECONDS: parsed.BLOB_STORAGE_SIGNED_URL_TTL_SECONDS,
+    BLOB_STORAGE_SIGNED_URL_TTL_SECONDS:
+      parsed.BLOB_STORAGE_SIGNED_URL_TTL_SECONDS,
     BLOB_HMAC_SECRET: parsed.BLOB_HMAC_SECRET ?? "",
     OPENAI_API_KEY: parsed.OPENAI_API_KEY ?? "",
     OPENAI_BASE_URL: parsed.OPENAI_BASE_URL ?? "https://api.openai.com/v1",
@@ -567,14 +930,17 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     OPENAI_TRANSCRIBE_MODEL: parsed.OPENAI_TRANSCRIBE_MODEL,
     OPENAI_TTS_MODEL: parsed.OPENAI_TTS_MODEL,
     ANTHROPIC_API_KEY: parsed.ANTHROPIC_API_KEY ?? "",
-    ANTHROPIC_BASE_URL: parsed.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com/v1",
+    ANTHROPIC_BASE_URL:
+      parsed.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com/v1",
     GROQ_API_KEY: parsed.GROQ_API_KEY ?? "",
     GROQ_BASE_URL: parsed.GROQ_BASE_URL ?? "https://api.groq.com/openai/v1",
+    GROQ_TRANSCRIBE_MODEL: parsed.GROQ_TRANSCRIBE_MODEL,
     GROQ_REASONING_MODEL: parsed.GROQ_REASONING_MODEL,
     GROQ_FAST_MODEL: parsed.GROQ_FAST_MODEL,
     GROQ_FALLBACK_MODEL: parsed.GROQ_FALLBACK_MODEL,
     GROQ_VISION_MODEL: parsed.GROQ_VISION_MODEL,
-    GROQ_VISION_SENSITIVE_DATA_ATTESTED: parsed.GROQ_VISION_SENSITIVE_DATA_ATTESTED,
+    GROQ_VISION_SENSITIVE_DATA_ATTESTED:
+      parsed.GROQ_VISION_SENSITIVE_DATA_ATTESTED,
     GROQ_COMPOUND_ENABLED: parsed.GROQ_COMPOUND_ENABLED,
     GROQ_COMPOUND_RESEARCH_ENABLED: parsed.GROQ_COMPOUND_RESEARCH_ENABLED,
     GROQ_COMPOUND_DEEP_ENABLED: parsed.GROQ_COMPOUND_DEEP_ENABLED,
@@ -585,38 +951,52 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_COMPOUND_EXCLUDE_DOMAINS: parsed.GROQ_COMPOUND_EXCLUDE_DOMAINS,
     GEMINI_API_KEY: parsed.GEMINI_API_KEY ?? "",
     GEMINI_BASE_URL:
-      parsed.GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta/openai",
+      parsed.GEMINI_BASE_URL ??
+      "https://generativelanguage.googleapis.com/v1beta/openai",
     GEMINI_INTERACTIONS_BASE_URL:
-      parsed.GEMINI_INTERACTIONS_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta",
+      parsed.GEMINI_INTERACTIONS_BASE_URL ??
+      "https://generativelanguage.googleapis.com/v1beta",
     GEMINI_TEXT_MODEL: parsed.GEMINI_TEXT_MODEL,
     GEMINI_FAST_MODEL: parsed.GEMINI_FAST_MODEL,
     GEMINI_REASONING_MODEL: parsed.GEMINI_REASONING_MODEL,
     GEMINI_VISION_MODEL: parsed.GEMINI_VISION_MODEL,
-    GEMINI_VISION_SENSITIVE_DATA_ATTESTED: parsed.GEMINI_VISION_SENSITIVE_DATA_ATTESTED,
+    GEMINI_VISION_SENSITIVE_DATA_ATTESTED:
+      parsed.GEMINI_VISION_SENSITIVE_DATA_ATTESTED,
     GEMINI_IMAGE_MODEL: parsed.GEMINI_IMAGE_MODEL,
     GEMINI_IMAGE_PRO_MODEL: parsed.GEMINI_IMAGE_PRO_MODEL,
     GEMINI_IMAGE_SIZE: parsed.GEMINI_IMAGE_SIZE,
     GEMINI_IMAGE_PRO_ENABLED: parsed.GEMINI_IMAGE_PRO_ENABLED,
     GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: parsed.GEMINI_IMAGE_DAILY_GLOBAL_LIMIT,
-    GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT: parsed.GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT,
-    GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT: parsed.GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT,
-    ELYAN_GEMINI_FREE_FEATURES_ENABLED: parsed.ELYAN_GEMINI_FREE_FEATURES_ENABLED,
+    GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT:
+      parsed.GEMINI_IMAGE_PRO_DAILY_GLOBAL_LIMIT,
+    GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT:
+      parsed.GEMINI_IMAGE_4K_DAILY_GLOBAL_LIMIT,
+    ELYAN_GEMINI_FREE_FEATURES_ENABLED:
+      parsed.ELYAN_GEMINI_FREE_FEATURES_ENABLED,
     GEMINI_FREE_ONLY: parsed.GEMINI_FREE_ONLY,
     GEMINI_FREE_DATA_USAGE_ATTESTED: parsed.GEMINI_FREE_DATA_USAGE_ATTESTED,
     GEMINI_FREE_MODEL_ALLOWLIST: parsed.GEMINI_FREE_MODEL_ALLOWLIST,
     GEMINI_FREE_DAILY_REQUEST_LIMIT: parsed.GEMINI_FREE_DAILY_REQUEST_LIMIT,
-    GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT: parsed.GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT,
-    GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT: parsed.GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT,
-    GEMINI_FREE_USER_DAILY_REQUEST_LIMIT: parsed.GEMINI_FREE_USER_DAILY_REQUEST_LIMIT,
-    GEMINI_FREE_UTILITY_SAMPLE_PERCENT: parsed.GEMINI_FREE_UTILITY_SAMPLE_PERCENT,
+    GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT:
+      parsed.GEMINI_FREE_DAILY_INPUT_TOKEN_LIMIT,
+    GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT:
+      parsed.GEMINI_FREE_DAILY_OUTPUT_TOKEN_LIMIT,
+    GEMINI_FREE_USER_DAILY_REQUEST_LIMIT:
+      parsed.GEMINI_FREE_USER_DAILY_REQUEST_LIMIT,
+    GEMINI_FREE_UTILITY_SAMPLE_PERCENT:
+      parsed.GEMINI_FREE_UTILITY_SAMPLE_PERCENT,
     OPENROUTER_API_KEY: parsed.OPENROUTER_API_KEY ?? "",
-    OPENROUTER_BASE_URL: parsed.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
+    OPENROUTER_BASE_URL:
+      parsed.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
     TOKEN_ENCRYPTION_KEY: parsed.TOKEN_ENCRYPTION_KEY ?? "",
-    IYZICO_PUBLIC_BASE_URL: parsed.IYZICO_PUBLIC_BASE_URL ?? parsed.APP_BASE_URL,
+    IYZICO_PUBLIC_BASE_URL:
+      parsed.IYZICO_PUBLIC_BASE_URL ?? parsed.APP_BASE_URL,
     ELYAN_SHARED_BRAIN_PROVIDER: parsed.ELYAN_SHARED_BRAIN_PROVIDER,
     ELYAN_SHARED_BRAIN_BASE_URL: parsed.ELYAN_SHARED_BRAIN_BASE_URL,
-    ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: parsed.ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER,
-    ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: parsed.ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL,
+    ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER:
+      parsed.ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER,
+    ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL:
+      parsed.ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL,
     ELYAN_SHARED_BRAIN_MODEL: parsed.ELYAN_SHARED_BRAIN_MODEL,
     ELYAN_SHARED_BRAIN_FAST_MODEL: parsed.ELYAN_SHARED_BRAIN_FAST_MODEL,
     ELYAN_SHARED_BRAIN_BALANCED_MODEL: parsed.ELYAN_SHARED_BRAIN_BALANCED_MODEL,
@@ -631,7 +1011,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     SEARXNG_BASE_URL: parsed.SEARXNG_BASE_URL,
     JINA_READER_ENABLED: parsed.JINA_READER_ENABLED,
     ELYAN_RAG_SEMANTIC_RERANK_ENABLED: parsed.ELYAN_RAG_SEMANTIC_RERANK_ENABLED,
-    ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED: parsed.ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED,
+    ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED:
+      parsed.ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED,
     ELYAN_RAG_SEMANTIC_RERANK_MODEL: parsed.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
     ELYAN_RAG_SEMANTIC_RERANK_WINDOW: parsed.ELYAN_RAG_SEMANTIC_RERANK_WINDOW,
     ELYAN_TURN_ENVELOPE_ENABLED: parsed.ELYAN_TURN_ENVELOPE_ENABLED,
@@ -640,6 +1021,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_USER_MODEL_V2_ENABLED: parsed.ELYAN_USER_MODEL_V2_ENABLED,
     ELYAN_GOAL_STATE_V2_ENABLED: parsed.ELYAN_GOAL_STATE_V2_ENABLED,
     ELYAN_AGENT_LOOP_ENABLED: parsed.ELYAN_AGENT_LOOP_ENABLED,
+    ELYAN_CORE_TOOLS_ENABLED: parsed.ELYAN_CORE_TOOLS_ENABLED,
+    ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED:
+      parsed.ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED,
     ELYAN_CONNECTOR_TOOLS_ENABLED: parsed.ELYAN_CONNECTOR_TOOLS_ENABLED,
     ELYAN_MCP_SDK_ENABLED: parsed.ELYAN_MCP_SDK_ENABLED,
     ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED:
@@ -648,6 +1032,17 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED:
       parsed.ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED,
     ELYAN_PROACTIVE_ENGINE_ENABLED: parsed.ELYAN_PROACTIVE_ENGINE_ENABLED,
+    ELYAN_PUSH_ENABLED: parsed.ELYAN_PUSH_ENABLED,
+    FCM_PROJECT_ID: parsed.FCM_PROJECT_ID,
+    FCM_CLIENT_EMAIL: parsed.FCM_CLIENT_EMAIL,
+    FCM_PRIVATE_KEY: parsed.FCM_PRIVATE_KEY,
+    ELYAN_NIGHT_WATCH_ENABLED: parsed.ELYAN_NIGHT_WATCH_ENABLED,
+    ELYAN_NIGHT_WATCH_MAX_JOBS_PER_NIGHT:
+      parsed.ELYAN_NIGHT_WATCH_MAX_JOBS_PER_NIGHT,
+    ELYAN_MORNING_DIGEST_HOUR: parsed.ELYAN_MORNING_DIGEST_HOUR,
+    ELYAN_PROACTIVE_OBSERVER_ENABLED: parsed.ELYAN_PROACTIVE_OBSERVER_ENABLED,
+    ELYAN_PROACTIVE_OBSERVER_INTERVAL_MS:
+      parsed.ELYAN_PROACTIVE_OBSERVER_INTERVAL_MS,
     ELYAN_CLOUD_VISION_ENABLED: parsed.ELYAN_CLOUD_VISION_ENABLED,
     ELYAN_COST_GUARD_ENABLED: parsed.ELYAN_COST_GUARD_ENABLED,
     ELYAN_MODEL_CANARY_ENABLED: parsed.ELYAN_MODEL_CANARY_ENABLED,
@@ -655,22 +1050,30 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_WEIGHT_TRAINING_ENABLED: parsed.ELYAN_WEIGHT_TRAINING_ENABLED,
     ELYAN_BEHAVIOR_LEARNING_ENABLED: parsed.ELYAN_BEHAVIOR_LEARNING_ENABLED,
     ELYAN_BLOCKS_V11_ENABLED: parsed.ELYAN_BLOCKS_V11_ENABLED,
-    ELYAN_SCALABLE_STATE_READS_ENABLED: parsed.ELYAN_SCALABLE_STATE_READS_ENABLED,
-    ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED: parsed.ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED,
-    ELYAN_COGNITIVE_SHADOW_READ_ENABLED: parsed.ELYAN_COGNITIVE_SHADOW_READ_ENABLED,
-    ELYAN_TENANT_RLS_ENFORCEMENT_ENABLED: parsed.ELYAN_TENANT_RLS_ENFORCEMENT_ENABLED,
+    ELYAN_SCALABLE_STATE_READS_ENABLED:
+      parsed.ELYAN_SCALABLE_STATE_READS_ENABLED,
+    ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED:
+      parsed.ELYAN_COGNITIVE_FOUNDATION_V2_ENABLED,
+    ELYAN_COGNITIVE_SHADOW_READ_ENABLED:
+      parsed.ELYAN_COGNITIVE_SHADOW_READ_ENABLED,
+    ELYAN_TENANT_RLS_ENFORCEMENT_ENABLED:
+      parsed.ELYAN_TENANT_RLS_ENFORCEMENT_ENABLED,
     ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT:
       parsed.ELYAN_COGNITIVE_FOUNDATION_ROLLOUT_PERCENT,
     ELYAN_AGENT_ENGINE_V2_ENABLED: parsed.ELYAN_AGENT_ENGINE_V2_ENABLED,
     ELYAN_AGENT_ENGINE_SHADOW_ENABLED: parsed.ELYAN_AGENT_ENGINE_SHADOW_ENABLED,
-    ELYAN_AGENT_ENGINE_ROLLOUT_PERCENT: parsed.ELYAN_AGENT_ENGINE_ROLLOUT_PERCENT,
-    ELYAN_CONTINUOUS_LEARNING_V2_ENABLED: parsed.ELYAN_CONTINUOUS_LEARNING_V2_ENABLED,
-    ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED: parsed.ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED,
+    ELYAN_AGENT_ENGINE_ROLLOUT_PERCENT:
+      parsed.ELYAN_AGENT_ENGINE_ROLLOUT_PERCENT,
+    ELYAN_CONTINUOUS_LEARNING_V2_ENABLED:
+      parsed.ELYAN_CONTINUOUS_LEARNING_V2_ENABLED,
+    ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED:
+      parsed.ELYAN_CONTINUOUS_LEARNING_SHADOW_ENABLED,
     ELYAN_CONTINUOUS_LEARNING_DAILY_BATCH_LIMIT:
       parsed.ELYAN_CONTINUOUS_LEARNING_DAILY_BATCH_LIMIT,
     ELYAN_CONTINUOUS_LEARNING_REPLAY_RATIO:
       parsed.ELYAN_CONTINUOUS_LEARNING_REPLAY_RATIO,
-    ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: parsed.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED,
+    ELYAN_WORLD_CONTEXT_PACKETS_ENABLED:
+      parsed.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED,
     ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: parsed.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
   };
 }
