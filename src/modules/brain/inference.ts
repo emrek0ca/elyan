@@ -154,6 +154,8 @@ import {
   type TurnEnvelope,
 } from "./turn-envelope.js";
 import { createTurnEnvelopeReplyTextStreamParser } from "./turn-envelope-stream.js";
+import { summarizeContextBudget } from "./context-budget.js";
+import { gateOptionalContext } from "./context-relevance.js";
 import { searchKnowledge } from "./retrieval-orchestrator.js";
 import {
   buildBrainCorpusGuidanceBlock,
@@ -6177,6 +6179,37 @@ export async function generateSharedBrainReply(
             }).catch(() => null)
           : Promise.resolve(null),
       ]);
+    // ALAKA KAPISI — hatırlatmayı itmek yerine çekmek.
+    //
+    // Bu dört blok "elde var, o hâlde koyalım" mantığıyla her turda prompt'a
+    // giriyordu. Alakasız hatırlatma hem token (gecikme) hem dikkat dağınıklığı
+    // maliyeti üretir: "bana bir şarkı öner" turunda geçen haftaki fatura
+    // görevini hatırlatmak, hiç hatırlamamaktan kötüdür.
+    //
+    // Kapı YALNIZ isteğe bağlı hatırlatmalara uygulanır. Güvenlik direktifleri,
+    // araç protokolü, kullanıcının bu turda eklediği belge ve bu turda yapılan
+    // arama sonuçları kapıya hiç uğramaz — onlar bağlam değil, turun kendisi.
+    const contextGate = gateOptionalContext({
+      prompt: knowledgeQuery,
+      candidates: {
+        // Kaldığımız yer: yeni oturumun ilk turunda değerli, sonra hızla söner.
+        continuity: {
+          text: continuityBlock,
+          affinity: boundedConversation.length <= 2 ? 1 : 0.4,
+        },
+        // Davranış kalıpları genel eğilimdir; sorunun kelimeleriyle nadiren
+        // örtüşür, o yüzden tabanı korunur ama uzun turlarda değeri düşer.
+        behaviorLearning: { text: behaviorLearningBlock, affinity: 0.7 },
+        // Bilgi tabanı rehberi ve hafıza: alakayı doğrudan metin örtüşmesi
+        // belirler — konuyla ilgisi yoksa taşınmasının bir gerekçesi yok.
+        corpusGuidance: { text: corpusGuidanceBlock },
+        memory: { text: memoryBlock },
+      },
+    });
+    const gatedContinuityBlock = contextGate.blocks.continuity;
+    const gatedBehaviorLearningBlock = contextGate.blocks.behaviorLearning;
+    const gatedCorpusGuidanceBlock = contextGate.blocks.corpusGuidance;
+    const gatedMemoryBlock = contextGate.blocks.memory;
     // Ekosistem farkındalığı: model Elyan'ın mobil+sunucu+masaüstü TEK
     // sistem olduğunu ve elindeki yetenekleri BİLSİN. Liste manifest'ten
     // türetilir; elle tutulsa yeni yetenek eklenince prompt yalan söylerdi.
@@ -6185,7 +6218,7 @@ export async function generateSharedBrainReply(
     });
     const systemPrompt = buildStructuredSystemPrompt(
       retrievalBlock == null &&
-        memoryBlock == null &&
+        gatedMemoryBlock == null &&
         webGroundingBlock == null &&
         urlContextBlock == null &&
         clientDocBlock == null &&
@@ -6194,19 +6227,19 @@ export async function generateSharedBrainReply(
         visualContentSafetyPromptBlock == null &&
         visionEvidenceFusionPromptBlock == null &&
         visionResponseContractPromptBlock == null &&
-        corpusGuidanceBlock == null &&
-        continuityBlock == null &&
-        behaviorLearningBlock == null &&
+        gatedCorpusGuidanceBlock == null &&
+        gatedContinuityBlock == null &&
+        gatedBehaviorLearningBlock == null &&
         claimConfidencePromptDirective == null
         ? app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT
         : [
             app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
             ecosystemContextBlock,
-            continuityBlock,
-            behaviorLearningBlock,
-            corpusGuidanceBlock,
+            gatedContinuityBlock,
+            gatedBehaviorLearningBlock,
+            gatedCorpusGuidanceBlock,
             retrievalBlock,
-            memoryBlock,
+            gatedMemoryBlock,
             webGroundingBlock,
             urlContextBlock,
             clientDocBlock,
@@ -6265,6 +6298,35 @@ export async function generateSharedBrainReply(
       messages.map((message) => message.content).join("\n\n"),
     );
     const userInputTokens = estimateTokens(input.prompt);
+    // BAĞLAM BÜTÇESİ — hangi bilginin kaç token'a mal olduğu.
+    //
+    // Bu kırılım olmadan "prompt şişti" demek bir tahmindir: hangi bloğun
+    // büyüdüğünü, hangisinin işe yaradığını göremezsin. Aynı körlük bugün
+    // sağlayıcı hatalarında yaşandı — telemetri eklenene kadar bütün 4xx'ler
+    // tek tip görünüyordu, eklenince kök neden ilk turda çıktı.
+    //
+    // Ölçüm ucuzdur (yalnız uzunluk), kararları ise pahalı hatalardan kurtarır.
+    const contextBudget = summarizeContextBudget({
+      ecosystem: ecosystemContextBlock,
+      continuity: gatedContinuityBlock,
+      behaviorLearning: gatedBehaviorLearningBlock,
+      corpusGuidance: gatedCorpusGuidanceBlock,
+      retrieval: retrievalBlock,
+      memory: gatedMemoryBlock,
+      webGrounding: webGroundingBlock,
+      urlContext: urlContextBlock,
+      clientDoc: clientDocBlock,
+      vision: [
+        ephemeralVisionPromptBlock,
+        visionPreprocessingPromptBlock,
+        visualContentSafetyPromptBlock,
+        visionEvidenceFusionPromptBlock,
+        visionResponseContractPromptBlock,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      claimConfidence: claimConfidencePromptDirective,
+    });
     const meteringSurface =
       input.meteringSurface ??
       (input.routeDecision && input.routeDecision.mode !== "chat"
@@ -7475,6 +7537,14 @@ export async function generateSharedBrainReply(
             ...buildWebGroundingMetadata(webGrounding),
             constitutionVersion: ELYAN_CONSTITUTION_VERSION,
             promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
+            // Bağlamın kaynak bazında maliyeti (bkz. context-budget.ts) ve
+            // alaka kapısının kararları: neyin neden alındığı/düşürüldüğü.
+            contextBudget,
+            contextGate: {
+              decisions: contextGate.decisions,
+              admittedTokens: contextGate.admittedTokens,
+              droppedTokens: contextGate.droppedTokens,
+            },
             routeDecision: input.routeDecision ?? null,
             skillExecution: input.skillExecutionMetadata ?? null,
             answerSource: "model",
@@ -7830,6 +7900,12 @@ export async function generateSharedBrainReply(
               ...buildWebGroundingMetadata(webGrounding),
               constitutionVersion: ELYAN_CONSTITUTION_VERSION,
               promptProfileVersion: ELYAN_PROMPT_PROFILE_VERSION,
+              contextBudget,
+              contextGate: {
+                decisions: contextGate.decisions,
+                admittedTokens: contextGate.admittedTokens,
+                droppedTokens: contextGate.droppedTokens,
+              },
               routeDecision: input.routeDecision ?? null,
               skillExecution: input.skillExecutionMetadata ?? null,
               answerSource: "model",
