@@ -33,7 +33,7 @@ customtkinter==6.0.0
 qrcode==8.2
 # 1.92.0+ sdist-only → Windows'ta Rust ister. Wheel'i olan en son sürüm budur.
 litellm==1.91.4
-langgraph==1.2.9
+langgraph==1.2.10
 google-genai==2.14.0
 mcp==1.28.1
 openpyxl==3.1.5
