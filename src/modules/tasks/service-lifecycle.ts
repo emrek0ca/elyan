@@ -15,7 +15,19 @@ export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: st
 }
 
 export const TASK_DISPATCH_LEASE_MS = 45_000;
-export const TASK_APPROVAL_TTL_MS = 10 * 60_000;
+/**
+ * Onay bekleyen bir görevin yaşam süresi.
+ *
+ * 10 dakikaydı; 2 dakikaya indirildi. Gerekçe: onay bir SORUDUR ve sorunun
+ * bağlamı hızla bayatlar — kullanıcı "şu klasörü sil" dedikten iki dakika
+ * sonra artık başka bir işin içindedir, gelen onay kutusu ise hangi isteğe
+ * ait olduğu unutulmuş bir kalıntıdır. Süresi dolan görev `approval_expired`
+ * ile kapanır; kullanıcı isterse isteği tekrarlar, bu ucuzdur.
+ *
+ * Bunu uygulayan süpürücü `lease-sweeper.ts` içindedir ve 30 saniyede bir
+ * koşar: pratikte bir onay en geç ~2,5 dakikada kapanır.
+ */
+export const TASK_APPROVAL_TTL_MS = 2 * 60_000;
 export const MAX_ACTIVE_USER_APPROVALS = 8;
 export const MAX_TASK_DISPATCH_ATTEMPTS = 5;
 

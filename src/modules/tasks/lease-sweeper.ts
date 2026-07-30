@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { runtimeConnections, tasks } from "../../db/schema.js";
 import { RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { reconcileStaleRuntimeTasks } from "./service.js";
+import { TASK_APPROVAL_TTL_MS } from "./service-lifecycle.js";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 const STALE_RUNTIME_TASK_AFTER_MS = 120_000;
@@ -18,6 +19,7 @@ const activeSweeps = new WeakMap<FastifyInstance, LeaseSweeperState>();
 async function collectStaleRuntimeTaskScopes(app: FastifyInstance, now: Date) {
   const cutoff = new Date(now.getTime() - STALE_RUNTIME_TASK_AFTER_MS);
   const runtimeCutoff = new Date(now.getTime() - RUNTIME_CONNECTION_STALE_AFTER_MS);
+  const approvalCutoff = new Date(now.getTime() - TASK_APPROVAL_TTL_MS);
   return app.db
     .select({
       userId: tasks.userId,
@@ -45,6 +47,22 @@ async function collectStaleRuntimeTaskScopes(app: FastifyInstance, now: Date) {
               eq(runtimeConnections.status, "offline"),
               lt(runtimeConnections.lastHeartbeatAt, runtimeCutoff),
             ),
+          ),
+          // ONAY BEKLEYEN GÖREVLER DE SÜPÜRÜLÜR.
+          //
+          // Bu dal eksikti: `reconcileStaleRuntimeTasks` süresi dolmuş onayı
+          // `approval_expired` ile kapatmayı zaten biliyordu, ama süpürücü
+          // `waiting_approval` görevlerini hiç TOPLAMIYORDU. Uzlaştırma yalnız
+          // kullanıcı başka bir istek attığında tetiklendiği için, onaya
+          // dokunulmayan bir görev sonsuza kadar asılı kalıyordu — mobilde
+          // "sıkışmış onay" olarak görünen şey buydu.
+          //
+          // Cihaz bağlantısı şart değil: onay kullanıcıyı bekler, masaüstünü
+          // değil. Bağlantı koşulu buraya konursa çevrimiçi bir masaüstünde
+          // bekleyen onay yine hiç süpürülmez.
+          and(
+            eq(tasks.status, "waiting_approval"),
+            lt(tasks.updatedAt, approvalCutoff),
           ),
         ),
       ),

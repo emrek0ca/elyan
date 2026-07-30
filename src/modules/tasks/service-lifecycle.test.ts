@@ -248,7 +248,7 @@ test("normalizeTaskApprovalRequest creates a single expiring full-access surface
   assert.equal(normalized.revision, 1);
   assert.equal(normalized.permissionSurface, "full_computer_access");
   assert.equal(normalized.surface, "full_computer_access");
-  assert.equal(normalized.expiresAt, "2030-01-01T00:10:00.000Z");
+  assert.equal(normalized.expiresAt, "2030-01-01T00:02:00.000Z");
   assert.equal(isApprovalRequestExpired(normalized, now), false);
   assert.equal(isApprovalRequestExpired(normalized, new Date("2030-01-01T00:10:00.001Z")), true);
 });
@@ -288,7 +288,7 @@ test("buildTaskApprovalResumeUpdate keeps approved tasks waiting for runtime res
     source: "desktop_runtime",
     approvalKey: "task:1",
     revision: 1,
-    expiresAt: "2030-01-01T00:10:00.000Z",
+    expiresAt: "2030-01-01T00:02:00.000Z",
     surface: "full_computer_access",
     permissionSurface: "full_computer_access",
     permissionSummary: "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak.",
