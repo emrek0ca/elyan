@@ -18,16 +18,30 @@ export const TASK_DISPATCH_LEASE_MS = 45_000;
 /**
  * Onay bekleyen bir görevin yaşam süresi.
  *
- * 10 dakikaydı; 2 dakikaya indirildi. Gerekçe: onay bir SORUDUR ve sorunun
+ * 10 dakikaydı; 1 dakikaya indirildi. Gerekçe: onay bir SORUDUR ve sorunun
  * bağlamı hızla bayatlar — kullanıcı "şu klasörü sil" dedikten iki dakika
  * sonra artık başka bir işin içindedir, gelen onay kutusu ise hangi isteğe
  * ait olduğu unutulmuş bir kalıntıdır. Süresi dolan görev `approval_expired`
  * ile kapanır; kullanıcı isterse isteği tekrarlar, bu ucuzdur.
  *
  * Bunu uygulayan süpürücü `lease-sweeper.ts` içindedir ve 30 saniyede bir
- * koşar: pratikte bir onay en geç ~2,5 dakikada kapanır.
+ * koşar: pratikte bir onay en geç ~1,5 dakikada kapanır.
  */
-export const TASK_APPROVAL_TTL_MS = 2 * 60_000;
+export const TASK_APPROVAL_TTL_MS = 60_000;
+
+/**
+ * Masaüstüne hiç teslim edilemeden kuyrukta bekleyen görevin yaşam süresi.
+ *
+ * Canlı bulgu (2026-07-30): kuyrukta 13 görev asılıydı, en eskisi ÜÇ HAFTA
+ * öncesinden ("Safari aç"). Süpürücü `queued` durumunu hiç taramıyordu, bu
+ * yüzden masaüstü o an kapalıysa görev sonsuza kadar kalıyordu. İki zararı
+ * vardı: görev listesini kirletiyordu ve masaüstü sonunda bağlandığında
+ * haftalar öncesinden bir komutun çalışma ihtimali doğuyordu.
+ *
+ * 10 dakika: masaüstünün kısa bir kopması görevi öldürmez, ama kuyruk da
+ * arşive dönüşmez.
+ */
+export const TASK_QUEUE_TTL_MS = 10 * 60_000;
 export const MAX_ACTIVE_USER_APPROVALS = 8;
 export const MAX_TASK_DISPATCH_ATTEMPTS = 5;
 

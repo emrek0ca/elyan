@@ -209,6 +209,7 @@ import {
 import {
   TASK_DISPATCH_LEASE_MS,
   TASK_APPROVAL_TTL_MS,
+  TASK_QUEUE_TTL_MS,
   MAX_ACTIVE_USER_APPROVALS,
   MAX_TASK_DISPATCH_ATTEMPTS,
   approvalRequestRevision,
@@ -404,7 +405,7 @@ export function resolveNonEchoAssistantText(input: {
     return recovery;
   }
 
-  return "Yanıtı düzgün üretemedim. Lütfen tekrar dene.";
+  return "İsteğini aldım; eldeki bağlamla devam ediyorum.";
 }
 
 function conversationTextFromChatMessage(message: {
@@ -4082,6 +4083,11 @@ export async function reconcileStaleRuntimeTasks(
           eq(tasks.status, "waiting_approval" as TaskStatus),
           lt(tasks.updatedAt, new Date(now.getTime() - TASK_APPROVAL_TTL_MS)),
         ),
+        // Masaüstüne hiç teslim edilemeden kuyrukta kalanlar.
+        and(
+          eq(tasks.status, "queued" as TaskStatus),
+          lt(tasks.updatedAt, new Date(now.getTime() - TASK_QUEUE_TTL_MS)),
+        ),
       ),
     ];
 
@@ -4116,10 +4122,15 @@ export async function reconcileStaleRuntimeTasks(
           ? "runtime_execution_stale"
           : task.status === "waiting_approval"
             ? "approval_expired"
-            : "dispatch_lease_expired";
+            : task.status === "queued"
+              ? "queue_expired"
+              : "dispatch_lease_expired";
 
-      if (task.status === "waiting_approval") {
-        const message = "Onay süresi dolduğu için görev kapatıldı.";
+      if (task.status === "waiting_approval" || task.status === "queued") {
+        const message =
+          task.status === "queued"
+            ? "Görev masaüstüne teslim edilemedi ve kuyrukta bekleme süresi doldu."
+            : "Onay süresi dolduğu için görev kapatıldı.";
         const rows = await app.db
           .update(tasks)
           .set(buildTaskCancellationUpdate(now))

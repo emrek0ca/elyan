@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { runtimeConnections, tasks } from "../../db/schema.js";
 import { RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { reconcileStaleRuntimeTasks } from "./service.js";
-import { TASK_APPROVAL_TTL_MS } from "./service-lifecycle.js";
+import { TASK_APPROVAL_TTL_MS, TASK_QUEUE_TTL_MS } from "./service-lifecycle.js";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 const STALE_RUNTIME_TASK_AFTER_MS = 120_000;
@@ -20,6 +20,7 @@ async function collectStaleRuntimeTaskScopes(app: FastifyInstance, now: Date) {
   const cutoff = new Date(now.getTime() - STALE_RUNTIME_TASK_AFTER_MS);
   const runtimeCutoff = new Date(now.getTime() - RUNTIME_CONNECTION_STALE_AFTER_MS);
   const approvalCutoff = new Date(now.getTime() - TASK_APPROVAL_TTL_MS);
+  const queueCutoff = new Date(now.getTime() - TASK_QUEUE_TTL_MS);
   return app.db
     .select({
       userId: tasks.userId,
@@ -64,6 +65,8 @@ async function collectStaleRuntimeTaskScopes(app: FastifyInstance, now: Date) {
             eq(tasks.status, "waiting_approval"),
             lt(tasks.updatedAt, approvalCutoff),
           ),
+          // Teslim edilemeden kuyrukta kalan görevler (bkz. TASK_QUEUE_TTL_MS).
+          and(eq(tasks.status, "queued"), lt(tasks.updatedAt, queueCutoff)),
         ),
       ),
     )
