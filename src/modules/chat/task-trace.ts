@@ -989,7 +989,14 @@ export function buildTaskTraceBlock(input: {
           : verify.completed || traceStatus === "completed"
             ? "completed"
             : traceStatus === "failed"
-              ? "failed"
+              ? // ARIZA ADIMI TEKTİR. Eskiden görev başarısız olduğunda bu
+                // adım da körlemesine "failed" işaretleniyordu; mobil ilk
+                // failed adımı gösterdiği için, arıza gerçekte `response`
+                // adımında olsa bile ekranda hep "Kontrol adımında durdu"
+                // yazıyordu — kullanıcıyı yanlış katmana bakmaya yönlendiren
+                // bir yalan. Gerçek arıza adımını `resolveFailureStep` seçer;
+                // ondan önceki adımlar atlanmıştır, sonrakiler hiç başlamadı.
+                "skipped"
               : (traceStatus === "running" ||
                   traceStatus === "waiting_approval") &&
                 desktopDeliveryReady
@@ -1018,7 +1025,9 @@ export function buildTaskTraceBlock(input: {
             : responseHasVisibleText
               ? "running"
               : traceStatus === "failed"
-                ? "failed"
+                ? // Tek arıza adımı kuralı (bkz. verify): arıza başka bir
+                  // adımdaysa yanıt adımı hiç başlamamıştır.
+                  "skipped"
                 : "pending",
       detail:
         failureStep === "response"

@@ -127,6 +127,7 @@ export function shapeTaskFeedItem(
   const quantum = extractTaskQuantumSnapshot(task);
   const presentation = extractTaskPresentation(task.payload);
   const routeDecision = extractTaskRouteDecision(task.payload);
+  const desktopHandoff = extractTaskDesktopHandoff(task.payload);
   const planningEvidence = extractTaskPlanningEvidence(task.payload);
   const supersedesTaskId = extractTaskSupersedesTaskId(task.payload);
   const operator = extractTaskOperatorSummary(task.result);
@@ -166,6 +167,7 @@ export function shapeTaskFeedItem(
     deliveryState: deriveTaskDeliveryState(task),
     selectedDesktopOnline: options?.selectedDesktopOnline ?? null,
     routeDecision,
+    ...(desktopHandoff ? { desktopHandoff } : {}),
     ...(planningEvidence ? { planningEvidence } : {}),
     ...(brain ? { brain } : {}),
     ...(operator ? { operator } : {}),
@@ -180,6 +182,54 @@ export function shapeTaskFeedItem(
     canceledAt: task.canceledAt ?? null,
     updatedAt: task.updatedAt,
   };
+}
+
+function extractTaskDesktopHandoff(payloadValue: unknown) {
+  const payload = readRecord(payloadValue);
+  const workOrder = readRecord(payload?.desktopWorkOrder);
+  if (!workOrder) {
+    return null;
+  }
+
+  const schema = readString(workOrder, "schema");
+  if (schema !== "elyan.desktop_work_order.v1") {
+    return null;
+  }
+
+  const semanticGoal = readRecord(workOrder.semanticGoal);
+  const planPreview = readRecord(workOrder.planPreview);
+  const planPreparation = readRecord(planPreview?.planPreparation);
+  const executionPlan = readRecord(workOrder.executionPlan);
+  const verificationPlan = readRecord(workOrder.verificationPlan);
+  const expectedOutput = readRecord(workOrder.expectedOutput);
+  const liveNarrationPlan = readRecord(planPreview?.liveNarrationPlan);
+  const rawSteps = Array.isArray(planPreview?.steps)
+    ? planPreview.steps.slice(0, 16)
+    : [];
+
+  const stepCapabilities = rawSteps
+    .map((step) => readString(readRecord(step), "capability"))
+    .filter((capability): capability is string => Boolean(capability));
+
+  return sanitizePublicInferenceValue({
+    schema,
+    contract: readString(semanticGoal, "contract"),
+    workType: readString(workOrder, "workType"),
+    privacyClass: readString(workOrder, "privacyClass"),
+    executionMode: readString(executionPlan, "mode"),
+    status: readString(planPreparation, "status") ?? "pending",
+    planSource: readString(planPreview, "planSource"),
+    requiresApproval: readBoolean(workOrder, "requiresApproval"),
+    requiresArtifact: readBoolean(expectedOutput, "requiresArtifact"),
+    verificationRequiresEvidence: readBoolean(
+      verificationPlan,
+      "requireEvidence",
+    ),
+    requiredCapabilities: readStringList(workOrder, "requiredCapabilities"),
+    stepCapabilities,
+    narrationMode: readString(liveNarrationPlan, "mode"),
+    narrationUpdatePolicy: readString(liveNarrationPlan, "updatePolicy"),
+  });
 }
 
 const PUBLIC_CAPABILITY_BY_NAME = new Map(
@@ -1169,6 +1219,22 @@ const CONTINUITY_CHAT_WORKLOADS = new Set([
   "fast_route",
   "mobile_chat_balanced",
   "mobile_chat_fast",
+  // CANLI ARIZA (2026-07-30): "Nazım Hikmet kimdir? 250 kelimelik belge
+  // gövdesi yaz" isteği `document_generate` yüküyle geldi, sağlayıcı zinciri
+  // tükendi ve bu küme onu tanımadığı için kullanıcı ham yedek sentinel
+  // metnini gördü. Düz metin üretimi de sohbet kadar kamusaldır.
+  "document_generate",
+]);
+
+/**
+ * Süreklilik cevabı üretilebilecek niyetler. Hepsi ÜRETİM niyetidir: yan
+ * etkisi, özel verisi ve araç bağımlılığı yoktur — aşağıdaki kapılar bunu
+ * ayrıca doğrular. Araç/onay/özel veri gerektiren her şey fail-closed kalır.
+ */
+const CONTINUITY_CHAT_INTENTS = new Set([
+  "normal_chat",
+  "writing",
+  "research",
 ]);
 
 /**
@@ -1202,7 +1268,7 @@ export function resolveSafeChatContinuityReply(input: {
     input.mode !== "chat" ||
     input.privacyClass !== "public_text" ||
     input.requiresApproval === true ||
-    input.intent !== "normal_chat" ||
+    !CONTINUITY_CHAT_INTENTS.has(String(input.intent ?? "")) ||
     input.requiredRuntime !== "server" ||
     input.shouldAskClarification !== false ||
     input.failClosedReason != null ||
@@ -1289,9 +1355,10 @@ export function resolveSafeChatContinuityReply(input: {
 
   const prompt = input.prompt.replace(/\s+/g, " ").trim();
   if (!prompt) return null;
-  if (/(?<!\p{L})(teorem|theorem)\p{L}*(?!\p{L})/iu.test(prompt)) {
-    return "Pisagor teoremi: Bir dik üçgende dik kenarların kareleri toplamı hipotenüsün karesine eşittir. Formülü: a^2 + b^2 = c^2.";
-  }
+  // NOT: Burada "teorem" geçen her prompta Pisagor teoremini döndüren sabit bir
+  // dal vardı. Bayes, Fermat, Gödel — hepsine aynı yanlış cevap gidiyordu.
+  // Süreklilik katmanı bir BİLGİ kaynağı değildir; bilmediğini uydurmak yerine
+  // dürüstçe "bu tur tamamlanamadı" demelidir.
   const asksQuestion =
     /[?？]\s*$/u.test(prompt) ||
     /^(?:kim|ne|neden|niçin|nicin|nasıl|nasil|nerede|nereye|hangi|kaç|kac|what|why|how|where|which|who)\b/iu.test(

@@ -168,6 +168,64 @@ export function parseTurnEnvelopeText(text: string): TurnEnvelopeParseResult {
   }
 }
 
+/**
+ * Parse edilemeyen ama zarfa benzeyen çıktıdan yalnız `reply.text` alanını
+ * kurtarır.
+ *
+ * CANLI ARIZA (2026-07-30): "Nazım Hikmet kimdir? 250 kelimelik belge gövdesi
+ * yaz" isteğinde iki model de zarf JSON'unu üretmeye çalışıp uzun düzyazıda
+ * bozdu. `looksLikeTurnEnvelopeJson` doğru şekilde "bu ham JSON kullanıcıya
+ * gitmesin" dedi, ama içindeki GERÇEK cevap da onunla birlikte çöpe gitti;
+ * altı deneme tükendi ve kullanıcı yedek sentinel metnini gördü.
+ *
+ * Metin zaten yazılmış — sadece yanlış kapta. Kap kırıksa içindekini kurtar.
+ *
+ * GÜVENLİK SINIRI: `tool_requests` taşıyan bozuk zarfta kurtarma YAPILMAZ.
+ * Orada model bir araç planı kurmuştu; planı yürütemeden nesir kısmını teslim
+ * etmek kullanıcıya yarım iş vermek olur — yapılandırılmış retry devam etsin.
+ */
+export function salvageTurnEnvelopeReplyText(text: string): string | null {
+  const trimmed = stripCodeFence(text);
+  if (!trimmed.startsWith("{") || !/"reply"\s*:/.test(trimmed)) {
+    return null;
+  }
+  if (/"tool_requests"\s*:\s*\[\s*\{/.test(trimmed)) {
+    return null;
+  }
+  // `"text"` değerini JSON kaçışlarına saygı duyarak tara: kaçırılmış tırnak
+  // (\") dizeyi bitirmez. Regex ile yapılamaz — kaçış sayımı gerekir.
+  const anchor = /"reply"\s*:\s*\{/.exec(trimmed);
+  if (!anchor) return null;
+  const textKey = /"text"\s*:\s*"/g;
+  textKey.lastIndex = anchor.index + anchor[0].length;
+  const start = textKey.exec(trimmed);
+  if (!start) return null;
+  let index = textKey.lastIndex;
+  let raw = "";
+  while (index < trimmed.length) {
+    const char = trimmed[index];
+    if (char === "\\") {
+      raw += trimmed.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === '"') break;
+    raw += char;
+    index += 1;
+  }
+  // Kesik çıktıda kapanış tırnağı hiç gelmemiş olabilir; o hâlde elimizdeki
+  // kısmi metin yine de gerçek cevaptır.
+  let decoded: string;
+  try {
+    decoded = JSON.parse(`"${raw.replace(/\\?$/, "")}"`) as string;
+  } catch {
+    return null;
+  }
+  const normalized = decoded.trim();
+  // Çok kısa parçalar cevap değil, zarf iskeletidir ("", "…", "Hazırlanıyor").
+  return normalized.length >= 40 ? normalized : null;
+}
+
 export function looksLikeTurnEnvelopeJson(text: string): boolean {
   const trimmed = text.trim();
   return (

@@ -150,6 +150,7 @@ import {
   looksLikeTurnEnvelopeJson,
   parseTurnEnvelope,
   parseTurnEnvelopeText,
+  salvageTurnEnvelopeReplyText,
   type TurnEnvelope,
 } from "./turn-envelope.js";
 import { createTurnEnvelopeReplyTextStreamParser } from "./turn-envelope-stream.js";
@@ -309,6 +310,7 @@ import {
 } from "./provider-http.js";
 import {
   buildProviderAttemptFailure,
+  describeProviderErrorPayload,
   providerHttpStatusClass,
   providerRetryDelayMs,
   readProviderRetryAfterMs,
@@ -6723,6 +6725,20 @@ export async function generateSharedBrainReply(
                     status: streamResponse.status,
                     provider: candidate.provider,
                     path: attempt.path,
+                    // Gövde zaten okundu; nedeni telemetriye taşı (non-stream
+                    // yolunun aynısı) — yoksa 4xx'ler tek tip görünüyor.
+                    reason: describeProviderErrorPayload(
+                      (() => {
+                        try {
+                          return streamErrorBody
+                            ? JSON.parse(streamErrorBody)
+                            : null;
+                        } catch {
+                          return null;
+                        }
+                      })(),
+                      streamErrorBody,
+                    ),
                     retryAfterMs: readProviderRetryAfterMs(
                       streamResponse.headers,
                     ),
@@ -6851,8 +6867,17 @@ export async function generateSharedBrainReply(
                     parsedStreamEnvelope?.ok === true
                       ? parsedStreamEnvelope.envelope
                       : null;
+                  // Zarf bozulduysa içindeki gerçek cevabı kurtar (bkz.
+                  // salvageTurnEnvelopeReplyText): kap kırık diye içindekini
+                  // atmak, altı denemeyi tüketip kullanıcıyı yedek metne
+                  // mahkûm eden canlı arızanın ta kendisiydi.
+                  const streamSalvagedReplyText =
+                    attempt.turnEnvelopeMode && !streamEnvelope
+                      ? salvageTurnEnvelopeReplyText(streamedText)
+                      : null;
                   const text = (
                     streamEnvelope?.reply.text ??
+                    streamSalvagedReplyText ??
                     (attempt.turnEnvelopeMode
                       ? (turnEnvelopeStreamParser?.finish().text ??
                         streamedVisibleText)
@@ -6884,12 +6909,21 @@ export async function generateSharedBrainReply(
                     !streamEnvelope &&
                     Boolean(text) &&
                     requiredConnectorReadHint?.enforcement !== "require" &&
-                    !looksLikeTurnEnvelopeJson(text) &&
+                    // Kurtarılmış metin zaten zarfın İÇİNDEN çıktı; ham JSON
+                    // değil, cevabın kendisidir.
+                    (streamSalvagedReplyText != null ||
+                      !looksLikeTurnEnvelopeJson(text)) &&
                     !looksLikeConnectorReadClaim(text) &&
                     !looksLikeConnectorToolPlanText(text);
                   const missingRequiredEnvelope =
                     attempt.turnEnvelopeMode &&
                     structuredToolProtocolRequired &&
+                    // Zarf ısrarı YALNIZ ilk denemede — §4.8'de connector
+                    // zorlaması için verilen kararın aynısı. Aracı/protokolü
+                    // bir kez teşvik etmek doğru; ısrar edip modelin ürettiği
+                    // geçerli cevabı her denemede çöpe atmak, tüm sağlayıcı
+                    // zincirini tüketip kullanıcıyı yedek metne mahkûm ediyor.
+                    retryIndex === 0 &&
                     !streamEnvelope &&
                     !envelopeSalvageAcceptable;
                   const missingRequiredConnectorTool =
@@ -6936,11 +6970,21 @@ export async function generateSharedBrainReply(
                     deltaPublisher.suppressedAsReasoningDump &&
                     !rescuedAnswer &&
                     classifyReasoningDump(visibleForGuard || text).isDump;
+                  // Ham zarf JSON'u kullanıcıya ASLA gitmez — zarf ısrarı
+                  // retryIndex ile gevşetildiği için bu kapı ayrı durmalı.
+                  // Kurtarma başarılıysa `text` zaten nesirdir ve buraya
+                  // düşmez; başarısızsa retry serbest kalır.
+                  const rawEnvelopeJsonLeak =
+                    attempt.turnEnvelopeMode === true &&
+                    !streamEnvelope &&
+                    streamSalvagedReplyText == null &&
+                    looksLikeTurnEnvelopeJson(text);
                   if (
                     !text ||
                     placeholderHallucination ||
                     confirmedDumpNoRescue ||
                     missingRequiredEnvelope ||
+                    rawEnvelopeJsonLeak ||
                     missingRequiredConnectorTool
                   ) {
                     lastError = {
@@ -6953,9 +6997,11 @@ export async function generateSharedBrainReply(
                           ? "reasoning_dump_stream_response"
                           : missingRequiredEnvelope
                             ? "required_turn_envelope_missing"
-                            : missingRequiredConnectorTool
-                              ? "required_connector_tool_missing"
-                              : "empty_stream_response",
+                            : rawEnvelopeJsonLeak
+                              ? "invalid_turn_envelope_response"
+                              : missingRequiredConnectorTool
+                                ? "required_connector_tool_missing"
+                                : "empty_stream_response",
                     };
                     attemptRetryable = true;
                   } else {
@@ -7061,6 +7107,12 @@ export async function generateSharedBrainReply(
                     status: candidateResponse.status,
                     provider: candidate.provider,
                     path: attempt.path,
+                    // Sağlayıcının KENDİ hata kodu/mesajı olmadan 4xx'ler
+                    // telemetride "provider_request_failed" diye tek tip
+                    // görünüyordu — canlıda iki farklı modelde tekrar eden
+                    // bir 400'ün nedeni bu yüzden okunamadı. Sınırlı ve
+                    // sanitize edilmiş biçimde taşı.
+                    reason: describeProviderErrorPayload(payload, rawText),
                     retryAfterMs: readProviderRetryAfterMs(
                       candidateResponse.headers,
                     ),
@@ -7115,7 +7167,16 @@ export async function generateSharedBrainReply(
                     parsedEnvelope?.ok === true
                       ? parsedEnvelope.envelope
                       : null;
-                  const visibleText = (envelope?.reply.text ?? text).trim();
+                  // Bozuk zarftan cevabı kurtar (stream yolunun aynısı).
+                  const salvagedReplyText =
+                    attempt.turnEnvelopeMode && !envelope
+                      ? salvageTurnEnvelopeReplyText(text)
+                      : null;
+                  const visibleText = (
+                    envelope?.reply.text ??
+                    salvagedReplyText ??
+                    text
+                  ).trim();
                   // Retry SADECE boş/placeholder cevaplarda. Reasoning dump
                   // görünse bile modelin ürettiği metni sanitizer + polish
                   // ile teslim etmek stub'a düşürmekten iyidir.
@@ -7128,12 +7189,15 @@ export async function generateSharedBrainReply(
                     !envelope &&
                     Boolean(visibleText) &&
                     requiredConnectorReadHint?.enforcement !== "require" &&
-                    !looksLikeTurnEnvelopeJson(text) &&
+                    (salvagedReplyText != null ||
+                      !looksLikeTurnEnvelopeJson(text)) &&
                     !looksLikeConnectorReadClaim(visibleText) &&
                     !looksLikeConnectorToolPlanText(visibleText);
                   const missingRequiredEnvelope =
                     attempt.turnEnvelopeMode &&
                     structuredToolProtocolRequired &&
+                    // Zarf ısrarı yalnız ilk denemede (bkz. stream yolu).
+                    retryIndex === 0 &&
                     !envelope &&
                     !envelopeSalvageAcceptable;
                   const fabricatedConnectorRead =
@@ -7165,8 +7229,11 @@ export async function generateSharedBrainReply(
                     placeholderHallucination ||
                     missingRequiredEnvelope ||
                     missingRequiredConnectorTool ||
+                    // Ham zarf JSON'u kullanıcıya ASLA gitmez. Kurtarma
+                    // başarılıysa `visibleText` nesirdir ve bu kapı geçilir.
                     (attempt.turnEnvelopeMode &&
                       !envelope &&
+                      salvagedReplyText == null &&
                       looksLikeTurnEnvelopeJson(text))
                   ) {
                     lastError = {
@@ -7230,11 +7297,21 @@ export async function generateSharedBrainReply(
                       turnEnvelopeParseOk: attempt.turnEnvelopeMode
                         ? Boolean(envelope)
                         : null,
-                      ...(envelope ? { response: envelope.reply.text } : {}),
+                      ...(envelope
+                        ? { response: envelope.reply.text }
+                        : salvagedReplyText != null
+                          ? // Kurtarılmış cevap açıkça `response` olarak
+                            // yazılmalı; aksi halde aşağıdaki metin çıkarımı
+                            // ham (bozuk) zarf JSON'una geri düşerdi.
+                            { response: salvagedReplyText }
+                          : {}),
                       provider: candidate.provider,
                       model: attemptedModel,
                       path: attempt.path,
                       streamed: false,
+                      ...(salvagedReplyText != null
+                        ? { turnEnvelopeSalvaged: true }
+                        : {}),
                     };
                     attemptSucceeded = true;
                   }
@@ -7468,6 +7545,17 @@ export async function generateSharedBrainReply(
         ? (payload as Record<string, unknown>)
         : {};
     let text = extractResponseText(successfulProvider, payload);
+    // Zarf kurtarma (non-streaming): sağlayıcı payload'ında `choices` öncelikli
+    // okunur, yani `text` burada bozuk zarf JSON'unun ta kendisi olurdu. Zarf
+    // parse edilemediği için aşağıdaki `turnEnvelope` da null kalır ve ham JSON
+    // kullanıcıya kadar giderdi. Kurtarılmış nesir yetkili metindir.
+    if (
+      payloadRecord.turnEnvelopeSalvaged === true &&
+      typeof payloadRecord.response === "string" &&
+      payloadRecord.response.trim()
+    ) {
+      text = payloadRecord.response.trim();
+    }
     let visionEscalationUsed = false;
     let visionEscalationAttempted = false;
     let visionCriticalConflict = false;

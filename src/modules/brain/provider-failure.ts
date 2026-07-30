@@ -93,12 +93,62 @@ export function readProviderRetryAfterMs(headers: Headers): number | null {
   return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
 }
 
+/** `describeProviderErrorPayload` çıktısının öneki. */
+const PROVIDER_ERROR_REASON_PREFIX = "provider_error:";
+
+/**
+ * Sağlayıcının HTTP hata gövdesinden kısa, sınıflandırmayı bozmayan bir neden
+ * kodu çıkarır.
+ *
+ * CANLI ARIZA (2026-07-30): Groq iki ayrı modelde tekrar eden 400 döndürüyordu
+ * ve telemetride hepsi tek tip `provider_request_failed` görünüyordu — gövde
+ * hiçbir yere taşınmadığı için nedeni okumak imkânsızdı. Yalnız `code`/`type`
+ * alanını taşırız: serbest metin mesajı sınıflandırma desenlerine ("policy_",
+ * "timeout") yanlışlıkla çarpabilir ve yanlış failureClass üretebilir.
+ */
+export function describeProviderErrorPayload(
+  payload: unknown,
+  rawText: string,
+): string {
+  const record = readRecord(payload);
+  const error = readRecord(record?.error) ?? record;
+  const code =
+    typeof error?.code === "string" && error.code.trim()
+      ? error.code.trim()
+      : typeof error?.type === "string" && error.type.trim()
+        ? error.type.trim()
+        : "";
+  if (code) {
+    return `${PROVIDER_ERROR_REASON_PREFIX}${code.slice(0, 80)}`;
+  }
+  // Gövde JSON değilse (proxy/gateway HTML'i) en azından baş kısmı taşınır;
+  // sınıflandırmaya karışmaması için yalnız harf/rakam/altçizgi bırakılır.
+  const sanitized = rawText
+    .slice(0, 120)
+    .replace(/[^a-zA-Z0-9 _-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized
+    ? `${PROVIDER_ERROR_REASON_PREFIX}${sanitized.slice(0, 80)}`
+    : "provider_request_failed";
+}
+
 function failureClass(input: {
   status: number | null;
   reason: string;
   error: unknown;
 }): ProviderFailureClass {
   if (input.status === 429) return "rate_limited";
+  // Sağlayıcı isteği reddettiyse sınıf HTTP durumundan gelir; gövdeden gelen
+  // serbest metnin desen eşleşmesi ("invalid_request_error" → invalid_output)
+  // burada yanlış sınıf üretirdi. Bizim ÜRETTİĞİMİZ neden kodları (ör.
+  // `required_turn_envelope_missing`) bu daldan etkilenmez.
+  if (input.reason.startsWith(PROVIDER_ERROR_REASON_PREFIX)) {
+    if (input.status != null && [408, 425, 500, 502, 503, 504].includes(input.status)) {
+      return "unavailable";
+    }
+    if (input.status != null && input.status >= 400) return "rejected";
+  }
   if (input.error instanceof TypeError) return "unavailable";
   if (input.error instanceof DOMException && input.error.name === "AbortError") {
     return "timeout";
