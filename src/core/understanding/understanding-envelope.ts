@@ -1277,12 +1277,11 @@ export function preferredWorkloadFromUnderstandingEnvelope(
   if (!envelope || envelope.confidence < 0.52) {
     return null;
   }
-  if (
-    envelope.required_capabilities.some(
-      (capability) => capability.executionSurface === "desktop",
-    ) ||
-    envelope.risk.local_private
-  ) {
+  const desktopExecutionRequired =
+    envelope.risk.local_private ||
+    envelope.privacy_routing.mode === "desktop_private" ||
+    envelope.desired_outputs.some((output) => output.target === "desktop");
+  if (desktopExecutionRequired) {
     return "desktop_handoff";
   }
   const contract = compileOutputContract({

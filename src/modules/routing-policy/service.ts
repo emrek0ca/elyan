@@ -326,8 +326,8 @@ const LOCAL_FILE_BENIGN_SAVE_PATTERNS = [
   /\b(kaydet|save|gönder|gonder|indir|export|dışa aktar|disa aktar)\b.*\b(masaüstü|masaustu|desktop|bilgisayar|downloads?|indirilenler)\b/i,
 ];
 const DESKTOP_APP_ACTION_PATTERNS = [
-  /(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme).*(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)/iu,
-  /(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate).*(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme)/iu,
+  /(?<!\p{L})(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme)(?!\p{L}).*(?<!\p{L})(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)(?!\p{L})/iu,
+  /(?<!\p{L})(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)(?!\p{L}).*(?<!\p{L})(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme)(?!\p{L})/iu,
 ];
 const DESKTOP_SCREEN_GLANCE_PATTERNS = [
   /(?<!\p{L})(?:ekranda|ekranımda|ekranimda|screen(?:imde|de)?|masaüstünde|masaustunde)\s+(?:ne\s+(?:var|görünüyor|gorunuyor|açık|acik)|neler\s+(?:var|görünüyor|gorunuyor)|ne\s+yazıyor|ne\s+yaziyor)(?!\p{L})/iu,
@@ -387,8 +387,12 @@ const QUANTUM_TOPIC_PATTERNS = [
 ];
 const QUANTUM_EXECUTION_PATTERNS = [
   /\b(çalıştır|calistir|koştur|kostur|simüle|simule|simulate|run|execute|deney|experiment|devre|circuit)\b/i,
-  /\b(modelle|formüle|formule|formulation|oluştur|olustur|kur|çöz|coz|solve|karşılaştır|karsilastir|benchmark|raporla|report)\b/i,
-  /\b(qaoa|vqe|qiskit|ocean sdk|qubo|ising)\b.*\b(çalıştır|calistir|simüle|simule|çöz|coz|solve|raporla|report)\b/i,
+  /\b(qaoa|vqe|qiskit|ocean sdk|qubo|ising)\b.*\b(çalıştır|calistir|simüle|simule|run|execute|deney|experiment|devre|circuit)\b/i,
+];
+const DESKTOP_FALLBACK_ANCHOR_PATTERNS = [
+  /\b(masaüst|masaust|desktop|downloads?|indirilenler|yerel dosya|local file|file system|dosya sistemi|workspace|path)\b/iu,
+  /\b(ekran|screen|pencere|window|chrome|safari|firefox|finder|terminal|shell|tarayıcı|tarayici|uygulama|app)\b/iu,
+  /\b(bilgisayar(?:ım|im|ımda|imde|umda|unda)?|masaüstündeki|masaustundeki|indirilenlerdeki)\b/iu,
 ];
 const QUANTUM_CAPABILITIES = [
   "quantum_model_problem",
@@ -812,6 +816,20 @@ function hasDesktopActionSignal(message: string): boolean {
     hasDesktopSaveExportSignal(message) ||
     hasDesktopWriteSideEffectSignal(message) ||
     matchesAny(message, DESKTOP_APP_ACTION_PATTERNS)
+  );
+}
+
+function hasConcreteDesktopFallbackSignal(
+  message: string,
+  metadata: unknown,
+): boolean {
+  return (
+    hasDesktopScreenGlanceSignal(message, metadata) ||
+    hasDesktopSaveExportSignal(message) ||
+    hasDesktopWriteSideEffectSignal(message) ||
+    matchesAny(message, DESKTOP_APP_ACTION_PATTERNS) ||
+    (hasDesktopActionSignal(message) &&
+      matchesAny(message, DESKTOP_FALLBACK_ANCHOR_PATTERNS))
   );
 }
 
@@ -1649,6 +1667,8 @@ export function buildCommandRouteModelPrompt(input: {
     "Choose desktop_runtime when fulfilling the request requires observing or changing the user's actual computer state: local files/folders, screen/window contents, installed apps, browser interaction, keyboard/mouse, shell, local calendar/notifications, or private on-device context.",
     "Choose server_brain for conversation, advice, explanation, planning, writing, reasoning, math, public research, code generation, or other work that can be completed without reading or changing the user's actual computer.",
     "A request to inspect/list/read/open/edit/save something on 'my desktop', 'my computer', a local folder, the current screen, or an installed app requires desktop_runtime even when a server could discuss the topic abstractly.",
+    "If the user asks Elyan to produce a real local artifact on the desktop after public research or analysis, route to desktop_runtime: the server may plan, but the desktop runtime must execute and verify the artifact write.",
+    "Do not route to desktop_runtime merely because the word desktop appears in an explanation or preference. Route desktop only when the requested outcome requires local execution, local state, or a verified local artifact/action.",
     "A request asking what the user should do, which approach to take, or for recommendations remains server_brain unless it also asks Elyan to perform the action now.",
     "For read-only local inspection set needsPrivateDesktopData=true and needsUserApproval=false. Side-effect actions may require approval according to capability policy.",
     "Keep reason generic and under 240 characters. Never copy names, paths, document text, credentials, or other request details into reason.",
@@ -1658,6 +1678,7 @@ export function buildCommandRouteModelPrompt(input: {
     "This is routing, not tool planning. Always return requiredCapabilities as an empty array; the catalog-grounded planner selects concrete capabilities later.",
     "Examples:",
     'User: Masaüstü klasörümde ne var, listele. -> {"target":"desktop_runtime","operationalRoute":"desktop_runtime","executionPlan":["desktop_runtime"],"reason":"The result requires reading the user\'s local Desktop folder.","needsDesktop":true,"needsPrivateDesktopData":true,"needsUserApproval":false,"requiredCapabilities":[]}',
+    'User: Ceza hukuku nedir araştır ve masaüstüne DOCX çalışma rehberi kaydet. -> {"target":"desktop_runtime","operationalRoute":"desktop_runtime","executionPlan":["desktop_runtime"],"reason":"The user asks Elyan to create and verify a local desktop document artifact.","needsDesktop":true,"needsPrivateDesktopData":false,"needsUserApproval":true,"requiredCapabilities":[]}',
     'User: Dosyalarımı düzenlemek için nasıl bir yöntem önerirsin? -> {"target":"server_brain","operationalRoute":"server_brain","executionPlan":["server_brain"],"reason":"The user asks for advice, not execution.","needsDesktop":false,"needsPrivateDesktopData":false,"needsUserApproval":false,"requiredCapabilities":[]}',
     `User request as JSON data: ${JSON.stringify(input.message)}`,
     `Router context: ${input.promptSummary}`,
@@ -1857,7 +1878,9 @@ export async function decideCommandRoute(
   const fallbackScreenGlanceRequested =
     modelTaskRoute == null && hasDesktopScreenGlanceSignal(message, metadata);
   const fallbackDesktopActionRequested =
-    modelTaskRoute == null && hasDesktopActionSignal(message);
+    modelTaskRoute == null &&
+    !hasPackagedWorldContextSignal(message) &&
+    hasConcreteDesktopFallbackSignal(message, metadata);
   const fallbackQuantumExecutionRequested =
     modelTaskRoute == null &&
     matchesAny(message, QUANTUM_TOPIC_PATTERNS) &&

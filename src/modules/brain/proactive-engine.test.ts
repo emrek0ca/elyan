@@ -39,9 +39,10 @@ test("typed proactive ops persist user mute and quiet-hour preferences", async (
     },
   });
   assert.equal(count, 2);
-  assert.equal(writes[0]?.table, userProactivePrefs);
-  assert.deepEqual(writes[0]?.values.mutedKinds, ["follow_up"]);
-  assert.equal(writes[0]?.values.quietStartHour, 21);
+  const prefsWrite = writes.find((write) => write.table === userProactivePrefs);
+  assert.ok(prefsWrite);
+  assert.deepEqual(prefsWrite.values.mutedKinds, ["follow_up"]);
+  assert.equal(prefsWrite.values.quietStartHour, 21);
 });
 
 test("proactive policy enforces mute, daily cap and overnight quiet hours", () => {
@@ -152,6 +153,9 @@ function createFakePublishApp(input: { sessions?: Array<Record<string, unknown>>
           return Promise.resolve(event);
         },
       },
+    },
+    log: {
+      debug() {},
     },
   };
   return { app: app as never, inserted, updates, events };

@@ -162,7 +162,7 @@ test("buildDesktopWorkOrder keeps private file requests local and evidence-gated
   const workOrder = buildDesktopWorkOrder({
     message: "Masaüstündeki son PDF'i özetle.",
     title: "PDF özeti",
-    routeDecision: routeDecision(),
+    routeDecision: routeDecision({ capabilities: ["document_read"] }),
     requestedCapabilities: [],
   });
 
@@ -364,7 +364,7 @@ test("legal file workflow includes private read, public research, analysis, and 
   const workOrder = buildDesktopWorkOrder({
     message: "Avukat gibi çalış. Bu dosya metnini analiz et: tahliye itirazı. Kira uyuşmazlığı mevzuatını araştır ve savunma dilekçesi hazırla.",
     title: "Savunma dilekçesi",
-    routeDecision: routeDecision(),
+    routeDecision: routeDecision({ capabilities: ["document_read"] }),
     requestedCapabilities: [],
   });
 
@@ -388,7 +388,7 @@ test("professional analysis mode follows medical student and technical domains",
   const medical = buildDesktopWorkOrder({
     message: "Doktor gibi çalış. Tahlil sonuçlarını yorumla ve rapor çıkar: Hb 10.5, ferritin 8, B12 220.",
     title: "Tahlil raporu",
-    routeDecision: routeDecision(),
+    routeDecision: routeDecision({ capabilities: ["document_read"] }),
     requestedCapabilities: [],
   });
   const student = buildDesktopWorkOrder({
@@ -509,10 +509,116 @@ test("buildDesktopWorkOrder carries typed understanding without forwarding a raw
   assert.equal(workOrder.permissionEnvelope?.mode, "single_full_access_surface");
   assert.equal(workOrder.understanding?.conversationState?.carryForward, true);
   assert.equal(workOrder.requiredCapabilities.includes("document_write"), true);
-  assert.equal(workOrder.requiredCapabilities.includes("canvas_write"), true);
-  assert.equal(workOrder.planPreview.steps.some((step) => step.capability === "canvas_write"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("canvas_write"), false);
+  assert.equal(
+    workOrder.planPreview.steps.filter(
+      (step) =>
+        step.capability === "document_write" ||
+        step.capability === "canvas_write",
+    ).length,
+    1,
+  );
   assert.equal("message" in workOrder, false);
   assert.equal("prompt" in workOrder, false);
+});
+
+test("buildDesktopWorkOrder plans research to desktop document from semantic envelope", () => {
+  const envelope: UnderstandingEnvelope = {
+    schema_version: "2026-07-understanding-envelope-v2",
+    intent: {
+      name: "research",
+      action: "create_study_guide",
+      topic: "Ceza hukuku çalışma rehberi",
+      confidence: 0.97,
+      source: "typed_extractor",
+    },
+    intent_graph: {
+      nodes: [
+        { id: "gather", kind: "gather", label: "Güvenilir kaynakları topla", surface: "server", confidence: 0.9 },
+        { id: "analyze", kind: "analyze", label: "Öğrenci düzeyinde analiz et", surface: "desktop", confidence: 0.9 },
+        { id: "write", kind: "write", label: "DOCX belge yaz", surface: "desktop", confidence: 0.95 },
+        { id: "verify", kind: "verify", label: "Dosya kanıtını doğrula", surface: "desktop", confidence: 0.95 },
+      ],
+      edges: [
+        { from: "gather", to: "analyze", reason: "research feeds analysis" },
+        { from: "analyze", to: "write", reason: "analysis feeds document" },
+      ],
+    },
+    source_reference: "current_prompt",
+    latest_artifact_ref: null,
+    conversation_state: {
+      turnKind: "new_request",
+      currentGoal: "Ceza hukuku rehberi oluştur",
+      lastAssistantSummary: null,
+      lastArtifactSummary: null,
+      lastImagePrompt: null,
+      userCorrection: null,
+      carryForward: false,
+    },
+    entities: [{ type: "topic", value: "Ceza hukuku", normalized: "Ceza hukuku", confidence: 0.98, source: "typed_extractor" }],
+    constraints: [
+      { kind: "language", value: "tr", confidence: 0.9, source: "typed_extractor", explicit: true },
+      { kind: "document_kind", value: "study_guide", confidence: 0.9, source: "typed_extractor", explicit: true },
+    ],
+    desired_outputs: [{ kind: "docx", format: "docx", target: "desktop", confidence: 0.98, constraints: ["study_guide"] }],
+    success_criteria: [
+      { kind: "artifact_verified", description: "DOCX dosyası artifact/state_readback kanıtıyla doğrulanmalı.", evidenceRequired: "artifact", confidence: 0.96 },
+    ],
+    ambiguities: [],
+    ambiguity_policy: { action: "proceed_with_best_reference", reason: "explicit_topic_and_output", assumedReference: "current_prompt" },
+    risk: { privacy: "low", safety: "low", cost: "low", latency: "medium", local_private: false, side_effect: true, prompt_injection: false, reasons: ["desktop_artifact_write"] },
+    privacy_routing: {
+      mode: "desktop_private",
+      mayUseHostedModels: true,
+      maySendPrivateContextToServer: false,
+      reasons: ["desktop_artifact_execution"],
+    },
+    required_capabilities: [
+      { name: "document.write", executionSurface: "desktop", permission: "write", confidence: 0.98 },
+    ],
+    tool_skill_decision: {
+      selected: "document.write",
+      surface: "document",
+      workload: "desktop_handoff",
+      confidence: 0.95,
+      reasons: ["verified_desktop_artifact"],
+      candidates: [],
+    },
+    output_contract: {
+      operation: "export",
+      sourceReference: "current_prompt",
+      outputKind: "document",
+      outputFormat: "docx",
+      pageCount: null,
+      requiresArtifact: true,
+      confidence: 0.97,
+      reasons: ["docx_desktop_artifact"],
+    },
+    memory_candidates: [],
+    confidence: 0.97,
+    source: "typed_extractor",
+  };
+
+  const workOrder = buildDesktopWorkOrder({
+    message:
+      "Ceza hukuku nedir araştır ve öğrenci için DOCX çalışma rehberi olarak masaüstüne kaydet.",
+    title: "Ceza hukuku rehberi",
+    routeDecision: routeDecision({ capabilities: [] }),
+    requestedCapabilities: [],
+    understandingEnvelope: envelope,
+  });
+
+  const capabilities = workOrder.planPreview.steps.map((step) => step.capability);
+  assert.deepEqual(capabilities.slice(0, 3), [
+    "web_research",
+    "text_analyze",
+    "document_write",
+  ]);
+  assert.equal(workOrder.semanticGoal?.contract, "elyan.semantic_task_contract.v1");
+  assert.equal(workOrder.workType, "data_workflow");
+  assert.equal(workOrder.expectedOutputs.some((output) => output.kind === "artifact"), true);
+  assert.equal(workOrder.verificationPlan?.requireEvidence, true);
+  assert.equal(workOrder.planPreview.privacyClass, "side_effect");
 });
 
 test("close-app browser task does not append a generic browser search step", () => {
@@ -553,15 +659,171 @@ test("saf Türkçe 'şunu anime tarzında çevir' image_edit sayılır", () => {
   assert.equal(workOrder.goal.kind, "image_edit");
 });
 
-test("saf Türkçe 'masaüstüne kaydet' dosya yeteneğini işaretler", () => {
+test("write destination does not grant an unrelated private document read", () => {
   const workOrder = buildDesktopWorkOrder({
     message: "Raporu masaüstüne kaydet",
     title: "Rapor",
     routeDecision: routeDecision({ capabilities: [] }),
     requestedCapabilities: [],
   });
-  // "masaüstüne" → document_read, "kaydet" → document_write; dönüşümden
-  // önce her iki alternatif de (ü-başlangıç/ş-kenar) hiç eşleşmiyordu.
-  assert.equal(workOrder.requiredCapabilities.includes("document_read"), true);
+  assert.equal(workOrder.requiredCapabilities.includes("document_read"), false);
   assert.equal(workOrder.requiredCapabilities.includes("document_write"), true);
+  assert.equal(
+    workOrder.expectedOutputs.some((output) => output.kind === "artifact"),
+    true,
+  );
+});
+
+test("semantic document intent reconciles a stale chat output contract", () => {
+  const envelope: UnderstandingEnvelope = {
+    schema_version: "2026-07-understanding-envelope-v2",
+    intent: {
+      name: "document",
+      action: "reply",
+      topic: "Tarihsel yaşam öyküsü",
+      confidence: 0.82,
+      source: "semantic_classifier",
+    },
+    intent_graph: { nodes: [], edges: [] },
+    source_reference: "current_prompt",
+    latest_artifact_ref: null,
+    conversation_state: {
+      turnKind: "new_request",
+      currentGoal: "Tarihsel yaşam öyküsünü iki sayfalık çıktı olarak teslim et",
+      lastAssistantSummary: null,
+      lastArtifactSummary: null,
+      lastImagePrompt: null,
+      userCorrection: null,
+      carryForward: false,
+    },
+    entities: [],
+    constraints: [],
+    desired_outputs: [
+      {
+        kind: "chat_reply",
+        format: null,
+        target: "chat",
+        confidence: 0.82,
+        constraints: [],
+      },
+    ],
+    success_criteria: [],
+    ambiguities: [],
+    ambiguity_policy: {
+      action: "proceed_with_best_reference",
+      reason: "current_prompt_is_best_reference",
+      assumedReference: "current_prompt",
+    },
+    risk: {
+      privacy: "low",
+      safety: "low",
+      cost: "low",
+      latency: "low",
+      local_private: false,
+      side_effect: false,
+      prompt_injection: false,
+      reasons: [],
+    },
+    privacy_routing: {
+      mode: "server",
+      mayUseHostedModels: true,
+      maySendPrivateContextToServer: false,
+      reasons: ["server_safe_context"],
+    },
+    required_capabilities: [],
+    tool_skill_decision: {
+      selected: "chat.reply",
+      surface: "chat",
+      workload: null,
+      confidence: 0.74,
+      reasons: ["default_chat_surface"],
+      candidates: [],
+    },
+    output_contract: {
+      operation: "answer",
+      sourceReference: "current_prompt",
+      outputKind: "chat_reply",
+      outputFormat: null,
+      pageCount: 2,
+      requiresArtifact: false,
+      confidence: 0.52,
+      reasons: ["operation:answer"],
+    },
+    memory_candidates: [],
+    confidence: 0.615,
+    source: "typed_extractor",
+  };
+
+  const workOrder = buildDesktopWorkOrder({
+    message: "Tarihsel yaşam öyküsünü iki sayfalık çıktı olarak teslim et",
+    title: "Yaşam öyküsü",
+    routeDecision: routeDecision({ capabilities: ["document_write"] }),
+    requestedCapabilities: [],
+    understandingEnvelope: envelope,
+  });
+
+  assert.deepEqual(workOrder.requiredCapabilities, ["document_write"]);
+  assert.equal(workOrder.contextPack?.outputContract?.requiresArtifact, true);
+  assert.equal(workOrder.contextPack?.outputContract?.outputFormat, "docx");
+  assert.equal(
+    workOrder.contextPack?.toolSkillDecision?.selected,
+    "document.write",
+  );
+  assert.equal(workOrder.contextPack?.privacyRouting?.mode, "desktop_private");
+  assert.deepEqual(workOrder.resourceScope, {
+    contract: "elyan.resource_scope.v1",
+    readRoots: ["workspace"],
+    writeRoots: ["~/Desktop"],
+  });
+  assert.match(
+    String(workOrder.planPreview.steps[0]?.args.outputPath ?? ""),
+    /^~\/Desktop\/.+\.docx$/u,
+  );
+  assert.equal(
+    workOrder.understanding?.desiredOutputs.some(
+      (output) => output.target === "desktop" && output.format === "docx",
+    ),
+    true,
+  );
+
+  const pdfEnvelope = structuredClone(envelope);
+  pdfEnvelope.desired_outputs = [
+    {
+      kind: "pdf",
+      format: "pdf",
+      target: "desktop",
+      confidence: 0.9,
+      constraints: [],
+    },
+  ];
+  pdfEnvelope.output_contract = {
+    ...pdfEnvelope.output_contract!,
+    operation: "write",
+    outputKind: "document",
+    outputFormat: "pdf",
+    requiresArtifact: true,
+    confidence: 0.9,
+  };
+  const pdfWorkOrder = buildDesktopWorkOrder({
+    message: "Tarihsel yaşam öyküsünü iki sayfalık PDF olarak teslim et",
+    title: "Yaşam öyküsü PDF",
+    routeDecision: routeDecision({
+      capabilities: ["document_write", "canvas_write"],
+    }),
+    requestedCapabilities: [],
+    understandingEnvelope: pdfEnvelope,
+  });
+  assert.deepEqual(pdfWorkOrder.requiredCapabilities, ["document_write"]);
+  assert.equal(
+    pdfWorkOrder.planPreview.steps.filter(
+      (step) =>
+        step.capability === "document_write" ||
+        step.capability === "canvas_write",
+    ).length,
+    1,
+  );
+  assert.match(
+    String(pdfWorkOrder.planPreview.steps[0]?.args.outputPath ?? ""),
+    /\.pdf$/u,
+  );
 });

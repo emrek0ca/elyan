@@ -45,6 +45,18 @@ export type OrchestratedRetrieval = {
     keywordCandidates: number;
     coreCandidates: number;
     coverage: number;
+    evidenceAcceptance: {
+      score: number;
+      threshold: number;
+      subquestionCount: number;
+      supportedSubquestionCount: number;
+      unsupportedSubquestionCount: number;
+    };
+    neuralPolicy: {
+      semanticRerankAdmitted: boolean;
+      selfCheckSensitivity: "normal" | "strict";
+      reason: string;
+    };
     selfCheckRetried: boolean;
     lowConfidence: boolean;
     neighborExpanded: number;
@@ -53,6 +65,7 @@ export type OrchestratedRetrieval = {
 
 const RRF_K = 60;
 const COVERAGE_RETRY_THRESHOLD = 0.34;
+const EVIDENCE_ACCEPTANCE_THRESHOLD = 0.45;
 const NEIGHBOR_EXPANSION_TOP = 3;
 
 const _TR_STOPWORDS = new Set([
@@ -225,6 +238,64 @@ export function coverageScore(query: string, results: RetrievalSearchResult[]): 
   return hits / terms.length;
 }
 
+function supportScoreForQuestion(
+  question: string,
+  results: RetrievalSearchResult[],
+): number {
+  const terms = keyTerms(question, 10);
+  if (terms.length === 0) return results.length > 0 ? 1 : 0;
+  if (results.length === 0) return 0;
+  const topResults = results.slice(0, 5);
+  const titleHits = new Set<string>();
+  const contentHits = new Set<string>();
+  for (const result of topResults) {
+    const title = foldTr(result.title);
+    const content = foldTr(result.content);
+    for (const term of terms) {
+      if (title.includes(term)) titleHits.add(term);
+      if (content.includes(term)) contentHits.add(term);
+    }
+  }
+  const titleCoverage = titleHits.size / terms.length;
+  const contentCoverage = contentHits.size / terms.length;
+  return Math.max(contentCoverage, titleCoverage * 0.75);
+}
+
+function evidenceAcceptanceScore(
+  query: string,
+  hops: string[],
+  results: RetrievalSearchResult[],
+): OrchestratedRetrieval["orchestration"]["evidenceAcceptance"] {
+  const subquestions = [...new Set([query, ...hops])]
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 4);
+  if (subquestions.length === 0) {
+    return {
+      score: results.length > 0 ? 1 : 0,
+      threshold: EVIDENCE_ACCEPTANCE_THRESHOLD,
+      subquestionCount: 0,
+      supportedSubquestionCount: results.length > 0 ? 1 : 0,
+      unsupportedSubquestionCount: results.length > 0 ? 0 : 1,
+    };
+  }
+  const scores = subquestions.map((question) =>
+    supportScoreForQuestion(question, results),
+  );
+  const supportedSubquestionCount = scores.filter(
+    (score) => score >= EVIDENCE_ACCEPTANCE_THRESHOLD,
+  ).length;
+  const score =
+    scores.reduce((sum, value) => sum + value, 0) / Math.max(1, scores.length);
+  return {
+    score: Number(score.toFixed(3)),
+    threshold: EVIDENCE_ACCEPTANCE_THRESHOLD,
+    subquestionCount: subquestions.length,
+    supportedSubquestionCount,
+    unsupportedSubquestionCount: subquestions.length - supportedSubquestionCount,
+  };
+}
+
 /** Graph-lite: en iyi eşleşmelerin komşu chunk'larını (aynı doküman, ordinal
  * ±1) getirir — bölünmüş bilgi bağlamıyla tamamlanır. */
 async function expandNeighbors(
@@ -300,10 +371,28 @@ async function expandNeighbors(
  */
 export async function searchKnowledge(
   app: FastifyInstance,
-  input: { userId: string; query: string; limit: number },
+  input: {
+    userId: string;
+    query: string;
+    limit: number;
+    neuralPolicy?: {
+      neuralReady?: boolean;
+      embeddingReady?: boolean;
+      evaluationReady?: boolean;
+    };
+  },
 ): Promise<OrchestratedRetrieval> {
   const strategy = classifyRetrievalStrategy(input.query);
   const hops = strategy === "multi_hop" ? decomposeQuery(input.query) : [input.query];
+  const semanticRerankAdmitted =
+    input.neuralPolicy?.neuralReady === true ||
+    input.neuralPolicy?.embeddingReady === true;
+  const selfCheckSensitivity =
+    input.neuralPolicy?.evaluationReady === true ? "normal" : "strict";
+  const evidenceThreshold =
+    selfCheckSensitivity === "strict"
+      ? Math.max(EVIDENCE_ACCEPTANCE_THRESHOLD, 0.55)
+      : EVIDENCE_ACCEPTANCE_THRESHOLD;
 
   // Arama kolları: her hop için çekirdek (vector+lexical+rerank) + keyword.
   const coreWeight = strategy === "keyword_heavy" ? 0.7 : 1.0;
@@ -312,7 +401,11 @@ export async function searchKnowledge(
   const [coreRuns, keywordRuns] = await Promise.all([
     Promise.all(
       hops.map((hop) =>
-        searchKnowledgeCore(app, { ...input, query: hop }).catch(() => null),
+        searchKnowledgeCore(app, {
+          ...input,
+          query: hop,
+          semanticRerankReady: semanticRerankAdmitted,
+        }).catch(() => null),
       ),
     ),
     Promise.all(
@@ -346,7 +439,11 @@ export async function searchKnowledge(
     if (reformulated && foldTr(reformulated) !== foldTr(input.query.trim())) {
       selfCheckRetried = true;
       const [retryCore, retryKeyword] = await Promise.all([
-        searchKnowledgeCore(app, { ...input, query: reformulated }).catch(() => null),
+        searchKnowledgeCore(app, {
+          ...input,
+          query: reformulated,
+          semanticRerankReady: semanticRerankAdmitted,
+        }).catch(() => null),
         searchKnowledgeKeyword(app, { ...input, query: reformulated }).catch(
           () => [] as RetrievalSearchResult[],
         ),
@@ -372,6 +469,11 @@ export async function searchKnowledge(
     neighborExpanded = Math.min(neighbors.length, input.limit - top.length);
     top.push(...neighbors.slice(0, input.limit - top.length));
   }
+  const evidenceAcceptance = evidenceAcceptanceScore(input.query, hops, top);
+  const evidenceAcceptanceForPolicy = {
+    ...evidenceAcceptance,
+    threshold: evidenceThreshold,
+  };
 
   const keywordCandidates = keywordRuns.reduce((sum, list) => sum + list.length, 0);
   const coreCandidates = coreRuns.reduce(
@@ -389,8 +491,20 @@ export async function searchKnowledge(
       keywordCandidates,
       coreCandidates,
       coverage: Number(coverage.toFixed(3)),
+      evidenceAcceptance: evidenceAcceptanceForPolicy,
+      neuralPolicy: {
+        semanticRerankAdmitted,
+        selfCheckSensitivity,
+        reason: semanticRerankAdmitted
+          ? "neural_readiness_admitted_semantic_rerank"
+          : "neural_readiness_withheld_semantic_rerank",
+      },
       selfCheckRetried,
-      lowConfidence: coverage < COVERAGE_RETRY_THRESHOLD && top.length > 0,
+      lowConfidence:
+        top.length > 0 &&
+        (coverage < COVERAGE_RETRY_THRESHOLD ||
+          evidenceAcceptance.score < evidenceThreshold ||
+          evidenceAcceptance.unsupportedSubquestionCount > 0),
       neighborExpanded,
     },
   };

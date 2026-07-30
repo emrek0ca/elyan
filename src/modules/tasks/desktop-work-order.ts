@@ -3,6 +3,7 @@ import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 import type { RemoteMcpSelectionMetadata } from "../integrations/provider-registry.js";
+import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
 // görevler masaüstünde WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu.
@@ -92,6 +93,11 @@ export type DesktopWorkOrder = {
   };
   materializedCapabilityScope?: string[];
   localContextNeeded: string[];
+  resourceScope?: {
+    contract: "elyan.resource_scope.v1";
+    readRoots: string[];
+    writeRoots: string[];
+  };
   expectedOutputs: Array<{
     kind: "chat_result" | "artifact" | "file_update" | "browser_state" | "system_state";
     format: string;
@@ -114,6 +120,24 @@ export type DesktopWorkOrder = {
     toolSkillDecision?: Record<string, unknown> | null;
     outputContract?: Record<string, unknown> | null;
     privacyRouting?: Record<string, unknown>;
+    desktopPlanningEvidence?: {
+      contract: "elyan.desktop_planning_evidence.v1";
+      source: "server_read_only_tool_loop";
+      toolCount: number;
+      okCount: number;
+      tools: Array<{
+        tool: string;
+        ok: boolean;
+        permission: "read";
+        resultDigest: string | null;
+        resultCount: number | null;
+        errorCode: string | null;
+      }>;
+      agentPlan?: {
+        stepCount: number;
+        tools: string[];
+      };
+    };
   };
   executionPlan?: {
     mode: "data_workflow" | "screen_action" | "mixed" | "decision_support";
@@ -209,6 +233,10 @@ export type DesktopWorkOrder = {
      * desktop tarafı mevcut (heuristik) davranışı korur → geriye dönük uyumlu.
      */
     planSource?: "heuristic" | "server_materialized";
+    materializationSource?:
+      | "model"
+      | "model_transport_repair"
+      | "semantic_compiler";
     /**
      * New tasks are not deliverable while model planning is pending. Older
      * work orders without this field remain ready for backward compatibility.
@@ -378,6 +406,91 @@ function compactText(value: unknown, maxLength = 1_000): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trimEnd()}…` : normalized;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function buildDesktopPlanningEvidenceFromMetadata(
+  metadata: Record<string, unknown>,
+): NonNullable<DesktopWorkOrder["contextPack"]>["desktopPlanningEvidence"] | null {
+  const rawResults = Array.isArray(metadata.toolResults)
+    ? metadata.toolResults
+    : [];
+  const tools = rawResults
+    .map((item) => readRecord(item))
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item) => {
+      const permission =
+        typeof item.permission === "string"
+          ? item.permission.toLocaleLowerCase("en-US")
+          : "";
+      if (permission !== "read") return null;
+      const output = readRecord(item.output);
+      const directResultCount = item.resultCount;
+      const outputResultCount = output?.resultCount;
+      const resultCount =
+        typeof directResultCount === "number" &&
+        Number.isFinite(directResultCount)
+          ? directResultCount
+          : typeof outputResultCount === "number" &&
+              Number.isFinite(outputResultCount)
+            ? outputResultCount
+            : null;
+      return {
+        tool: compactText(item.tool, 80),
+        ok: item.ok === true,
+        permission: "read" as const,
+        resultDigest:
+          typeof item.resultDigest === "string"
+            ? compactText(item.resultDigest, 120)
+            : null,
+        resultCount,
+        errorCode:
+          typeof item.errorCode === "string"
+            ? compactText(item.errorCode, 80)
+            : null,
+      };
+    })
+    .filter(
+      (
+        item,
+      ): item is {
+        tool: string;
+        ok: boolean;
+        permission: "read";
+        resultDigest: string | null;
+        resultCount: number | null;
+        errorCode: string | null;
+      } => Boolean(item?.tool),
+    )
+    .slice(0, 8);
+  const agentPlan = readRecord(metadata.agentPlan);
+  const rawPlanSteps = Array.isArray(agentPlan?.steps) ? agentPlan.steps : [];
+  const planTools = rawPlanSteps
+    .map((step) => readRecord(readRecord(step)?.tool_request)?.tool)
+    .filter((tool): tool is string => typeof tool === "string" && tool.trim())
+    .map((tool) => compactText(tool, 80))
+    .slice(0, 8);
+  if (tools.length === 0 && planTools.length === 0) return null;
+  return {
+    contract: "elyan.desktop_planning_evidence.v1",
+    source: "server_read_only_tool_loop",
+    toolCount: tools.length,
+    okCount: tools.filter((item) => item.ok).length,
+    tools,
+    ...(planTools.length > 0
+      ? {
+          agentPlan: {
+            stepCount: rawPlanSteps.length,
+            tools: [...new Set(planTools)],
+          },
+        }
+      : {}),
+  };
+}
+
 function sourceHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
@@ -522,20 +635,144 @@ function canonicalRuntimeCapability(value: string): string | null {
   return normalized.replaceAll(".", "_");
 }
 
+function semanticCapabilitiesFromEnvelope(
+  envelope?: UnderstandingEnvelope,
+): string[] {
+  if (!envelope) return [];
+  const capabilities = new Set<string>();
+  for (const capability of envelope.required_capabilities ?? []) {
+    const canonical = canonicalRuntimeCapability(capability.name);
+    if (canonical) capabilities.add(canonical);
+  }
+
+  const desiredOutputKinds = new Set(
+    (envelope.desired_outputs ?? []).map((output) => output.kind),
+  );
+  const desiredTargets = new Set(
+    (envelope.desired_outputs ?? []).map((output) => output.target),
+  );
+  const outputFormat = String(
+    envelope.output_contract?.outputFormat ??
+      envelope.output_contract?.outputKind ??
+      "",
+  ).toLocaleLowerCase("en-US");
+  const operation = String(
+    envelope.output_contract?.operation ?? "",
+  ).toLocaleLowerCase("en-US");
+  const needsArtifact =
+    desiredTargets.has("artifact") ||
+    desiredTargets.has("desktop") ||
+    envelope.output_contract?.requiresArtifact === true ||
+    ["create", "export", "write"].includes(operation);
+
+  if (envelope.intent.name === "research") capabilities.add("web_research");
+  if (envelope.intent.name === "math") capabilities.add("math_solve");
+  if (
+    envelope.intent.name === "document" ||
+    envelope.intent.name === "writing"
+  ) {
+    capabilities.add("document_write");
+  }
+  if (
+    desiredOutputKinds.has("docx") ||
+    (needsArtifact && ["docx", "document"].includes(outputFormat))
+  ) {
+    capabilities.add("document_write");
+  }
+  if (
+    desiredOutputKinds.has("pdf") ||
+    desiredOutputKinds.has("svg") ||
+    outputFormat === "pdf" ||
+    outputFormat === "svg"
+  ) {
+    if (outputFormat === "svg" || desiredOutputKinds.has("svg")) {
+      capabilities.add("canvas_write");
+    } else {
+      capabilities.add("document_write");
+      capabilities.delete("canvas_write");
+    }
+  }
+  if (
+    desiredOutputKinds.has("xlsx") ||
+    desiredOutputKinds.has("table") ||
+    outputFormat === "xlsx" ||
+    outputFormat === "table"
+  ) {
+    capabilities.add("spreadsheet_write");
+  }
+  if (
+    outputFormat === "pptx" ||
+    outputFormat === "presentation"
+  ) {
+    capabilities.add("presentation_write");
+    capabilities.delete("document_write");
+  }
+  if (desiredOutputKinds.has("chart") || outputFormat === "chart") {
+    capabilities.add("chart_generate");
+  }
+  if (desiredOutputKinds.has("image") || outputFormat === "image") {
+    capabilities.add("image_generate");
+  }
+  if (
+    envelope.source_reference === "attachment" ||
+    envelope.required_capabilities.some(
+      (capability) => capability.name === "document.read",
+    )
+  ) {
+    capabilities.add("document_read");
+  }
+  if (
+    capabilities.has("web_research") &&
+    [...capabilities].some((capability) =>
+      ["document_write", "spreadsheet_write", "presentation_write", "canvas_write"].includes(capability),
+    )
+  ) {
+    capabilities.add("text_analyze");
+  }
+  if (
+    (envelope.intent_graph?.nodes ?? []).some((node) => node.kind === "analyze")
+  ) {
+    capabilities.add("text_analyze");
+  }
+  return [...capabilities].slice(0, 16);
+}
+
 function inferCapabilities(
   routeDecision: CommandRouteDecision,
   message: string,
   envelope?: UnderstandingEnvelope,
 ): string[] {
-  const capabilities = new Set<string>();
+  const routeCapabilities = new Set<string>();
   for (const capability of routeDecision.capabilities) {
     const canonical = canonicalRuntimeCapability(capability);
-    if (canonical) capabilities.add(canonical);
+    if (canonical) routeCapabilities.add(canonical);
   }
-  for (const capability of envelope?.required_capabilities ?? []) {
-    const canonical = canonicalRuntimeCapability(capability.name);
-    if (canonical) capabilities.add(canonical);
+  const semanticCapabilities = new Set(
+    semanticCapabilitiesFromEnvelope(envelope),
+  );
+  const semanticAuthoritative =
+    envelope !== undefined &&
+    semanticCapabilities.size > 0 &&
+    (
+      (
+        envelope.intent.source === "semantic_classifier" &&
+        envelope.intent.confidence >= 0.75
+      ) ||
+      envelope.confidence >= 0.75
+    ) &&
+    (
+      (envelope.required_capabilities ?? []).length > 0 ||
+      (envelope.desired_outputs ?? []).some((output) => output.target !== "chat") ||
+      ["document", "writing", "research", "math"].includes(envelope.intent.name) ||
+      envelope.output_contract?.requiresArtifact === true
+    );
+  if (semanticAuthoritative) {
+    return [...semanticCapabilities].slice(0, 16);
   }
+  const capabilities = new Set([
+    ...routeCapabilities,
+    ...semanticCapabilities,
+  ]);
   const normalized = message.toLocaleLowerCase("tr-TR");
   const researchRequested = unicodeWordPattern(String.raw`\b(?:araştır\p{L}*|arastir\p{L}*|research|bilgi\s+topla\p{L}*|kaynak\s+topla\p{L}*)\b`, "i").test(normalized);
   const analysisRequested = unicodeWordPattern(String.raw`\b(?:analiz\p{L}*|yorumla\p{L}*|değerlendir\p{L}*|degerlendir\p{L}*|incele\p{L}*|rapor\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*)\b`, "i").test(normalized);
@@ -575,9 +812,6 @@ function inferCapabilities(
     capabilities.add("presentation_write");
     capabilities.delete("desktop_operator.run");
   }
-  if (unicodeWordPattern(String.raw`\b(masaüstü\p{L}*|masaustu\p{L}*|desktop|indirilenler\p{L}*|downloads|klasör\p{L}*|klasor\p{L}*|dosya\p{L}*|belge\p{L}*|pdf)\b`, "i").test(normalized)) {
-    capabilities.add("document_read");
-  }
   if (unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|çıkar\p{L}*|cikar\p{L}*|hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
     if (presentationRequested) capabilities.add("presentation_write");
     else if (unicodeWordPattern(String.raw`\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b`, "i").test(normalized)) capabilities.add("spreadsheet_write");
@@ -596,9 +830,6 @@ function inferCapabilities(
     )
   ) {
     capabilities.add("text_analyze");
-    if (!capabilities.has("web_research") && !capabilities.has("math_solve")) {
-      capabilities.add("document_read");
-    }
   }
   if (
     unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)
@@ -614,6 +845,7 @@ function inferCapabilities(
 
 function inferExpectedOutputs(
   message: string,
+  capabilities: string[],
   envelope?: UnderstandingEnvelope,
 ): DesktopWorkOrder["expectedOutputs"] {
   const outputs: DesktopWorkOrder["expectedOutputs"] = [{ kind: "chat_result", format: "elyan_blocks.v2", required: true }];
@@ -646,19 +878,200 @@ function inferExpectedOutputs(
   const typedArtifactRequested = envelope?.desired_outputs.some(
     (output) => output.target === "artifact" || ["pdf", "docx", "xlsx", "svg", "artifact"].includes(output.kind),
   ) ?? false;
+  const semanticArtifactRequested = capabilities.some((capability) =>
+    [
+      "document_write",
+      "spreadsheet_write",
+      "presentation_write",
+      "canvas_write",
+      "image_generate",
+      "image_edit",
+      "chart_generate",
+    ].includes(capability),
+  );
   const explicitArtifactCreation =
     /\b(pdf|docx|xlsx|pptx|csv|svg|dosya|belge|rapor|sunum|slayt|presentation)\b/i.test(normalized) &&
     unicodeWordPattern(String.raw`\b(oluştur|olustur|hazırla|hazirla|dönüştür|donustur|export|dışa aktar|disa aktar|kaydet|yap)\b`, "i").test(normalized);
-  if (typedArtifactRequested || explicitArtifactCreation) {
+  if (typedArtifactRequested || semanticArtifactRequested || explicitArtifactCreation) {
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
   }
-  if (unicodeWordPattern(String.raw`\b(kaydet|save|düzenle|duzenle|yaz|çıkar|cikar|oluştur|olustur|hazırla|hazirla|üret|uret)\b`, "i").test(normalized)) {
+  if (
+    semanticArtifactRequested ||
+    unicodeWordPattern(String.raw`\b(kaydet|save|düzenle|duzenle|yaz|çıkar|cikar|oluştur|olustur|hazırla|hazirla|üret|uret)\b`, "i").test(normalized)
+  ) {
     addOutput({ kind: "file_update", format: "state_readback", required: true });
   }
   if (unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)) {
     addOutput({ kind: "browser_state", format: "tool_result", required: false });
   }
   return outputs;
+}
+
+function artifactContractForCapabilities(
+  capabilities: string[],
+  requestedFormat?: string | null,
+): {
+  desiredKind: UnderstandingEnvelope["desired_outputs"][number]["kind"];
+  outputKind: string;
+  format: string;
+  selected: string;
+  surface: NonNullable<
+    UnderstandingEnvelope["tool_skill_decision"]
+  >["surface"];
+} | null {
+  if (capabilities.includes("presentation_write")) {
+    return {
+      desiredKind: "artifact",
+      outputKind: "presentation",
+      format: "pptx",
+      selected: "presentation.write",
+      surface: "document",
+    };
+  }
+  if (capabilities.includes("spreadsheet_write")) {
+    return {
+      desiredKind: "xlsx",
+      outputKind: "spreadsheet",
+      format: "xlsx",
+      selected: "spreadsheet.write",
+      surface: "spreadsheet",
+    };
+  }
+  if (capabilities.includes("canvas_write")) {
+    return {
+      desiredKind: "pdf",
+      outputKind: "artifact",
+      format: "pdf",
+      selected: "canvas.write",
+      surface: "document",
+    };
+  }
+  if (capabilities.includes("document_write")) {
+    const format =
+      requestedFormat?.toLocaleLowerCase("en-US") === "pdf"
+        ? "pdf"
+        : "docx";
+    return {
+      desiredKind: format,
+      outputKind: "document",
+      format,
+      selected: "document.write",
+      surface: "document",
+    };
+  }
+  if (capabilities.includes("chart_generate")) {
+    return {
+      desiredKind: "chart",
+      outputKind: "chart",
+      format: "chart",
+      selected: "chart.generate",
+      surface: "chart",
+    };
+  }
+  if (
+    capabilities.includes("image_generate") ||
+    capabilities.includes("image_edit")
+  ) {
+    return {
+      desiredKind: "image",
+      outputKind: "image",
+      format: "image",
+      selected: capabilities.includes("image_edit")
+        ? "image.edit"
+        : "image.generate",
+      surface: "image",
+    };
+  }
+  return null;
+}
+
+function reconcileSemanticExecutionContract(
+  envelope: UnderstandingEnvelope | undefined,
+  capabilities: string[],
+): {
+  desiredOutputs: UnderstandingEnvelope["desired_outputs"] | undefined;
+  outputContract: UnderstandingEnvelope["output_contract"] | undefined;
+  toolSkillDecision: UnderstandingEnvelope["tool_skill_decision"] | undefined;
+} {
+  if (!envelope) {
+    return {
+      desiredOutputs: undefined,
+      outputContract: undefined,
+      toolSkillDecision: undefined,
+    };
+  }
+  const artifact = artifactContractForCapabilities(
+    capabilities,
+    envelope.output_contract?.outputFormat ??
+      envelope.desired_outputs.find((output) => output.format)?.format,
+  );
+  if (!artifact) {
+    return {
+      desiredOutputs: envelope.desired_outputs,
+      outputContract: envelope.output_contract,
+      toolSkillDecision: envelope.tool_skill_decision,
+    };
+  }
+  const desiredOutputs = [...envelope.desired_outputs];
+  if (
+    !desiredOutputs.some(
+      (output) =>
+        output.target === "artifact" ||
+        output.target === "desktop" ||
+        output.kind === artifact.desiredKind ||
+        output.format === artifact.format,
+    )
+  ) {
+    desiredOutputs.push({
+      kind: artifact.desiredKind,
+      format: artifact.format,
+      target: "desktop",
+      confidence: Math.max(0.8, envelope.intent.confidence),
+      constraints: [],
+    });
+  }
+  const outputContract: UnderstandingEnvelope["output_contract"] = {
+    ...envelope.output_contract,
+    pageCount: envelope.output_contract?.pageCount ?? null,
+    sourceReference:
+      envelope.output_contract?.sourceReference ??
+      envelope.source_reference ??
+      "current_prompt",
+    operation: "write",
+    outputKind: artifact.outputKind,
+    outputFormat: artifact.format,
+    requiresArtifact: true,
+    confidence: Math.max(
+      0.8,
+      envelope.output_contract?.confidence ?? 0,
+      envelope.intent.confidence,
+    ),
+    reasons: [
+      ...new Set([
+        ...(envelope.output_contract?.reasons ?? []),
+        `semantic_capability:${artifact.selected}`,
+      ]),
+    ],
+  };
+  const currentDecision = envelope.tool_skill_decision;
+  const toolSkillDecision =
+    currentDecision?.surface === "chat" ||
+    currentDecision?.selected === "chat.reply"
+      ? {
+          ...currentDecision,
+          selected: artifact.selected,
+          surface: artifact.surface,
+          workload: currentDecision.workload ?? "desktop_handoff",
+          confidence: Math.max(0.8, currentDecision.confidence),
+          reasons: [
+            ...new Set([
+              ...currentDecision.reasons,
+              `semantic_capability:${artifact.selected}`,
+            ]),
+          ],
+        }
+      : currentDecision;
+  return { desiredOutputs, outputContract, toolSkillDecision };
 }
 
 function semanticSuccessCriteria(
@@ -794,6 +1207,48 @@ function inferTextAnalysisMode(message: string): "professional" | "legal" | "med
   return "professional";
 }
 
+function safeArtifactFilename(value: string): string {
+  return (
+    value
+      .toLocaleLowerCase("tr-TR")
+      .replace(/[ıİ]/g, "i")
+      .replace(/[ğĞ]/g, "g")
+      .replace(/[üÜ]/g, "u")
+      .replace(/[şŞ]/g, "s")
+      .replace(/[öÖ]/g, "o")
+      .replace(/[çÇ]/g, "c")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64) || "elyan-belge"
+  );
+}
+
+function explicitResourceRoot(value: string): string | null {
+  const normalized = value.trim().replaceAll("\\", "/");
+  if (!normalized || normalized.includes("{{steps.")) return null;
+  if (normalized === "workspace" || normalized.startsWith("workspace/")) {
+    return "workspace";
+  }
+  if (normalized === "~/Desktop" || normalized.startsWith("~/Desktop/")) {
+    return "~/Desktop";
+  }
+  if (
+    normalized === "~/Downloads" ||
+    normalized.startsWith("~/Downloads/")
+  ) {
+    return "~/Downloads";
+  }
+  const lastSlash = normalized.lastIndexOf("/");
+  if (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//u.test(normalized) ||
+    normalized.startsWith("//")
+  ) {
+    return lastSlash > 0 ? normalized.slice(0, lastSlash) : normalized;
+  }
+  return null;
+}
+
 function buildSteps(input: {
   title: string;
   summary: string;
@@ -825,6 +1280,14 @@ function buildSteps(input: {
   const researchRequested = input.capabilities.includes("web_research");
   const calculationRequested = input.capabilities.includes("math_solve");
   const analysisRequested = input.capabilities.includes("text_analyze");
+  const desktopArtifactTarget =
+    input.envelope?.desired_outputs.some(
+      (output) => output.target === "desktop",
+    ) ??
+    unicodeWordPattern(
+      String.raw`\b(?:masaüstü\p{L}*|masaustu\p{L}*|desktop)\b`,
+      "i",
+    ).test(topic);
   const semanticBrief = compactText([
     input.envelope?.intent.topic,
     ...(input.envelope?.entities ?? []).map((entity) => `${entity.type}: ${entity.normalized ?? entity.value}`),
@@ -920,12 +1383,23 @@ function buildSteps(input: {
   const upstreamStepIds = steps
     .filter((step) => ["step_web_research", "step_math_solve", "step_document_read"].includes(step.id))
     .map((step) => step.id);
-  if (analysisRequested && upstreamStepIds.length > 0) {
-    const sourceContext = [
-      upstreamStepIds.includes("step_document_read") ? "Okunan bağlam: {{steps.step_document_read.output}}" : "",
-      upstreamStepIds.includes("step_math_solve") ? "Hesap sonucu: {{steps.step_math_solve.output}}" : "",
-      upstreamStepIds.includes("step_web_research") ? "Araştırma bağlamı: {{steps.step_web_research.output}}" : "",
-    ].filter(Boolean).join("\n\n");
+  if (analysisRequested) {
+    const sourceContext =
+      upstreamStepIds.length > 0
+        ? [
+            upstreamStepIds.includes("step_document_read")
+              ? "Okunan bağlam: {{steps.step_document_read.output}}"
+              : "",
+            upstreamStepIds.includes("step_math_solve")
+              ? "Hesap sonucu: {{steps.step_math_solve.output}}"
+              : "",
+            upstreamStepIds.includes("step_web_research")
+              ? "Araştırma bağlamı: {{steps.step_web_research.output}}"
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        : semanticBrief;
     steps.push({
       id: "step_text_analyze",
       capability: "text_analyze",
@@ -935,7 +1409,7 @@ function buildSteps(input: {
         sourceContext,
         mode: inferTextAnalysisMode(`${input.title}\n${input.summary}\n${semanticBrief}`),
       },
-      dependsOn: upstreamStepIds,
+      ...(upstreamStepIds.length > 0 ? { dependsOn: upstreamStepIds } : {}),
     });
   }
   for (const capability of ["document_write", "spreadsheet_write", "presentation_write", "canvas_write"] as const) {
@@ -945,30 +1419,27 @@ function buildSteps(input: {
       prompt: semanticBrief,
     };
     if (!researchRequested) args.sourceContext = semanticBrief;
-    if (analysisRequested && upstreamStepIds.length > 0) {
+    if (analysisRequested) {
       args.sourceContext = "Analiz bağlamı: {{steps.step_text_analyze.output}}";
     } else if (researchRequested) {
       args.sourceContext = "Araştırma bağlamı: {{steps.step_web_research.output}}";
     } else if (calculationRequested) {
       args.sourceContext = "Hesap sonucu: {{steps.step_math_solve.output}}";
     }
-    if (
-      capability === "presentation_write"
-      && unicodeWordPattern(String.raw`\b(?:masaüstü\p{L}*|masaustu\p{L}*|desktop)\b`, "i").test(topic)
-    ) {
-      const filename = topic
-        .toLocaleLowerCase("tr-TR")
-        .replace(/[ıİ]/g, "i")
-        .replace(/[ğĞ]/g, "g")
-        .replace(/[üÜ]/g, "u")
-        .replace(/[şŞ]/g, "s")
-        .replace(/[öÖ]/g, "o")
-        .replace(/[çÇ]/g, "c")
-        .replace(unicodeWordPattern(String.raw`\b(?:webden|web'den|araştır|arastir|araştırıp|arastirip|sonuçları|sonuclari|sunum|slayt|pptx|powerpoint|hazırla|hazirla|oluştur|olustur|masaüstüne|masaustune|desktop)\b`, "gi"), " ")
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 64) || "elyan-sunum";
-      args.outputPath = `~/Desktop/${filename}.pptx`;
+    if (desktopArtifactTarget) {
+      const extension =
+        capability === "presentation_write"
+          ? "pptx"
+          : capability === "spreadsheet_write"
+            ? "xlsx"
+            : capability === "canvas_write"
+              ? input.envelope?.output_contract?.outputFormat === "svg"
+                ? "svg"
+                : "pdf"
+              : input.envelope?.output_contract?.outputFormat === "pdf"
+                ? "pdf"
+                : "docx";
+      args.outputPath = `~/Desktop/${safeArtifactFilename(input.title)}.${extension}`;
     }
     if (capability === "canvas_write") {
       const wantsPdf = input.envelope?.desired_outputs.some((output) => output.kind === "pdf") ?? false;
@@ -979,7 +1450,7 @@ function buildSteps(input: {
       capability,
       description: "Tipli kullanıcı gereksinimlerinden deterministik çıktı üretilecek.",
       args,
-      ...(analysisRequested && upstreamStepIds.length > 0
+      ...(analysisRequested
         ? { dependsOn: ["step_text_analyze"] }
         : researchRequested
           ? { dependsOn: ["step_web_research"] }
@@ -988,27 +1459,25 @@ function buildSteps(input: {
             : {}),
     });
   }
-  if (
-    input.capabilities.some((capability) =>
-      ["desktop_operator.observe_screen", "shell_run", "desktop_operator.run"].includes(capability),
-    )
-  ) {
+  if (input.capabilities.includes("chart_generate") && fileHint) {
+    steps.push({
+      id: "step_chart_generate",
+      capability: "chart_generate",
+      description: "Veri kaynağından grafik artifact'i üretilecek.",
+      args: {
+        path: fileHint,
+        chartType: "auto",
+      },
+      ...(analysisRequested
+        ? { dependsOn: ["step_text_analyze"] }
+        : {}),
+    });
+  }
+  if (input.capabilities.includes("desktop_operator.run")) {
     steps.push({
       id: "step_desktop_execute",
       capability: "desktop_operator.run",
       description: "Yerel masaüstü bağlamında görev yürütülecek.",
-      args: {
-        action: "run",
-        goal: semanticBrief,
-        workOrderKind: input.kind,
-      },
-    });
-  }
-  if (steps.length === 0 && !input.capabilities.includes("mcp_call_tool")) {
-    steps.push({
-      id: "step_desktop_execute",
-      capability: "desktop_operator.run",
-      description: "Tipli görev yerel masaüstü bağlamında yürütülecek.",
       args: {
         action: "run",
         goal: semanticBrief,
@@ -1075,6 +1544,9 @@ export function buildDesktopWorkOrder(input: {
   responsiveExecution?: DesktopWorkOrder["planPreview"]["responsiveExecution"];
   livenessGuard?: DesktopWorkOrder["planPreview"]["livenessGuard"];
   autonomy?: DesktopWorkOrder["autonomy"];
+  desktopPlanningEvidence?: NonNullable<
+    DesktopWorkOrder["contextPack"]
+  >["desktopPlanningEvidence"];
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
   const kind = inferKind(input.routeDecision, message);
@@ -1100,7 +1572,29 @@ export function buildDesktopWorkOrder(input: {
   );
   const entities = extractEntities(message);
   const localContextNeeded = inferLocalContext(message, capabilities);
-  const expectedOutputs = inferExpectedOutputs(message, input.understandingEnvelope);
+  const expectedOutputs = inferExpectedOutputs(
+    message,
+    capabilities,
+    input.understandingEnvelope,
+  );
+  const semanticExecutionContract = reconcileSemanticExecutionContract(
+    input.understandingEnvelope,
+    capabilities,
+  );
+  const executionEnvelope = input.understandingEnvelope
+    ? {
+        ...input.understandingEnvelope,
+        desired_outputs:
+          semanticExecutionContract.desiredOutputs ??
+          input.understandingEnvelope.desired_outputs,
+        output_contract:
+          semanticExecutionContract.outputContract ??
+          input.understandingEnvelope.output_contract,
+        tool_skill_decision:
+          semanticExecutionContract.toolSkillDecision ??
+          input.understandingEnvelope.tool_skill_decision,
+      }
+    : undefined;
   const workType: DesktopWorkOrder["workType"] = capabilities.some((capability) => capability.startsWith("quantum_"))
     ? "decision_support"
     : capabilities.some((capability) => capability.startsWith("desktop_operator") || capability === "observe_screen" || capability === "browser_control")
@@ -1143,7 +1637,7 @@ export function buildDesktopWorkOrder(input: {
   const successCriteria = semanticSuccessCriteria(
     expectedOutputs,
     verificationRules,
-    input.understandingEnvelope,
+    executionEnvelope,
   );
   const forbiddenCapabilities = forbiddenCapabilitiesForWorkOrder({
     workType,
@@ -1157,18 +1651,90 @@ export function buildDesktopWorkOrder(input: {
     kind,
     capabilities,
     entities,
-    envelope: input.understandingEnvelope,
+    envelope: executionEnvelope,
     inputRefs: input.inputRefs,
   });
   for (const step of steps) {
     if (!capabilities.includes(step.capability)) capabilities.push(step.capability);
   }
   const sourceReference = input.understandingEnvelope?.source_reference ?? "current_prompt";
-  const privacyRouting = input.understandingEnvelope?.privacy_routing ?? {
+  const basePrivacyRouting = executionEnvelope?.privacy_routing ?? {
     mode: localContextNeeded.length > 0 ? "desktop_private" : "server",
     mayUseHostedModels: localContextNeeded.length === 0,
     maySendPrivateContextToServer: false,
     reasons: localContextNeeded.length > 0 ? ["local_private_context"] : ["server_safe_context"],
+  };
+  const requiresDesktopExecutionContext =
+    localContextNeeded.length > 0 ||
+    (executionEnvelope?.desired_outputs ?? []).some(
+      (output) => output.target === "desktop",
+    );
+  const privacyRouting =
+    requiresDesktopExecutionContext
+      ? {
+          ...basePrivacyRouting,
+          mode: "desktop_private" as const,
+          maySendPrivateContextToServer: false,
+          reasons: [
+            ...new Set([
+              ...basePrivacyRouting.reasons,
+              "desktop_execution_context",
+            ]),
+          ],
+        }
+      : basePrivacyRouting;
+  const explicitRoots = [
+    ...entities
+      .filter((entity) => entity.type === "file_hint")
+      .map((entity) => explicitResourceRoot(entity.value)),
+    ...(input.inputRefs ?? []).map(explicitResourceRoot),
+  ].filter((root): root is string => Boolean(root));
+  const stepRoots = steps.flatMap((step) =>
+      Object.entries(step.args)
+        .filter(
+          ([key, value]) =>
+            /path$/iu.test(key) && typeof value === "string",
+        )
+        .map(([, value]) => ({
+          root: explicitResourceRoot(String(value)),
+          privacyClass: DESKTOP_CAPABILITY_MANIFEST.find(
+            (entry) => entry.name === step.capability,
+          )?.privacyClass,
+        })),
+  ).filter(
+    (
+      item,
+    ): item is { root: string; privacyClass: string | undefined } =>
+      Boolean(item.root),
+  );
+  const stepReadRoots = stepRoots
+    .filter((item) => item.privacyClass?.includes("_write") !== true)
+    .map((item) => item.root);
+  const stepWriteRoots = stepRoots
+    .filter((item) => item.privacyClass?.includes("_write") === true)
+    .map((item) => item.root);
+  const desktopOutputRequested = (
+    executionEnvelope?.desired_outputs ?? []
+  ).some((output) => output.target === "desktop") ||
+    steps.some((step) =>
+      Object.entries(step.args).some(
+        ([key, value]) =>
+          /path$/iu.test(key) &&
+          typeof value === "string" &&
+          (value === "~/Desktop" || value.startsWith("~/Desktop/")),
+      ),
+    );
+  const resourceScope = {
+    contract: "elyan.resource_scope.v1" as const,
+    readRoots: [
+      ...new Set(["workspace", ...explicitRoots, ...stepReadRoots]),
+    ],
+    writeRoots: [
+      ...new Set([
+        desktopOutputRequested ? "~/Desktop" : "workspace",
+        ...stepWriteRoots,
+      ]),
+    ],
   };
   return {
     schema: "elyan.desktop_work_order.v1",
@@ -1214,6 +1780,7 @@ export function buildDesktopWorkOrder(input: {
       sideEffectsRequireApproval: true,
     },
     localContextNeeded,
+    resourceScope,
     expectedOutputs,
     verificationRules,
     execution: {
@@ -1225,9 +1792,12 @@ export function buildDesktopWorkOrder(input: {
       sourceReference,
       conversationState: input.understandingEnvelope?.conversation_state,
       latestArtifactRef: input.understandingEnvelope?.latest_artifact_ref ?? null,
-      toolSkillDecision: input.understandingEnvelope?.tool_skill_decision ?? null,
-      outputContract: input.understandingEnvelope?.output_contract ?? null,
+      toolSkillDecision: semanticExecutionContract.toolSkillDecision ?? null,
+      outputContract: semanticExecutionContract.outputContract ?? null,
       privacyRouting,
+      ...(input.desktopPlanningEvidence
+        ? { desktopPlanningEvidence: input.desktopPlanningEvidence }
+        : {}),
     },
     executionPlan: {
       mode: workType,
@@ -1322,7 +1892,9 @@ export function buildDesktopWorkOrder(input: {
             intent: input.understandingEnvelope.intent,
             entities: input.understandingEnvelope.entities,
             constraints: input.understandingEnvelope.constraints,
-            desiredOutputs: input.understandingEnvelope.desired_outputs,
+            desiredOutputs:
+              semanticExecutionContract.desiredOutputs ??
+              input.understandingEnvelope.desired_outputs,
             successCriteria: input.understandingEnvelope.success_criteria,
             ambiguities: input.understandingEnvelope.ambiguities,
             risk: input.understandingEnvelope.risk,
@@ -1330,8 +1902,12 @@ export function buildDesktopWorkOrder(input: {
             sourceReference: input.understandingEnvelope.source_reference,
             latestArtifactRef: input.understandingEnvelope.latest_artifact_ref,
             conversationState: input.understandingEnvelope.conversation_state,
-            toolSkillDecision: input.understandingEnvelope.tool_skill_decision,
-            outputContract: input.understandingEnvelope.output_contract,
+            toolSkillDecision:
+              semanticExecutionContract.toolSkillDecision ??
+              input.understandingEnvelope.tool_skill_decision,
+            outputContract:
+              semanticExecutionContract.outputContract ??
+              input.understandingEnvelope.output_contract,
             privacyRouting: input.understandingEnvelope.privacy_routing,
             ambiguityPolicy: input.understandingEnvelope.ambiguity_policy,
             confidence: input.understandingEnvelope.confidence,

@@ -34,7 +34,7 @@ test("buildTaskTraceBlock adds human-readable phase metadata", () => {
   assert.equal(block.activeStepId, undefined);
 });
 
-test("buildTaskTraceBlock exposes a safe route rationale", () => {
+test("buildTaskTraceBlock hides ordinary chat route rationale from the card trigger", () => {
   const block = buildTaskTraceBlock({
     task: {
       id: "task-route-rationale",
@@ -60,10 +60,7 @@ test("buildTaskTraceBlock exposes a safe route rationale", () => {
     assistantContent: "Hazır.",
   });
 
-  assert.equal(
-    block.routeReason,
-    "Elyan bunu sohbet olarak işledi çünkü istek özel yerel veri veya bilgisayar erişimi gerektirmiyor.",
-  );
+  assert.equal(block.routeReason, undefined);
   assert.equal(
     block.steps.find((step) => step.id === "route")?.detail,
     "Yanıt yolu seçildi.",

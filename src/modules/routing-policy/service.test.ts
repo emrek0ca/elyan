@@ -1441,22 +1441,36 @@ test("decideCommandRoute ignores legacy routePreference/desktopDispatchOnce sign
   assert.equal(decision.route, "server_brain");
 });
 
-test("decideCommandRoute keeps everything on the shared brain when the toggle is off", async () => {
-  // Even an unmistakably desktop-sounding prompt with a ready desktop stays on
-  // the server brain unless the user explicitly opts in. No silent auto-routing.
+test("decideCommandRoute routes real local execution even when the old toggle is off", async () => {
+  // The route model is the authority now. A real local file action must not be
+  // answered as plausible server chat merely because the old toggle is absent.
   const app = createDesktopReadyApp();
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "desktop_runtime" as const,
+        operationalRoute: "desktop_runtime" as const,
+        executionPlan: ["desktop_runtime" as const],
+        reason: "The request requires reading and opening local desktop files.",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      }),
+    },
+  });
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
     message: "masaüstündeki raporu aç ve özetle",
     source: "mobile",
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.mode, "chat");
-  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.mode, "executable_task");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
-test("decideCommandRoute ignores desktop capabilities from mobile when dispatch is off", async () => {
+test("decideCommandRoute honors explicit desktop capabilities from mobile", async () => {
   const app = createDesktopReadyApp(["filesystem_read"]);
   const decision = await decideCommandRoute(app as never, {
     userId: "dispatch-off-capability-user",
@@ -1465,10 +1479,10 @@ test("decideCommandRoute ignores desktop capabilities from mobile when dispatch 
     requestedCapabilities: ["filesystem_read"],
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.mode, "chat");
-  assert.equal(decision.targetDeviceId, undefined);
-  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.mode, "executable_task");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
 test("decideCommandRoute uses the model decision for dispatch-enabled execution", async () => {
@@ -1615,6 +1629,65 @@ test("decideCommandRoute accepts a schema-valid direct desktop model route", asy
   assert.equal(decision.taskRoute?.target, "desktop_runtime");
 });
 
+test("decideCommandRoute sends model-classified local artifact work to desktop", async () => {
+  const app = createDesktopReadyApp();
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "desktop_runtime" as const,
+        operationalRoute: "desktop_runtime" as const,
+        executionPlan: ["desktop_runtime" as const],
+        reason: "The user asks Elyan to create a verified local desktop document artifact.",
+        needsDesktop: true,
+        needsPrivateDesktopData: false,
+        needsUserApproval: true,
+        requiredCapabilities: [],
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "desktop-artifact-route-user",
+    message:
+      "Ceza hukuku nedir araştır ve öğrenci için DOCX çalışma rehberini masaüstüne kaydet.",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.operationalRoute, "desktop_runtime");
+  assert.equal(decision.taskRoute?.needsPrivateDesktopData, false);
+  assert.equal(decision.requiresApproval, true);
+});
+
+test("decideCommandRoute keeps desktop-word advice on server when model says no execution", async () => {
+  const app = createDesktopReadyApp();
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain" as const,
+        operationalRoute: "server_brain" as const,
+        executionPlan: ["server_brain" as const],
+        reason: "The user asks for advice about where to save, not execution.",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "desktop-advice-route-user",
+    message: "Raporu masaüstüne kaydetmek iyi fikir mi, nasıl düzenlemeliyim?",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.requiredRuntime, "server");
+});
+
 test("decideCommandRoute rejects string booleans from a malformed model route", async () => {
   const app = createDesktopReadyApp(["filesystem_read"]);
   Object.assign(app.services, {
@@ -1660,7 +1733,7 @@ test("decideCommandRoute fails closed when an explicit desktop capability has no
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
-test("decideCommandRoute keeps chat on the server when dispatch is on but the plan forbids desktop", async () => {
+test("decideCommandRoute fails closed when desktop execution is required but plan forbids desktop", async () => {
   const app = createDesktopReadyApp();
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -1671,12 +1744,9 @@ test("decideCommandRoute keeps chat on the server when dispatch is on but the pl
     requestedCapabilities: ["filesystem_read"],
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.failClosedReason, null);
-  assert.equal(
-    decision.userFacingMessage,
-    "Masaüstü bağlantısı bu planda kapalı; sohbet burada devam ediyor.",
-  );
+  assert.equal(decision.route, "unavailable");
+  assert.equal(decision.failClosedReason, "desktop_plan_required");
+  assert.equal(decision.requiredRuntime, "desktop");
 });
 
 test("decideCommandRoute escalates low-confidence ambiguous prompts to the balanced profile", async () => {

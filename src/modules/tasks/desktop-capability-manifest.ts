@@ -195,7 +195,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "requiredArgs": [
       "query"
     ],
-    "requiresApproval": false,
+    "requiresApproval": true,
     "whenToUse": [
       "ekranda ne var",
       "aktif pencerede ne görünüyor",
@@ -209,7 +209,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "query"
       ],
-      "target": "active_window only in v1"
+      "target": "active_window only in v1",
+      "cloudDefault": "local_only"
     },
     "outputContract": {
       "kind": "screen_analysis",
@@ -1344,7 +1345,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "description": "Metin veya öğe tipine göre ekrandaki hedef öğeyi bulur (operator alt-adımı).",
     "usage": "İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde.",
     "requiredArgs": [],
-    "requiresApproval": false,
+    "requiresApproval": true,
     "whenToUse": [
       "İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde."
     ],
@@ -1361,6 +1362,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         "elementType": {
           "type": "STRING",
           "description": "Öğe tipi, örn. 'button', 'field'."
+        },
+        "imagePath": {
+          "type": "STRING",
+          "description": "Ekranda aranacak template görsel yolu."
+        },
+        "threshold": {
+          "type": "NUMBER",
+          "description": "Template eşleşme eşiği; varsayılan 0.86."
         }
       },
       "additionalProperties": false
@@ -1372,7 +1381,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
     ],
     "liveNarration": [
       "Capability is running.",
@@ -1384,7 +1394,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_screen",
     "skillAffinity": []
   },
   {
@@ -1393,7 +1403,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "description": "Operator için yapılandırılmış ekran gözlemi üretir; sonraki UI eylemini güvenli seçmek için kullanılır.",
     "usage": "Ekran-eylem planında her kritik tıklama/yazma öncesi ve sonrası durum görmek için.",
     "requiredArgs": [],
-    "requiresApproval": false,
+    "requiresApproval": true,
     "whenToUse": [
       "UI görevinin mevcut durumunu gözle",
       "buton/alan görünür mü kontrol et",
@@ -1790,8 +1800,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "document_write",
     "displayName": "Belge oluşturma",
-    "description": "DOCX/Word belgesi üretir; metin, bölüm, tablo, grafik ve görsel bloklarını düzenli belgeye yazar.",
-    "usage": "Word/DOCX, dilekçe, rapor, yazı, taslak, not veya profesyonel belge istendiğinde. PDF için canvas_write, Excel için spreadsheet_write, sunum için presentation_write.",
+    "description": "DOCX/Word veya sade PDF belgesi üretir; metin, bölüm, tablo, grafik ve görsel bloklarını düzenli belgeye yazar.",
+    "usage": "Word/DOCX, sade PDF, dilekçe, rapor, yazı, taslak, not veya profesyonel belge istendiğinde. Tasarımlı canvas PDF için canvas_write, Excel için spreadsheet_write, sunum için presentation_write.",
     "requiredArgs": [],
     "requiresApproval": true,
     "whenToUse": [
@@ -1800,7 +1810,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "okunan metni Word belgesi yap"
     ],
     "whenNotToUse": [
-      "PDF isteniyorsa canvas_write kullan.",
+      "Görsel tasarımlı PDF isteniyorsa canvas_write kullan.",
       "Sunum/slayt isteniyorsa presentation_write kullan.",
       "Tablo/xlsx isteniyorsa spreadsheet_write kullan."
     ],
@@ -1812,29 +1822,36 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         "sourceContext",
         "sourcePath"
       ],
+      "formatDecision": "outputFormat/outputPath extension chooses docx or pdf",
       "mustUsePriorOutputs": "research/read/analysis outputs go into sourceContext or prompt"
     },
     "outputContract": {
       "kind": "document_write",
       "primary": "artifact",
       "formats": [
-        "docx"
+        "docx",
+        "pdf"
       ]
     },
     "artifactContract": {
       "artifactTypes": [
-        "document"
+        "document",
+        "pdf"
       ],
       "extension": ".docx",
+      "extensions": [
+        ".docx",
+        ".pdf"
+      ],
       "mobileBlocksRemainCanonical": true
     },
     "verificationPlan": [
-      "Check DOCX artifact exists.",
+      "Check written artifact exists and extension matches requested format.",
       "Writer args must contain concrete content or a prior-step reference."
     ],
     "liveNarration": [
       "Belge içeriği düzenleniyor",
-      "DOCX dosyası oluşturuluyor",
+      "Belge dosyası oluşturuluyor",
       "Belge çıktısı doğrulanıyor"
     ],
     "failureModes": [
@@ -3197,6 +3214,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         "languageHint": {
           "type": "STRING",
           "description": "Metin dili ipucu, örn. 'tr'."
+        },
+        "backend": {
+          "type": "STRING",
+          "description": "auto, rapidocr, tesseract, easyocr, paddleocr veya surya."
         }
       },
       "additionalProperties": false
@@ -3220,7 +3241,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_read",
     "skillAffinity": []
   },
   {

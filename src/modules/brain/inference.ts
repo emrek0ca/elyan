@@ -250,6 +250,11 @@ import {
   isSocialChatPrompt,
 } from "./chat-heuristics.js";
 import {
+  buildGroundedSocialReply,
+  type LiveSocialSignals,
+  type SocialTurnKind,
+} from "./grounded-social-reply.js";
+import {
   classifyReasoningDump,
   extractFinalAnswerFromReasoningDump,
   looksLikeReasoningDumpOpening,
@@ -993,78 +998,127 @@ function buildCheapSocialTurnReply(
   }
   const name = readPreferredUserName(input.understandingContext);
   const lower = prompt.toLocaleLowerCase("tr-TR");
+  // Desenler yalnız TÜRÜ belirler; cümleyi `grounded-social-reply` kurar.
+  // Eskiden burada sekiz sabit cümle vardı ve beşinde "buradayım" geçiyordu —
+  // aynı kelimeyi her açılışta duymak asistanı ölü gösteriyordu. Sabit metin
+  // yerine "açılış + EN FAZLA BİR doğrulanabilir ipucu" üretilir; ipucu yoksa
+  // düz açılış kalır (uydurma yok) ve aynı açılış üst üste tekrarlanmaz.
+  const socialKind = classifySocialTurn(lower);
+  if (!socialKind) {
+    return null;
+  }
+  return buildGroundedSocialReply({
+    kind: socialKind,
+    userId: input.understandingContext?.userId ?? "anonymous",
+    name,
+    context: input.understandingContext,
+    signals: readLiveSocialSignals(input),
+  });
+}
+
+/**
+ * Which kind of social turn is this? Patterns here classify ONLY — they never
+ * carry the answer text. Adding a new phrasing means adding it to one arm of
+ * this switch, not writing another canned sentence.
+ */
+function classifySocialTurn(lower: string): SocialTurnKind | null {
   if (
     /\b(orada mısın|burada mısın|burda mısın|are you there|you there)\b/i.test(
       lower,
     )
   ) {
-    return name ? `Buradayım ${name}.` : "Buradayım.";
-  }
-  if (/^(hey|selam|merhaba|mrb|slm|hi|hello)\b/i.test(lower)) {
-    return name ? `Merhaba ${name}, buradayım.` : "Merhaba, buradayım.";
+    return "presence";
   }
   if (/^(?:günaydın|gunaydin|iyi sabahlar|good morning)\b/iu.test(lower)) {
-    return name
-      ? `Günaydın ${name}! Bugün neye el atalım?`
-      : "Günaydın! Bugün neye el atalım?";
+    return "morning";
   }
   if (/^(?:iyi geceler|good night)\b/iu.test(lower)) {
-    return name
-      ? `İyi geceler ${name}. Dinlen; sonra kaldığımız yerden devam ederiz.`
-      : "İyi geceler. Dinlen; sonra kaldığımız yerden devam ederiz.";
+    return "night";
+  }
+  if (/^(hey|selam|merhaba|mrb|slm|hi|hello)\b/i.test(lower)) {
+    return "greeting";
   }
   if (
     /^(?:naber|ne haber|nasılsın|nasilsin|nasıl gidiyor|nasil gidiyor|how are you|how(?:'|’)s it going)\b/iu.test(
       lower,
     )
   ) {
-    return name
-      ? `İyiyim ${name}, buradayım. Sen nasılsın?`
-      : "İyiyim, buradayım. Sen nasılsın?";
+    return "how_are_you";
   }
   if (
     /(?<!\p{L})(?:ne yapıyorsun|ne yapiyorsun|napıyorsun|napiyorsun)(?!\p{L})/iu.test(
       lower,
     )
   ) {
-    return name
-      ? `Buradayım ${name}, seninle ilgileniyorum. Ne yapalım?`
-      : "Buradayım, seninle ilgileniyorum. Ne yapalım?";
+    return "what_doing";
   }
   if (
     /(?<!\p{L})(?:teşekkür|tesekkur|sağ ol|sag ol|thanks|thank you)\p{L}*/iu.test(
       lower,
     )
   ) {
-    return name ? `Rica ederim ${name}. Her zaman.` : "Rica ederim. Her zaman.";
+    return "thanks";
   }
   if (
     /(?<!\p{L})(?:sıkıldım|sikildim|canım sıkılıyor|canim sikiliyor|i(?:'|’)m bored)(?!\p{L})/iu.test(
       lower,
     )
   ) {
-    return "O zaman küçük bir şey seçelim: sohbet, kısa bir fikir oyunu ya da birlikte çözeceğimiz bir iş?";
+    return "bored";
   }
   if (
     /(?<!\p{L})(?:seni seviyorum|iyi ki varsın|iyi ki varsin|love you)(?!\p{L})/iu.test(
       lower,
     )
   ) {
-    return "Bu sıcaklık güzel geldi. Ben de buradayım. 💚";
+    return "affection";
   }
   if (
     /(?<!\p{L})(?:görüşürüz|gorusuruz|hoşça kal|hosca kal|bye)(?!\p{L})/iu.test(
       lower,
     )
   ) {
-    return name
-      ? `Görüşürüz ${name}.`
-      : "Görüşürüz. Ne zaman istersen buradayım.";
+    return "farewell";
   }
   if (/^(?:tamam|peki|olur|okey|okay)[!?.\s]*$/iu.test(lower)) {
-    return "Tamam. Devam edelim.";
+    return "ack";
   }
   return null;
+}
+
+/**
+ * Live desktop/runtime signals carried on the request, if the caller supplied
+ * them. Absent → the greeting simply has no cue. Never invented here.
+ */
+function readLiveSocialSignals(
+  input: SharedBrainInferenceInput,
+): LiveSocialSignals | undefined {
+  const raw = (input.requestMetadata ?? {}) as Record<string, unknown>;
+  const live = raw.liveSignals;
+  if (!live || typeof live !== "object") {
+    return undefined;
+  }
+  const map = live as Record<string, unknown>;
+  const asText = (value: unknown): string | null =>
+    typeof value === "string" && value.trim() ? value.trim() : null;
+  const asCount = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+  const progress = map.activeTaskProgress as
+    | { completed?: unknown; total?: unknown }
+    | undefined;
+  return {
+    activeTaskLabel: asText(map.activeTaskLabel),
+    activeTaskProgress:
+      progress &&
+      typeof progress.completed === "number" &&
+      typeof progress.total === "number"
+        ? { completed: progress.completed, total: progress.total }
+        : null,
+    recentOutputName: asText(map.recentOutputName),
+    recentOutputMinutesAgo: asCount(map.recentOutputMinutesAgo),
+    upcomingEventTitle: asText(map.upcomingEventTitle),
+    upcomingEventMinutes: asCount(map.upcomingEventMinutes),
+  };
 }
 
 function deterministicDriveRecentRequest(
@@ -1609,6 +1663,20 @@ function detectMemoryEnabled(
     readMetadataBoolean(root, "memoryEnabled") ??
     true
   );
+}
+
+function buildRetrievalNeuralPolicy(rawProfile: unknown): {
+  neuralReady: boolean;
+  embeddingReady: boolean;
+  evaluationReady: boolean;
+} {
+  const profile = readMetadataRecord(rawProfile);
+  const learning = readMetadataRecord(profile?.learning);
+  return {
+    neuralReady: readMetadataBoolean(learning, "neuralReady") === true,
+    embeddingReady: readMetadataBoolean(learning, "embeddingReady") === true,
+    evaluationReady: readMetadataBoolean(learning, "evaluationReady") === true,
+  };
 }
 
 function analyzeResponseCompleteness(
@@ -3777,6 +3845,128 @@ function buildRetrievalPromptBlock(input: {
   return lines.join("\n");
 }
 
+function readRetrievalOrchestration(
+  retrieval: unknown,
+): {
+  lowConfidence: boolean;
+  coverage: number | null;
+  evidenceAcceptanceScore: number | null;
+  evidenceAcceptanceThreshold: number | null;
+  unsupportedSubquestionCount: number | null;
+  semanticRerankAdmitted: boolean | null;
+  selfCheckSensitivity: string | null;
+  selfCheckRetried: boolean;
+  strategy: string | null;
+} {
+  if (!retrieval || typeof retrieval !== "object") {
+    return {
+      lowConfidence: false,
+      coverage: null,
+      evidenceAcceptanceScore: null,
+      evidenceAcceptanceThreshold: null,
+      unsupportedSubquestionCount: null,
+      semanticRerankAdmitted: null,
+      selfCheckSensitivity: null,
+      selfCheckRetried: false,
+      strategy: null,
+    };
+  }
+  const orchestration = (retrieval as { orchestration?: unknown }).orchestration;
+  if (!orchestration || typeof orchestration !== "object") {
+    return {
+      lowConfidence: false,
+      coverage: null,
+      evidenceAcceptanceScore: null,
+      evidenceAcceptanceThreshold: null,
+      unsupportedSubquestionCount: null,
+      semanticRerankAdmitted: null,
+      selfCheckSensitivity: null,
+      selfCheckRetried: false,
+      strategy: null,
+    };
+  }
+  const record = orchestration as Record<string, unknown>;
+  const evidenceAcceptance = readMetadataRecord(record.evidenceAcceptance);
+  const neuralPolicy = readMetadataRecord(record.neuralPolicy);
+  const coverage =
+    typeof record.coverage === "number" && Number.isFinite(record.coverage)
+      ? Math.max(0, Math.min(1, record.coverage))
+      : null;
+  const evidenceAcceptanceScore = readMetadataNumber(
+    evidenceAcceptance,
+    "score",
+  );
+  const evidenceAcceptanceThreshold = readMetadataNumber(
+    evidenceAcceptance,
+    "threshold",
+  );
+  const unsupportedSubquestionCount = readMetadataNumber(
+    evidenceAcceptance,
+    "unsupportedSubquestionCount",
+  );
+  return {
+    lowConfidence: record.lowConfidence === true,
+    coverage,
+    evidenceAcceptanceScore:
+      evidenceAcceptanceScore == null
+        ? null
+        : Math.max(0, Math.min(1, evidenceAcceptanceScore)),
+    evidenceAcceptanceThreshold:
+      evidenceAcceptanceThreshold == null
+        ? null
+        : Math.max(0, Math.min(1, evidenceAcceptanceThreshold)),
+    unsupportedSubquestionCount,
+    semanticRerankAdmitted:
+      readMetadataBoolean(neuralPolicy, "semanticRerankAdmitted"),
+    selfCheckSensitivity: readMetadataString(
+      neuralPolicy,
+      "selfCheckSensitivity",
+    ),
+    selfCheckRetried: record.selfCheckRetried === true,
+    strategy: typeof record.strategy === "string" ? record.strategy : null,
+  };
+}
+
+function buildRetrievalQualityDirective(input: {
+  lowConfidence: boolean;
+  coverage: number | null;
+  evidenceAcceptanceScore: number | null;
+  evidenceAcceptanceThreshold: number | null;
+  unsupportedSubquestionCount: number | null;
+  resultCount: number;
+  degradedReason: string | null;
+}): string | null {
+  if (
+    !input.lowConfidence &&
+    input.degradedReason == null &&
+    (input.coverage == null || input.coverage >= 0.55) &&
+    (input.evidenceAcceptanceScore == null ||
+      input.evidenceAcceptanceScore >=
+        (input.evidenceAcceptanceThreshold ?? 0.45)) &&
+    (input.unsupportedSubquestionCount == null ||
+      input.unsupportedSubquestionCount <= 0)
+  ) {
+    return null;
+  }
+  const coverage =
+    input.coverage == null ? "unknown" : input.coverage.toFixed(2);
+  const acceptance =
+    input.evidenceAcceptanceScore == null
+      ? "unknown"
+      : input.evidenceAcceptanceScore.toFixed(2);
+  const threshold =
+    input.evidenceAcceptanceThreshold == null
+      ? "unknown"
+      : input.evidenceAcceptanceThreshold.toFixed(2);
+  return [
+    "Retrieval quality directive:",
+    `- Internal retrieval confidence is limited (lowConfidence=${String(input.lowConfidence)}, coverage=${coverage}, evidenceAcceptance=${acceptance}/${threshold}, unsupportedSubquestions=${String(input.unsupportedSubquestionCount ?? 0)}, resultCount=${String(input.resultCount)}, degradedReason=${input.degradedReason ?? "none"}).`,
+    "- Use retrieved facts only when they are directly supported by the provided snippets.",
+    "- When evidence is weak, answer from stable general reasoning and explicitly avoid pretending that memory/RAG proved the claim.",
+    "- Do not ask the user to retry unless the missing evidence is required to complete the task.",
+  ].join("\n");
+}
+
 /// Maps a timestamp to a short relative phrase the model can paraphrase ("3
 /// days ago", "earlier today"). Empty when no timestamp is available.
 function relativeMemoryAge(timestamp: string | undefined | null): string {
@@ -3970,6 +4160,7 @@ function buildSelfCheck(input: {
   retrievalCount: number;
   memoryResults: Array<{ confidence: number; staleness: string }>;
   retrievalDegradedReason: string | null;
+  retrievalLowConfidence?: boolean;
   memoryDegradedReason: string | null;
   route?: string;
 }) {
@@ -3982,7 +4173,9 @@ function buildSelfCheck(input: {
     (item) => item.staleness === "contested",
   );
   const retrievalSufficiency =
-    input.retrievalCount > 0 || input.memoryCount >= 2
+    input.retrievalLowConfidence === true
+      ? "partial"
+      : input.retrievalCount > 0 || input.memoryCount >= 2
       ? "strong"
       : input.memoryCount === 1
         ? "partial"
@@ -4000,6 +4193,8 @@ function buildSelfCheck(input: {
       ? "route_to_task"
       : needsClarification
         ? "clarify"
+        : input.retrievalLowConfidence === true
+          ? "evidence_gap"
         : hasStaleMemory
           ? "memory_gap"
           : "grounded";
@@ -5717,6 +5912,7 @@ export async function generateSharedBrainReply(
         }));
     const brainCorpusDomains = detectBrainCorpusDomains(knowledgeQuery);
     const retrievalQuery = buildBrainCorpusRetrievalQuery(knowledgeQuery);
+    const retrievalNeuralPolicy = buildRetrievalNeuralPolicy(input.brainProfile);
     const [retrieval, memory, webGrounding] = shouldAugment
       ? await Promise.all([
           retrievalAuthorized
@@ -5724,6 +5920,7 @@ export async function generateSharedBrainReply(
                 userId: input.userId,
                 query: retrievalQuery,
                 limit: planBrainProfile.retrievalFanout,
+                neuralPolicy: retrievalNeuralPolicy,
               }).catch(() => ({
                 retrievalMode: "lexical_fallback" as const,
                 results: [],
@@ -5795,9 +5992,22 @@ export async function generateSharedBrainReply(
       input.onDelta = undefined;
     }
     const retrievalTelemetry = buildRetrievalTelemetry(retrieval);
+    const retrievalOrchestration = readRetrievalOrchestration(retrieval);
     const retrievalBlock = buildRetrievalPromptBlock({
       workload,
       ...retrieval,
+    });
+    const retrievalQualityDirective = buildRetrievalQualityDirective({
+      lowConfidence: retrievalOrchestration.lowConfidence,
+      coverage: retrievalOrchestration.coverage,
+      evidenceAcceptanceScore:
+        retrievalOrchestration.evidenceAcceptanceScore,
+      evidenceAcceptanceThreshold:
+        retrievalOrchestration.evidenceAcceptanceThreshold,
+      unsupportedSubquestionCount:
+        retrievalOrchestration.unsupportedSubquestionCount,
+      resultCount: retrieval.results.length,
+      degradedReason: retrieval.degradedReason,
     });
     const memoryBlock = shouldUseLegacyMemoryPrompt(input.understandingContext)
       ? buildMemoryPromptBlock({ workload, results: memory.results })
@@ -6055,9 +6265,29 @@ export async function generateSharedBrainReply(
       retrievalCount: retrieval.results.length,
       memoryResults: memory.results,
       retrievalDegradedReason: retrieval.degradedReason,
+      retrievalLowConfidence: retrievalOrchestration.lowConfidence,
       memoryDegradedReason: memory.degradedReason,
       route: input.route,
     });
+    const retrievalOrchestrationMetadata = {
+      retrievalLowConfidence: retrievalOrchestration.lowConfidence,
+      retrievalCoverage: retrievalOrchestration.coverage,
+      retrievalEvidenceAcceptanceScore:
+        retrievalOrchestration.evidenceAcceptanceScore,
+      retrievalEvidenceAcceptanceThreshold:
+        retrievalOrchestration.evidenceAcceptanceThreshold,
+      retrievalUnsupportedSubquestionCount:
+        retrievalOrchestration.unsupportedSubquestionCount,
+      retrievalSelfCheckRetried: retrievalOrchestration.selfCheckRetried,
+      retrievalStrategy: retrievalOrchestration.strategy,
+      retrievalSemanticRerankAdmitted:
+        retrievalOrchestration.semanticRerankAdmitted,
+      retrievalSelfCheckSensitivity:
+        retrievalOrchestration.selfCheckSensitivity,
+      retrievalNeuralReady: retrievalNeuralPolicy.neuralReady,
+      retrievalEmbeddingReady: retrievalNeuralPolicy.embeddingReady,
+      retrievalEvaluationReady: retrievalNeuralPolicy.evaluationReady,
+    };
     const memoryEnabled = detectMemoryEnabled(
       input.requestMetadata,
       input.understandingContext,
@@ -6231,6 +6461,7 @@ export async function generateSharedBrainReply(
         gatedContinuityBlock == null &&
         gatedBehaviorLearningBlock == null &&
         claimConfidencePromptDirective == null
+        && retrievalQualityDirective == null
         ? app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT
         : [
             app.config.ELYAN_SHARED_BRAIN_SYSTEM_PROMPT,
@@ -6248,6 +6479,7 @@ export async function generateSharedBrainReply(
             visualContentSafetyPromptBlock,
             visionEvidenceFusionPromptBlock,
             visionResponseContractPromptBlock,
+            retrievalQualityDirective,
             claimConfidencePromptDirective,
           ]
             .filter(Boolean)
@@ -7527,6 +7759,7 @@ export async function generateSharedBrainReply(
               retrievalTelemetry.lexicalCandidateCount,
             retrievalSemanticCandidateCount:
               retrievalTelemetry.semanticCandidateCount,
+            ...retrievalOrchestrationMetadata,
             rerankUsed: retrievalTelemetry.rerankUsed,
             rerankDegradedReason: retrievalTelemetry.rerankDegradedReason,
             groundingUsed,
@@ -8116,13 +8349,8 @@ export async function generateSharedBrainReply(
     // Self-RAG dürüstlük sinyali: retrieval kullanıldı ama kanıt kapsaması
     // düşük kaldıysa (orchestration.lowConfidence) kullanıcıya ince bir
     // güven çipi göster — halüsinasyon şüphesinde sessiz kalma.
-    const retrievalOrchestration =
-      retrieval && typeof retrieval === "object" && "orchestration" in retrieval
-        ? (retrieval as { orchestration?: { lowConfidence?: boolean } })
-            .orchestration
-        : undefined;
     const lowConfidenceBlocks =
-      retrievalOrchestration?.lowConfidence === true &&
+      retrievalOrchestration.lowConfidence === true &&
       retrieval.results.length > 0
         ? [
             {
@@ -8277,6 +8505,7 @@ export async function generateSharedBrainReply(
           retrievalTelemetry.lexicalCandidateCount,
         retrievalSemanticCandidateCount:
           retrievalTelemetry.semanticCandidateCount,
+        ...retrievalOrchestrationMetadata,
         rerankUsed: retrievalTelemetry.rerankUsed,
         workerOffloaded:
           retrievalTelemetry.rerankUsed === true ||

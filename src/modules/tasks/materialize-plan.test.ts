@@ -5,6 +5,7 @@ import {
   buildAllowedCapabilities,
   buildPlanningPrompt,
   clearPlanningCatalogCacheForTests,
+  compileValidatedSemanticFallback,
   getPlanningCatalogCacheStats,
   markDesktopPlanPrepared,
   maybeMaterializeDesktopPlan,
@@ -12,6 +13,7 @@ import {
   normalizeMaterializedSteps,
   readPlanningGatePrompt,
   renderPlanningFewShots,
+  validateMaterializedPlanAgainstWorkOrder,
   validateMaterializedPlanContracts,
 } from "./materialize-plan.js";
 import type { DesktopWorkOrder } from "./desktop-work-order.js";
@@ -79,6 +81,49 @@ test("an already materialized server plan remains dispatchable on retry", async 
   assert.equal(materialized, true);
 });
 
+test("a semantic server plan without a current binding is rematerialized", async () => {
+  const order = workOrder("Masaüstünü listele", ["directory_tree"]);
+  order.semanticGoal = {
+    contract: "elyan.semantic_task_contract.v1",
+    objective: "Masaüstünü listele",
+    constraints: [],
+    successCriteria: ["Liste döner."],
+    requiredCapabilities: ["directory_tree"],
+    forbiddenCapabilities: [],
+    ambiguityPolicy: "safe_assumption",
+    risk: {
+      localPrivate: true,
+      sideEffect: false,
+      irreversible: false,
+    },
+  };
+  order.planPreview = {
+    ...order.planPreview,
+    planSource: "server_materialized",
+    contract: "elyan.compiled_plan.v1",
+    steps: [
+      {
+        id: "list",
+        capability: "directory_tree",
+        description: "Masaüstünü listele",
+        args: { path: "~/Desktop" },
+      },
+    ],
+  };
+
+  assert.equal(
+    await maybeMaterializeDesktopPlan(
+      { log: { info() {}, warn() {} } } as never,
+      {
+        id: "task-unbound-semantic-plan",
+        userId: "user-1",
+        payload: { desktopWorkOrder: order },
+      } as never,
+    ),
+    false,
+  );
+});
+
 test("an incomplete server-plan marker fails closed on retry", async () => {
   const order = workOrder("Masaüstünü listele", ["directory_tree"]);
   order.planPreview = {
@@ -116,14 +161,18 @@ test("semantic privacy authority bounds model capabilities without keyword scope
   };
   const publicAllowed = buildAllowedCapabilities(publicOrder);
   assert.equal(publicAllowed.includes("file_read"), false);
-  assert.equal(publicAllowed.includes("text_analyze"), true);
-  assert.equal(publicAllowed.includes("document_write"), true);
+  assert.deepEqual(publicAllowed, []);
 
   publicOrder.capabilityAuthorization.allowPrivateRead = true;
-  assert.equal(
-    buildAllowedCapabilities(publicOrder).includes("file_read"),
-    true,
-  );
+  assert.deepEqual(buildAllowedCapabilities(publicOrder), ["file_read"]);
+
+  const writerOrder = workOrder("Yerel belge üret", ["document_write"]);
+  writerOrder.capabilityAuthorization = {
+    source: "semantic_router",
+    allowPrivateRead: false,
+    sideEffectsRequireApproval: true,
+  };
+  assert.deepEqual(buildAllowedCapabilities(writerOrder), ["document_write"]);
 });
 
 test("planning safety gate inspects the real user goal, not the capability catalog", () => {
@@ -590,6 +639,164 @@ test("normalizer decodes strict-schema argument JSON before desktop dispatch", (
   );
 });
 
+test("normalizer recovers nested and fenced JSON-encoded arguments", () => {
+  const encodedArgs = {
+    title: "Yaşam Öyküsü",
+    prompt: "İki sayfalık belge hazırla",
+    outputPath: "~/Desktop/Yasam-Oykusu.docx",
+  };
+  const nested = normalizeMaterializedSteps(
+    {
+      steps: [
+        {
+          id: "s1",
+          capability: "document_write",
+          args: JSON.stringify(JSON.stringify(encodedArgs)),
+          dependsOn: [],
+          description: "Belgeyi yaz",
+        },
+      ],
+    },
+    ["document_write"],
+  );
+  const fenced = normalizeMaterializedSteps(
+    {
+      steps: [
+        {
+          id: "s1",
+          capability: "document_write",
+          args: `\`\`\`json\n${JSON.stringify(encodedArgs)}\n\`\`\``,
+          dependsOn: [],
+          description: "Belgeyi yaz",
+        },
+      ],
+    },
+    ["document_write"],
+  );
+
+  assert.equal(nested?.[0]?.args.outputPath, "~/Desktop/Yasam-Oykusu.docx");
+  assert.equal(fenced?.[0]?.args.outputPath, "~/Desktop/Yasam-Oykusu.docx");
+});
+
+test("semantic compiler fallback accepts only authorized reversible plans", () => {
+  const order = workOrder("İki sayfalık yaşam öyküsünü masaüstüne kaydet", [
+    "document_write",
+  ]);
+  order.workType = "data_workflow";
+  order.semanticGoal = {
+    contract: "elyan.semantic_task_contract.v1",
+    objective: "İki sayfalık yaşam öyküsü belgesi üret",
+    constraints: [],
+    successCriteria: ["Belge artifact kanıtıyla teslim edilir."],
+    requiredCapabilities: ["document_write"],
+    forbiddenCapabilities: [],
+    ambiguityPolicy: "safe_assumption",
+    risk: {
+      localPrivate: false,
+      sideEffect: true,
+      irreversible: false,
+    },
+  };
+  order.planPreview.steps = [
+    {
+      id: "write",
+      capability: "document_write",
+      args: {
+        title: "Yaşam Öyküsü",
+        prompt: "İki sayfalık yaşam öyküsü hazırla",
+        outputPath: "~/Desktop/Yasam-Oykusu.docx",
+      },
+      dependsOn: [],
+      description: "Belgeyi yaz",
+    },
+  ];
+
+  assert.equal(
+    compileValidatedSemanticFallback(order, ["document_write"])?.length,
+    1,
+  );
+  order.semanticGoal.forbiddenCapabilities = ["document_write"];
+  assert.equal(compileValidatedSemanticFallback(order, []), null);
+  order.semanticGoal.forbiddenCapabilities = [];
+  order.autonomy = {
+    mode: "night_watch",
+    unattended: true,
+    jobId: "night-1",
+    allowedCapabilities: ["text_analyze"],
+    evidence: {
+      source: "night_watch",
+      ref: "job-1",
+      note: "read only",
+    },
+  };
+  assert.equal(compileValidatedSemanticFallback(order, []), null);
+});
+
+test("work-order resource scope rejects model-selected paths outside authorized roots", () => {
+  const order = workOrder("İki sayfalık yaşam öyküsünü masaüstüne kaydet", [
+    "document_write",
+  ]);
+  order.semanticGoal = {
+    contract: "elyan.semantic_task_contract.v1",
+    objective: "İki sayfalık yaşam öyküsü belgesi üret",
+    constraints: [],
+    successCriteria: ["Belge artifact kanıtıyla teslim edilir."],
+    requiredCapabilities: ["document_write"],
+    forbiddenCapabilities: [],
+    ambiguityPolicy: "safe_assumption",
+    risk: {
+      localPrivate: false,
+      sideEffect: true,
+      irreversible: false,
+    },
+  };
+  order.resourceScope = {
+    contract: "elyan.resource_scope.v1",
+    readRoots: ["workspace"],
+    writeRoots: ["~/Desktop"],
+  };
+  order.planPreview.steps = [
+    {
+      id: "write",
+      capability: "document_write",
+      args: {
+        title: "Yaşam Öyküsü",
+        prompt: "İki sayfalık yaşam öyküsü hazırla",
+        outputPath: "~/Desktop/yasam-oykusu.docx",
+      },
+      dependsOn: [],
+      description: "Belgeyi yaz",
+    },
+  ];
+
+  assert.deepEqual(
+    validateMaterializedPlanAgainstWorkOrder(order.planPreview.steps, order),
+    [],
+  );
+  const outsideScope = structuredClone(order.planPreview.steps);
+  outsideScope[0]!.args.outputPath = "/tmp/yasam-oykusu.docx";
+  assert.match(
+    validateMaterializedPlanAgainstWorkOrder(outsideScope, order).join("\n"),
+    /outside the authorized WorkOrder resource scope/u,
+  );
+  const traversal = structuredClone(order.planPreview.steps);
+  traversal[0]!.args.outputPath =
+    "~/Desktop/../.ssh/authorized_keys";
+  assert.match(
+    validateMaterializedPlanAgainstWorkOrder(traversal, order).join("\n"),
+    /outside the authorized WorkOrder resource scope/u,
+  );
+  const selectedPaths = structuredClone(order.planPreview.steps);
+  selectedPaths[0]!.args.selectedPaths = [
+    "~/Desktop/yasam-oykusu.docx",
+    "/etc/passwd",
+  ];
+  assert.match(
+    validateMaterializedPlanAgainstWorkOrder(selectedPaths, order).join("\n"),
+    /outside the authorized WorkOrder resource scope/u,
+  );
+});
+
 test("plan contract validation rejects missing required args and ungrounded paths", () => {
   assert.deepEqual(
     validateMaterializedPlanContracts([
@@ -616,8 +823,8 @@ test("plan contract validation rejects missing required args and ungrounded path
       },
     ]),
     [
-      's1: args.path must use an explicit root such as ~/Desktop, workspace/, an absolute path, or a prior-step reference; received "."',
-      's2: args.path must use an explicit root such as ~/Desktop, workspace/, an absolute path, or a prior-step reference; received "notlar.txt"',
+      "s1: args.path must use an explicit root such as ~/Desktop, workspace/, an absolute path, or a prior-step reference",
+      "s2: args.path must use an explicit root such as ~/Desktop, workspace/, an absolute path, or a prior-step reference",
       "s3: text_analyze requires args.prompt",
     ],
   );
@@ -643,6 +850,142 @@ test("plan contract validation rejects missing required args and ungrounded path
       },
     ]),
     [],
+  );
+
+});
+
+test("work-order validation rejects partial plans, cycles, and private-to-web flow", () => {
+  const order = workOrder("Araştır ve belge üret", [
+    "web_research",
+    "document_write",
+  ]);
+  order.semanticGoal = {
+    contract: "elyan.semantic_task_contract.v1",
+    objective: "Kaynaklı belge üret",
+    constraints: [],
+    successCriteria: ["Belge artifact olarak teslim edilir."],
+    requiredCapabilities: ["web_research", "document_write"],
+    forbiddenCapabilities: [],
+    ambiguityPolicy: "safe_assumption",
+    risk: {
+      localPrivate: false,
+      sideEffect: true,
+      irreversible: false,
+    },
+  };
+  order.planPreview.steps = [
+    {
+      id: "research",
+      capability: "web_research",
+      args: { query: "public tarih kaynakları" },
+      dependsOn: [],
+      description: "Araştır",
+    },
+    {
+      id: "write",
+      capability: "document_write",
+      args: { prompt: "{{steps.research.output}}" },
+      dependsOn: ["research"],
+      description: "Yaz",
+    },
+  ];
+
+  const partialIssues = validateMaterializedPlanAgainstWorkOrder(
+    [order.planPreview.steps[0]!],
+    order,
+  );
+  assert.match(
+    partialIssues.join("\n"),
+    /semantic work order requires capability document_write/,
+  );
+  assert.match(partialIssues.join("\n"), /artifact-producing capability/);
+
+  const cycleIssues = validateMaterializedPlanContracts([
+    {
+      id: "s1",
+      capability: "web_research",
+      args: { query: "public kaynak" },
+      dependsOn: ["s2"],
+      description: "Araştır",
+    },
+    {
+      id: "s2",
+      capability: "document_write",
+      args: { prompt: "{{steps.s1.output}}" },
+      dependsOn: ["s1"],
+      description: "Yaz",
+    },
+  ]);
+  assert.match(cycleIssues.join("\n"), /dependsOn must reference an earlier step/);
+
+  const privateWebIssues = validateMaterializedPlanAgainstWorkOrder(
+    [
+      {
+        id: "read",
+        capability: "document_read",
+        args: { path: "~/Desktop/private.docx" },
+        dependsOn: [],
+        description: "Oku",
+      },
+      {
+        id: "research",
+        capability: "web_research",
+        args: { query: "{{steps.read.output}}" },
+        dependsOn: ["read"],
+        description: "Araştır",
+      },
+    ],
+    {
+      ...order,
+      requiredCapabilities: ["document_read", "web_research"],
+      planPreview: {
+        ...order.planPreview,
+        steps: [
+          {
+            id: "read",
+            capability: "document_read",
+            args: { path: "~/Desktop/private.docx" },
+            description: "Oku",
+          },
+          {
+            id: "research",
+            capability: "web_research",
+            args: { query: "public kaynak" },
+            description: "Araştır",
+          },
+        ],
+      },
+      expectedOutputs: [{ kind: "chat_result", format: "elyan_blocks.v2", required: true }],
+    },
+  );
+  assert.match(privateWebIssues.join("\n"), /cannot consume prior-step/);
+  assert.match(privateWebIssues.join("\n"), /cannot depend on local-private/);
+
+  const literalPrivateQueryIssues = validateMaterializedPlanAgainstWorkOrder(
+    [
+      {
+        id: "research",
+        capability: "web_research",
+        args: { query: "Ayşe Demir bipolar tanısı ilaçları" },
+        dependsOn: [],
+        description: "Araştır",
+      },
+      order.planPreview.steps[1]!,
+    ],
+    {
+      ...order,
+      semanticGoal: {
+        ...order.semanticGoal,
+        risk: {
+          ...order.semanticGoal.risk,
+          localPrivate: true,
+        },
+      },
+    },
+  );
+  assert.match(
+    literalPrivateQueryIssues.join("\n"),
+    /contains unapproved private task material/u,
   );
 });
 

@@ -704,6 +704,9 @@ test("processDueProactiveTriggers composes and publishes a due proactive chat me
         },
       },
     },
+    log: {
+      debug() {},
+    },
   };
 
   const result = await processDueProactiveTriggers(app as never, {

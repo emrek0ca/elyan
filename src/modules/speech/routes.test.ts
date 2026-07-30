@@ -28,6 +28,7 @@ function authenticatedSpeechApp(budgetValue = 1, authenticated = true) {
   });
   app.decorate("config", {
     REQUEST_BUDGET_WINDOW_MS: 60_000,
+    ELYAN_SPEECH_IP_RPM_LIMIT: 20,
     ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED: false,
     GROQ_API_KEY: "test-key",
     GROQ_BASE_URL: "https://api.groq.com/openai/v1",

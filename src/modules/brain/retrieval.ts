@@ -537,6 +537,7 @@ export async function searchKnowledge(
     userId: string;
     query: string;
     limit: number;
+    semanticRerankReady?: boolean;
   },
 ) {
   const hybridReady = await canUseHybridRetrieval(app);
@@ -560,7 +561,9 @@ export async function searchKnowledge(
   const reranked = await rerankSemanticCandidates({
     query: input.query,
     candidates: mergedResults,
-    enabled: app.config.ELYAN_RAG_SEMANTIC_RERANK_ENABLED,
+    enabled:
+      app.config.ELYAN_RAG_SEMANTIC_RERANK_ENABLED &&
+      input.semanticRerankReady !== false,
     modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
     windowSize: app.config.ELYAN_RAG_SEMANTIC_RERANK_WINDOW,
     cacheScope: `user:${input.userId}`,

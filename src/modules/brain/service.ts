@@ -20,6 +20,7 @@ import {
   modelArtifacts,
   runtimeConnections,
   trainingJobs,
+  turnMetrics,
   worldSignals,
 } from "../../db/schema.js";
 import { badRequest, conflict, forbidden, notFound } from "../../lib/errors.js";
@@ -711,6 +712,63 @@ function readBoolean(
   }
   const value = record[key];
   return typeof value === "boolean" ? value : null;
+}
+
+async function readLastTurnBehaviorUsage(
+  app: FastifyInstance,
+  userId: string,
+): Promise<Record<string, unknown>> {
+  const rows = await app.db
+    .select({
+      workload: turnMetrics.workload,
+      quality: turnMetrics.quality,
+      createdAt: turnMetrics.createdAt,
+    })
+    .from(turnMetrics)
+    .where(eq(turnMetrics.userId, userId))
+    .orderBy(desc(turnMetrics.createdAt))
+    .limit(1);
+  const quality = readRecord(rows[0]?.quality);
+  const latestEvidenceAcceptanceScore =
+    quality?.retrieval_evidence_acceptance_score;
+  return {
+    observedAt: rows[0]?.createdAt ?? null,
+    workload: rows[0]?.workload ?? null,
+    memoryRecall:
+      Number(quality?.memory_recall_fact_count ?? 0) > 0 ||
+      Number(quality?.memory_recall_episode_count ?? 0) > 0,
+    canonicalUserModel:
+      readBoolean(quality, "canonical_user_model_used") === true,
+    semanticRerank:
+      readBoolean(quality, "retrieval_semantic_rerank_admitted") === true,
+    evidenceAcceptanceScore:
+      typeof latestEvidenceAcceptanceScore === "number" &&
+      Number.isFinite(latestEvidenceAcceptanceScore)
+        ? latestEvidenceAcceptanceScore
+        : null,
+    retrievalLowConfidence: readBoolean(quality, "retrieval_low_confidence"),
+    connectorRead: readBoolean(quality, "connector_result_used") === true,
+    agentEngine:
+      typeof quality?.agent_engine_version === "string" &&
+      quality.agent_engine_version.length > 0,
+  };
+}
+
+function withLiveBehaviorUsage<T>(profile: T, lastTurnUsed: unknown): T {
+  const root = readRecord(profile);
+  const learning = readRecord(root?.learning);
+  const behaviorState = readRecord(learning?.behaviorState);
+  if (!root || !learning || !behaviorState) return profile;
+  return {
+    ...root,
+    learning: {
+      ...learning,
+      behaviorState: {
+        ...behaviorState,
+        usedLastTurn: lastTurnUsed,
+      },
+    },
+  } as T;
 }
 
 function readStringArray(
@@ -1605,7 +1663,15 @@ export async function getBrainProfile(
 ): Promise<any> {
   const cached = readBrainProfileCache(app, userId);
   if (cached) {
-    return cached as Awaited<ReturnType<typeof getBrainProfile>>;
+    const lastTurnUsed = await readLastTurnBehaviorUsage(app, userId).catch(
+      () => null,
+    );
+    return lastTurnUsed
+      ? withLiveBehaviorUsage(
+          cached as Awaited<ReturnType<typeof getBrainProfile>>,
+          lastTurnUsed,
+        )
+      : (cached as Awaited<ReturnType<typeof getBrainProfile>>);
   }
 
   const [
@@ -1968,6 +2034,19 @@ export async function getBrainProfile(
     runnerBacklog: null,
     brainBlockingReasons: ["neural_readiness_unavailable"],
   }));
+  const lastTurnUsed = await readLastTurnBehaviorUsage(app, userId).catch(
+    () => ({
+      observedAt: null,
+      workload: null,
+      memoryRecall: false,
+      canonicalUserModel: false,
+      semanticRerank: false,
+      evidenceAcceptanceScore: null,
+      retrievalLowConfidence: null,
+      connectorRead: false,
+      agentEngine: false,
+    }),
+  );
   const brainRuntimeReady = Boolean(runtimeSnapshot.ready && serverBrainName);
   const probeReady = Boolean(inferenceProbe.ready);
   const servingProvider = inferenceProbe.provider ?? runtimeSnapshot.provider;
@@ -2618,6 +2697,29 @@ export async function getBrainProfile(
       personalizationEnabled: app.config.ELYAN_PERSONALIZATION_ENABLED,
       extractionEnabled: app.config.ELYAN_LEARNING_EXTRACTION_ENABLED,
       privacyBoundary: "shared_brain_plus_user_scoped_learning",
+      behaviorState: {
+        contract: "elyan.brain_behavior_state.v1",
+        configured: {
+          userUnderstanding: app.config.ELYAN_USER_UNDERSTANDING_ENABLED,
+          personalization: app.config.ELYAN_PERSONALIZATION_ENABLED,
+          learningExtraction: app.config.ELYAN_LEARNING_EXTRACTION_ENABLED,
+          semanticRerank:
+            app.config.ELYAN_RAG_SEMANTIC_RERANK_ENABLED === true,
+          agentLoop:
+            app.config.ELYAN_AGENT_LOOP_ENABLED === true ||
+            app.config.ELYAN_AGENT_ENGINE_V2_ENABLED === true,
+          connectorTools: app.config.ELYAN_CONNECTOR_TOOLS_ENABLED === true,
+        },
+        ready: {
+          neural: neural.neuralReady,
+          trainingWorker: neural.trainingWorkerReady,
+          embedding: neural.embeddingReady,
+          evaluation: neural.evaluationReady,
+          retrieval: retrievalStatus.hybridReady,
+          memory: memoryStatus.pipelineReady,
+        },
+        usedLastTurn: lastTurnUsed,
+      },
       neuralReady: neural.neuralReady,
       trainingWorkerReady: neural.trainingWorkerReady,
       embeddingReady: neural.embeddingReady,

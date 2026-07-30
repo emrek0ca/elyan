@@ -51,6 +51,9 @@ export const turnMetricQualitySchema = z.object({
   data_input_bytes_bucket: z.string().trim().max(80).nullable().default(null),
   heavy_context_truncated: z.boolean().default(false),
   worker_offloaded: z.boolean().default(false),
+  retrieval_semantic_rerank_admitted: z.boolean().nullable().default(null),
+  retrieval_evidence_acceptance_score: z.number().min(0).max(1).nullable().default(null),
+  retrieval_low_confidence: z.boolean().nullable().default(null),
   queue_wait_ms: nullableTimingSchema,
   cognitive_write_ms: nullableTimingSchema,
   cognitive_foundation_used: z.boolean().default(false),
@@ -283,6 +286,15 @@ export function buildTurnMetricInputFromInference(input: {
         bucketByteSize(input.metadata.dataInputBytes),
       heavy_context_truncated: readBoolean(input.metadata.heavyContextTruncated),
       worker_offloaded: readBoolean(input.metadata.workerOffloaded),
+      retrieval_semantic_rerank_admitted: readNullableBoolean(
+        input.metadata.retrievalSemanticRerankAdmitted,
+      ),
+      retrieval_evidence_acceptance_score: readRatio(
+        input.metadata.retrievalEvidenceAcceptanceScore,
+      ),
+      retrieval_low_confidence: readNullableBoolean(
+        input.metadata.retrievalLowConfidence,
+      ),
       queue_wait_ms: readNumber(input.metadata.queueWaitMs),
       cognitive_write_ms: readNumber(input.metadata.cognitiveWriteMs),
       cognitive_foundation_used: readBoolean(input.metadata.cognitiveFoundationUsed),

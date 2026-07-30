@@ -592,6 +592,53 @@ function describeTool(task: TaskTraceSource) {
   };
 }
 
+function hasDesktopWorkOrderEvidence(task: TaskTraceSource): boolean {
+  const payload = readRecord(task.payload);
+  const workOrder = readRecord(payload?.desktopWorkOrder);
+  if (!workOrder) return false;
+  const requiredCapabilities = Array.isArray(workOrder.requiredCapabilities)
+    ? workOrder.requiredCapabilities.filter(
+        (capability) =>
+          typeof capability === "string" && capability.trim().length > 0,
+      )
+    : [];
+  const planPreview = readRecord(workOrder.planPreview);
+  const plannedSteps = Array.isArray(planPreview?.steps)
+    ? planPreview.steps.length
+    : 0;
+  return requiredCapabilities.length > 0 || plannedSteps > 0;
+}
+
+function routeReasonIsInformative(input: {
+  task: TaskTraceSource;
+  routeDecision: ReturnType<typeof extractTaskRouteDecision>;
+  toolNeeded: boolean;
+}): boolean {
+  const route =
+    input.routeDecision?.taskRoute?.operationalRoute ??
+    input.routeDecision?.route;
+  if (input.routeDecision?.route === "pairing_required") {
+    return true;
+  }
+  if (route === "desktop_runtime") {
+    const executionPlan = input.routeDecision?.taskRoute?.executionPlan ?? [];
+    const requiredCapabilities =
+      input.routeDecision?.taskRoute?.requiredCapabilities ?? [];
+    return (
+      input.routeDecision?.taskRoute?.needsDesktop === true ||
+      input.task.dispatchLeaseIssuedAt != null ||
+      input.task.dispatchAckAt != null ||
+      input.task.runtimeConnectionId != null ||
+      input.task.status === "waiting_approval" ||
+      input.task.status === "running" ||
+      executionPlan.length > 0 ||
+      requiredCapabilities.length > 0 ||
+      hasDesktopWorkOrderEvidence(input.task)
+    );
+  }
+  return input.toolNeeded && route !== "server_brain";
+}
+
 function describeVerify(task: TaskTraceSource): {
   completed: boolean;
   detail?: string;
@@ -1062,6 +1109,15 @@ export function buildTaskTraceBlock(input: {
     toolNeeded: tool.needed,
     error: input.task.error,
   });
+  const visibleRouteReason =
+    routeReason &&
+    routeReasonIsInformative({
+      task: input.task,
+      routeDecision,
+      toolNeeded: tool.needed,
+    })
+      ? routeReason
+      : undefined;
 
   const fallback: ElyanTaskTraceBlock = {
     type: "task_trace",
@@ -1079,7 +1135,7 @@ export function buildTaskTraceBlock(input: {
     phase,
     summary,
     progressLabel,
-    ...(routeReason ? { routeReason } : {}),
+    ...(visibleRouteReason ? { routeReason: visibleRouteReason } : {}),
     ...(activeStep ? { activeStepId: activeStep.id } : {}),
     steps,
   };

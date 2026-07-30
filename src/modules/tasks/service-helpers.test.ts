@@ -54,11 +54,10 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
   assert.ok(imageBranch.includes('event: "message.completed"'));
   // Niyet aynı: görüntü dalı metin çıkarımını ATLAR. Tek fark, çıkan metnin
   // etiket denetiminden geçmesi (yetenek adı cevap olarak gidemez).
-  assert.ok(
-    imageBranch.includes(
-      'const visibleText = imageResultBlocks.length > 0 ? "" : ensureUserFacingMessage(completedResultText);',
-    ),
-  );
+  assert.ok(imageBranch.includes("const visibleText ="));
+  assert.ok(imageBranch.includes("imageResultBlocks.length > 0"));
+  assert.ok(imageBranch.includes(' ? ""'));
+  assert.ok(imageBranch.includes("ensureUserFacingMessage(completedResultText)"));
   assert.equal(imageBranch.includes('title: ""'), false);
   assert.equal(imageBranch.includes('summary: ""'), false);
   assert.equal(imageBranch.includes('preview: ""'), false);
@@ -701,6 +700,87 @@ test("extractTaskRouteDecision round-trips the richer taskRoute metadata", () =>
     })?.taskRoute,
     routeDecision.taskRoute,
   );
+});
+
+test("shapeTaskFeedItem exposes semantic desktop handoff without private payload text", () => {
+  const item = shapeTaskFeedItem({
+    id: "task-desktop-handoff",
+    title: "Ceza hukuku rehberi",
+    status: "queued",
+    targetDeviceId: "desktop-1",
+    queuePosition: 1,
+    runtimeConnectionId: null,
+    dispatchLeaseId: null,
+    dispatchLeaseIssuedAt: null,
+    dispatchLeaseExpiresAt: null,
+    dispatchAckAt: null,
+    requestedCapabilities: ["document_write"],
+    payload: {
+      prompt:
+        "Ceza hukuku nedir araştır ve özel notlarımla masaüstüne DOCX kaydet.",
+      desktopWorkOrder: {
+        schema: "elyan.desktop_work_order.v1",
+        workType: "data_workflow",
+        privacyClass: "side_effect",
+        requiresApproval: true,
+        requiredCapabilities: ["web_research", "text_analyze", "document_write"],
+        semanticGoal: {
+          contract: "elyan.semantic_task.v1",
+          summary:
+            "Ceza hukuku konusunda masaüstünde doğrulanabilir belge üret.",
+        },
+        expectedOutput: {
+          requiresArtifact: true,
+          target: "desktop",
+          format: "docx",
+        },
+        executionPlan: {
+          mode: "desktop_runtime",
+        },
+        verificationPlan: {
+          requireEvidence: true,
+        },
+        planPreview: {
+          planSource: "initial_heuristic",
+          planPreparation: {
+            status: "pending",
+          },
+          liveNarrationPlan: {
+            mode: "progressive_status",
+            updatePolicy: "milestone_only",
+          },
+          steps: [
+            { capability: "web_research", title: "Araştır" },
+            { capability: "text_analyze", title: "Düzenle" },
+            { capability: "document_write", title: "DOCX yaz" },
+          ],
+        },
+      },
+    },
+    summary: null,
+    error: null,
+    approvalRequest: null,
+    createdAt: new Date("2030-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2030-01-01T00:00:00.000Z"),
+  });
+
+  assert.deepEqual(item.desktopHandoff, {
+    schema: "elyan.desktop_work_order.v1",
+    contract: "elyan.semantic_task.v1",
+    workType: "data_workflow",
+    privacyClass: "side_effect",
+    executionMode: "desktop_runtime",
+    status: "pending",
+    planSource: "initial_heuristic",
+    requiresApproval: true,
+    requiresArtifact: true,
+    verificationRequiresEvidence: true,
+    requiredCapabilities: ["web_research", "text_analyze", "document_write"],
+    stepCapabilities: ["web_research", "text_analyze", "document_write"],
+    narrationMode: "progressive_status",
+    narrationUpdatePolicy: "milestone_only",
+  });
+  assert.equal(JSON.stringify(item.desktopHandoff).includes("özel notlarımla"), false);
 });
 
 test("shapeTaskArtifact adds viewer hints and compact previews", () => {

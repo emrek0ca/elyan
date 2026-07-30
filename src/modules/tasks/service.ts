@@ -228,6 +228,7 @@ import {
   shouldAutoApproveDesktopTask,
 } from "./service-lifecycle.js";
 import {
+  buildDesktopPlanningEvidenceFromMetadata,
   buildDesktopWorkOrder,
   isDeterministicDesktopFastWorkOrder,
   MAX_WORK_ORDER_STEPS,
@@ -7404,6 +7405,9 @@ export async function createTask(
         livenessGuard: livenessGuard ?? undefined,
         understandingEnvelope: understanding.envelope,
         autonomy: readAutonomyEnvelope(payloadMetadata),
+        desktopPlanningEvidence:
+          buildDesktopPlanningEvidenceFromMetadata(payloadMetadata) ??
+          undefined,
         inputRefs: (Array.isArray(payloadMetadata.mediaInputRefs)
           ? payloadMetadata.mediaInputRefs
           : []

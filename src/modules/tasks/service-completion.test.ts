@@ -227,3 +227,14 @@ test("resolveNonEchoAssistantText recovers animal-name prompt echoes with a real
   assert.match(answer, /Yıldız burunlu köstebek/u);
   assert.doesNotMatch(answer, /^Bana çok bilinmeyen/u);
 });
+
+test("resolveNonEchoAssistantText does not expose broken generation fallback prose", () => {
+  const answer = resolveNonEchoAssistantText({
+    prompt: "Ceza hukuku nedir?",
+    responseText: "Ceza hukuku nedir?",
+  });
+
+  assert.doesNotMatch(answer, /Yanıtı düzgün üretemedim/u);
+  assert.doesNotMatch(answer, /tekrar dene/u);
+  assert.equal(answer, "İsteğini aldım; eldeki bağlamla devam ediyorum.");
+});

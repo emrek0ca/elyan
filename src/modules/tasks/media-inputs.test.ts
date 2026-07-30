@@ -9,12 +9,17 @@ test("legacy inline vision is materialized into durable V2 refs and bytes are cl
       TOKEN_ENCRYPTION_KEY: "t".repeat(48),
       BLOB_HMAC_SECRET: "b".repeat(48),
       JWT_SECRET: "j".repeat(48),
+      ELYAN_MEDIA_NORMALIZE_GLOBAL_CONCURRENCY: 2,
+      ELYAN_MEDIA_NORMALIZE_USER_CONCURRENCY: 1,
+      RELIABILITY_REDIS_REQUIRED: false,
     },
     services: {
       reliability: {
         store: {
           increment: async () => 1,
           incrementBy: async () => 100,
+          tryAcquireExpiringSlot: async () => ({ allowed: true, used: 1 }),
+          releaseExpiringSlot: async () => true,
         },
       },
       blobs: {
