@@ -6467,9 +6467,20 @@ export async function generateSharedBrainReply(
                 : []),
             ];
       return structuredAttempt.turnEnvelopeMode
-        ? structuredToolProtocolRequired
-          ? structuredAttempts
-          : [...structuredAttempts, { path, body, turnEnvelopeMode: false }]
+        ? // ZARFSIZ DENEME HER ZAMAN SON ÇARE OLARAK DURUR.
+          //
+          // Canlı arıza (2026-07-30): connector araçları duyurulduğunda
+          // `structuredToolProtocolRequired` true oluyor ve düz metin denemesi
+          // listeye HİÇ eklenmiyordu. Model katı json_schema'ya uyamayınca
+          // (Groq `json_validate_failed`) altı denemenin hepsi aynı şemada
+          // tükeniyor, kullanıcı ~20 saniye bekleyip yedek metni görüyordu —
+          // "polinom yaz" gibi araçla hiç ilgisi olmayan bir istekte bile.
+          //
+          // Zarf yine ÖNCE denenir: araç çağırma yolu birinci sınıf kalır.
+          // Ama hepsi tükendiyse düz metin istemek, boş dönmekten iyidir;
+          // araç planı sızıntısına karşı `looksLikeConnectorToolPlanText`
+          // koruması bu yolda da çalışmaya devam eder.
+          [...structuredAttempts, { path, body, turnEnvelopeMode: false }]
         : [
             requiresNonStreamingReplacement
               ? { ...structuredAttempt, forceNonStreaming: true }

@@ -349,12 +349,21 @@ function guardUnsupportedCurrentClaims(input: {
   if (kept.length > 0) {
     return kept.join(" ").trim();
   }
-  const looksTurkish =
-    /[çğıöşüÇĞİÖŞÜ]/u.test(input.prompt) ||
-    /(?<!\p{L})(bugün|güncel|fiyat|kur|haber|hava|maç|mevzuat)(?!\p{L})/iu.test(input.prompt);
-  return looksTurkish
-    ? "Şu anda yeterli güncel kaynaktan doğrulanmış veri alamadım."
-    : "I couldn't establish this from enough current sources right now.";
+  // CEVABIN TAMAMI SİLİNDİYSE: eskiden buradan sabit bir yedek cümle dönüyordu
+  // ("Şu anda yeterli güncel kaynaktan doğrulanmış veri alamadım."). Canlı
+  // arıza (2026-07-30): "bana bir şarkı öner" gibi güncellikle hiç ilgisi
+  // olmayan bir istekte de bu cümle görünüyordu — kullanıcı bir öneri sordu,
+  // kaynak raporu aldı.
+  //
+  // Bu kapı UYDURMA GÜNCEL VERİYE karşıdır: "dolar bugün 42 lira" gibi bir
+  // iddia kanıtsız kalmamalı. Ama tek tek cümle eleyip geriye hiçbir şey
+  // kalmaması, kapının niyetini aştığının işaretidir: ya istek zaten güncel
+  // veri istemiyordu ya da desenler yanlış eşleşti. İki durumda da doğru
+  // davranış cevabı TESLİM ETMEK, kullanıcıyı boş bırakmak değil.
+  //
+  // Ayrım korunuyor: kanıtsız güncel iddia taşıyan CÜMLELER hâlâ düşer
+  // (yukarıdaki filtre). Düşen tek tek cümlelerdir, cevabın tamamı değil.
+  return input.text;
 }
 
 export function sanitizeFinalAssistantResponse(input: {
