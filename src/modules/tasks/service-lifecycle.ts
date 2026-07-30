@@ -42,6 +42,23 @@ export const TASK_APPROVAL_TTL_MS = 60_000;
  * arşive dönüşmez.
  */
 export const TASK_QUEUE_TTL_MS = 10 * 60_000;
+
+/**
+ * Bitmiş görevlerin saklama süresi — sonunda KALICI olarak silinirler.
+ *
+ * Elyan'ın son işleri hatırlaması için bir haftalık pencere yeterlidir:
+ * "dün oluşturduğun raporu aç" çalışır, üç hafta önceki bir kayıt ise
+ * hatırlamaya değer bir bağlam değil, sadece taşınan yüktür.
+ *
+ * `canceled` olarak bırakmak yetmiyor: satır tabloda durdukça sorgular,
+ * indeksler ve görev listeleri onu taşımaya devam eder. Süre dolunca kayıt
+ * gerçekten silinir; bağımlı satırlar şemadaki `cascade`/`set null`
+ * kurallarıyla birlikte temizlenir.
+ *
+ * Yalnız TERMİNAL durumdakiler silinir — çalışan ya da onay bekleyen bir
+ * görev yaşına bakılmaksızın korunur.
+ */
+export const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const MAX_ACTIVE_USER_APPROVALS = 8;
 export const MAX_TASK_DISPATCH_ATTEMPTS = 5;
 
