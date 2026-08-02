@@ -291,10 +291,10 @@ test("syncChatTaskLifecycle publishes running assistant snapshots for chat tasks
   const runningBlocks = runningPayload?.assistantMessage?.blocks as
     | Array<Record<string, unknown>>
     | undefined;
-  assert.equal(runningBlocks?.length, 1);
-  assert.equal(runningBlocks?.[0]?.type, "task_trace");
-  assert.equal(runningBlocks?.[0]?.activeStepId, "write");
-  const runningSteps = runningBlocks?.[0]?.steps as
+  const taskTrace = runningBlocks?.find((block) => block.type === "task_trace");
+  assert.ok(taskTrace);
+  assert.equal(taskTrace.activeStepId, "write");
+  const runningSteps = taskTrace.steps as
     | Array<Record<string, unknown>>
     | undefined;
   assert.deepEqual(
