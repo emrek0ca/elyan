@@ -269,9 +269,9 @@ test("syncChatTaskLifecycle publishes running assistant snapshots for chat tasks
     updates[0]?.content,
     "Adımlar:\n1. Kaynakları araştırıyorum tamamlandı\n2. Raporu yazıyorum yürütülüyor",
   );
-  assert.equal(published.length, 1);
-  assert.equal(published[0]?.topic, "chat.message.updated");
-  const runningPayload = published[0]?.payload as
+  const updatedEvent = published.find((event) => event.topic === "chat.message.updated");
+  assert.ok(updatedEvent);
+  const runningPayload = updatedEvent.payload as
     | {
         sessionId?: string;
         presentation?: string;

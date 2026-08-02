@@ -54,8 +54,9 @@ test("resolveGroqFallbackModel returns a distinct backup model when primary fail
   assert.equal(fallback, "qwen/qwen3.6-27b");
 });
 
-test("resolveGroqFallbackModel keeps fast chat on the fast reliable model", () => {
-  // mobile_chat_fast hız-kritik yol; primary de fallback de küçük Groq modelinde kalır.
+test("resolveGroqFallbackModel backs fast chat up with the reasoning model", () => {
+  // mobile_chat_fast hız-kritik yol olarak 20b'de başlar; 20b düşerse
+  // qwen'e değil daha güvenilir reasoning modeline yükselir.
   const fallback = resolveGroqFallbackModel(
     {
       GROQ_REASONING_MODEL: "openai/gpt-oss-120b",
@@ -66,7 +67,7 @@ test("resolveGroqFallbackModel keeps fast chat on the fast reliable model", () =
     "mobile_chat_fast",
   );
 
-  assert.equal(fallback, "openai/gpt-oss-20b");
+  assert.equal(fallback, "openai/gpt-oss-120b");
 });
 
 test("resolveGroqFallbackModel prefers the fast Groq model for document analysis failover", () => {

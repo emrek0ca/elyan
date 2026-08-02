@@ -51,10 +51,11 @@ test("resolveSharedBrainModel skips Ollama model discovery when Groq is primary"
     });
 
     assert.equal(fetchCalled, false);
-    assert.equal(result.configuredBaseModel, "openai/gpt-oss-20b");
-    // Fast chat hız-kritik yoldur; küçük Groq modelinde kalır.
+    assert.equal(result.configuredBaseModel, "openai/gpt-oss-120b");
+    // Global configured model reasoning'dir; fast chat workload çözümü küçük
+    // Groq modeline iner.
     assert.equal(result.resolvedBaseModel, "openai/gpt-oss-20b");
-    assert.equal(result.resolvedFallbackModel, "openai/gpt-oss-20b");
+    assert.equal(result.resolvedFallbackModel, "openai/gpt-oss-120b");
     assert.deepEqual(result.availableModels, [
       "openai/gpt-oss-120b",
       "openai/gpt-oss-20b",
