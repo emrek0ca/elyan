@@ -37,6 +37,7 @@ import {
   updateDatasetManifestBodySchema,
   updateModelArtifactBodySchema,
 } from "./schemas.js";
+import { listPublicAgentToolCatalog } from "./tool-registry.js";
 import {
   cancelTrainingJob,
   createDatasetManifest,
@@ -63,6 +64,7 @@ import {
   updateDatasetManifest,
   updateModelArtifact,
 } from "./service.js";
+import { listConnectedCapabilityGrants } from "../integrations/service.js";
 import { decideCommandRoute } from "../routing-policy/service.js";
 import { generateGovernedSharedBrainReply } from "./inference.js";
 import { generateDesktopPlan } from "./desktop-plan.js";
@@ -171,6 +173,41 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
     // "sinyal yoksa uydurma yok" sözleşmesiyle çalışır.
     const worldSignals = await getRecentWorldSignalDigest(app, auth.sub);
     return worldSignals.length > 0 ? { ...profile, worldSignals } : profile;
+  });
+
+  app.get("/tool-skill-manifest", async (request, reply) => {
+    await app.authenticateUserOrRuntime(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    brainProfileQuerySchema.parse(request.query ?? {});
+    const auth = getUserScopedAuth(request);
+    const profile = shapePublicBrainProfile(await getBrainProfile(app, auth.sub));
+    const connectedCapabilities = [
+      ...new Set(
+        (
+          await listConnectedCapabilityGrants(app, auth.sub).catch(
+            () => [] as Array<{ capabilities: string[] }>,
+          )
+        ).flatMap((grant) =>
+          (grant.capabilities ?? [])
+            .map((capability) => String(capability).trim())
+            .filter(Boolean),
+        ),
+      ),
+    ];
+
+    return {
+      manifestVersion: "elyan.backend-tool-skill-manifest.v1",
+      generatedAt: new Date().toISOString(),
+      skills: profile.skills,
+      tools: listPublicAgentToolCatalog(connectedCapabilities),
+      integrations: profile.integrations,
+      bridge: profile.bridge,
+      chat: profile.chat,
+    };
   });
 
   app.post("/chat", async (request, reply) => {

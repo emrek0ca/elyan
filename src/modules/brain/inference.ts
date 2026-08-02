@@ -5677,6 +5677,7 @@ export async function generateSharedBrainReply(
   if (agentToolProtocolEnabled) {
     const understandingEnvelope =
       input.understandingContext?.understandingEnvelope;
+    const requestedToolName = readRequestedAgentToolName(input.requestMetadata);
     const advertisedConnectorTools = (input.connectorToolContracts ?? [])
       .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
       .filter((name): name is string => Boolean(name));
@@ -5704,7 +5705,10 @@ export async function generateSharedBrainReply(
           }
         : null,
       coreToolHint,
-      deterministicToolNames: mailOpenBlockAction ? ["gmail.read"] : [],
+      deterministicToolNames: [
+        ...(mailOpenBlockAction ? ["gmail.read"] : []),
+        ...(requestedToolName ? [requestedToolName] : []),
+      ],
       memoryCandidateCount:
         understandingEnvelope?.memory_candidates.length ?? 0,
       sideEffectRequested:
@@ -9913,6 +9917,18 @@ function readSkillHint(metadata: unknown): string | null {
   }
   const value = (metadata as Record<string, unknown>).skillHint;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readRequestedAgentToolName(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const record = metadata as Record<string, unknown>;
+  const value = record.requestedToolName ?? record.agentToolName;
+  if (typeof value !== "string") return null;
+  const name = value.trim();
+  if (!name) return null;
+  return getAgentToolMetadata(name) ? name : null;
 }
 
 const SAFE_NON_ATTACHMENT_SKILL_METADATA_KEYS = [

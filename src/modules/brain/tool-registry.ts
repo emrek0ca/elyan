@@ -1158,6 +1158,28 @@ export type AgentToolMetadata = {
   selectionHints: AgentToolSelectionHints;
 };
 
+export type PublicAgentToolCatalogEntry = {
+  name: string;
+  permission: AgentToolPermission;
+  idempotency: ApprovalToolIdempotency;
+  timeoutMs: number;
+  parallelSafe: boolean;
+  purpose: string;
+  modelContract: string;
+  capabilities: string[];
+  desiredOutputKinds: string[];
+  resultBlockTypes: string[];
+  requiresConnection: boolean;
+  connectorCapability: string | null;
+  available: boolean;
+};
+
+export type PublicAgentToolCatalog = {
+  enabled: boolean;
+  catalogVersion: string;
+  items: PublicAgentToolCatalogEntry[];
+};
+
 export type AgentToolCatalogEntry = AgentToolMetadata & {
   selectionConfidence: number;
   selectionReasons: string[];
@@ -1177,6 +1199,46 @@ export function getAgentToolMetadata(name: string): AgentToolMetadata | null {
     approvalScope: tool.approvalScope ?? "user_action",
     parallelSafe: tool.permission === "read" && idempotency === "read_only",
     selectionHints,
+  };
+}
+
+export function listPublicAgentToolCatalog(
+  connectedCapabilities: readonly string[] = [],
+): PublicAgentToolCatalog {
+  const connected = new Set(
+    connectedCapabilities
+      .map((capability) => String(capability).trim())
+      .filter(Boolean),
+  );
+  const items = toolDefinitions.flatMap((tool) => {
+    const metadata = getAgentToolMetadata(tool.name);
+    if (!metadata) return [];
+    const connectorCapability =
+      metadata.selectionHints.connectorCapability ?? null;
+    return [
+      {
+        name: metadata.name,
+        permission: metadata.permission,
+        idempotency: metadata.idempotency,
+        timeoutMs: metadata.timeoutMs,
+        parallelSafe: metadata.parallelSafe,
+        purpose: metadata.selectionHints.purpose,
+        modelContract: metadata.selectionHints.modelContract,
+        capabilities: metadata.selectionHints.capabilities,
+        desiredOutputKinds: metadata.selectionHints.desiredOutputKinds,
+        resultBlockTypes: metadata.selectionHints.resultBlockTypes,
+        requiresConnection: Boolean(connectorCapability),
+        connectorCapability,
+        available:
+          !connectorCapability || connected.has(connectorCapability),
+      },
+    ];
+  });
+
+  return {
+    enabled: items.length > 0,
+    catalogVersion: "2026-08-agent-tool-catalog-v1",
+    items,
   };
 }
 
