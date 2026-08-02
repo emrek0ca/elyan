@@ -2229,6 +2229,17 @@ export async function createChatMessage(
     routeDecision.route === "server_brain"
       ? buildSharedBrainAckText(effectiveWorkload)
       : "";
+  const assistantAckMetadata =
+    assistantAckText.trim().length > 0
+      ? {
+          transientAck: true,
+          ack: {
+            transient: true,
+            source: "shared_brain_ack",
+            workload: effectiveWorkload,
+          },
+        }
+      : {};
   const assistantAckStatus =
     routeDecision.route === "server_brain" || assistantAckText
       ? "running"
@@ -2284,10 +2295,13 @@ export async function createChatMessage(
       contentBlobId: assistantAckBlob?.blobId ?? null,
       preview: compactMessagePreview(assistantAckText),
       tokenCount: estimateMessageTokens(assistantAckText),
-      metadata: withAssistantBlocksMetadata(assistantRequestMetadata, {
-        content: assistantAckText,
-        streaming: true,
-      }),
+      metadata: {
+        ...withAssistantBlocksMetadata(assistantRequestMetadata, {
+          content: assistantAckText,
+          streaming: true,
+        }),
+        ...assistantAckMetadata,
+      },
     })
     .returning();
 
@@ -2327,11 +2341,14 @@ export async function createChatMessage(
         tokenCount: estimateMessageTokens(assistantAckText),
         status: assistantAckStatus,
         metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
-          withAssistantBlocksMetadata(requestChatMetadata, {
-            content: assistantAckText,
-            blocks: [taskTraceBlock],
-            streaming: true,
-          }),
+          {
+            ...withAssistantBlocksMetadata(requestChatMetadata, {
+              content: assistantAckText,
+              blocks: [taskTraceBlock],
+              streaming: true,
+            }),
+            ...assistantAckMetadata,
+          },
         )}::jsonb`,
         updatedAt: new Date(),
       })

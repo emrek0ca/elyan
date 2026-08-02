@@ -122,6 +122,10 @@ function deriveAssistantContent(input: {
     const sanitized = sanitizeAssistantVisibleText(value);
     return sanitized.trim();
   };
+  const desktopTranscript = buildDesktopExecutionTranscript(input.updatedTask);
+  if (desktopTranscript) {
+    return finalize(desktopTranscript);
+  }
 
   if (input.updatedTask.status === "waiting_approval") {
     const approvalRequest = input.updatedTask.approvalRequest;
@@ -217,6 +221,156 @@ function deriveAssistantContent(input: {
   return "";
 }
 
+function readExecutionStepText(
+  step: Record<string, unknown>,
+  keys: string[],
+  maxLength: number,
+): string | null {
+  for (const key of keys) {
+    const value = step[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const compact = sanitizeAssistantVisibleText(value)
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!compact) {
+      continue;
+    }
+    return compact.length <= maxLength
+      ? compact
+      : `${compact.slice(0, maxLength - 1).trimEnd()}…`;
+  }
+  return null;
+}
+
+function buildDesktopExecutionTranscript(
+  task: typeof tasks.$inferSelect,
+): string | null {
+  const result =
+    task.result && typeof task.result === "object" && !Array.isArray(task.result)
+      ? (task.result as Record<string, unknown>)
+      : null;
+  if (!result) {
+    return null;
+  }
+  const executionTrace =
+    result.executionTrace &&
+    typeof result.executionTrace === "object" &&
+    !Array.isArray(result.executionTrace)
+      ? (result.executionTrace as Record<string, unknown>)
+      : null;
+  const rawSteps = Array.isArray(executionTrace?.steps)
+    ? executionTrace.steps
+    : Array.isArray(executionTrace?.stepStates)
+      ? executionTrace.stepStates
+      : [];
+  if (rawSteps.length === 0) {
+    return null;
+  }
+
+  const stepLines: string[] = [];
+  const seen = new Set<string>();
+  for (const rawStep of rawSteps) {
+    if (!rawStep || typeof rawStep !== "object" || Array.isArray(rawStep)) {
+      continue;
+    }
+    const step = rawStep as Record<string, unknown>;
+    const id = String(step.id ?? step.capability ?? `step_${stepLines.length + 1}`)
+      .trim()
+      .slice(0, 80);
+    if (id && seen.has(id)) {
+      continue;
+    }
+    if (id) {
+      seen.add(id);
+    }
+    const status = String(step.status ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      status !== "completed" &&
+      status !== "running" &&
+      status !== "waiting_approval" &&
+      status !== "failed" &&
+      status !== "canceled" &&
+      status !== "cancelled"
+    ) {
+      continue;
+    }
+    const label =
+      readExecutionStepText(step, ["label", "capability"], 120) ??
+      `Adım ${stepLines.length + 1}`;
+    const detail = readExecutionStepText(
+      step,
+      [
+        "resultSummary",
+        "outputPreview",
+        "detail",
+        "stopReason",
+        "errorCode",
+      ],
+      220,
+    );
+    const suffix = detail ? `: ${detail}` : "";
+    const statusLabel =
+      status === "completed"
+        ? "tamamlandı"
+        : status === "running"
+          ? "yürütülüyor"
+          : status === "waiting_approval"
+            ? "onay bekliyor"
+            : status === "failed"
+              ? "tamamlanamadı"
+              : "iptal edildi";
+    stepLines.push(`${stepLines.length + 1}. ${label} ${statusLabel}${suffix}`);
+    if (stepLines.length >= 16) {
+      break;
+    }
+  }
+  if (stepLines.length === 0) {
+    return null;
+  }
+
+  const finalText =
+    typeof result.final === "string"
+      ? result.final
+      : typeof result.finalAnswer === "string"
+        ? result.finalAnswer
+        : typeof result.answer === "string"
+          ? result.answer
+          : typeof result.text === "string"
+            ? result.text
+            : typeof result.assistantMessage === "string"
+              ? result.assistantMessage
+              : typeof result.message === "string"
+                ? result.message
+                : "";
+  const safeFinal = sanitizeAssistantVisibleText(finalText)
+    .replace(/\s+/g, " ")
+    .trim();
+  const parts: string[] = [];
+  if (safeFinal) {
+    parts.push(safeFinal.length <= 500 ? safeFinal : `${safeFinal.slice(0, 499).trimEnd()}…`);
+  }
+  parts.push("Adımlar:", ...stepLines);
+  return parts.join("\n");
+}
+
+function hasDesktopExecutionTrace(task: typeof tasks.$inferSelect): boolean {
+  const result =
+    task.result && typeof task.result === "object" && !Array.isArray(task.result)
+      ? (task.result as Record<string, unknown>)
+      : null;
+  const executionTrace =
+    result?.executionTrace &&
+    typeof result.executionTrace === "object" &&
+    !Array.isArray(result.executionTrace)
+      ? (result.executionTrace as Record<string, unknown>)
+      : null;
+  return Array.isArray(executionTrace?.steps) || Array.isArray(executionTrace?.stepStates);
+}
+
 function buildAssistantMetadataFromTask(task: typeof tasks.$inferSelect): Record<string, unknown> {
   const result =
     task.result && typeof task.result === "object" && !Array.isArray(task.result)
@@ -249,6 +403,13 @@ function buildAssistantMetadataFromTask(task: typeof tasks.$inferSelect): Record
   }
   if (result.visionBlock && typeof result.visionBlock === "object" && !Array.isArray(result.visionBlock)) {
     metadata.visionBlock = result.visionBlock;
+  }
+  if (hasDesktopExecutionTrace(task)) {
+    metadata.desktopExecution = {
+      transcript: true,
+      source: "executionTrace",
+      appendMode: "cumulative",
+    };
   }
 
   // Skill selection is backend truth. Carry only the public, bounded identity
@@ -409,6 +570,7 @@ function buildLifecycleBlocks(
   const routeDecision = extractTaskRouteDecision(input.task.payload);
   const normalizedError = String(input.task.error ?? "").trim().toLowerCase();
   const summary = buildShortSummary(input.assistantContent);
+  const desktopTranscriptOwnsText = hasDesktopExecutionTrace(input.task);
 
   if (input.task.status === "waiting_approval") {
     blocks.push(
@@ -463,7 +625,11 @@ function buildLifecycleBlocks(
     // While running, the only running-state UI is the quiet wave carried by the
     // task trace block. No "İşlem sürüyor / Cevap hazırlanıyor" status card — it
     // just clutters the surface while the answer is already streaming in.
-  } else if (input.task.status === "completed" && summary) {
+  } else if (
+    input.task.status === "completed" &&
+    summary &&
+    !desktopTranscriptOwnsText
+  ) {
     blocks.push(
       buildAssistantSummaryBlock(summary, {
         title: "Sonuç",

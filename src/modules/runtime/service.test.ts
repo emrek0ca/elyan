@@ -105,6 +105,18 @@ test("registerRuntime replaces the active connection and returns a connection-bo
         errorCode: "no_approved_roots",
       },
     },
+    capabilityHandshake: [
+      {
+        canonicalCapabilityId: "browser_control",
+        adapter: "browser.control",
+        ready: true,
+        dependencyReady: true,
+        permissionReady: false,
+        aliases: ["browser.control"],
+        version: "1.2.3",
+        inputContractHash: "hash-browser-v1",
+      },
+    ],
   });
 
   assert.deepEqual(closeCalls, [
@@ -119,8 +131,23 @@ test("registerRuntime replaces the active connection and returns a connection-bo
     result.runtime.connectionId,
     "22222222-2222-4222-8222-222222222222",
   );
-  assert.deepEqual(result.capabilities, ["runtime.status", "task.execution"]);
+  assert.deepEqual(result.capabilities, [
+    "runtime.status",
+    "task.execution",
+    "browser.control",
+  ]);
   assert.deepEqual(result.capabilityStates, {
+    "browser.control": {
+      canonicalCapabilityId: "browser.control",
+      adapter: "browser.control",
+      ready: true,
+      dependencyReady: true,
+      permissionReady: false,
+      aliases: ["browser.control"],
+      version: "1.2.3",
+      inputContractHash: "hash-browser-v1",
+      handshakeContract: "elyan.runtime_capability_handshake.v1",
+    },
     "local_files.index": {
       available: true,
       ready: false,
@@ -128,7 +155,8 @@ test("registerRuntime replaces the active connection and returns a connection-bo
       errorCode: "no_approved_roots",
     },
   });
-  assert.equal(result.capabilitySummary.total, 2);
+  assert.equal(result.capabilityReadinessSummary.permissionBlocked, 1);
+  assert.equal(result.capabilitySummary.total, 3);
   assert.equal(result.capabilitySummary.categories.runtime, 1);
   assert.equal(result.capabilitySummary.categories.task, 1);
   assert.equal(
@@ -139,6 +167,17 @@ test("registerRuntime replaces the active connection and returns a connection-bo
   assert.equal(result.realtime.ssePath, "/v1/realtime/stream");
   assert.equal(inserts.length, 1);
   assert.deepEqual(inserts[0].capabilityStates, {
+    "browser.control": {
+      canonicalCapabilityId: "browser.control",
+      adapter: "browser.control",
+      ready: true,
+      dependencyReady: true,
+      permissionReady: false,
+      aliases: ["browser.control"],
+      version: "1.2.3",
+      inputContractHash: "hash-browser-v1",
+      handshakeContract: "elyan.runtime_capability_handshake.v1",
+    },
     "local_files.index": {
       available: true,
       ready: false,

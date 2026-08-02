@@ -80,7 +80,11 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       // Reasoning effort "medium"da tutulduğu için gizli düşünme turu saniyeler
       // mertebesinde kalır; token akışı yine kesintisizdir. Hız-kritik yollar
       // (intent/fast_route/desktop_handoff) hâlâ küçük modelde.
-      mobile_chat_fast: reasoningModel,
+      // `mobile_chat_fast` adı gereği hız yolu ve yukarıdaki yorum da
+      // "hız-kritik yollar hâlâ küçük modelde" diyor; buna rağmen büyük
+      // reasoning modeline bağlıydı. Kısa/basit turlarda gizli düşünme turu
+      // saniyeler ekliyor ve kalite farkı yaratmıyor.
+      mobile_chat_fast: fastModel,
       mobile_chat_balanced: reasoningModel,
       mobile_chat_deep_refine: reasoningModel,
       document_analysis: fallbackModel,

@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import { getRuntimeAuth } from "../../lib/request-auth.js";
 import { serializeZodError } from "../../lib/http.js";
 import {
+  acknowledgeTaskDispatchLease,
   acknowledgeTaskControl,
   appendTaskArtifacts,
   appendTaskBinaryArtifact,
@@ -13,6 +14,7 @@ import {
 import {
   registerRuntimeBodySchema,
   runtimeHeartbeatBodySchema,
+  runtimeTaskAckBodySchema,
   runtimeTaskArtifactsBodySchema,
   runtimeTaskControlAckBodySchema,
   runtimeTaskControlParamsSchema,
@@ -25,6 +27,7 @@ import {
   heartbeatRuntime,
   listAssignedRuntimeTasks,
   registerRuntime,
+  shapeAssignedRuntimeTaskResponse,
 } from "./service.js";
 
 export const runtimeRoutes: FastifyPluginAsync = async (app) => {
@@ -103,7 +106,9 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
     return {
       // Authenticated runtime channel binding: desktop WorkOrder v2 seals this
       // backend-owned identity into its device-local execution ledger.
-      tasks: tasks.map((task) => ({ ...task, userId: auth.sub })),
+      ...shapeAssignedRuntimeTaskResponse(
+        tasks.map((task) => ({ ...task, userId: auth.sub })),
+      ),
     };
   });
 
@@ -119,6 +124,28 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
     const auth = getRuntimeAuth(request);
 
     return updateTaskFromRuntime(app, auth, params.taskId, body);
+  });
+
+  app.post("/tasks/:taskId/ack", async (request, reply) => {
+    await app.authenticateRuntime(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const params = runtimeTaskParamsSchema.parse(request.params);
+    const body = runtimeTaskAckBodySchema.parse(request.body);
+    const auth = getRuntimeAuth(request);
+
+    return acknowledgeTaskDispatchLease(app, auth, {
+      taskId: params.taskId,
+      leaseId: body.leaseId,
+      state: body.state,
+      acceptedAt: body.acceptedAt,
+      missingCapabilities: body.missingCapabilities,
+      blockedReason: body.blockedReason,
+      consumedContractFields: body.consumedContractFields,
+    });
   });
 
   app.get("/tasks/:taskId/controls", async (request, reply) => {

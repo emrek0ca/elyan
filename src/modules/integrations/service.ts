@@ -205,7 +205,9 @@ export function normalizeOauthRedirectUri(
 
   if (
     target.protocol === "elyan:" &&
-    ["connections", "oauth-complete"].includes(target.hostname) &&
+    ["connections", "integrations", "oauth-complete"].includes(
+      target.hostname,
+    ) &&
     (target.pathname === "" || target.pathname === "/") &&
     !target.username &&
     !target.password &&
@@ -1006,18 +1008,21 @@ export async function startOauthConnection(
     input.redirectUri,
     app.config.APP_BASE_URL,
   );
-  const existingRows = input.appId
-    ? []
-    : await app.db
-        .select({ scopes: integrationConnections.scopes })
-        .from(integrationConnections)
-        .where(
-          and(
+  const existingRows = await app.db
+    .select({ scopes: integrationConnections.scopes })
+    .from(integrationConnections)
+    .where(
+      input.appId
+        ? and(
+            eq(integrationConnections.userId, input.userId),
+            eq(integrationConnections.appId, input.appId),
+          )
+        : and(
             eq(integrationConnections.userId, input.userId),
             eq(integrationConnections.provider, input.provider),
           ),
-        )
-        .limit(1);
+    )
+    .limit(1);
   const requestedScopes = input.scopes?.length
     ? input.scopes
     : entry.oauth.defaultScopes;

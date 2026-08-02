@@ -63,6 +63,51 @@ test("buildDesktopWorkOrder turns a mobile dispatch prompt into typed execution 
   assert.deepEqual(workOrder.planPreview.planPreparation, { status: "pending" });
 });
 
+test("buildDesktopWorkOrder prefers semantic desktop contract over prompt keyword inference", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "devam et ve orada aç",
+    title: "Tarayıcı akışına devam et",
+    routeDecision: routeDecision({
+      capabilities: [],
+      taskRoute: {
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "The request continues a browser workflow.",
+        needsDesktop: true,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDesktopContract: {
+          contract: "elyan.semantic_desktop_dispatch.v1",
+          route: "desktop_runtime",
+          intent: "browser_workflow",
+          requiredSemanticCapabilities: ["browser_control"],
+          requiredLocalContext: ["browser"],
+          sideEffectLevel: "none",
+          confidence: 0.9,
+          evidence: ["continued browser workflow"],
+        },
+      },
+    }),
+    requestedCapabilities: [],
+  });
+
+  assert.equal(workOrder.goal.kind, "browser_task");
+  assert.deepEqual(workOrder.localContextNeeded, ["browser"]);
+  assert.equal(workOrder.requiredCapabilities.includes("browser_control"), true);
+  assert.equal(
+    workOrder.planPreview.steps.some(
+      (step) => step.capability === "browser_control",
+    ),
+    true,
+  );
+  assert.equal(
+    workOrder.contextPack?.semanticDesktopContract?.intent,
+    "browser_workflow",
+  );
+});
+
 test("desktop plan preparation gate blocks pending v1.7 work without an age escape", () => {
   const payload = {
     desktopWorkOrder: {
@@ -260,6 +305,13 @@ test("direct desktop app commands support terse Turkish and skip generic plannin
     capability: "close_app",
     appName: "Chrome",
   });
+  assert.deepEqual(
+    parseDirectDesktopAppCommand("Masaüstümde Chrome uygulamasını aç."),
+    {
+      capability: "open_app",
+      appName: "Chrome",
+    },
+  );
   assert.equal(
     isDeterministicDesktopAppWorkOrder(
       routeDecision({ capabilities: ["open_app"] }),

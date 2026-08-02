@@ -18,6 +18,13 @@ import {
   extractHostedGeneratedImage,
   type HostedImageProviderConfig,
 } from "./media/hosted-image-adapter.js";
+import {
+  buildVisualIntentContract,
+  isNegatedVisualActionRequest,
+  isVisualImageRequested,
+  latestImageArtifactFromMetadata,
+  type VisualIntentContract,
+} from "./visual-intent-contract.js";
 
 export type HostedImageSource = {
   base64Data: string;
@@ -32,6 +39,7 @@ type HostedImageArtifactInput = {
   userId?: string;
   taskId?: string;
   sourceImages?: HostedImageSource[];
+  visualIntent?: VisualIntentContract;
 };
 
 // ── Çoklu-kullanıcı dayanıklılık ayarları ─────────────────────────────────
@@ -214,6 +222,9 @@ function shouldGenerateHostedImage(prompt: string): boolean {
   if (!normalized) {
     return false;
   }
+  if (isNegatedVisualActionRequest(normalized)) {
+    return false;
+  }
   if (NON_CREATIVE_EXPORT_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return false;
   }
@@ -253,6 +264,7 @@ export function isHostedImageEditRequest(prompt: string, sourceImageCount: numbe
 
 export function isHostedImageEditIntent(prompt: string): boolean {
   const normalized = compactText(prompt);
+  if (isNegatedVisualActionRequest(normalized)) return false;
   return IMAGE_EDIT_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
@@ -425,21 +437,60 @@ function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
     input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
       ? input.metadata
       : {};
-  const sessionArtifacts = Array.isArray(metadata.sessionArtifacts)
-    ? metadata.sessionArtifacts
-    : [];
-  const latestImage = sessionArtifacts
-    .map((item) =>
-      item && typeof item === "object" && !Array.isArray(item)
-        ? (item as Record<string, unknown>)
-        : null,
-    )
-    .find((item) => {
-      const type = String(item?.artifactType ?? item?.type ?? "").toLowerCase();
-      const family = String(item?.contentFamily ?? "").toLowerCase();
-      return type === "image" || family === "image";
+  const visualIntent =
+    input.visualIntent ??
+    buildVisualIntentContract({
+      prompt,
+      metadata,
+      sourceImageCount: input.sourceImages?.length ?? 0,
     });
-  if (!latestImage) return prompt;
+  const latestImage = latestImageArtifactFromMetadata(metadata);
+  const contractText = JSON.stringify(visualIntent, null, 2);
+  const subjectText =
+    visualIntent.subject.length > 0
+      ? visualIntent.subject.join(", ")
+      : "the requested visual subject";
+  if (visualIntent.intent === "image_generate") {
+    return [
+      "VISUAL INTENT CONTRACT:",
+      contractText,
+      "",
+      "Create a new image from this contract.",
+      `Primary subject: ${subjectText}.`,
+      `Subject count: ${visualIntent.count}.`,
+      visualIntent.style ? `Style: ${visualIntent.style}.` : null,
+      visualIntent.add.length > 0 ? `Include: ${visualIntent.add.join(", ")}.` : null,
+      visualIntent.remove.length > 0 ? `Exclude: ${visualIntent.remove.join(", ")}.` : null,
+      visualIntent.spatialInstruction
+        ? `Spatial instruction: ${visualIntent.spatialInstruction}.`
+        : null,
+      visualIntent.negativeConstraints.length > 0
+        ? `Negative constraints: ${visualIntent.negativeConstraints.join(", ")}.`
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (!latestImage) {
+    return [
+      "VISUAL INTENT CONTRACT:",
+      contractText,
+      "",
+      "Edit or continue the referenced image from this contract.",
+      `Primary subject: ${subjectText}.`,
+      "Use referenced image as source of truth.",
+      "Preserve the existing image.",
+      visualIntent.add.length > 0 ? `Only add: ${visualIntent.add.join(", ")}.` : null,
+      visualIntent.remove.length > 0 ? `Only remove: ${visualIntent.remove.join(", ")}.` : null,
+      visualIntent.spatialInstruction
+        ? `Spatial instruction: ${visualIntent.spatialInstruction}.`
+        : null,
+      "Do not introduce unrelated people or objects.",
+      "Keep style and composition consistent.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
   const basePrompt = String(
     latestImage.revisedPrompt ??
       latestImage.prompt ??
@@ -450,19 +501,50 @@ function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 900);
-  if (!basePrompt || !isHostedImageEditIntent(prompt)) return prompt;
+  if (
+    visualIntent.intent !== "image_continue" &&
+    visualIntent.intent !== "image_edit" &&
+    !isHostedImageEditIntent(prompt)
+  ) {
+    return [
+      "VISUAL INTENT CONTRACT:",
+      contractText,
+      "",
+      "Create or edit the image from this contract.",
+      `Primary subject: ${subjectText}.`,
+      "Do not introduce unrelated people or objects.",
+    ].join("\n");
+  }
+  const instructions = [
+    "Use referenced image as source of truth.",
+    "Preserve the existing image.",
+    visualIntent.preserve.length > 0
+      ? `Preserve: ${visualIntent.preserve.join(", ")}.`
+      : "Preserve the previous image's main subject, composition, style, and background.",
+    visualIntent.add.length > 0 ? `Only add: ${visualIntent.add.join(", ")}.` : null,
+    visualIntent.remove.length > 0 ? `Only remove: ${visualIntent.remove.join(", ")}.` : null,
+    visualIntent.spatialInstruction
+      ? `Spatial instruction: ${visualIntent.spatialInstruction}.`
+      : null,
+    "Do not introduce unrelated people or objects.",
+    "Keep style and composition consistent.",
+    visualIntent.negativeConstraints.length > 0
+      ? `Negative constraints: ${visualIntent.negativeConstraints.join(", ")}.`
+      : "Do not switch to an unrelated subject.",
+  ].filter(Boolean);
   return [
-    "Previous image context:",
-    basePrompt,
+    "VISUAL INTENT CONTRACT:",
+    contractText,
     "",
-    "User requested a follow-up edit/variation:",
-    prompt,
-    "",
-    "Preserve the previous image's main subject, composition, and intent. Apply only the requested visual change. Do not switch to an unrelated subject.",
+    ...(basePrompt ? ["Previous image context:", basePrompt, ""] : []),
+    "Instructions:",
+    ...instructions,
   ].join("\n");
 }
 
 function hasSessionImageArtifact(metadata: Record<string, unknown> | undefined): boolean {
+  const latestImage = latestImageArtifactFromMetadata(metadata);
+  if (latestImage) return true;
   const sessionArtifacts = Array.isArray(metadata?.sessionArtifacts)
     ? metadata.sessionArtifacts
     : [];
@@ -605,6 +687,7 @@ async function readCachedImage(
   store: ReliabilityStore | null,
   cacheKey: string,
   prompt: string,
+  visualIntent?: VisualIntentContract,
 ): Promise<HostedImageArtifactResult | null> {
   if (!store) {
     return null;
@@ -627,6 +710,7 @@ async function readCachedImage(
       mimeType: parsed.mimeType || "image/jpeg",
       revisedPrompt: parsed.revisedPrompt ?? null,
       model: parsed.model || "",
+      visualIntent,
     });
   } catch {
     return null;
@@ -801,10 +885,31 @@ export async function maybeGenerateHostedImageArtifact(
     input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
       ? input.metadata
       : {};
+  const visualIntent =
+    input.visualIntent ??
+    buildVisualIntentContract({
+      prompt: input.prompt,
+      metadata,
+      sourceImageCount,
+    });
+  metadata.visualIntent = visualIntent;
   const editing =
+    visualIntent.intent === "image_edit" ||
+    visualIntent.intent === "image_continue" ||
     isHostedImageEditRequest(input.prompt, sourceImageCount) ||
     (hasSessionImageArtifact(metadata) && isHostedImageEditIntent(input.prompt));
-  if (!shouldGenerateHostedImage(input.prompt) && !editing) {
+  if (!isVisualImageRequested(visualIntent, input.prompt) && !editing) {
+    return null;
+  }
+  if (
+    (visualIntent.intent === "image_edit" ||
+      visualIntent.intent === "image_continue") &&
+    !hasSourceImages
+  ) {
+    setImageGenerationBlockReason(metadata, "image_edit_source_missing", {
+      intent: visualIntent.intent,
+      sourceArtifactId: visualIntent.sourceArtifactId ?? "last_image",
+    });
     return null;
   }
 
@@ -815,7 +920,10 @@ export async function maybeGenerateHostedImageArtifact(
 
   const store = resolveReliabilityStore(app);
   const sharedCacheAllowed =
-    !hasSourceImages && isSharedImageCacheEligible(input.prompt);
+    visualIntent.intent === "image_generate" &&
+    !hasSessionImageArtifact(metadata) &&
+    !hasSourceImages &&
+    isSharedImageCacheEligible(input.prompt);
   const premiumRequested = app.config.GEMINI_IMAGE_PRO_ENABLED === true && requestsPremiumImageWork(input);
   const cacheKey = imageCacheKey(
     input.prompt,
@@ -825,7 +933,7 @@ export async function maybeGenerateHostedImageArtifact(
 
   // 1) Önbellek: aynı istem yakın zamanda üretildiyse dış çağrı yok.
   const cached = sharedCacheAllowed
-    ? await readCachedImage(store, cacheKey, input.prompt)
+    ? await readCachedImage(store, cacheKey, input.prompt, visualIntent)
     : null;
   if (cached) {
     await recordSuccessfulImageGenerationUsage(app, input, allowance);
@@ -845,7 +953,7 @@ export async function maybeGenerateHostedImageArtifact(
       .acquireLock(lockKey, lockOwner, IMAGE_SINGLEFLIGHT_LOCK_TTL_MS)
       .catch(() => true);
     if (!holdsLock) {
-      const shared = await waitForSharedImage(store, cacheKey, input.prompt);
+      const shared = await waitForSharedImage(store, cacheKey, input.prompt, visualIntent);
       if (shared) {
         await recordSuccessfulImageGenerationUsage(app, input, allowance);
         return shared;
@@ -918,7 +1026,11 @@ export async function maybeGenerateHostedImageArtifact(
     );
     const providers = buildHostedImageProviderConfigs(app, input.prompt, usePremium);
     if (!providers.length) return null;
-    const result = await generateHostedImageArtifactWithPermit(app, input, providers);
+    const result = await generateHostedImageArtifactWithPermit(
+      app,
+      { ...input, metadata, visualIntent },
+      providers,
+    );
     if (result) {
       const premiumModel = String(
         app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image-preview",
@@ -947,11 +1059,12 @@ async function waitForSharedImage(
   store: ReliabilityStore,
   cacheKey: string,
   prompt: string,
+  visualIntent?: VisualIntentContract,
 ): Promise<HostedImageArtifactResult | null> {
   const deadline = Date.now() + IMAGE_SINGLEFLIGHT_WAIT_MS;
   while (Date.now() < deadline) {
     await delay(IMAGE_SINGLEFLIGHT_POLL_MS);
-    const shared = await readCachedImage(store, cacheKey, prompt);
+    const shared = await readCachedImage(store, cacheKey, prompt, visualIntent);
     if (shared) {
       return shared;
     }
@@ -968,9 +1081,13 @@ function buildImageArtifactResult(params: {
   mimeType: string;
   revisedPrompt: string | null;
   model: string;
+  visualIntent?: VisualIntentContract;
 }): HostedImageArtifactResult {
-  const { prompt, base64, mimeType, revisedPrompt, model } = params;
+  const { prompt, base64, mimeType, revisedPrompt, model, visualIntent } = params;
   const previewText = "Görsel hazır.";
+  const detectedSubject = visualIntent?.subject ?? [];
+  const style = visualIntent?.style ?? null;
+  const visualSummary = compactText(revisedPrompt || prompt).slice(0, 900);
   return {
     artifact: {
       kind: "file",
@@ -980,7 +1097,12 @@ function buildImageArtifactResult(params: {
       payload: {
         previewText,
         mimeType,
+        prompt,
         revisedPrompt: revisedPrompt ?? undefined,
+        visualSummary,
+        detectedSubject,
+        style,
+        visualIntent,
         source: "elyan_image_generation",
       },
       metadata: {
@@ -988,6 +1110,10 @@ function buildImageArtifactResult(params: {
         contentFamily: "image",
         viewerHint: "image",
         mimeType,
+        visualSummary,
+        detectedSubject,
+        style,
+        visualIntent,
       },
     },
     binaryBody: Buffer.from(base64, "base64"),
@@ -1055,7 +1181,17 @@ async function generateHostedImageArtifactWithPermit(
   providers: HostedImageProviderConfig[],
 ): Promise<HostedImageArtifactResult | null> {
   const store = resolveReliabilityStore(app);
-  const editing = (input.sourceImages?.length ?? 0) > 0;
+  const visualIntent =
+    input.visualIntent ??
+    buildVisualIntentContract({
+      prompt: input.prompt,
+      metadata: input.metadata,
+      sourceImageCount: input.sourceImages?.length ?? 0,
+    });
+  const editing =
+    (input.sourceImages?.length ?? 0) > 0 ||
+    visualIntent.intent === "image_edit" ||
+    visualIntent.intent === "image_continue";
 
   for (const providerConfig of providers) {
     const circuitKey = imageCircuitKey(providerConfig.provider, providerConfig.model);
@@ -1073,7 +1209,7 @@ async function generateHostedImageArtifactWithPermit(
     try {
       const request = buildHostedImageProviderRequest({
         config: providerConfig,
-        prompt: buildHostedImagePrompt(input),
+        prompt: buildHostedImagePrompt({ ...input, visualIntent }),
         aspectRatio: editing ? undefined : inferGeminiAspectRatio(input.prompt),
         sourceImages: input.sourceImages,
       });
@@ -1131,6 +1267,7 @@ async function generateHostedImageArtifactWithPermit(
         mimeType,
         revisedPrompt,
         model: providerConfig.model,
+        visualIntent,
       });
     } catch (error) {
       app.log.warn(

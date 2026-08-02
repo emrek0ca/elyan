@@ -4362,7 +4362,7 @@ test("generateGovernedSharedBrainReply does not force clarification for greeting
   );
 
   assert.equal(result.answerSource, "backend_gate");
-  assert.equal(result.text.includes("buradayım"), true);
+  assert.notEqual(result.text.trim(), "");
 });
 
 test("generateGovernedSharedBrainReply serves cheap social turns without a provider call when cost guard is enabled", async () => {
@@ -4437,7 +4437,7 @@ test("generateGovernedSharedBrainReply serves cheap social turns without a provi
   assert.equal(result.answerSource, "backend_gate");
   assert.equal(result.provider, "backend_gate");
   assert.equal(result.model, "elyan.cheap_social_turn");
-  assert.equal(result.text, "Merhaba Zeynep, buradayım.");
+  assert.equal(result.text, "Merhaba Zeynep.");
   assert.equal(result.promptTokens, 0);
   assert.equal(result.completionTokens, 0);
   assert.equal(result.totalTokens, 0);
@@ -4519,7 +4519,7 @@ test("generateGovernedSharedBrainReply serves Turkish how-are-you slang without 
 
   assert.equal(result.answerSource, "backend_gate");
   assert.equal(result.model, "elyan.cheap_social_turn");
-  assert.equal(result.text, "İyiyim, buradayım. Sen nasılsın?");
+  assert.equal(result.text, "İyiyim, sen nasılsın?");
   assert.equal(result.promptTokens, 0);
   assert.equal(result.completionTokens, 0);
   assert.equal(result.totalTokens, 0);
@@ -4588,7 +4588,7 @@ test("cheap social reply survives an unavailable learning store without leaking 
   );
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(result.text, "Buradayım, seninle ilgileniyorum. Ne yapalım?");
+  assert.equal(result.text, "Seninleyim.");
   assert.equal(result.totalTokens, 0);
   assert.ok(warnings.length >= 1);
   assert.match(JSON.stringify(warnings), /review_store_unavailable/u);

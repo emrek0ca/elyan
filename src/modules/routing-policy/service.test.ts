@@ -163,6 +163,53 @@ test("decideCommandRoute sends an explicit remote MCP request to a capable deskt
   assert.deepEqual(decision.capabilities, ["mcp_call_tool"]);
 });
 
+test("decideCommandRoute carries typed semantic desktop dispatch contract from route model", async () => {
+  const app = createDesktopReadyApp(["task.execution"]);
+  (app.services as Record<string, unknown>).commandRouteModel = {
+    decide: async () => ({
+      target: "desktop_runtime",
+      operationalRoute: "desktop_runtime",
+      executionPlan: ["desktop_runtime"],
+      reason: "The request needs browser state on the paired desktop.",
+      needsDesktop: true,
+      needsPrivateDesktopData: false,
+      needsUserApproval: false,
+      requiredCapabilities: [],
+      semanticDesktopContract: {
+        contract: "elyan.semantic_desktop_dispatch.v1",
+        route: "desktop_runtime",
+        intent: "browser_workflow",
+        requiredSemanticCapabilities: ["browser_control"],
+        requiredLocalContext: ["browser"],
+        sideEffectLevel: "none",
+        confidence: 0.91,
+        evidence: ["continue browser workflow"],
+      },
+    }),
+  };
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "devam et ve orada aç",
+    source: "mobile",
+    selectedDeviceId: "desktop-1",
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(
+    decision.taskRoute?.semanticDesktopContract?.contract,
+    "elyan.semantic_desktop_dispatch.v1",
+  );
+  assert.equal(
+    decision.taskRoute?.semanticDesktopContract?.intent,
+    "browser_workflow",
+  );
+  assert.deepEqual(
+    decision.taskRoute?.semanticDesktopContract?.requiredSemanticCapabilities,
+    ["browser_control"],
+  );
+});
+
 test("decideCommandRoute fails closed when remote MCP runtime is unavailable", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
@@ -1688,6 +1735,39 @@ test("decideCommandRoute keeps desktop-word advice on server when model says no 
   assert.equal(decision.requiredRuntime, "server");
 });
 
+test("decideCommandRoute overrides a wrong server model route for explicit desktop app execution", async () => {
+  const app = createDesktopReadyApp(["browser_control"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain" as const,
+        operationalRoute: "server_brain" as const,
+        executionPlan: ["server_brain" as const],
+        reason: "The model incorrectly treated this as normal chat.",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "wrong-server-route-desktop-action-user",
+    message: "Masaüstümde Chrome uygulamasını aç.",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.semanticDesktopContract?.intent, "browser_workflow");
+  assert.match(
+    decision.taskRoute?.semanticDesktopContract?.evidence.join("\n") ?? "",
+    /model_server_route_overridden_for_desktop_action/,
+  );
+});
+
 test("decideCommandRoute rejects string booleans from a malformed model route", async () => {
   const app = createDesktopReadyApp(["filesystem_read"]);
   Object.assign(app.services, {
@@ -1715,6 +1795,31 @@ test("decideCommandRoute rejects string booleans from a malformed model route", 
 
   assert.equal(decision.route, "server_brain");
   assert.equal(decision.targetDeviceId, undefined);
+});
+
+test("decideCommandRoute uses regex fallback only when route model fails technically", async () => {
+  const app = createDesktopReadyApp(["filesystem_read"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => {
+        throw new Error("route model timeout");
+      },
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "route-model-timeout-fallback-user",
+    message: "Masaüstümdeki dosyaları listele",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.match(
+    decision.taskRoute?.semanticDesktopContract?.evidence.join("\n") ?? "",
+    /model_error/,
+  );
 });
 
 test("decideCommandRoute fails closed when an explicit desktop capability has no runtime", async () => {

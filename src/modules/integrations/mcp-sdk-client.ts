@@ -26,6 +26,8 @@ import {
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_RECORDED_TOOL_NAMES = 24;
 const MAX_RECORDED_TOOL_DESCRIPTION_LENGTH = 240;
+// Elle yazılmış probla aynı sınır: modele ilan için ham şema saklanır.
+const MAX_RECORDED_TOOL_SCHEMA_LENGTH = 8_000;
 
 function bearerHeaders(accessToken: string): Record<string, string> {
   return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
@@ -144,7 +146,12 @@ export async function probeMcpServerViaSdk(input: {
       const inputSchemaDigest = serializedInputSchema
         ? createHash("sha256").update(serializedInputSchema).digest("hex")
         : null;
-      return { name, description, inputSchemaDigest };
+      const inputSchema =
+        serializedInputSchema &&
+        serializedInputSchema.length <= MAX_RECORDED_TOOL_SCHEMA_LENGTH
+          ? (tool.inputSchema as Record<string, unknown>)
+          : null;
+      return { name, description, inputSchemaDigest, inputSchema };
     })
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
 

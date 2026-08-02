@@ -84,6 +84,11 @@ import {
   maybeGenerateHostedImageArtifact,
   type HostedImageSource,
 } from "../brain/image-generation.js";
+import {
+  buildVisualIntentContract,
+  isNegatedVisualActionRequest,
+  isVisualImageRequested,
+} from "../brain/visual-intent-contract.js";
 import { sanitizeFinalAssistantResponse } from "../brain/response-policy.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import {
@@ -1733,6 +1738,7 @@ function extractRouteDecision(
 
   const typedRoutingDecision = routingDecision as Record<string, unknown>;
   const taskRoute = readRecord(typedRoutingDecision.taskRoute);
+  const semanticDesktopContract = readRecord(taskRoute?.semanticDesktopContract);
   return {
     route:
       typeof typedRoutingDecision.route === "string"
@@ -1772,6 +1778,14 @@ function extractRouteDecision(
                 .map((value: unknown) => String(value ?? "").trim())
                 .filter(Boolean)
             : [],
+          ...(semanticDesktopContract
+            ? {
+                semanticDesktopContract:
+                  semanticDesktopContract as NonNullable<
+                    NonNullable<CommandRouteDecision["taskRoute"]>["semanticDesktopContract"]
+                  >,
+              }
+            : {}),
         }
       : undefined,
     mode:
@@ -2246,6 +2260,9 @@ function resolveImageGenerationFallbackText(
       : "";
   if (reason === "image_generation_limit_reached") {
     return "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin.";
+  }
+  if (reason === "image_edit_source_missing") {
+    return "Düzenlenecek son görseli bu sohbet içinde bulamadım. Görseli tekrar ekleyip ne değiştireceğini yazabilirsin.";
   }
   return "Görsel üretim şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene.";
 }
@@ -3025,6 +3042,7 @@ function buildArtifactOutputArtifact(
 
 function compactSessionArtifactSnapshot(input: {
   prompt: string;
+  sessionId?: string | null;
   artifact: ReturnType<typeof shapeTaskArtifact>;
 }): Record<string, unknown> | null {
   const artifact = input.artifact;
@@ -3042,6 +3060,44 @@ function compactSessionArtifactSnapshot(input: {
     .toLowerCase();
   const contentFamily = String(artifact.contentFamily ?? "").toLowerCase();
   if (!artifactType && !contentFamily) return null;
+  const visualIntent = metadata?.visualIntent ?? payload?.visualIntent;
+  const visualIntentRecord = readRecord(visualIntent);
+  const detectedSubject = Array.isArray(metadata?.detectedSubject)
+    ? metadata.detectedSubject
+    : Array.isArray(payload?.detectedSubject)
+      ? payload.detectedSubject
+      : Array.isArray(visualIntentRecord?.subject)
+        ? visualIntentRecord.subject
+        : [];
+  const style =
+    typeof metadata?.style === "string" && metadata.style.trim()
+      ? metadata.style.trim()
+      : typeof payload?.style === "string" && payload.style.trim()
+        ? payload.style.trim()
+        : typeof visualIntentRecord?.style === "string" &&
+            visualIntentRecord.style.trim()
+          ? visualIntentRecord.style.trim()
+          : null;
+  const revisedPrompt = compactTextPreview(
+    metadata?.revisedPrompt ?? payload?.revisedPrompt,
+    900,
+  );
+  const visualSummary = compactTextPreview(
+    metadata?.visualSummary ??
+      payload?.visualSummary ??
+      revisedPrompt ??
+      artifact.previewText ??
+      input.prompt,
+    900,
+  );
+  const artifactRef = {
+    kind: "task_artifact",
+    artifactId: artifact.id,
+    taskId: artifact.taskId,
+    contentType: artifact.contentType,
+    bodyBlobId: artifact.bodyBlobId ?? null,
+    downloadUrl: artifact.downloadUrl ?? null,
+  };
   return {
     id: artifact.id,
     taskId: artifact.taskId,
@@ -3053,10 +3109,15 @@ function compactSessionArtifactSnapshot(input: {
     viewerHint: artifact.viewerHint,
     prompt: compactTextPreview(input.prompt, 900),
     previewText: compactTextPreview(artifact.previewText, 500),
-    revisedPrompt: compactTextPreview(
-      metadata?.revisedPrompt ?? payload?.revisedPrompt,
-      900,
-    ),
+    revisedPrompt,
+    visualSummary,
+    detectedSubject,
+    style,
+    sourceSessionId: input.sessionId ?? null,
+    artifactRef,
+    editableImageRef: artifactRef,
+    renderedImageUrl: artifact.downloadUrl ?? null,
+    visualIntent,
     createdAt:
       artifact.createdAt instanceof Date
         ? artifact.createdAt.toISOString()
@@ -3077,15 +3138,51 @@ async function persistSessionArtifactMemory(
   if (!sessionId || input.artifacts.length === 0) return;
   const snapshots = input.artifacts
     .map((artifact) =>
-      compactSessionArtifactSnapshot({ prompt: input.prompt, artifact }),
+      compactSessionArtifactSnapshot({
+        prompt: input.prompt,
+        sessionId,
+        artifact,
+      }),
     )
     .filter((item): item is Record<string, unknown> => item != null)
     .slice(0, 4);
   if (snapshots.length === 0) return;
-  await app.db
-    .update(chatSessions)
-    .set({
-      metadata: sql`
+  const lastVisualArtifact =
+    snapshots.find((item) => {
+      const type = String(item.artifactType ?? item.type ?? "").toLowerCase();
+      const family = String(item.contentFamily ?? "").toLowerCase();
+      return type === "image" || family === "image";
+    }) ?? null;
+  const nextMetadata = lastVisualArtifact
+    ? sql`
+        jsonb_set(
+          jsonb_set(
+            coalesce(${chatSessions.metadata}, '{}'::jsonb),
+            '{sessionArtifacts}',
+            (
+              select jsonb_agg(value)
+              from (
+                select value
+                from (
+                  select distinct on (value->>'id') value, ord
+                  from jsonb_array_elements(
+                    ${JSON.stringify(snapshots)}::jsonb ||
+                    coalesce(${chatSessions.metadata}->'sessionArtifacts', '[]'::jsonb)
+                  ) with ordinality as items(value, ord)
+                  order by value->>'id', ord
+                ) deduped
+                order by ord
+                limit 8
+              ) ordered
+            ),
+            true
+          ),
+          '{lastVisualArtifact}',
+          ${JSON.stringify(lastVisualArtifact)}::jsonb,
+          true
+        )
+      `
+    : sql`
         jsonb_set(
           coalesce(${chatSessions.metadata}, '{}'::jsonb),
           '{sessionArtifacts}',
@@ -3107,7 +3204,11 @@ async function persistSessionArtifactMemory(
           ),
           true
         )
-      `,
+      `;
+  await app.db
+    .update(chatSessions)
+    .set({
+      metadata: nextMetadata,
       updatedAt: new Date(),
     })
     .where(
@@ -3118,12 +3219,121 @@ async function persistSessionArtifactMemory(
     );
 }
 
-async function readSessionArtifactMemory(
+function isImageArtifactMemory(record: Record<string, unknown> | null): boolean {
+  if (!record) return false;
+  const type = String(record.artifactType ?? record.type ?? "").toLowerCase();
+  const family = String(record.contentFamily ?? "").toLowerCase();
+  const contentType = String(record.contentType ?? "").toLowerCase();
+  return type === "image" || family === "image" || contentType.startsWith("image/");
+}
+
+function artifactIdFromMemory(record: Record<string, unknown> | null): string | null {
+  if (!record) return null;
+  const artifactRef = readRecord(record.artifactRef) ?? readRecord(record.editableImageRef);
+  const value = String(
+    artifactRef?.artifactId ??
+      record.artifactId ??
+      record.id ??
+      "",
+  ).trim();
+  return value || null;
+}
+
+function taskIdFromMemory(record: Record<string, unknown> | null): string | null {
+  if (!record) return null;
+  const artifactRef = readRecord(record.artifactRef) ?? readRecord(record.editableImageRef);
+  const value = String(artifactRef?.taskId ?? record.taskId ?? "").trim();
+  return value || null;
+}
+
+function resolveLastVisualArtifactMemory(
+  metadata: Record<string, unknown>,
+  sourceArtifactId: string | null | undefined,
+): Record<string, unknown> | null {
+  const explicitId = String(sourceArtifactId ?? "").trim();
+  const lastVisualArtifact = readRecord(metadata.lastVisualArtifact);
+  const sessionArtifacts = Array.isArray(metadata.sessionArtifacts)
+    ? metadata.sessionArtifacts
+        .map((item) => readRecord(item))
+        .filter((item): item is Record<string, unknown> => item != null)
+    : [];
+  if (explicitId && explicitId !== "last_image") {
+    const matched =
+      [lastVisualArtifact, ...sessionArtifacts].find(
+        (item) => artifactIdFromMemory(item) === explicitId && isImageArtifactMemory(item),
+      ) ?? null;
+    return matched;
+  }
+  if (isImageArtifactMemory(lastVisualArtifact)) {
+    return lastVisualArtifact;
+  }
+  return sessionArtifacts.find((item) => isImageArtifactMemory(item)) ?? null;
+}
+
+async function resolveLastVisualArtifactImageSource(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    metadata: Record<string, unknown>;
+    sourceArtifactId?: string | null;
+  },
+): Promise<{ source: HostedImageSource; artifact: Record<string, unknown> } | null> {
+  const memory = resolveLastVisualArtifactMemory(
+    input.metadata,
+    input.sourceArtifactId,
+  );
+  const artifactId = artifactIdFromMemory(memory);
+  const taskId = taskIdFromMemory(memory);
+  if (!artifactId || !taskId) {
+    return null;
+  }
+  const artifact = await getTaskArtifactRecordForUser(
+    app,
+    taskId,
+    artifactId,
+    input.userId,
+  ).catch(() => null);
+  const contentType = String(artifact?.contentType ?? "").toLowerCase();
+  if (
+    !artifact?.bodyBlobId ||
+    (contentType !== "image/png" &&
+      contentType !== "image/jpeg" &&
+      contentType !== "image/webp")
+  ) {
+    return null;
+  }
+  const body = await app.services?.blobs?.hydrateBytesForOwner({
+    blobId: artifact.bodyBlobId,
+    userId: input.userId,
+    ownerType: "artifact",
+    ownerId: artifact.id,
+  });
+  if (!body || body.byteLength <= 0 || body.byteLength > 12 * 1024 * 1024) {
+    return null;
+  }
+  return {
+    source: {
+      base64Data: Buffer.from(body).toString("base64"),
+      mimeType: contentType as HostedImageSource["mimeType"],
+    },
+    artifact: memory ?? {
+      id: artifact.id,
+      artifactId: artifact.id,
+      taskId: artifact.taskId,
+      contentType: artifact.contentType,
+    },
+  };
+}
+
+async function readSessionVisualArtifactMemory(
   app: FastifyInstance,
   input: { userId: string; sessionId: string | null | undefined },
-): Promise<Record<string, unknown>[]> {
+): Promise<{
+  sessionArtifacts: Record<string, unknown>[];
+  lastVisualArtifact: Record<string, unknown> | null;
+}> {
   const sessionId = String(input.sessionId ?? "").trim();
-  if (!sessionId) return [];
+  if (!sessionId) return { sessionArtifacts: [], lastVisualArtifact: null };
   const rows = await app.db
     .select({ metadata: chatSessions.metadata })
     .from(chatSessions)
@@ -3138,10 +3348,13 @@ async function readSessionArtifactMemory(
   const sessionArtifacts = Array.isArray(metadata?.sessionArtifacts)
     ? metadata.sessionArtifacts
     : [];
-  return sessionArtifacts
-    .map((item) => readRecord(item))
-    .filter((item): item is Record<string, unknown> => item != null)
-    .slice(0, 8);
+  return {
+    sessionArtifacts: sessionArtifacts
+      .map((item) => readRecord(item))
+      .filter((item): item is Record<string, unknown> => item != null)
+      .slice(0, 8),
+    lastVisualArtifact: readRecord(metadata?.lastVisualArtifact),
+  };
 }
 
 async function getTaskForUser(
@@ -3714,7 +3927,11 @@ export async function acknowledgeTaskDispatchLease(
   input: {
     taskId: string;
     leaseId: string;
+    state?: "accepted" | "rejected" | "needs_permission" | "missing_dependency";
     acceptedAt?: string;
+    missingCapabilities?: string[];
+    blockedReason?: string;
+    consumedContractFields?: string[];
   },
 ) {
   const task = await getTaskForRuntime(app, input.taskId, auth);
@@ -3735,6 +3952,26 @@ export async function acknowledgeTaskDispatchLease(
   }
 
   const acceptedAt = parseRuntimeAcceptedAt(input.acceptedAt);
+  const acceptance = normalizeRuntimeTaskAcceptance(input);
+
+  if (acceptance.state !== "accepted") {
+    const updatedTask = await recordRuntimeTaskAcceptanceRejection(app, {
+      task: ownedTask,
+      auth,
+      leaseId: input.leaseId,
+      acceptance,
+    });
+    await publishTaskEvent(app, updatedTask, "runtime.acceptance_rejected", {
+      task: shapeTaskFeedItem(updatedTask),
+      leaseId: input.leaseId,
+      acceptance,
+    });
+    return {
+      task: updatedTask,
+      leaseId: input.leaseId,
+      acceptance,
+    };
+  }
 
   const rows = await app.db
     .update(tasks)
@@ -3772,6 +4009,7 @@ export async function acknowledgeTaskDispatchLease(
       runtimeConnectionId: auth.connectionId,
       acceptedAt: effectiveAcceptedAt,
       acceptanceMode: "local_journal_persisted",
+      acceptance,
     },
   });
 
@@ -3780,6 +4018,7 @@ export async function acknowledgeTaskDispatchLease(
     leaseId: input.leaseId,
     acceptedAt: effectiveAcceptedAt,
     acceptanceMode: "local_journal_persisted",
+    acceptance,
   });
   try {
     await syncChatTaskLifecycle(app, {
@@ -3798,7 +4037,168 @@ export async function acknowledgeTaskDispatchLease(
     task: updatedTask,
     leaseId: input.leaseId,
     acceptedAt: effectiveAcceptedAt,
+    acceptance,
   };
+}
+
+type RuntimeTaskAcceptanceState =
+  | "accepted"
+  | "rejected"
+  | "needs_permission"
+  | "missing_dependency";
+
+type RuntimeTaskAcceptance = {
+  contract: "elyan.runtime_task_acceptance.v1";
+  state: RuntimeTaskAcceptanceState;
+  missingCapabilities: string[];
+  blockedReason: string | null;
+  consumedContractFields: string[];
+  acceptedAt: string | null;
+};
+
+function boundedRuntimeAcceptanceList(value: unknown, maxItems: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .map((item) => String(item ?? "").trim())
+        .filter((item) => item.length > 0)
+        .map((item) => item.slice(0, 120)),
+    ),
+  ].slice(0, maxItems);
+}
+
+function normalizeRuntimeTaskAcceptance(input: {
+  state?: RuntimeTaskAcceptanceState;
+  acceptedAt?: string;
+  missingCapabilities?: string[];
+  blockedReason?: string;
+  consumedContractFields?: string[];
+}): RuntimeTaskAcceptance {
+  const state = input.state ?? "accepted";
+  return {
+    contract: "elyan.runtime_task_acceptance.v1",
+    state,
+    missingCapabilities: boundedRuntimeAcceptanceList(
+      input.missingCapabilities,
+      32,
+    ),
+    blockedReason: String(input.blockedReason ?? "").trim().slice(0, 300) || null,
+    consumedContractFields: boundedRuntimeAcceptanceList(
+      input.consumedContractFields,
+      64,
+    ),
+    acceptedAt: input.acceptedAt ?? null,
+  };
+}
+
+function runtimeAcceptanceUserMessage(acceptance: RuntimeTaskAcceptance): string {
+  if (acceptance.state === "needs_permission") {
+    return "Masaüstü görevi almak için ek izin gerekiyor.";
+  }
+  if (acceptance.state === "missing_dependency") {
+    return "Masaüstü görevi almak için gerekli bağımlılık eksik.";
+  }
+  return "Masaüstü runtime bu iş emrini kabul etmedi.";
+}
+
+function mergeRuntimeAcceptanceIntoPayload(
+  payload: unknown,
+  acceptance: RuntimeTaskAcceptance,
+): Record<string, unknown> {
+  const root = readRecord(payload) ?? {};
+  const metadata = readRecord(root.metadata) ?? {};
+  return {
+    ...root,
+    metadata: {
+      ...metadata,
+      runtimeAcceptance: acceptance,
+    },
+  };
+}
+
+async function recordRuntimeTaskAcceptanceRejection(
+  app: FastifyInstance,
+  input: {
+    task: typeof tasks.$inferSelect;
+    auth: RuntimeAuthTokenPayload;
+    leaseId: string;
+    acceptance: RuntimeTaskAcceptance;
+  },
+) {
+  const now = new Date();
+  const status: TaskStatus =
+    input.acceptance.state === "needs_permission"
+      ? "waiting_approval"
+      : "failed";
+  const safeMessage = runtimeAcceptanceUserMessage(input.acceptance);
+  const rows = await app.db
+    .update(tasks)
+    .set({
+      status,
+      summary: safeMessage,
+      error:
+        status === "failed"
+          ? input.acceptance.blockedReason ?? safeMessage
+          : null,
+      approvalRequest:
+        input.acceptance.state === "needs_permission"
+          ? {
+              kind: "runtime_permission",
+              source: "desktop_runtime_acceptance",
+              state: "pending",
+              missingCapabilities: input.acceptance.missingCapabilities,
+              blockedReason: input.acceptance.blockedReason,
+              consumedContractFields: input.acceptance.consumedContractFields,
+            }
+          : input.task.approvalRequest,
+      payload: mergeRuntimeAcceptanceIntoPayload(
+        input.task.payload,
+        input.acceptance,
+      ),
+      runtimeConnectionId: null,
+      dispatchLeaseId: null,
+      dispatchLeaseIssuedAt: null,
+      dispatchLeaseExpiresAt: null,
+      dispatchAckAt: null,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(tasks.id, input.task.id),
+        eq(tasks.status, input.task.status),
+        eq(tasks.dispatchLeaseId, input.leaseId),
+      ),
+    )
+    .returning();
+  const updatedTask = rows[0];
+  if (!updatedTask) {
+    throw conflict("Task state changed before runtime acceptance response");
+  }
+  await insertTaskEvent(app, {
+    taskId: updatedTask.id,
+    userId: updatedTask.userId,
+    status,
+    message: safeMessage,
+    payload: {
+      leaseId: input.leaseId,
+      runtimeConnectionId: input.auth.connectionId,
+      acceptance: input.acceptance,
+    },
+  });
+  try {
+    await syncChatTaskLifecycle(app, {
+      originalTask: input.task,
+      updatedTask,
+      message: safeMessage,
+    });
+  } catch (error) {
+    app.log.warn(
+      { err: error, taskId: updatedTask.id },
+      "Runtime acceptance chat sync failed",
+    );
+  }
+  return updatedTask;
 }
 
 function parseRuntimeAcceptedAt(value: string | undefined): Date | undefined {
@@ -4399,6 +4799,7 @@ async function completeServerBrainTask(
     userId: string;
     chatSessionId?: string | null;
     sessionArtifacts?: Record<string, unknown>[];
+    lastVisualArtifact?: Record<string, unknown> | null;
     responseText: string;
     provider: string;
     model: string;
@@ -4490,8 +4891,17 @@ async function completeServerBrainTask(
       : {};
   const basePayloadMetadata = getPayloadMetadata(payload);
   const payloadMetadata =
-    input.sessionArtifacts && input.sessionArtifacts.length > 0
-      ? { ...basePayloadMetadata, sessionArtifacts: input.sessionArtifacts }
+    (input.sessionArtifacts && input.sessionArtifacts.length > 0) ||
+    input.lastVisualArtifact
+      ? {
+          ...basePayloadMetadata,
+          ...(input.sessionArtifacts && input.sessionArtifacts.length > 0
+            ? { sessionArtifacts: input.sessionArtifacts }
+            : {}),
+          ...(input.lastVisualArtifact
+            ? { lastVisualArtifact: input.lastVisualArtifact }
+            : {}),
+        }
       : basePayloadMetadata;
   const prompt = getTaskPrompt(payload);
   const resolved = resolveCompletionAssistantBlocks({
@@ -4673,10 +5083,55 @@ async function completeServerBrainTask(
     input.userId,
     payloadMetadata,
   );
-  const effectiveSourceImages =
+  const explicitSourceImages =
     referencedSourceImages.length > 0
       ? referencedSourceImages
-      : input.sourceImages;
+      : input.sourceImages && input.sourceImages.length > 0
+        ? input.sourceImages
+        : [];
+  let visualIntent = buildVisualIntentContract({
+    prompt,
+    metadata: payloadMetadata,
+    sourceImageCount: explicitSourceImages.length,
+  });
+  const lastVisualArtifactSource =
+    explicitSourceImages.length === 0 &&
+    (visualIntent.intent === "image_continue" ||
+      visualIntent.intent === "image_edit")
+      ? await resolveLastVisualArtifactImageSource(app, {
+          userId: input.userId,
+          metadata: payloadMetadata,
+          sourceArtifactId: visualIntent.sourceArtifactId,
+        })
+      : null;
+  const effectiveSourceImages =
+    explicitSourceImages.length > 0
+      ? explicitSourceImages
+      : lastVisualArtifactSource
+        ? [lastVisualArtifactSource.source]
+        : [];
+  if (lastVisualArtifactSource) {
+    payloadMetadata.lastVisualArtifactSourceUsed = {
+      artifactId: artifactIdFromMemory(lastVisualArtifactSource.artifact),
+      taskId: taskIdFromMemory(lastVisualArtifactSource.artifact),
+      sourceSessionId:
+        typeof lastVisualArtifactSource.artifact.sourceSessionId === "string"
+          ? lastVisualArtifactSource.artifact.sourceSessionId
+          : null,
+    };
+    visualIntent = buildVisualIntentContract({
+      prompt,
+      metadata: payloadMetadata,
+      sourceImageCount: effectiveSourceImages.length,
+    });
+  }
+  const imageGenerationRequested =
+    artifactPipeline.kind !== "evidence_required" &&
+    artifactPipeline.kind !== "validation_failed" &&
+    !hasVisualDataBlock &&
+    (isVisualImageRequested(visualIntent, prompt) ||
+      isHostedImageGenerationRequest(prompt) ||
+      isHostedImageEditRequest(prompt, effectiveSourceImages.length));
   const generatedImageArtifact =
     artifactPipeline.kind === "evidence_required" ||
     artifactPipeline.kind === "validation_failed" ||
@@ -4687,14 +5142,34 @@ async function completeServerBrainTask(
           metadata: payloadMetadata,
           userId: input.userId,
           taskId: input.taskId,
-          sourceImages: effectiveSourceImages,
+          sourceImages: effectiveSourceImages.length > 0 ? effectiveSourceImages : undefined,
+          visualIntent,
         });
-  const imageGenerationRequested =
-    artifactPipeline.kind !== "evidence_required" &&
-    artifactPipeline.kind !== "validation_failed" &&
-    !hasVisualDataBlock &&
-    (isHostedImageGenerationRequest(prompt) ||
-      isHostedImageEditRequest(prompt, effectiveSourceImages?.length ?? 0));
+  const visualCapabilityAwareness = {
+    imageGenerationConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+    imageEditConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+    lastImageArtifactAvailable: Boolean(
+      resolveLastVisualArtifactMemory(
+        payloadMetadata,
+        visualIntent.sourceArtifactId,
+      ),
+    ),
+    visualContinuationSupported: true,
+    visualIntent: imageGenerationRequested ? visualIntent.intent : null,
+    sourceImageResolved: effectiveSourceImages.length > 0,
+    sourceArtifactId: visualIntent.sourceArtifactId,
+    usedLastTurn: {
+      imageGeneration: Boolean(
+        generatedImageArtifact && visualIntent.intent === "image_generate",
+      ),
+      imageEdit: Boolean(
+        generatedImageArtifact && visualIntent.intent === "image_edit",
+      ),
+      imageContinue: Boolean(
+        generatedImageArtifact && visualIntent.intent === "image_continue",
+      ),
+    },
+  };
   if (generatedImageArtifact) {
     visibleResponseText = generatedImageArtifact.previewText;
     resolvedAssistantBlocks = [];
@@ -4826,6 +5301,22 @@ async function completeServerBrainTask(
     healthContextUsed: input.healthContextUsed ?? false,
     contextFreshness: input.contextFreshness ?? null,
     assistantBlocks: resolvedAssistantBlocks,
+    visualCapabilityAwareness,
+    imageGenerationConfigured: visualCapabilityAwareness.imageGenerationConfigured,
+    imageEditConfigured: visualCapabilityAwareness.imageEditConfigured,
+    lastImageArtifactAvailable: visualCapabilityAwareness.lastImageArtifactAvailable,
+    visualContinuationSupported: true,
+    imageGenerationUsed: visualCapabilityAwareness.usedLastTurn.imageGeneration,
+    imageEditUsed:
+      visualCapabilityAwareness.usedLastTurn.imageEdit ||
+      visualCapabilityAwareness.usedLastTurn.imageContinue,
+    visualIntent: imageGenerationRequested ? visualIntent.intent : null,
+    ...(payloadMetadata.lastVisualArtifactSourceUsed
+      ? {
+          lastVisualArtifactSourceUsed:
+            payloadMetadata.lastVisualArtifactSourceUsed,
+        }
+      : {}),
     ...(input.visionBlock ? { visionBlock: input.visionBlock } : {}),
     blockQuality,
     ...(artifactPipeline.kind === "rendered"
@@ -5491,13 +5982,22 @@ function resolveSharedBrainWorkloadForUnderstanding(input: {
     input.envelope,
     input.prompt,
   );
+  const visualActionNegated = isNegatedVisualActionRequest(input.prompt);
+  const eligibleSelectorWorkload =
+    visualActionNegated && selectorWorkload === "image_analyze"
+      ? null
+      : selectorWorkload;
+  const eligibleEnvelopeWorkload =
+    visualActionNegated && envelopeWorkload === "image_analyze"
+      ? null
+      : envelopeWorkload;
   const selectedWorkload =
-    (selectorWorkload ?? envelopeWorkload) &&
+    (eligibleSelectorWorkload ?? eligibleEnvelopeWorkload) &&
     (!input.routeDecision?.selectedWorkload ||
       input.routeDecision.selectedWorkload === "mobile_chat_fast" ||
       input.routeDecision.selectedWorkload === "mobile_chat_balanced" ||
       input.routeDecision.selectedWorkload === "fast_route")
-      ? (selectorWorkload ?? envelopeWorkload)
+      ? (eligibleSelectorWorkload ?? eligibleEnvelopeWorkload)
       : input.routeDecision?.selectedWorkload;
 
   return resolveAttachmentAwareSharedBrainWorkload({
@@ -5612,12 +6112,16 @@ async function processSharedBrainChatTask(
       });
     }
     const chatStreaming = extractChatStreamingMetadata(runningTask);
-    const sessionArtifacts = chatStreaming?.sessionId
-      ? await readSessionArtifactMemory(app, {
+    const sessionVisualMemory = chatStreaming?.sessionId
+      ? await readSessionVisualArtifactMemory(app, {
           userId: input.userId,
           sessionId: chatStreaming.sessionId,
-        }).catch(() => [])
-      : [];
+        }).catch(() => ({
+          sessionArtifacts: [],
+          lastVisualArtifact: null,
+        }))
+      : { sessionArtifacts: [], lastVisualArtifact: null };
+    const sessionArtifacts = sessionVisualMemory.sessionArtifacts;
     const routeDecision = extractRouteDecision(
       runningTask.payload &&
         typeof runningTask.payload === "object" &&
@@ -5697,6 +6201,21 @@ async function processSharedBrainChatTask(
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
     // Prettier-ignore -- a source-level regression contract verifies this fast-path seam.
     const sourceImages = hostedImageSources(hydratedEphemeralVision);
+    const visualIntentMetadata =
+      sessionArtifacts.length > 0 || sessionVisualMemory.lastVisualArtifact
+        ? {
+            ...getPayloadMetadata(runningPayload),
+            ...(sessionArtifacts.length > 0 ? { sessionArtifacts } : {}),
+            ...(sessionVisualMemory.lastVisualArtifact
+              ? { lastVisualArtifact: sessionVisualMemory.lastVisualArtifact }
+              : {}),
+          }
+        : getPayloadMetadata(runningPayload);
+    const visualIntent = buildVisualIntentContract({
+      prompt: input.prompt,
+      metadata: visualIntentMetadata,
+      sourceImageCount: sourceImages.length,
+    });
     const imageEditIntent = isHostedImageEditIntent(input.prompt);
     const imageEditHasSessionImage = sessionArtifacts.some((artifact) => {
       const type = String(
@@ -5704,13 +6223,15 @@ async function processSharedBrainChatTask(
       ).toLowerCase();
       const family = String(artifact.contentFamily ?? "").toLowerCase();
       return type === "image" || family === "image";
-    });
+    }) || isImageArtifactMemory(sessionVisualMemory.lastVisualArtifact);
     const imageEditNeedsSource =
-      imageEditIntent &&
+      (imageEditIntent || visualIntent.intent === "image_edit") &&
       countDistinctEphemeralImages(hydratedEphemeralVision) === 0 &&
       !imageEditHasSessionImage;
     const imageGenerationRequested =
-      isHostedImageGenerationRequest(input.prompt) || imageEditIntent;
+      isVisualImageRequested(visualIntent, input.prompt) ||
+      isHostedImageGenerationRequest(input.prompt) ||
+      imageEditIntent;
 
     if (imageGenerationRequested) {
       await assertSharedBrainExecutionActive(input);
@@ -5770,6 +6291,7 @@ async function processSharedBrainChatTask(
           userId: input.userId,
           chatSessionId: chatStreaming?.sessionId ?? null,
           sessionArtifacts,
+          lastVisualArtifact: sessionVisualMemory.lastVisualArtifact,
           responseText: imageEditNeedsSource
             ? "Düzenlememi istediğin görseli yüklemen gerekiyor. Görseli ekleyip değiştirmemi istediğin kısmı tekrar yaz."
             : "",
@@ -5930,6 +6452,17 @@ async function processSharedBrainChatTask(
       return;
     }
     const ackText = buildSharedBrainAckText(selectedWorkload);
+    const ackMetadata =
+      ackText.trim().length > 0
+        ? {
+            transientAck: true,
+            ack: {
+              transient: true,
+              source: "shared_brain_ack",
+              workload: selectedWorkload,
+            },
+          }
+        : {};
     const ackTaskTrace = buildTaskTraceBlock({
       task: runningTask,
       assistantContent: ackText,
@@ -5964,6 +6497,7 @@ async function processSharedBrainChatTask(
               role: "assistant",
               status: "running",
               ...(ackBlocks.length > 0 ? { blocks: ackBlocks } : {}),
+              metadata: ackMetadata,
               taskId: runningTask.id,
               createdAt: runningTask.createdAt.toISOString(),
               updatedAt: now,
@@ -6090,10 +6624,7 @@ async function processSharedBrainChatTask(
       attachmentContext,
       clientAttachments:
         clientAttachments.length > 0 ? clientAttachments : null,
-      requestMetadata:
-        sessionArtifacts.length > 0
-          ? { ...getPayloadMetadata(runningPayload), sessionArtifacts }
-          : getPayloadMetadata(runningPayload),
+      requestMetadata: visualIntentMetadata,
       route: "shared_brain",
       routeDecision,
       workload: selectedWorkload,
@@ -8117,11 +8648,21 @@ export async function createTask(
         envelope: understanding.envelope,
       });
       const sourceImages = hostedImageSources(input.ephemeralVision);
+      const visualIntent = buildVisualIntentContract({
+        prompt,
+        metadata: runningMetadata,
+        sourceImageCount: sourceImages.length,
+      });
       const imageEditIntent = isHostedImageEditIntent(prompt);
       const imageEditNeedsSource =
-        imageEditIntent &&
-        countDistinctEphemeralImages(input.ephemeralVision) === 0;
-      if (isHostedImageGenerationRequest(prompt) || imageEditIntent) {
+        (imageEditIntent || visualIntent.intent === "image_edit") &&
+        countDistinctEphemeralImages(input.ephemeralVision) === 0 &&
+        !visualIntent.sourceArtifactId;
+      if (
+        isVisualImageRequested(visualIntent, prompt) ||
+        isHostedImageGenerationRequest(prompt) ||
+        imageEditIntent
+      ) {
         const startedAtMs = Date.now();
         const completedTask = await completeServerBrainTask(app, {
           taskId: runningTask.id,

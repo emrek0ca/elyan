@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
-import { maybeGenerateHostedImageArtifact } from "./image-generation.js";
+import {
+  isHostedImageEditIntent,
+  isHostedImageGenerationRequest,
+  maybeGenerateHostedImageArtifact,
+} from "./image-generation.js";
+import {
+  buildVisualIntentContract,
+  isVisualImageRequested,
+} from "./visual-intent-contract.js";
 
 async function createTestJpeg(seed = 40) {
   const { default: sharp } = await import("sharp");
@@ -195,12 +203,11 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     // default kapalı) ve açık çözünürlük istenmedikçe 1K üretilir.
     assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image-preview");
     assert.equal("response_format" in requests[0]!.body, false);
-    assert.deepEqual(requests[0]?.body.input, [
-      {
-        type: "text",
-        text: "Yeni sürüm için poster oluştur\n\nRequested aspect ratio: 2:3.",
-      },
-    ]);
+    const providerInput = requests[0]?.body.input as Array<Record<string, unknown>>;
+    assert.equal(providerInput[0]?.type, "text");
+    assert.match(String(providerInput[0]?.text ?? ""), /VISUAL INTENT CONTRACT/);
+    assert.match(String(providerInput[0]?.text ?? ""), /"intent": "image_generate"/);
+    assert.match(String(providerInput[0]?.text ?? ""), /Requested aspect ratio: 2:3/);
     assert.equal(result.previewText, "Görsel hazır.");
     assert.equal(result.mimeType, "image/jpeg");
     assert.equal(result.artifact.contentType, "image/jpeg");
@@ -239,7 +246,7 @@ test("maybeGenerateHostedImageArtifact does not fall back to billed OpenAI when 
         OPENAI_API_KEY: "openai-test-key",
       }),
       {
-        prompt: "Basit görsel üret",
+        prompt: "Kedi resmi çiz",
         responseText: "",
       },
     );
@@ -639,7 +646,7 @@ test("provider circuit opens after repeated failures and skips further upstream 
       { GEMINI_API_KEY: "gemini-test-key" },
       { store: createMemoryStore() },
     );
-    const input = { prompt: "Basit görsel üret", responseText: "", userId: "user-2" };
+    const input = { prompt: "Kedi resmi çiz", responseText: "", userId: "user-2" };
 
     const first = await maybeGenerateHostedImageArtifact(app, input);
     const second = await maybeGenerateHostedImageArtifact(app, input);
@@ -782,6 +789,276 @@ test("generated images are validated and branded as real image bytes", async () 
     assert.equal(meta.format, "jpeg");
     assert.equal(meta.width, 256);
     assert.equal(meta.height, 256);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("visual intent contract carries the latest image into Turkish continuation requests", () => {
+  const contract = buildVisualIntentContract({
+    prompt: "yanına bir tane daha çiz",
+    metadata: {
+      sessionArtifacts: [
+        {
+          artifactId: "artifact-horse-1",
+          artifactType: "image",
+          contentFamily: "image",
+          revisedPrompt: "A single horse in a field, watercolor style.",
+          metadata: {
+            visualIntent: {
+              intent: "image_generate",
+              subject: ["horse"],
+              count: 1,
+              add: [],
+              remove: [],
+              preserve: [],
+              style: "watercolor",
+              spatialInstruction: null,
+              sourceArtifactId: null,
+              negativeConstraints: [],
+            },
+          },
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(contract, {
+    intent: "image_continue",
+    subject: ["horse"],
+    count: 1,
+    add: ["one more horse"],
+    remove: [],
+    preserve: ["existing horse", "same style", "same background", "same composition"],
+    style: "watercolor",
+    spatialInstruction: "beside existing subject",
+    sourceArtifactId: "artifact-horse-1",
+    negativeConstraints: [
+      "do not replace the existing horse",
+      "do not change the existing scene",
+      "do not create an unrelated image",
+      "do not add a child unless explicitly requested",
+    ],
+  });
+});
+
+test("visual intent contract keeps forbidden people out of requested subjects", () => {
+  const contract = buildVisualIntentContract({
+    prompt: "Bir at çiz. Sadece at olsun, çocuk veya insan olmasın.",
+  });
+
+  assert.equal(contract.intent, "image_generate");
+  assert.deepEqual(contract.subject, ["horse"]);
+  assert.deepEqual(contract.remove, []);
+  assert.match(contract.negativeConstraints.join("\n"), /do not add child/);
+  assert.match(contract.negativeConstraints.join("\n"), /do not add person/);
+});
+
+test("visual intent contract does not execute explicitly negated visual actions", () => {
+  const prompt =
+    "Bu sohbeti iki kısa cümleyle özetle. Görsel oluşturma veya düzenleme yapma.";
+  const contract = buildVisualIntentContract({
+    prompt,
+    metadata: {
+      lastVisualArtifact: {
+        id: "artifact-horse-negated",
+        artifactType: "image",
+        contentFamily: "image",
+      },
+    },
+  });
+
+  assert.equal(contract.intent, "image_generate");
+  assert.equal(contract.sourceArtifactId, null);
+  assert.equal(isVisualImageRequested(contract, prompt), false);
+  assert.equal(isHostedImageGenerationRequest(prompt), false);
+  assert.equal(isHostedImageEditIntent(prompt), false);
+});
+
+test("visual intent contract does not turn unrelated follow-ups into image edits", () => {
+  const contract = buildVisualIntentContract({
+    prompt: "Tarayıcıdan api.elyan.dev sağlık durumuna bak ve sonucu bildir.",
+    metadata: {
+      lastVisualArtifact: {
+        id: "artifact-horse-2",
+        artifactType: "image",
+        contentFamily: "image",
+        visualIntent: {
+          intent: "image_generate",
+          subject: ["horse"],
+          count: 1,
+          add: [],
+          remove: [],
+          preserve: [],
+          style: null,
+          spatialInstruction: null,
+          sourceArtifactId: null,
+          negativeConstraints: [],
+        },
+      },
+    },
+  });
+
+  assert.equal(contract.intent, "image_generate");
+  assert.equal(contract.sourceArtifactId, null);
+  assert.equal(
+    isVisualImageRequested(
+      contract,
+      "Tarayıcıdan api.elyan.dev sağlık durumuna bak ve sonucu bildir.",
+    ),
+    false,
+  );
+});
+
+test("visual intent contract reads lastVisualArtifact as the continuation source", () => {
+  const contract = buildVisualIntentContract({
+    prompt: "rengini değiştir",
+    metadata: {
+      lastVisualArtifact: {
+        id: "artifact-horse-2",
+        taskId: "task-horse-2",
+        artifactType: "image",
+        contentFamily: "image",
+        prompt: "at çiz",
+        revisedPrompt: "A horse on a plain background.",
+        visualSummary: "A horse on a plain background.",
+        detectedSubject: ["horse"],
+        style: "minimal",
+        sourceSessionId: "session-1",
+        visualIntent: {
+          intent: "image_generate",
+          subject: ["horse"],
+          count: 1,
+          add: [],
+          remove: [],
+          preserve: [],
+          style: "minimal",
+          spatialInstruction: null,
+          sourceArtifactId: null,
+          negativeConstraints: [],
+        },
+      },
+    },
+  });
+
+  assert.equal(contract.intent, "image_edit");
+  assert.equal(contract.sourceArtifactId, "artifact-horse-2");
+  assert.deepEqual(contract.subject, ["horse"]);
+  assert.equal(contract.style, "minimal");
+  assert.ok(contract.preserve.includes("existing horse"));
+});
+
+test("hosted image continuation prompt uses visual intent contract and preserves prior image", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<Record<string, unknown>> = [];
+  const jpegBase64 = (await createTestJpeg(50)).toString("base64");
+
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    requests.push(body);
+    return Response.json({
+      output_image: { data: jpegBase64, mime_type: "image/jpeg" },
+    });
+  };
+
+  try {
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+      {
+        prompt: "yanına bir tane daha çiz",
+        responseText: "",
+        sourceImages: [{ base64Data: jpegBase64, mimeType: "image/jpeg" }],
+        metadata: {
+          sessionArtifacts: [
+            {
+              artifactId: "artifact-horse-1",
+              artifactType: "image",
+              contentFamily: "image",
+              revisedPrompt: "A single horse in a green field.",
+              metadata: {
+                visualIntent: {
+                  intent: "image_generate",
+                  subject: ["horse"],
+                  count: 1,
+                  add: [],
+                  remove: [],
+                  preserve: [],
+                  style: null,
+                  spatialInstruction: null,
+                  sourceArtifactId: null,
+                  negativeConstraints: [],
+                },
+              },
+            },
+          ],
+        },
+      },
+    );
+
+    assert.ok(result);
+    assert.equal(requests.length, 1);
+    const input = requests[0]?.input as Array<Record<string, unknown>>;
+    const prompt = String(input[0]?.text ?? "");
+    assert.match(prompt, /VISUAL INTENT CONTRACT/);
+    assert.match(prompt, /"intent": "image_continue"/);
+    assert.match(prompt, /"sourceArtifactId": "artifact-horse-1"/);
+    assert.match(prompt, /one more horse/);
+    assert.match(prompt, /do not add a child unless explicitly requested/);
+    assert.match(prompt, /A single horse in a green field/);
+    assert.equal(
+      (result.artifact.metadata?.visualIntent as Record<string, unknown> | undefined)?.intent,
+      "image_continue",
+    );
+    assert.deepEqual(
+      (result.artifact.payload?.visualIntent as Record<string, unknown> | undefined)?.add,
+      ["one more horse"],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("hosted image continuation fails soft instead of generating unrelated output when source image is missing", async () => {
+  const originalFetch = globalThis.fetch;
+  const metadata: Record<string, unknown> = {
+    lastVisualArtifact: {
+      id: "artifact-horse-3",
+      taskId: "task-horse-3",
+      artifactType: "image",
+      contentFamily: "image",
+      visualIntent: {
+        intent: "image_generate",
+        subject: ["horse"],
+        count: 1,
+        add: [],
+        remove: [],
+        preserve: [],
+        style: null,
+        spatialInstruction: null,
+        sourceArtifactId: null,
+        negativeConstraints: [],
+      },
+    },
+  };
+  let called = false;
+  globalThis.fetch = async () => {
+    called = true;
+    return Response.json({});
+  };
+
+  try {
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+      {
+        prompt: "yanına bir tane daha çiz",
+        responseText: "",
+        metadata,
+      },
+    );
+
+    assert.equal(result, null);
+    assert.equal(called, false);
+    assert.equal(metadata.imageGenerationBlockedReason, "image_edit_source_missing");
   } finally {
     globalThis.fetch = originalFetch;
   }

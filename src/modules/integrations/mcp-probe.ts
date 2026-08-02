@@ -20,6 +20,9 @@ export const MCP_PROBE_PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 const MAX_RECORDED_TOOL_NAMES = 24;
 const MAX_RECORDED_TOOL_DESCRIPTION_LENGTH = 240;
+/// Modele ilan edilebilmesi için saklanan ham `inputSchema` üst sınırı.
+/// Bundan büyük şemalar saklanmaz; bağlantı metadata'sı sınırsız büyümesin.
+const MAX_RECORDED_TOOL_SCHEMA_LENGTH = 8_000;
 const MAX_MCP_PROBE_RESPONSE_BYTES = 512 * 1024;
 export const MCP_PROBE_TTL_MS = 15 * 60_000;
 
@@ -41,6 +44,8 @@ export type McpProbeResult = {
     name: string;
     description: string;
     inputSchemaDigest: string | null;
+    /** Ham JSON Schema. Modele araç ilan etmek için gerekli; çok büyükse null. */
+    inputSchema?: Record<string, unknown> | null;
   }>;
   toolCatalogDigest: string | null;
   latencyMs: number;
@@ -286,7 +291,15 @@ export async function probeMcpServer(input: {
       const inputSchemaDigest = serializedInputSchema
         ? createHash("sha256").update(serializedInputSchema).digest("hex")
         : null;
-      return { name, description, inputSchemaDigest };
+      // Şemanın KENDİSİ de saklanıyor. Yalnız özet tutulduğu sürece araçlar
+      // modele ilan edilemiyordu: özetten argüman şeması geri üretilemez.
+      // Sınırı aşan şema saklanmaz — o araç yine adıyla görünür, sadece
+      // serbest argümanla çağrılır.
+      const inputSchema =
+        serializedInputSchema && serializedInputSchema.length <= MAX_RECORDED_TOOL_SCHEMA_LENGTH
+          ? (record.inputSchema as Record<string, unknown>)
+          : null;
+      return { name, description, inputSchemaDigest, inputSchema };
     })
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
 

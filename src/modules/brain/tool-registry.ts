@@ -16,6 +16,7 @@ import {
   semanticToolConfidence,
   type CoreToolHint,
 } from "./tool-semantic.js";
+import { callMcpTool, isMcpToolName } from "./mcp-tools.js";
 import { searchBrainMemory } from "./memory.js";
 import { recordTurnMemoryOps } from "./memory-fabric.js";
 import { cognitiveMemoryRepository } from "./cognitive-memory-repository.js";
@@ -1492,6 +1493,75 @@ const TOOL_RATE_WINDOW_MS = 60_000;
 const TOOL_RATE_MAX_CALLS = 30;
 const WRITE_TOOL_RATE_MAX_CALLS = 10;
 
+/**
+ * Dinamik MCP aracı çalıştırma.
+ *
+ * Yerleşik araçlarla aynı kapılardan geçer (kullanıcı kapsamı, iptal, hız
+ * sınırı) ama onay kapısından geçmez: ürün kararı gereği MCP araçları
+ * okuma/yazma diye ayrılmıyor. Hız sınırı için `write` sayılıyorlar —
+ * kotaları okuma araçlarından ayrı ve daha dar tutulsun.
+ */
+async function executeDynamicMcpTool(
+  app: FastifyInstance,
+  context: AgentToolContext,
+  request: AgentToolRequest,
+  startedAt: number,
+): Promise<AgentToolResult> {
+  const permission: AgentToolPermission = "write";
+  const fail = (code: string, message: string): AgentToolResult => ({
+    tool: request.tool,
+    ok: false,
+    permission,
+    durationMs: Date.now() - startedAt,
+    output: null,
+    error: { code, message },
+  });
+
+  if (
+    !context.userId ||
+    typeof context.userId !== "string" ||
+    context.userId.trim().length === 0
+  ) {
+    return fail(
+      "missing_user_context",
+      "Tool execution requires a valid userId scope.",
+    );
+  }
+  if (context.shouldAbort && (await context.shouldAbort())) {
+    return fail("task_canceled", "Tool execution was canceled.");
+  }
+  const rateCheck = checkToolRateLimit(context.userId, permission);
+  if (!rateCheck.allowed) {
+    return fail(
+      "tool_rate_limited",
+      `Too many tool calls. Retry after ${Math.ceil(rateCheck.retryAfterMs / 1000)}s.`,
+    );
+  }
+
+  const args = normalizeToolArgs(request.args);
+  const outcome = await callMcpTool(app, {
+    userId: context.userId,
+    toolName: request.tool,
+    args: (args ?? {}) as Record<string, unknown>,
+  });
+
+  if (!outcome.ok) {
+    return fail(
+      outcome.errorCode ?? "mcp_tool_failed",
+      outcome.errorMessage ?? "MCP tool call failed.",
+    );
+  }
+
+  return {
+    tool: request.tool,
+    ok: true,
+    permission,
+    durationMs: Date.now() - startedAt,
+    output: outcome.output,
+    error: null,
+  };
+}
+
 function checkToolRateLimit(userId: string, permission: AgentToolPermission): { allowed: boolean; retryAfterMs: number } {
   const now = Date.now();
   const key = `${userId}:${permission === "write" || permission === "side_effect" ? "write" : "all"}`;
@@ -1515,6 +1585,12 @@ export async function executeAgentTool(
   request: AgentToolRequest,
 ): Promise<AgentToolResult> {
   const startedAt = Date.now();
+  // Dinamik MCP araçları statik kayıtta YOKTUR: katalog kullanıcının bağlı
+  // sunucularından turda üretilir. Bu yüzden `unknown_tool` demeden önce
+  // MCP ad alanını deniyoruz.
+  if (isMcpToolName(request.tool)) {
+    return executeDynamicMcpTool(app, context, request, startedAt);
+  }
   const tool = registry.get(request.tool);
   if (!tool) {
     return {

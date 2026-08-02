@@ -466,6 +466,48 @@ test("shapeTaskFeedItem preserves chat session truth from task payload", () => {
   );
 });
 
+test("shapeTaskFeedItem exposes runtime work-order acceptance summary", () => {
+  const item = shapeTaskFeedItem({
+    id: "task-runtime-acceptance",
+    title: "Tarayıcı görevi",
+    status: "waiting_approval",
+    targetDeviceId: "desktop-1",
+    queuePosition: 0,
+    runtimeConnectionId: null,
+    dispatchLeaseId: null,
+    dispatchLeaseIssuedAt: new Date("2030-01-01T00:00:00.000Z"),
+    dispatchLeaseExpiresAt: null,
+    dispatchAckAt: null,
+    requestedCapabilities: ["browser_control"],
+    payload: {
+      metadata: {
+        runtimeAcceptance: {
+          contract: "elyan.runtime_task_acceptance.v1",
+          state: "needs_permission",
+          missingCapabilities: ["browser_control"],
+          blockedReason: "screen permission missing",
+          consumedContractFields: ["semanticDesktopContract"],
+          acceptedAt: null,
+        },
+      },
+    },
+    summary: "Masaüstü görevi almak için ek izin gerekiyor.",
+    error: null,
+    approvalRequest: null,
+    createdAt: new Date("2030-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2030-01-01T00:00:01.000Z"),
+  });
+
+  assert.deepEqual(item.runtimeAcceptance, {
+    contract: "elyan.runtime_task_acceptance.v1",
+    state: "needs_permission",
+    missingCapabilities: ["browser_control"],
+    blockedReason: "screen permission missing",
+    consumedContractFields: ["semanticDesktopContract"],
+    acceptedAt: null,
+  });
+});
+
 test("shapeTaskFeedItem exposes render recipe from completed task result", () => {
   const item = shapeTaskFeedItem({
     id: "task-render",

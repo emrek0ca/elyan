@@ -749,7 +749,11 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
             await acknowledgeTaskDispatchLease(app, payload, {
               taskId: parsed.taskId,
               leaseId: parsed.leaseId,
+              state: parsed.state,
               acceptedAt: parsed.acceptedAt,
+              missingCapabilities: parsed.missingCapabilities,
+              blockedReason: parsed.blockedReason,
+              consumedContractFields: parsed.consumedContractFields,
             });
             return;
           }

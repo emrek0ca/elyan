@@ -4,12 +4,10 @@ import test from "node:test";
 import { buildSharedBrainAckText, isShortFollowUpPrompt, isSocialChatPrompt, selectHybridMobileChatWorkload } from "./chat-heuristics.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
-test("buildSharedBrainAckText returns empty string so frontend loading indicator handles pending state", () => {
-  // All workloads must return empty — no "Bir saniye bakıyorum" injected into
-  // the assistant message before the real answer arrives.
-  assert.equal(buildSharedBrainAckText("mobile_chat_fast"), "");
-  assert.equal(buildSharedBrainAckText("mobile_chat_balanced"), "");
-  assert.equal(buildSharedBrainAckText("planning"), "");
+test("buildSharedBrainAckText returns short workload-scoped transient ack text", () => {
+  assert.equal(buildSharedBrainAckText("mobile_chat_fast"), "İsteği netleştiriyorum");
+  assert.equal(buildSharedBrainAckText("mobile_chat_balanced"), "Düşünüyorum");
+  assert.equal(buildSharedBrainAckText("planning"), "Planı netleştiriyorum");
 });
 
 test("selectHybridMobileChatWorkload keeps only greetings on fast and upgrades explanatory asks", () => {

@@ -110,6 +110,7 @@ import {
   type ConnectorReadToolHint,
 } from "./connector-tools.js";
 import { stageConnectorWriteApproval } from "./connector-write-approvals.js";
+import { listMcpToolDeclarations } from "./mcp-tools.js";
 import { getUserApprovalMode } from "../approval-policy/service.js";
 import {
   listConnectedCapabilityGrants,
@@ -5598,7 +5599,17 @@ export async function generateSharedBrainReply(
         connectedGrants,
         scopeSatisfied,
       ).map((entry) => entry.contract);
-      input.connectorToolContracts = [...readContracts, ...writeContracts];
+      // Bağlı uzak MCP sunucularının KENDİ araç kataloğu. Buraya kadar her
+      // MCP uygulamasından yalnız elle yazılmış tek bir arama aracı
+      // ulaşıyordu; sunucunun geri kalanı sadece masaüstü lease'inde vardı.
+      const mcpContracts = (
+        await listMcpToolDeclarations(app, input.userId)
+      ).map((entry) => entry.contract);
+      input.connectorToolContracts = [
+        ...readContracts,
+        ...writeContracts,
+        ...mcpContracts,
+      ];
     } catch (error) {
       app.log.debug?.(
         {
@@ -8346,29 +8357,11 @@ export async function generateSharedBrainReply(
       freshData: webGrounding.freshData,
     });
     const finalTextBlocks = buildAssistantMessageBlocks(finalText);
-    // Self-RAG dürüstlük sinyali: retrieval kullanıldı ama kanıt kapsaması
-    // düşük kaldıysa (orchestration.lowConfidence) kullanıcıya ince bir
-    // güven çipi göster — halüsinasyon şüphesinde sessiz kalma.
-    const lowConfidenceBlocks =
-      retrievalOrchestration.lowConfidence === true &&
-      retrieval.results.length > 0
-        ? [
-            {
-              type: "context_signal",
-              stableBlockId: "retrieval_low_confidence",
-              tone: "caution",
-              title: "Kaynak güveni düşük",
-              // Mobil InfoCard sözleşmesi: items[{label,value}].
-              items: [
-                {
-                  label: "Uyarı",
-                  value:
-                    "Bu cevap için bulunan kaynaklar sınırlıydı; kritik bir konuysa doğrulamak isteyebilirsin.",
-                },
-              ],
-            },
-          ]
-        : [];
+    // "Kaynak güveni düşük" uyarı kutusu KALDIRILDI: neredeyse her cevabın
+    // başında beliriyor, ekranı kaplıyor ve gerçek bir eylem önermiyordu.
+    // Düşük kapsama hâlâ `retrievalOrchestration.lowConfidence` üzerinden
+    // ölçülüyor ve loglanıyor; yalnız kullanıcıya çip basılmıyor.
+    const lowConfidenceBlocks: never[] = [];
     let assistantMetadataBlocks = [
       ...webGroundingBlocks,
       ...groqCompoundBlocks,

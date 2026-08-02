@@ -127,6 +127,7 @@ export function shapeTaskFeedItem(
   const quantum = extractTaskQuantumSnapshot(task);
   const presentation = extractTaskPresentation(task.payload);
   const routeDecision = extractTaskRouteDecision(task.payload);
+  const runtimeAcceptance = extractTaskRuntimeAcceptance(task.payload);
   const desktopHandoff = extractTaskDesktopHandoff(task.payload);
   const planningEvidence = extractTaskPlanningEvidence(task.payload);
   const supersedesTaskId = extractTaskSupersedesTaskId(task.payload);
@@ -167,6 +168,7 @@ export function shapeTaskFeedItem(
     deliveryState: deriveTaskDeliveryState(task),
     selectedDesktopOnline: options?.selectedDesktopOnline ?? null,
     routeDecision,
+    ...(runtimeAcceptance ? { runtimeAcceptance } : {}),
     ...(desktopHandoff ? { desktopHandoff } : {}),
     ...(planningEvidence ? { planningEvidence } : {}),
     ...(brain ? { brain } : {}),
@@ -182,6 +184,25 @@ export function shapeTaskFeedItem(
     canceledAt: task.canceledAt ?? null,
     updatedAt: task.updatedAt,
   };
+}
+
+function extractTaskRuntimeAcceptance(payloadValue: unknown) {
+  const metadata = readRecord(readRecord(payloadValue)?.metadata);
+  const acceptance = readRecord(metadata?.runtimeAcceptance);
+  if (acceptance?.contract !== "elyan.runtime_task_acceptance.v1") {
+    return null;
+  }
+  return sanitizePublicInferenceValue({
+    contract: readString(acceptance, "contract"),
+    state: readString(acceptance, "state"),
+    missingCapabilities: readStringList(acceptance, "missingCapabilities"),
+    blockedReason: readString(acceptance, "blockedReason"),
+    consumedContractFields: readStringList(
+      acceptance,
+      "consumedContractFields",
+    ),
+    acceptedAt: readString(acceptance, "acceptedAt"),
+  });
 }
 
 function extractTaskDesktopHandoff(payloadValue: unknown) {

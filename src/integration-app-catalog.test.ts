@@ -494,6 +494,13 @@ test("OAuth completion redirects are limited to Elyan-owned destinations", () =>
   );
   assert.equal(
     normalizeOauthRedirectUri(
+      "elyan://integrations?appId=gmail",
+      "https://api.elyan.dev",
+    ),
+    "elyan://integrations",
+  );
+  assert.equal(
+    normalizeOauthRedirectUri(
       "elyan://connections?appId=gmail&flow=0123456789abcdef0123456789abcdef",
       "https://api.elyan.dev",
     ),

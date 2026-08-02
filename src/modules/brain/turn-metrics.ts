@@ -82,6 +82,13 @@ export const turnMetricQualitySchema = z.object({
   connector_tool_success_count: nonNegativeIntSchema.default(0),
   connector_result_used: z.boolean().default(false),
   connector_error_code: z.string().trim().max(80).nullable().default(null),
+  image_generation_configured: z.boolean().default(false),
+  image_edit_configured: z.boolean().default(false),
+  last_image_artifact_available: z.boolean().default(false),
+  visual_continuation_supported: z.boolean().default(false),
+  image_generation_used: z.boolean().default(false),
+  image_edit_used: z.boolean().default(false),
+  visual_intent: z.string().trim().max(40).nullable().default(null),
 });
 
 export const turnMetricInputSchema = z.object({
@@ -329,6 +336,19 @@ export function buildTurnMetricInputFromInference(input: {
         readNumber(input.metadata.connectorToolSuccessCount) ?? 0,
       connector_result_used: readBoolean(input.metadata.connectorResultUsed),
       connector_error_code: readString(input.metadata.connectorErrorCode),
+      image_generation_configured: readBoolean(
+        input.metadata.imageGenerationConfigured,
+      ),
+      image_edit_configured: readBoolean(input.metadata.imageEditConfigured),
+      last_image_artifact_available: readBoolean(
+        input.metadata.lastImageArtifactAvailable,
+      ),
+      visual_continuation_supported: readBoolean(
+        input.metadata.visualContinuationSupported,
+      ),
+      image_generation_used: readBoolean(input.metadata.imageGenerationUsed),
+      image_edit_used: readBoolean(input.metadata.imageEditUsed),
+      visual_intent: readString(input.metadata.visualIntent),
     },
   };
 }

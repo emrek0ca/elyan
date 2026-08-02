@@ -493,6 +493,12 @@ const envSchema = z.object({
   // streamable-HTTP transport (+ OAuth discovery/DCR helpers). Default off until
   // validated against live servers; the hand-written probe stays the fallback.
   ELYAN_MCP_SDK_ENABLED: booleanFlag(false),
+  // Uzak MCP sunucularının TÜM araç kataloğunu paylaşılan beyne ilan eder ve
+  // çağrıları sunucu tarafında çalıştırır (mobil dahil her istemci kazanır).
+  // Araçlar okuma/yazma diye AYRILMAZ ve onay kapısına uğramaz — açmadan önce
+  // bağlı MCP sunucularının yazma araçlarını gözden geçir.
+  // `ELYAN_MCP_SDK_ENABLED` olmadan etkisizdir: çağrı yolu SDK istemcisidir.
+  ELYAN_MCP_DYNAMIC_TOOLS_ENABLED: booleanFlag(false),
   // Emits source-typed connector block envelopes. Set false to suppress the
   // block surface while retaining safe prose connector replies and tool access.
   ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED: booleanFlag(true),
@@ -789,6 +795,7 @@ export type AppEnv = ParsedEnv & {
   ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED: boolean;
   ELYAN_CONNECTOR_TOOLS_ENABLED: boolean;
   ELYAN_MCP_SDK_ENABLED: boolean;
+  ELYAN_MCP_DYNAMIC_TOOLS_ENABLED: boolean;
   ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED: boolean;
   ELYAN_TOOL_CALL_BLOCK_ENABLED: boolean;
   ELYAN_AI_DATA_SHARING_CONSENT_REQUIRED: boolean;
@@ -1026,6 +1033,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
       parsed.ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED,
     ELYAN_CONNECTOR_TOOLS_ENABLED: parsed.ELYAN_CONNECTOR_TOOLS_ENABLED,
     ELYAN_MCP_SDK_ENABLED: parsed.ELYAN_MCP_SDK_ENABLED,
+    ELYAN_MCP_DYNAMIC_TOOLS_ENABLED: parsed.ELYAN_MCP_DYNAMIC_TOOLS_ENABLED,
     ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED:
       parsed.ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED,
     ELYAN_TOOL_CALL_BLOCK_ENABLED: parsed.ELYAN_TOOL_CALL_BLOCK_ENABLED,

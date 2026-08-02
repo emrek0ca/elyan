@@ -160,6 +160,7 @@ export function shapeUserDevice(
     typeof options === "number" ? options : options?.queuedTaskCount;
   const queuedTaskCount = Math.max(0, queuedTaskCountValue ?? 0);
   const realtimeReady = canReceiveTasks && targetStatus === "ready";
+  const transportReady = realtimeReady;
   const transportMode = realtimeReady
     ? "websocket"
     : runtimeStale
@@ -177,6 +178,7 @@ export function shapeUserDevice(
     isOnline,
     canReceiveTasks,
     realtimeReady,
+    transportReady,
     queuedTaskCount,
     transportMode,
     deliveryStatus,
@@ -201,6 +203,7 @@ export function shapeUserDevice(
             transportMode,
             queuedTaskCount,
             realtimeReady,
+            transportReady,
           }
         : {
             isConnected: false,
@@ -220,6 +223,7 @@ export function shapeUserDevice(
             transportMode,
             queuedTaskCount,
             realtimeReady,
+            transportReady,
           },
   };
 }

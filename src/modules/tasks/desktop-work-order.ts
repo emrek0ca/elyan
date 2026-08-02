@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
-import type { CommandRouteDecision } from "../routing-policy/service.js";
+import type {
+  CommandRouteDecision,
+  SemanticDesktopDispatchContract,
+} from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 import type { RemoteMcpSelectionMetadata } from "../integrations/provider-registry.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
+import { matchDesktopCapabilitiesSemantically } from "./desktop-capability-ontology.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
 // görevler masaüstünde WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu.
@@ -138,6 +142,7 @@ export type DesktopWorkOrder = {
         tools: string[];
       };
     };
+    semanticDesktopContract?: SemanticDesktopDispatchContract;
   };
   executionPlan?: {
     mode: "data_workflow" | "screen_action" | "mixed" | "decision_support";
@@ -308,7 +313,13 @@ export function parseDirectDesktopAppCommand(message: string): DirectDesktopAppC
   const rawApp = match?.groups?.app?.trim() ?? "";
   const verb = match?.groups?.verb?.toLocaleLowerCase("tr-TR") ?? "";
   if (!rawApp || !verb) return null;
-  const appName = rawApp.replace(/['’](?:y?[ıiuü])$/iu, "").trim();
+  const appName = rawApp
+    .replace(
+      /^(?:masaüstümde|masaustumde|masaüstünde|masaustunde|bilgisayarımda|bilgisayarimda|desktop(?:ımda|imda)?|on my desktop)\s+/iu,
+      "",
+    )
+    .replace(/['’](?:y?[ıiuü])$/iu, "")
+    .trim();
   if (!appName) return null;
   return {
     capability: /^(?:kapat|durdur|sonlandır|sonlandir)$/iu.test(verb) ? "close_app" : "open_app",
@@ -470,7 +481,10 @@ export function buildDesktopPlanningEvidenceFromMetadata(
   const rawPlanSteps = Array.isArray(agentPlan?.steps) ? agentPlan.steps : [];
   const planTools = rawPlanSteps
     .map((step) => readRecord(readRecord(step)?.tool_request)?.tool)
-    .filter((tool): tool is string => typeof tool === "string" && tool.trim())
+    .filter(
+      (tool): tool is string =>
+        typeof tool === "string" && tool.trim().length > 0,
+    )
     .map((tool) => compactText(tool, 80))
     .slice(0, 8);
   if (tools.length === 0 && planTools.length === 0) return null;
@@ -544,7 +558,95 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
   return entities.slice(0, 16);
 }
 
-function inferLocalContext(message: string, capabilities: string[]): string[] {
+function semanticDesktopContractFromRoute(
+  routeDecision: CommandRouteDecision,
+): SemanticDesktopDispatchContract | null {
+  return routeDecision.taskRoute?.semanticDesktopContract ?? null;
+}
+
+function canonicalSemanticDesktopCapabilities(
+  contract: SemanticDesktopDispatchContract | null,
+  message = "",
+): string[] {
+  if (!contract) return [];
+  const semanticQuery = [
+    ...contract.requiredLocalContext,
+    ...contract.evidence,
+    message,
+  ].join("\n");
+  const capabilities = new Set<string>();
+  for (const semanticCapability of contract.requiredSemanticCapabilities) {
+    const [match] = matchDesktopCapabilitiesSemantically({
+      query: [semanticCapability, semanticQuery].join("\n"),
+      hints: [semanticCapability],
+      intent: contract.intent,
+      sideEffectLevel: contract.sideEffectLevel,
+      limit: 1,
+      threshold: 0.16,
+    });
+    if (match) capabilities.add(match.capability);
+  }
+  if (capabilities.size === 0) {
+    for (const match of matchDesktopCapabilitiesSemantically({
+      query: semanticQuery,
+      intent: contract.intent,
+      sideEffectLevel: contract.sideEffectLevel,
+      limit: 3,
+      threshold: 0.18,
+    })) {
+      capabilities.add(match.capability);
+    }
+  }
+  for (const capability of contract.requiredSemanticCapabilities) {
+    const canonical = canonicalRuntimeCapability(capability);
+    if (canonical) capabilities.add(canonical);
+  }
+  if (contract.intent === "screen_action") {
+    capabilities.add("desktop_operator.run");
+  }
+  if (contract.intent === "browser_workflow") {
+    capabilities.add("browser_control");
+  }
+  if (contract.intent === "document_workflow") {
+    if (contract.sideEffectLevel === "read") capabilities.add("document_read");
+    if (
+      contract.sideEffectLevel === "write" ||
+      contract.sideEffectLevel === "destructive"
+    ) {
+      capabilities.add("document_write");
+    }
+  }
+  if (contract.sideEffectLevel === "destructive") {
+    capabilities.add("desktop_operator.run");
+  }
+  return [...capabilities].filter(Boolean).slice(0, 16);
+}
+
+function inferLocalContext(
+  message: string,
+  capabilities: string[],
+  contract?: SemanticDesktopDispatchContract | null,
+): string[] {
+  if (contract?.requiredLocalContext.length) {
+    const contexts = new Set<string>();
+    for (const context of contract.requiredLocalContext) {
+      const normalized = context.trim().toLocaleLowerCase("en-US");
+      if (["filesystem", "file", "folder", "document"].includes(normalized)) {
+        contexts.add("filesystem");
+      } else if (["screen", "window", "computer"].includes(normalized)) {
+        contexts.add("screen");
+      } else if (["browser", "web"].includes(normalized)) {
+        contexts.add("browser");
+      } else if (["terminal", "shell"].includes(normalized)) {
+        contexts.add("terminal");
+      } else if (["app", "application"].includes(normalized)) {
+        contexts.add("app");
+      } else if (normalized) {
+        contexts.add(normalized);
+      }
+    }
+    return [...contexts].slice(0, 12);
+  }
   const normalized = message.toLocaleLowerCase("tr-TR");
   const contexts = new Set<string>();
   if (unicodeWordPattern(String.raw`\b(masaüstü\p{L}*|masaustu\p{L}*|desktop|indirilenler\p{L}*|downloads|klasör\p{L}*|klasor\p{L}*|dosya\p{L}*|belge\p{L}*|pdf)\b`, "i").test(normalized)) {
@@ -583,6 +685,19 @@ function isImageEditCommand(message: string): boolean {
 }
 
 function inferKind(routeDecision: CommandRouteDecision, message: string): string {
+  const semanticDesktopContract = semanticDesktopContractFromRoute(routeDecision);
+  if (semanticDesktopContract) {
+    switch (semanticDesktopContract.intent) {
+      case "screen_action":
+        return "computer_task";
+      case "file_workflow":
+        return "desktop_cowork";
+      case "browser_workflow":
+        return "browser_task";
+      case "document_workflow":
+        return "document_task";
+    }
+  }
   const normalized = message.toLocaleLowerCase("tr-TR");
   if (routeDecision.capabilities.includes("mcp_call_tool")) return "remote_mcp";
   if (parseDirectImageFetchCommand(message)) return "image_fetch";
@@ -742,6 +857,12 @@ function inferCapabilities(
   message: string,
   envelope?: UnderstandingEnvelope,
 ): string[] {
+  const semanticDesktopContract = semanticDesktopContractFromRoute(routeDecision);
+  const contractCapabilities =
+    canonicalSemanticDesktopCapabilities(semanticDesktopContract, message);
+  if (contractCapabilities.length > 0) {
+    return contractCapabilities;
+  }
   const routeCapabilities = new Set<string>();
   for (const capability of routeDecision.capabilities) {
     const canonical = canonicalRuntimeCapability(capability);
@@ -1549,6 +1670,9 @@ export function buildDesktopWorkOrder(input: {
   >["desktopPlanningEvidence"];
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
+  const semanticDesktopContract = semanticDesktopContractFromRoute(
+    input.routeDecision,
+  );
   const kind = inferKind(input.routeDecision, message);
   const capabilities = inferCapabilities(
     {
@@ -1566,12 +1690,16 @@ export function buildDesktopWorkOrder(input: {
           ? "Masaüstü cowork görevi"
           : "Masaüstü görevi",
       input.title,
-      inferLocalContext(message, capabilities).length > 0 ? `Bağlam: ${inferLocalContext(message, capabilities).join(", ")}` : "",
+      inferLocalContext(message, capabilities, semanticDesktopContract).length > 0 ? `Bağlam: ${inferLocalContext(message, capabilities, semanticDesktopContract).join(", ")}` : "",
     ].filter(Boolean).join(" — "),
     280,
   );
   const entities = extractEntities(message);
-  const localContextNeeded = inferLocalContext(message, capabilities);
+  const localContextNeeded = inferLocalContext(
+    message,
+    capabilities,
+    semanticDesktopContract,
+  );
   const expectedOutputs = inferExpectedOutputs(
     message,
     capabilities,
@@ -1762,10 +1890,12 @@ export function buildDesktopWorkOrder(input: {
       risk: {
         localPrivate: Boolean(input.understandingEnvelope?.risk.local_private || localContextNeeded.length > 0),
         sideEffect: Boolean(
+          semanticDesktopContract?.sideEffectLevel === "write" ||
+            semanticDesktopContract?.sideEffectLevel === "destructive" ||
           input.understandingEnvelope?.risk.side_effect ||
             input.routeDecision.privacyClass === "side_effect",
         ),
-        irreversible: false,
+        irreversible: semanticDesktopContract?.sideEffectLevel === "destructive",
       },
     },
     entities,
@@ -1795,6 +1925,7 @@ export function buildDesktopWorkOrder(input: {
       toolSkillDecision: semanticExecutionContract.toolSkillDecision ?? null,
       outputContract: semanticExecutionContract.outputContract ?? null,
       privacyRouting,
+      ...(semanticDesktopContract ? { semanticDesktopContract } : {}),
       ...(input.desktopPlanningEvidence
         ? { desktopPlanningEvidence: input.desktopPlanningEvidence }
         : {}),

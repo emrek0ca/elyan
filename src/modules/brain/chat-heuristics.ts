@@ -226,11 +226,31 @@ export function isMateriallyAmbiguousUserPrompt(prompt: string): boolean {
 }
 
 export function buildSharedBrainAckText(workload: SharedBrainWorkload): string {
-  // Pending state is presentation truth: mobile renders its loading animation.
-  // Never stream workload-specific prose that can be persisted or mistaken for
-  // the beginning of the final answer.
-  void workload;
-  return "";
+  // ACK is deliberately short and low-cost: it keeps mobile alive while the
+  // selected answer workload runs, but finalization treats it as transient
+  // content and does not prepend it to the completed answer.
+  switch (workload) {
+    case "planning":
+    case "desktop_handoff":
+      return "Planı netleştiriyorum";
+    case "document_analysis":
+    case "document_generate":
+    case "table_generate":
+    case "vision_reasoning":
+    case "image_analyze":
+      return "İçeriği okuyorum";
+    case "public_research":
+    case "public_deep_research":
+    case "public_quantum_research":
+      return "Kaynakları tarıyorum";
+    case "mobile_chat_balanced":
+    case "mobile_chat_deep_refine":
+      return "Düşünüyorum";
+    case "mobile_chat_fast":
+    case "fast_route":
+    case "intent":
+      return "İsteği netleştiriyorum";
+  }
 }
 
 export function buildClarificationPrompt(prompt: string): string {

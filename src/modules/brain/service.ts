@@ -13,12 +13,14 @@ import type {
 } from "../../contracts/domain.js";
 import {
   datasetManifests,
+  chatSessions,
   knowledgeChunks,
   knowledgeDocuments,
   learningEvents,
   devices,
   modelArtifacts,
   runtimeConnections,
+  tasks,
   trainingJobs,
   turnMetrics,
   worldSignals,
@@ -718,21 +720,47 @@ async function readLastTurnBehaviorUsage(
   app: FastifyInstance,
   userId: string,
 ): Promise<Record<string, unknown>> {
-  const rows = await app.db
-    .select({
-      workload: turnMetrics.workload,
-      quality: turnMetrics.quality,
-      createdAt: turnMetrics.createdAt,
-    })
-    .from(turnMetrics)
-    .where(eq(turnMetrics.userId, userId))
-    .orderBy(desc(turnMetrics.createdAt))
-    .limit(1);
+  const [rows, taskRows, sessionRows] = await Promise.all([
+    app.db
+      .select({
+        workload: turnMetrics.workload,
+        quality: turnMetrics.quality,
+        createdAt: turnMetrics.createdAt,
+      })
+      .from(turnMetrics)
+      .where(eq(turnMetrics.userId, userId))
+      .orderBy(desc(turnMetrics.createdAt))
+      .limit(1),
+    app.db
+      .select({
+        result: tasks.result,
+        updatedAt: tasks.updatedAt,
+      })
+      .from(tasks)
+      .where(eq(tasks.userId, userId))
+      .orderBy(desc(tasks.updatedAt))
+      .limit(1),
+    app.db
+      .select({
+        metadata: chatSessions.metadata,
+        updatedAt: chatSessions.updatedAt,
+      })
+      .from(chatSessions)
+      .where(eq(chatSessions.userId, userId))
+      .orderBy(desc(chatSessions.updatedAt))
+      .limit(8),
+  ]);
   const quality = readRecord(rows[0]?.quality);
+  const taskResult = readRecord(taskRows[0]?.result);
+  const visualAwareness = readRecord(taskResult?.visualCapabilityAwareness);
+  const visualUsedLastTurn = readRecord(visualAwareness?.usedLastTurn);
+  const lastImageArtifactAvailable = sessionRows.some((row) =>
+    Boolean(readRecord(readRecord(row.metadata)?.lastVisualArtifact)),
+  );
   const latestEvidenceAcceptanceScore =
     quality?.retrieval_evidence_acceptance_score;
   return {
-    observedAt: rows[0]?.createdAt ?? null,
+    observedAt: rows[0]?.createdAt ?? taskRows[0]?.updatedAt ?? null,
     workload: rows[0]?.workload ?? null,
     memoryRecall:
       Number(quality?.memory_recall_fact_count ?? 0) > 0 ||
@@ -751,16 +779,90 @@ async function readLastTurnBehaviorUsage(
     agentEngine:
       typeof quality?.agent_engine_version === "string" &&
       quality.agent_engine_version.length > 0,
+    imageGeneration:
+      readBoolean(quality, "image_generation_used") === true ||
+      readBoolean(taskResult, "imageGenerationUsed") === true ||
+      readBoolean(visualUsedLastTurn, "imageGeneration") === true,
+    imageEdit:
+      readBoolean(quality, "image_edit_used") === true ||
+      readBoolean(taskResult, "imageEditUsed") === true ||
+      readBoolean(visualUsedLastTurn, "imageEdit") === true ||
+      readBoolean(visualUsedLastTurn, "imageContinue") === true,
+    visualIntent:
+      readString(quality, "visual_intent") ??
+      readString(taskResult, "visualIntent") ??
+      readString(visualAwareness, "visualIntent"),
+    imageGenerationConfigured:
+      readBoolean(quality, "image_generation_configured") ??
+      readBoolean(taskResult, "imageGenerationConfigured") ??
+      readBoolean(visualAwareness, "imageGenerationConfigured") ??
+      Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+    imageEditConfigured:
+      readBoolean(quality, "image_edit_configured") ??
+      readBoolean(taskResult, "imageEditConfigured") ??
+      readBoolean(visualAwareness, "imageEditConfigured") ??
+      Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+    lastImageArtifactAvailable:
+      lastImageArtifactAvailable ||
+      readBoolean(quality, "last_image_artifact_available") === true ||
+      readBoolean(taskResult, "lastImageArtifactAvailable") === true ||
+      readBoolean(visualAwareness, "lastImageArtifactAvailable") === true,
+    visualContinuationSupported:
+      readBoolean(quality, "visual_continuation_supported") ??
+      readBoolean(taskResult, "visualContinuationSupported") ??
+      readBoolean(visualAwareness, "visualContinuationSupported") ??
+      true,
   };
 }
 
 function withLiveBehaviorUsage<T>(profile: T, lastTurnUsed: unknown): T {
   const root = readRecord(profile);
+  const chat = readRecord(root?.chat);
   const learning = readRecord(root?.learning);
   const behaviorState = readRecord(learning?.behaviorState);
   if (!root || !learning || !behaviorState) return profile;
+  const lastTurnRecord = readRecord(lastTurnUsed);
+  const imageGenerationConfigured =
+    readBoolean(lastTurnRecord, "imageGenerationConfigured") ??
+    readBoolean(chat, "imageGenerationConfigured") ??
+    false;
+  const imageEditConfigured =
+    readBoolean(lastTurnRecord, "imageEditConfigured") ??
+    readBoolean(chat, "imageEditConfigured") ??
+    false;
+  const lastImageArtifactAvailable =
+    readBoolean(lastTurnRecord, "lastImageArtifactAvailable") ??
+    readBoolean(chat, "lastImageArtifactAvailable") ??
+    false;
+  const visualContinuationSupported =
+    readBoolean(lastTurnRecord, "visualContinuationSupported") ??
+    readBoolean(chat, "visualContinuationSupported") ??
+    true;
   return {
     ...root,
+    ...(chat
+      ? {
+          chat: {
+            ...chat,
+            visualCapabilities: {
+              imageGenerationConfigured,
+              imageEditConfigured,
+              lastImageArtifactAvailable,
+              visualContinuationSupported,
+              usedLastTurn: {
+                imageGeneration:
+                  readBoolean(lastTurnRecord, "imageGeneration") === true,
+                imageEdit: readBoolean(lastTurnRecord, "imageEdit") === true,
+                visualIntent: readString(lastTurnRecord, "visualIntent"),
+              },
+            },
+            imageGenerationConfigured,
+            imageEditConfigured,
+            lastImageArtifactAvailable,
+            visualContinuationSupported,
+          },
+        }
+      : {}),
     learning: {
       ...learning,
       behaviorState: {
@@ -2045,6 +2147,13 @@ export async function getBrainProfile(
       retrievalLowConfidence: null,
       connectorRead: false,
       agentEngine: false,
+      imageGeneration: false,
+      imageEdit: false,
+      visualIntent: null,
+      imageGenerationConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+      imageEditConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+      lastImageArtifactAvailable: false,
+      visualContinuationSupported: true,
     }),
   );
   const brainRuntimeReady = Boolean(runtimeSnapshot.ready && serverBrainName);
@@ -2365,6 +2474,23 @@ export async function getBrainProfile(
     app.config.GEMINI_API_KEY ||
     app.config.OPENROUTER_API_KEY,
   );
+  const imageGenerationConfigured = Boolean(
+    String(app.config.GEMINI_API_KEY ?? "").trim(),
+  );
+  const imageEditConfigured = imageGenerationConfigured;
+  const visualCapabilities = {
+    imageGenerationConfigured,
+    imageEditConfigured,
+    lastImageArtifactAvailable:
+      readBoolean(readRecord(lastTurnUsed), "lastImageArtifactAvailable") === true,
+    visualContinuationSupported: true,
+    usedLastTurn: {
+      imageGeneration:
+        readBoolean(readRecord(lastTurnUsed), "imageGeneration") === true,
+      imageEdit: readBoolean(readRecord(lastTurnUsed), "imageEdit") === true,
+      visualIntent: readString(readRecord(lastTurnUsed), "visualIntent"),
+    },
+  };
   const activeKnowledgeCorpusSnapshot = await getActiveKnowledgeCorpusSummary(
     app,
   ).catch(() => ({
@@ -2587,6 +2713,11 @@ export async function getBrainProfile(
       messagesPath: "/v1/chat/messages",
       homeSurface: "chat",
       mobileDocumentExportReady: true,
+      visualCapabilities,
+      imageGenerationConfigured,
+      imageEditConfigured,
+      lastImageArtifactAvailable: visualCapabilities.lastImageArtifactAvailable,
+      visualContinuationSupported: true,
       responseProtocol: {
         blocksVersion: app.config.ELYAN_BLOCKS_V11_ENABLED ? "v1.1" : "v1",
         phasedRollout: true,
@@ -2709,6 +2840,9 @@ export async function getBrainProfile(
             app.config.ELYAN_AGENT_LOOP_ENABLED === true ||
             app.config.ELYAN_AGENT_ENGINE_V2_ENABLED === true,
           connectorTools: app.config.ELYAN_CONNECTOR_TOOLS_ENABLED === true,
+          imageGeneration: imageGenerationConfigured,
+          imageEdit: imageEditConfigured,
+          visualContinuation: true,
         },
         ready: {
           neural: neural.neuralReady,
@@ -2717,6 +2851,10 @@ export async function getBrainProfile(
           evaluation: neural.evaluationReady,
           retrieval: retrievalStatus.hybridReady,
           memory: memoryStatus.pipelineReady,
+          imageGeneration: imageGenerationConfigured,
+          imageEdit: imageEditConfigured,
+          lastImageArtifact: visualCapabilities.lastImageArtifactAvailable,
+          visualContinuation: true,
         },
         usedLastTurn: lastTurnUsed,
       },

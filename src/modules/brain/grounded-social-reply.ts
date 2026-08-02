@@ -188,8 +188,11 @@ function safePersonalAnchorCue(
   const project = read("active_project", "project", "primary_repo");
   if (project) return `${project} bağlamını aklımda tutuyorum.`;
 
-  const boundary = read("working_boundary", "implementation_boundary");
-  if (boundary) return `Çalışma sınırını biliyorum: ${boundary}.`;
+  // `working_boundary` / `implementation_boundary` bilerek ATLANIYOR.
+  // Bunlar Elyan'ın kendi çalışma kuralları — kullanıcı hakkında bir tercih
+  // değil. Selamlaşmaya iliştirilince "Çalışma sınırını biliyorum: preserve
+  // existing architecture and avoid unrelated rewrites." gibi, çoğu zaman
+  // İngilizce ve kullanıcıya hiçbir şey ifade etmeyen bir cümle çıkıyordu.
 
   const length = read("answer_length", "brevity_preference");
   if (length && /short|concise|kısa|kisa|brief/i.test(length)) {

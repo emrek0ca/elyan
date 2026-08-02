@@ -795,7 +795,7 @@ test("getBrainProfile exposes the stable mobile and desktop contract surface", a
       [],
       [],
       [],
-      [{ freshSignals: 0, reconnectRecoveries: 0, handoffQualitySignals: 0 }],
+      [{ freshSignals: 8, reconnectRecoveries: 0, handoffQualitySignals: 1 }],
       ...makeBrainLatencyRows(32),
     ]),
     config: {
@@ -1376,6 +1376,18 @@ test("queueContinuousBrainTrainingJob queues only with approved correction linea
           },
         },
       ],
+      [
+        {
+          id: "dataset-1",
+          status: "ready",
+          metadata: {
+            datasetRole: "sft_ready_corrections_jsonl",
+            datasetVersion: "dataset-v1",
+            approvedCorrectionsOnly: true,
+            sourceLineage: "approved_corrections",
+          },
+        },
+      ],
       ],
       inserted,
     ),
@@ -1406,7 +1418,7 @@ test("queueContinuousBrainTrainingJob queues only with approved correction linea
       userAgent: "test-agent",
     });
 
-    assert.equal(result.created, true);
+    assert.equal(result.created, true, JSON.stringify(result));
     assert.equal(result.reason, "queued_shared_refresh");
     assert.equal(result.job?.id, "queued-training-job-1");
     assert.equal(result.elyanModel?.modelName, "Elyan");

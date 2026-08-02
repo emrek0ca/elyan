@@ -30,6 +30,23 @@ export type RuntimeCapabilityReadinessSummary = {
   }>;
 };
 
+export type RuntimeCapabilityHandshake = {
+  canonicalCapabilityId: string;
+  adapter: string;
+  ready: boolean;
+  dependencyReady: boolean;
+  permissionReady: boolean;
+  aliases: string[];
+  version: string | null;
+  inputContractHash: string | null;
+};
+
+export type NormalizedRuntimeCapabilityHandshake = {
+  capabilities: string[];
+  capabilityStates: Record<string, unknown>;
+  descriptors: RuntimeCapabilityHandshake[];
+};
+
 const CATEGORY_KEYS: RuntimeCapabilityCategory[] = [
   "runtime",
   "task",
@@ -128,6 +145,83 @@ export function normalizeRuntimeCapabilities(input: unknown): string[] {
   return [...new Set(input.map((capability) => String(capability ?? "").trim()).filter(Boolean).map(normalizeCapabilityName))];
 }
 
+function boundedString(value: unknown, maxLength: number): string {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeCapabilityHandshakeEntry(
+  value: unknown,
+): RuntimeCapabilityHandshake | null {
+  const record = readRecord(value);
+  if (!record) return null;
+  const canonicalCapabilityId = normalizeCapabilityName(
+    boundedString(record.canonicalCapabilityId, 120),
+  );
+  if (!canonicalCapabilityId) return null;
+  const aliases = normalizeRuntimeCapabilities(
+    Array.isArray(record.aliases) ? record.aliases.slice(0, 16) : [],
+  );
+  return {
+    canonicalCapabilityId,
+    adapter: boundedString(record.adapter, 160) || canonicalCapabilityId,
+    ready: readBoolean(record.ready, true),
+    dependencyReady: readBoolean(record.dependencyReady, true),
+    permissionReady: readBoolean(record.permissionReady, true),
+    aliases,
+    version: boundedString(record.version, 80) || null,
+    inputContractHash: boundedString(record.inputContractHash, 120) || null,
+  };
+}
+
+export function normalizeRuntimeCapabilityHandshake(input: {
+  capabilities?: unknown;
+  capabilityStates?: unknown;
+  capabilityHandshake?: unknown;
+}): NormalizedRuntimeCapabilityHandshake {
+  const legacyCapabilities = normalizeRuntimeCapabilities(input.capabilities);
+  const states = readCapabilityStateRecord(input.capabilityStates);
+  const descriptors = Array.isArray(input.capabilityHandshake)
+    ? input.capabilityHandshake
+        .map(normalizeCapabilityHandshakeEntry)
+        .filter((item): item is RuntimeCapabilityHandshake => Boolean(item))
+        .slice(0, 256)
+    : [];
+  const capabilities = new Set(legacyCapabilities);
+  const capabilityStates: Record<string, unknown> = { ...states };
+  for (const descriptor of descriptors) {
+    capabilities.add(descriptor.canonicalCapabilityId);
+    for (const alias of descriptor.aliases) capabilities.add(alias);
+    const existing = readRecord(capabilityStates[descriptor.canonicalCapabilityId]) ?? {};
+    capabilityStates[descriptor.canonicalCapabilityId] = {
+      ...existing,
+      canonicalCapabilityId: descriptor.canonicalCapabilityId,
+      adapter: descriptor.adapter,
+      ready: descriptor.ready,
+      dependencyReady: descriptor.dependencyReady,
+      permissionReady: descriptor.permissionReady,
+      aliases: descriptor.aliases,
+      version: descriptor.version,
+      inputContractHash: descriptor.inputContractHash,
+      handshakeContract: "elyan.runtime_capability_handshake.v1",
+    };
+  }
+  return {
+    capabilities: [...capabilities],
+    capabilityStates,
+    descriptors,
+  };
+}
+
 export function supportsRequestedCapabilities(
   availableCapabilities: unknown,
   requestedCapabilities: string[] = [],
@@ -159,9 +253,10 @@ function readCapabilityStateRecord(
 function stateReady(value: unknown): boolean | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (typeof record.ready === "boolean") return record.ready;
   if (typeof record.dependencyReady === "boolean" && record.dependencyReady === false) return false;
+  if (typeof record.permissionReady === "boolean" && record.permissionReady === false) return false;
   if (typeof record.systemPermissionRequired === "boolean" && record.systemPermissionRequired === true) return false;
+  if (typeof record.ready === "boolean") return record.ready;
   return null;
 }
 
@@ -181,6 +276,7 @@ function stateBlockedReason(value: unknown): string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
   const record = value as Record<string, unknown>;
   if (record.dependencyReady === false) return "dependency_unavailable";
+  if (record.permissionReady === false) return "permission_unavailable";
   if (record.systemPermissionRequired === true) return "os_permission_required";
   return stateErrorCode(value) || "not_ready";
 }

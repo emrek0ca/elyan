@@ -509,7 +509,10 @@ function buildContextPackConsumption(
     latestArtifact?.name,
     latestArtifact?.summary,
   ]
-    .filter((value): value is string => typeof value === "string" && value.trim())
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .map((value) => value.trim().toLocaleLowerCase("tr-TR"));
   addConsumed(
     "latestArtifactRef",
@@ -556,13 +559,19 @@ function buildContextPackConsumption(
   const evidenceTools = Array.isArray(planningEvidence?.tools)
     ? planningEvidence.tools
         .map((item) => asRecord(item)?.tool)
-        .filter((tool): tool is string => typeof tool === "string" && tool.trim())
+        .filter(
+          (tool): tool is string =>
+            typeof tool === "string" && tool.trim().length > 0,
+        )
         .map((tool) => tool.trim().toLocaleLowerCase("en-US"))
     : [];
   if (Array.isArray(evidencePlan?.tools)) {
     evidenceTools.push(
       ...evidencePlan.tools
-        .filter((tool): tool is string => typeof tool === "string" && tool.trim())
+        .filter(
+          (tool): tool is string =>
+            typeof tool === "string" && tool.trim().length > 0,
+        )
         .map((tool) => tool.trim().toLocaleLowerCase("en-US")),
     );
   }

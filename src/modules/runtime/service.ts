@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { devices, runtimeConnections, tasks } from "../../db/schema.js";
@@ -8,7 +8,7 @@ import { verifySecret } from "../../lib/auth-crypto.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
 import { assertDesktopPairingAllowed } from "../billing/service.js";
 import {
-  normalizeRuntimeCapabilities,
+  normalizeRuntimeCapabilityHandshake,
   preflightRequestedRuntimeCapabilities,
   summarizeRuntimeCapabilities,
   summarizeRuntimeCapabilityReadiness,
@@ -17,6 +17,84 @@ import { activeTaskStatuses } from "../tasks/queue.js";
 import { isDesktopPlanPreparationPending } from "../tasks/desktop-work-order.js";
 import { deriveTaskDeliveryState, extractTaskRouteDecision } from "../tasks/service-helpers.js";
 import { getUserDevice } from "../devices/service.js";
+
+function stableRuntimeJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableRuntimeJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableRuntimeJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function runtimeCapabilityHash(input: {
+  capabilities: unknown;
+  capabilityStates: unknown;
+}): string {
+  return createHash("sha256")
+    .update(
+      stableRuntimeJson({
+        capabilities: Array.isArray(input.capabilities)
+          ? [...input.capabilities].map(String).sort()
+          : [],
+        capabilityStates: input.capabilityStates ?? {},
+      }),
+    )
+    .digest("hex");
+}
+
+type AssignedRuntimeTaskResponseItem = {
+  id: string;
+  status: string;
+  updatedAt?: Date | null;
+  dispatchLeaseId?: string | null;
+  dispatchLeaseExpiresAt?: Date | null;
+};
+
+function assignedTasksHash(
+  tasksInput: AssignedRuntimeTaskResponseItem[],
+): string {
+  return createHash("sha256")
+    .update(
+      stableRuntimeJson(
+        tasksInput.map((task) => ({
+          id: task.id,
+          status: task.status,
+          updatedAt: task.updatedAt?.toISOString() ?? null,
+          dispatchLeaseId: task.dispatchLeaseId ?? null,
+          dispatchLeaseExpiresAt:
+            task.dispatchLeaseExpiresAt?.toISOString() ?? null,
+        })),
+      ),
+    )
+    .digest("hex");
+}
+
+export function shapeAssignedRuntimeTaskResponse<
+  TaskItem extends AssignedRuntimeTaskResponseItem,
+>(tasksInput: TaskItem[]) {
+  const cursor =
+    tasksInput
+      .map((task) => task.updatedAt?.toISOString() ?? "")
+      .sort()
+      .at(-1) ?? null;
+  return {
+    tasks: tasksInput,
+    cursor,
+    assignmentHash: assignedTasksHash(tasksInput),
+    leases: tasksInput
+      .filter((task) => task.dispatchLeaseId || task.dispatchLeaseExpiresAt)
+      .map((task) => ({
+        taskId: task.id,
+        leaseId: task.dispatchLeaseId ?? null,
+        expiresAt: task.dispatchLeaseExpiresAt ?? null,
+      })),
+  };
+}
 
 export async function getRuntimeConnectionByAuth(
   app: FastifyInstance,
@@ -63,11 +141,16 @@ export async function registerRuntime(
     runtimeVersion?: string;
     capabilities: string[];
     capabilityStates?: Record<string, unknown>;
+    capabilityHandshake?: unknown[];
   },
 ) {
-  const normalizedCapabilities = normalizeRuntimeCapabilities(input.capabilities);
-  const normalizedCapabilityStates =
-    input.capabilityStates && typeof input.capabilityStates === "object" ? input.capabilityStates : {};
+  const handshake = normalizeRuntimeCapabilityHandshake({
+    capabilities: input.capabilities,
+    capabilityStates: input.capabilityStates,
+    capabilityHandshake: input.capabilityHandshake,
+  });
+  const normalizedCapabilities = handshake.capabilities;
+  const normalizedCapabilityStates = handshake.capabilityStates;
   const rows = await app.db
     .select({
       id: devices.id,
@@ -164,6 +247,7 @@ export async function registerRuntime(
     },
     capabilities: normalizedCapabilities,
     capabilityStates: normalizedCapabilityStates,
+    capabilityHandshake: handshake.descriptors,
     capabilitySummary: summarizeRuntimeCapabilities(normalizedCapabilities),
     capabilityReadinessSummary: summarizeRuntimeCapabilityReadiness(
       normalizedCapabilityStates,
@@ -241,21 +325,32 @@ export async function heartbeatRuntime(
     currentTaskId?: string;
     capabilities?: string[];
     capabilityStates?: Record<string, unknown>;
+    capabilityHandshake?: unknown[];
   },
 ) {
   await getRuntimeConnectionByAuth(app, auth);
-  const normalizedCapabilities =
-    input.capabilities === undefined ? undefined : normalizeRuntimeCapabilities(input.capabilities);
-  const normalizedCapabilityStates =
-    input.capabilityStates && typeof input.capabilityStates === "object" ? input.capabilityStates : undefined;
+  const handshake =
+    input.capabilities !== undefined ||
+    input.capabilityStates !== undefined ||
+    input.capabilityHandshake !== undefined
+      ? normalizeRuntimeCapabilityHandshake({
+          capabilities: input.capabilities,
+          capabilityStates: input.capabilityStates,
+          capabilityHandshake: input.capabilityHandshake,
+        })
+      : null;
+  const shouldUpdateCapabilities =
+    input.capabilities !== undefined || input.capabilityHandshake !== undefined;
 
   await app.db
     .update(runtimeConnections)
     .set({
       status: input.status,
       currentTaskId: input.currentTaskId,
-      ...(normalizedCapabilities ? { capabilities: normalizedCapabilities } : {}),
-      ...(normalizedCapabilityStates ? { capabilityStates: normalizedCapabilityStates } : {}),
+      ...(handshake && shouldUpdateCapabilities
+        ? { capabilities: handshake.capabilities }
+        : {}),
+      ...(handshake ? { capabilityStates: handshake.capabilityStates } : {}),
       lastHeartbeatAt: new Date(),
       disconnectedAt: null,
     })
@@ -273,10 +368,11 @@ export async function heartbeatRuntime(
     ok: true,
     deviceId: auth.deviceId,
     status: input.status,
-    capabilityStates: normalizedCapabilityStates ?? {},
-    capabilitySummary: summarizeRuntimeCapabilities(normalizedCapabilities ?? []),
+    capabilityStates: handshake?.capabilityStates ?? {},
+    capabilityHandshake: handshake?.descriptors ?? [],
+    capabilitySummary: summarizeRuntimeCapabilities(handshake?.capabilities ?? []),
     capabilityReadinessSummary: summarizeRuntimeCapabilityReadiness(
-      normalizedCapabilityStates ?? {},
+      handshake?.capabilityStates ?? {},
     ),
   };
 }
@@ -352,7 +448,7 @@ export async function disconnectRuntime(
 }
 
 export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
-  await getRuntimeConnectionByAuth(app, auth);
+  const connection = await getRuntimeConnectionByAuth(app, auth);
 
   const rows = await app.db
     .select({
@@ -403,20 +499,33 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
     }
   }
 
-  return claimable.map((row) => ({
-    ...row,
-    routeDecision: extractTaskRouteDecision(row.payload),
-    deliveryState: deriveTaskDeliveryState(row),
-    deliveryAttemptCount: row.dispatchAttemptCount ?? 0,
-    lastAckAt: row.dispatchAckAt ?? null,
-    lastDispatchAttemptAt: row.dispatchLeaseIssuedAt ?? row.dispatchAckAt ?? null,
-  }));
+  return claimable.map((row) => {
+    const requestedCapabilities = Array.isArray(row.requestedCapabilities)
+      ? row.requestedCapabilities.filter(
+          (capability): capability is string => typeof capability === "string",
+        )
+      : [];
+    const capabilityPreflight = preflightRequestedRuntimeCapabilities({
+      availableCapabilities: connection.capabilities,
+      capabilityStates: connection.capabilityStates,
+      requestedCapabilities,
+    });
+    return {
+      ...row,
+      routeDecision: extractTaskRouteDecision(row.payload),
+      deliveryState: deriveTaskDeliveryState(row),
+      deliveryAttemptCount: row.dispatchAttemptCount ?? 0,
+      lastAckAt: row.dispatchAckAt ?? null,
+      lastDispatchAttemptAt: row.dispatchLeaseIssuedAt ?? row.dispatchAckAt ?? null,
+      capabilityPreflight,
+      canAcceptNow: capabilityPreflight.ok,
+    };
+  });
 }
 
 export async function getRuntimeSessionSnapshot(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
   const connection = await getRuntimeConnectionByAuth(app, auth);
   const deviceTruth = await getUserDevice(app, auth.sub, auth.deviceId);
-  const assignedTasks = await listAssignedRuntimeTasks(app, auth);
   const deviceRows = await app.db
     .select({
       id: devices.id,
@@ -436,27 +545,28 @@ export async function getRuntimeSessionSnapshot(app: FastifyInstance, auth: Runt
           canReceiveTasks: deviceTruth.canReceiveTasks,
           targetStatus: deviceTruth.targetStatus,
           targetErrorCode: deviceTruth.targetErrorCode,
+          transportReady: deviceTruth.canReceiveTasks && deviceTruth.targetStatus === "ready",
+          taskAcceptanceReady: deviceTruth.canReceiveTasks && deviceTruth.targetStatus === "ready",
           realtimeReady: deviceTruth.canReceiveTasks && deviceTruth.targetStatus === "ready",
           runtime: deviceTruth.runtime,
         }
       : null,
-    connection,
+    connection: {
+      id: connection.id,
+      status: connection.status,
+      socketSessionId: connection.socketSessionId,
+      currentTaskId: connection.currentTaskId,
+      connectedAt: connection.connectedAt,
+      lastHeartbeatAt: connection.lastHeartbeatAt,
+    },
+    lastHeartbeatAt: connection.lastHeartbeatAt,
+    capabilityHash: runtimeCapabilityHash({
+      capabilities: connection.capabilities,
+      capabilityStates: connection.capabilityStates,
+    }),
     capabilitySummary: summarizeRuntimeCapabilities(connection.capabilities),
     capabilityReadinessSummary: summarizeRuntimeCapabilityReadiness(
       connection.capabilityStates,
     ),
-    taskCapabilityPreflights: assignedTasks.slice(0, 8).map((task) => ({
-      taskId: task.id,
-      ...preflightRequestedRuntimeCapabilities({
-        availableCapabilities: connection.capabilities,
-        capabilityStates: connection.capabilityStates,
-        requestedCapabilities: Array.isArray(task.requestedCapabilities)
-          ? task.requestedCapabilities.filter(
-              (capability): capability is string => typeof capability === "string",
-            )
-          : [],
-      }),
-    })),
-    tasks: assignedTasks,
   };
 }

@@ -123,6 +123,12 @@ test("runtime websocket redelivers stale running tasks after reconnect", () => {
     deliveryState: "queued" as const,
     selectedDesktopOnline: null,
     routeDecision: null,
+    capabilityPreflight: {
+      ok: true,
+      missingCapabilities: [],
+      blockedCapabilities: [],
+    },
+    canAcceptNow: true,
     createdAt: new Date("2030-01-01T00:00:00.000Z"),
     updatedAt: new Date("2030-01-01T00:00:00.000Z"),
   };
