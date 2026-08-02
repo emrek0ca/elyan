@@ -265,7 +265,10 @@ test("syncChatTaskLifecycle publishes running assistant snapshots for chat tasks
 
   assert.equal(updates.length, 2);
   assert.equal(updates[0]?.status, "running");
-  assert.equal(updates[0]?.content, "");
+  assert.equal(
+    updates[0]?.content,
+    "Adımlar:\n1. Kaynakları araştırıyorum tamamlandı\n2. Raporu yazıyorum yürütülüyor",
+  );
   assert.equal(published.length, 1);
   assert.equal(published[0]?.topic, "chat.message.updated");
   const runningPayload = published[0]?.payload as
