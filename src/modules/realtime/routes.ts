@@ -427,6 +427,89 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
       return true;
     };
 
+    // Replay is an awaited handoff. A false `write()` only means that the
+    // kernel buffer is full; closing after an arbitrary event count caused a
+    // reconnect storm and made completed chat responses appear to hang.
+    const waitForDrain = (): Promise<boolean> =>
+      new Promise((resolve) => {
+        if (closed || reply.raw.destroyed || reply.raw.writableEnded) {
+          resolve(false);
+          return;
+        }
+        let settled = false;
+        let timer: NodeJS.Timeout | undefined;
+        const onDrain = () => finish(true);
+        const onClose = () => finish(false);
+        const onError = () => finish(false);
+        const cleanup = () => {
+          if (timer) {
+            clearTimeout(timer);
+          }
+          reply.raw.off("drain", onDrain);
+          reply.raw.off("close", onClose);
+          reply.raw.off("error", onError);
+        };
+        const finish = (ok: boolean) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          resolve(ok);
+        };
+        reply.raw.on("drain", onDrain);
+        reply.raw.on("close", onClose);
+        reply.raw.on("error", onError);
+        timer = setTimeout(() => finish(false), 10_000);
+      });
+
+    const writeReplayOrClose = async (input: {
+      event: string;
+      data: unknown;
+      id?: number;
+    }): Promise<boolean> => {
+      if (closed) {
+        return false;
+      }
+      if (
+        shouldDropSlowSseClient(reply.raw, app.config.SSE_MAX_BUFFERED_BYTES)
+      ) {
+        recordSseDroppedBackpressure(app);
+        void markChatSessionReconnectPending(app, {
+          userId: auth.sub,
+          sessionId: lastChatSessionId,
+        });
+        closeStream();
+        return false;
+      }
+      lastChatSessionId =
+        readSessionIdFromSseData(input.data) ?? lastChatSessionId;
+      if (writeSseEvent(reply.raw, input)) {
+        pendingWriteState.pendingEvents = 0;
+        pendingWriteState.waitingDrain = false;
+        return true;
+      }
+
+      pendingWriteState.waitingDrain = true;
+      const drained = await waitForDrain();
+      pendingWriteState.waitingDrain = false;
+      pendingWriteState.pendingEvents = 0;
+      if (!drained) {
+        recordSseDroppedBackpressure(app);
+        void markChatSessionReconnectPending(app, {
+          userId: auth.sub,
+          sessionId: lastChatSessionId,
+        });
+        app.log.warn(
+          { channel },
+          "sse replay write stalled; dropping connection (resume via replay)",
+        );
+        closeStream();
+        return false;
+      }
+      return !closed;
+    };
+
     request.raw.on("close", closeStream);
 
     if (
@@ -507,16 +590,21 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
           cursorProvided: true,
           outcome: "resync_required",
         });
-        writeOrClose({
-          event: "resync_required",
-          data: {
-            reason: "cursor_expired",
-            cursor,
-            earliestAvailableEventId:
-              replayAvailability.earliestAvailableEventId,
-            latestAvailableEventId: replayAvailability.latestAvailableEventId,
-          },
-        });
+        if (
+          !(await writeReplayOrClose({
+            event: "resync_required",
+            data: {
+              reason: "cursor_expired",
+              cursor,
+              earliestAvailableEventId:
+                replayAvailability.earliestAvailableEventId,
+              latestAvailableEventId:
+                replayAvailability.latestAvailableEventId,
+            },
+          }))
+        ) {
+          return;
+        }
       }
 
       const replayEvents = await listRealtimeEventsForStream(app, {
@@ -531,11 +619,11 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
       for (const event of replayEvents) {
         if (
-          !writeOrClose({
+          !(await writeReplayOrClose({
             event: event.topic,
             id: event.id,
             data: shapeRealtimeEventEnvelope(event),
-          })
+          }))
         ) {
           return;
         }
@@ -553,10 +641,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         app.services.eventBus.recentVolatileSnapshots(channel);
       for (const event of missedSnapshots) {
         if (
-          !writeOrClose({
+          !(await writeReplayOrClose({
             event: event.topic,
             data: shapeRealtimeEventEnvelope(event),
-          })
+          }))
         ) {
           return;
         }
@@ -591,11 +679,11 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
         for (const event of persisted) {
           if (
-            !writeOrClose({
+            !(await writeReplayOrClose({
               event: event.topic,
               id: event.id,
               data: shapeRealtimeEventEnvelope(event),
-            })
+            }))
           ) {
             return;
           }
@@ -603,10 +691,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         }
         for (const event of volatile) {
           if (
-            !writeOrClose({
+            !(await writeReplayOrClose({
               event: event.topic,
               data: shapeRealtimeEventEnvelope(event),
-            })
+            }))
           ) {
             return;
           }
@@ -629,11 +717,11 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
 
         for (const event of persisted) {
           if (
-            !writeOrClose({
+            !(await writeReplayOrClose({
               event: event.topic,
               id: event.id,
               data: shapeRealtimeEventEnvelope(event),
-            })
+            }))
           ) {
             return;
           }
@@ -641,10 +729,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         }
         for (const event of volatile) {
           if (
-            !writeOrClose({
+            !(await writeReplayOrClose({
               event: event.topic,
               data: shapeRealtimeEventEnvelope(event),
-            })
+            }))
           ) {
             return;
           }

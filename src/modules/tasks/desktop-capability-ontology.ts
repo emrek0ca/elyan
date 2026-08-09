@@ -29,7 +29,11 @@ export type DesktopCapabilitySemanticMatch = {
 
 type SparseEmbedding = Map<number, number>;
 
-const EMBEDDING_BUCKETS = 512;
+// 512 kova, 81 yetenek × yüzlerce karakter-ngramı için çok dardı: farklı
+// özellikler aynı kovaya düşüp skoru gürültüye çeviriyordu ("şu şarkıyı çal"
+// → desktop_os.status). Ölçüm bunu gösterdi; kova sayısı çarpışmayı pratikte
+// ortadan kaldıracak seviyeye çekildi.
+const EMBEDDING_BUCKETS = 16_384;
 const ontologyCache = new Map<string, DesktopCapabilityOntologyEntry[]>();
 const embeddingCache = new Map<string, SparseEmbedding>();
 
@@ -292,36 +296,59 @@ function runtimeNamesFor(name: string): string[] {
   return [...new Set([name, dotted, underscored])];
 }
 
+// fewShots örnekleri `{"args": {"app_name": "Spotify"}}` biçiminde. Tümünü
+// JSON olarak gömmek "args"/"app name" gibi hiçbir niyet taşımayan token'ları
+// her girdiye dağıtıyordu. Yalnız yaprak değerleri alıyoruz.
+function leafStringValues(value: unknown, depth = 0): string[] {
+  if (depth > 4) return [];
+  if (typeof value === "string") return value.trim() ? [value] : [];
+  if (typeof value === "number" || typeof value === "boolean") return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => leafStringValues(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap((item) =>
+      leafStringValues(item, depth + 1),
+    );
+  }
+  return [];
+}
+
 function examplesFromFewShots(
   fewShots: DesktopCapabilityManifestEntry["fewShots"],
 ): string[] {
-  return fewShots
-    .map((shot) => JSON.stringify(shot))
-    .filter((shot) => shot.length > 2)
-    .slice(0, 4);
+  return fewShots.flatMap((shot) => leafStringValues(shot)).slice(0, 6);
 }
 
 export function getDesktopCapabilityOntology(): DesktopCapabilityOntologyEntry[] {
   const cached = ontologyCache.get("v1");
   if (cached) return cached;
   const entries = DESKTOP_CAPABILITY_MANIFEST.map((entry) => {
+    // `utterances` masaüstü kaynağından (capability_phrasebook) gelir ve her
+    // yetenek için tanımlıdır. CURATED_ALIASES yalnız ~20 yeteneği kapsayan,
+    // backend'de elle tutulan kalıntı listedir; kaynak sözlük onu kapsadıkça
+    // devre dışı kalır — iki liste tutmak sürüklenme üretir.
     const aliases = [
       entry.name,
       entry.displayName,
       ...runtimeNamesFor(entry.name),
-      ...(CURATED_ALIASES[entry.name] ?? []),
+      ...entry.utterances,
+      ...(entry.utterances.length > 0 ? [] : (CURATED_ALIASES[entry.name] ?? [])),
       ...entry.skillAffinity,
     ];
+    // verificationPlan / liveNarration bilinçli olarak dışarıda: 81 girdinin
+    // tamamında birebir aynı İngilizce kalıp ("Structured result must return
+    // ok=true…"). Ayırt edici değeri sıfır, blob'u şişirip sinyali seyreltiyor.
     const examples = [
       entry.description,
       entry.usage,
       ...entry.whenToUse,
-      ...entry.verificationPlan,
       ...examplesFromFewShots(entry.fewShots),
     ];
     const negativeExamples = [
       ...entry.whenNotToUse,
-      ...(CURATED_NEGATIVES[entry.name] ?? []),
+      ...entry.notFor,
+      ...(entry.notFor.length > 0 ? [] : (CURATED_NEGATIVES[entry.name] ?? [])),
     ];
     return {
       canonicalId: entry.name,
@@ -341,14 +368,100 @@ export function getDesktopCapabilityOntology(): DesktopCapabilityOntologyEntry[]
   return entries;
 }
 
-function ontologyEntryText(entry: DesktopCapabilityOntologyEntry): string {
-  return [
-    entry.canonicalId,
-    ...entry.aliases,
-    ...entry.examples,
-    entry.privacyClass,
-    entry.sideEffectClass,
-  ].join(" ");
+// ── Skorlama indeksi ────────────────────────────────────────────────────
+//
+// Eski yaklaşım: girdinin bütün metnini tek bir blob'a birleştirip sorguyla
+// kosinüs alıyordu. 3 kelimelik bir sorgu 43 kelimelik blob'a karşı ölçülünce
+// ayırt edici sinyal blob'un kendi kütlesinde kayboluyordu.
+//
+// Yeni yaklaşım: her alan ayrı bir "kanıt belgesi" (probe). Skor, alanların
+// ORTALAMASI değil EN İYİSİ. Bir yeteneği seçmek için tek bir güçlü kanıt
+// yeter; on tane alakasız alan onu cezalandırmamalı.
+type Probe = { vector: SparseEmbedding; weight: number };
+
+type ScoringIndex = {
+  idf: Map<number, number>;
+  probes: Map<string, Probe[]>;
+  negatives: Map<string, SparseEmbedding[]>;
+};
+
+let scoringIndexCache: ScoringIndex | null = null;
+
+function rawProbeTexts(
+  entry: DesktopCapabilityOntologyEntry,
+): Array<{ text: string; weight: number }> {
+  const probes: Array<{ text: string; weight: number }> = [];
+  // Ağırlıklar, kanıtın niyet taşıma gücüne göre: takma ad doğrudan kullanıcı
+  // ifadesidir, açıklama ikinci elden anlatımdır.
+  for (const alias of entry.aliases) probes.push({ text: alias, weight: 1 });
+  for (const example of entry.examples) probes.push({ text: example, weight: 0.88 });
+  return probes.filter((probe) => probe.text.length > 0);
+}
+
+function applyIdf(
+  vector: SparseEmbedding,
+  idf: Map<number, number>,
+): SparseEmbedding {
+  const weighted: SparseEmbedding = new Map();
+  for (const [bucket, value] of vector.entries()) {
+    weighted.set(bucket, value * (idf.get(bucket) ?? 1));
+  }
+  return weighted;
+}
+
+function getScoringIndex(): ScoringIndex {
+  if (scoringIndexCache) return scoringIndexCache;
+  const ontology = getDesktopCapabilityOntology();
+
+  // IDF girdi düzeyinde: bir özellik kaç FARKLI yetenekte geçiyor. Her
+  // girdide geçen "kullan/dosya/aç" gibi özellikler ayırt edici değildir ve
+  // bastırılır; yalnız bir yetenekte geçenler öne çıkar.
+  const documentFrequency = new Map<number, number>();
+  const rawByCapability = new Map<
+    string,
+    Array<{ vector: SparseEmbedding; weight: number }>
+  >();
+  for (const entry of ontology) {
+    const vectors = rawProbeTexts(entry).map((probe) => ({
+      vector: embedText(probe.text),
+      weight: probe.weight,
+    }));
+    rawByCapability.set(entry.canonicalId, vectors);
+    const seen = new Set<number>();
+    for (const probe of vectors) {
+      for (const bucket of probe.vector.keys()) seen.add(bucket);
+    }
+    for (const bucket of seen) {
+      documentFrequency.set(bucket, (documentFrequency.get(bucket) ?? 0) + 1);
+    }
+  }
+
+  const total = Math.max(1, ontology.length);
+  const idf = new Map<number, number>();
+  for (const [bucket, frequency] of documentFrequency.entries()) {
+    idf.set(bucket, Math.log(1 + total / (1 + frequency)));
+  }
+
+  const probes = new Map<string, Probe[]>();
+  const negatives = new Map<string, SparseEmbedding[]>();
+  for (const entry of ontology) {
+    probes.set(
+      entry.canonicalId,
+      (rawByCapability.get(entry.canonicalId) ?? []).map((probe) => ({
+        vector: applyIdf(probe.vector, idf),
+        weight: probe.weight,
+      })),
+    );
+    negatives.set(
+      entry.canonicalId,
+      entry.negativeExamples.map((example) =>
+        applyIdf(embedText(example), idf),
+      ),
+    );
+  }
+
+  scoringIndexCache = { idf, probes, negatives };
+  return scoringIndexCache;
 }
 
 function sideEffectCompatible(
@@ -371,19 +484,21 @@ export function matchDesktopCapabilitiesSemantically(input: {
 }): DesktopCapabilitySemanticMatch[] {
   const query = normalizeText([input.query, ...(input.hints ?? [])].join(" "));
   if (!query) return [];
-  const queryEmbedding = embedText(query);
+  const index = getScoringIndex();
+  const queryEmbedding = applyIdf(embedText(query), index.idf);
   const intent = input.intent ?? "";
   const matches = getDesktopCapabilityOntology()
     .map((entry) => {
-      const positive = cosine(queryEmbedding, embedText(ontologyEntryText(entry)));
-      const negative =
-        entry.negativeExamples.length > 0
-          ? Math.max(
-              ...entry.negativeExamples.map((example) =>
-                cosine(queryEmbedding, embedText(example)),
-              ),
-            )
-          : 0;
+      let positive = 0;
+      for (const probe of index.probes.get(entry.canonicalId) ?? []) {
+        const score = cosine(queryEmbedding, probe.vector) * probe.weight;
+        if (score > positive) positive = score;
+      }
+      let negative = 0;
+      for (const example of index.negatives.get(entry.canonicalId) ?? []) {
+        const score = cosine(queryEmbedding, example);
+        if (score > negative) negative = score;
+      }
       const intentBoost =
         intent === "browser_workflow" && entry.canonicalId === "browser_control"
           ? 0.22

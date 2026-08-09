@@ -42,6 +42,17 @@ export function getChatCompletionPath(provider: SharedBrainProvider): string {
   return "/chat/completions";
 }
 
+/** Native shared-brain endpoint. Gemini utilities keep the compatibility path. */
+export function getNativeChatPath(
+  provider: SharedBrainProvider,
+  stream = false,
+): string {
+  if (provider === "gemini") {
+    return stream ? "/interactions?alt=sse" : "/interactions";
+  }
+  return getChatCompletionPath(provider);
+}
+
 function buildAnthropicRequestBody(
   model: string,
   messages: SharedBrainConversationMessage[],
@@ -108,6 +119,111 @@ function buildOpenAiMessagesWithVision(
   return result;
 }
 
+type GeminiInteractionContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mime_type: string };
+
+type GeminiInteractionInputStep = {
+  type: "user_input" | "model_output";
+  content: GeminiInteractionContentPart[];
+};
+
+function buildGeminiInteractionInput(
+  messages: SharedBrainConversationMessage[],
+  visionImages: ResolvedAttachmentContextVisionImage[],
+): GeminiInteractionInputStep[] {
+  const conversationMessages = messages.filter(
+    (message) => message.role !== "system",
+  );
+  const lastUserIndex = conversationMessages.reduce(
+    (lastIndex, message, index) =>
+      message.role === "user" ? index : lastIndex,
+    -1,
+  );
+
+  return conversationMessages.flatMap((message, index) => {
+    const text = message.content.trim();
+    const content: GeminiInteractionContentPart[] = text
+      ? [{ type: "text", text: message.content }]
+      : [];
+
+    // Images belong to the current user turn, not to a synthetic transcript
+    // after the conversation. The preprocessor enforces byte and pixel
+    // budgets before this adapter is reached.
+    if (message.role === "user" && index === lastUserIndex) {
+      for (const image of visionImages.slice(0, 10)) {
+        content.push({
+          type: "image",
+          data: image.base64,
+          mime_type: image.mimeType,
+        });
+      }
+    }
+
+    if (content.length === 0) return [];
+    const type: GeminiInteractionInputStep["type"] =
+      message.role === "assistant" ? "model_output" : "user_input";
+    return [
+      {
+        type,
+        content,
+      },
+    ];
+  });
+}
+
+function buildGeminiInteractionsRequestBody(
+  model: string,
+  messages: SharedBrainConversationMessage[],
+  maxTokens: number,
+  stream: boolean,
+  visionImages: ResolvedAttachmentContextVisionImage[],
+  reasoningEffort: "low" | "medium" | "high",
+  temperature: number,
+  responseSchema?: Record<string, unknown>,
+  jsonObjectMode = false,
+): Record<string, unknown> {
+  const systemInstruction = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const generationConfig: Record<string, unknown> = {
+    temperature,
+    max_output_tokens: maxTokens,
+    thinking_level: reasoningEffort,
+    thinking_summaries: "none",
+  };
+  if (visionImages.some((image) => image.detail === "high")) {
+    generationConfig.media_resolution = "high";
+  }
+
+  return {
+    model,
+    input: buildGeminiInteractionInput(messages, visionImages),
+    store: false,
+    stream,
+    ...(systemInstruction ? { system_instruction: systemInstruction } : {}),
+    generation_config: generationConfig,
+    ...(responseSchema
+      ? {
+          response_format: {
+            type: "text",
+            mime_type: "application/json",
+            schema: responseSchema,
+          },
+        }
+      : jsonObjectMode
+        ? {
+            response_format: {
+              type: "text",
+              mime_type: "application/json",
+            },
+          }
+        : {}),
+  };
+}
+
 export function buildRequestBody(
   provider: SharedBrainProvider,
   model: string,
@@ -126,6 +242,7 @@ export function buildRequestBody(
   // JSON nesnesi olacak" der. Bunsuz model soruyu CEVAPLIYOR (ölçüldü: soru
   // biçimli mesajlarda ~%40 düzyazı → sınıflandırma kaybı → degraded).
   jsonObjectMode = false,
+  nativeGemini = false,
 ) {
   if (provider === "ollama") {
     return {
@@ -142,6 +259,20 @@ export function buildRequestBody(
 
   if (provider === "claude") {
     return buildAnthropicRequestBody(model, messages, maxTokens);
+  }
+
+  if (provider === "gemini" && nativeGemini) {
+    return buildGeminiInteractionsRequestBody(
+      model,
+      messages,
+      maxTokens,
+      stream,
+      visionImages,
+      reasoningEffort,
+      temperature,
+      responseSchema,
+      jsonObjectMode,
+    );
   }
 
   const outMessages = buildOpenAiMessagesWithVision(provider, messages, visionImages);
@@ -203,8 +334,12 @@ function supportsTurnEnvelopeResponseFormat(
   path: string,
 ): boolean {
   return (
-    path === getChatCompletionPath(provider) &&
-    (provider === "groq" || provider === "openai" || provider === "openrouter")
+    (path === getChatCompletionPath(provider) &&
+      (provider === "groq" ||
+        provider === "openai" ||
+        provider === "openrouter" ||
+        provider === "gemini")) ||
+    (provider === "gemini" && path.startsWith("/interactions"))
   );
 }
 
@@ -229,6 +364,32 @@ function withTurnEnvelopeResponseFormat(
   body: Record<string, unknown>,
   proactiveOpsEnabled: boolean,
 ): Record<string, unknown> {
+  if (provider === "gemini" && body.input) {
+    const openAiFormat = buildTurnEnvelopeResponseFormat(proactiveOpsEnabled);
+    const jsonSchema =
+      openAiFormat.json_schema &&
+      typeof openAiFormat.json_schema === "object" &&
+      !Array.isArray(openAiFormat.json_schema)
+        ? (openAiFormat.json_schema as Record<string, unknown>).schema
+        : null;
+    const systemInstruction = buildTurnEnvelopeSystemInstruction(proactiveOpsEnabled);
+    return {
+      ...body,
+      system_instruction:
+        typeof body.system_instruction === "string" && body.system_instruction.trim()
+          ? `${body.system_instruction}\n\n${systemInstruction}`
+          : systemInstruction,
+      ...(jsonSchema
+        ? {
+            response_format: {
+              type: "text",
+              mime_type: "application/json",
+              schema: jsonSchema,
+            },
+          }
+        : {}),
+    };
+  }
   const jsonSchemaSupported = modelSupportsJsonSchemaFormat(
     provider,
     body.model,

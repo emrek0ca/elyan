@@ -22,6 +22,7 @@ import {
 import { buildTaskTraceBlock } from "./task-trace.js";
 import {
   chatMessageStatusRank,
+  chatStreamEventStatusRank,
   isTerminalChatMessageStatus,
 } from "./stream-authority.js";
 
@@ -191,7 +192,7 @@ function deriveAssistantContent(input: {
   if (
     summary.trim() &&
     !isInternalRoutingSummary(summary) &&
-    !(terminalTask && isTransientChatProgressMessage(summary))
+    !isTransientChatProgressMessage(summary)
   ) {
     return finalize(summary);
   }
@@ -559,7 +560,7 @@ function buildLifecycleBlocks(
   input: {
     task: typeof tasks.$inferSelect;
     assistantContent: string;
-    taskTraceBlock: ReturnType<typeof buildTaskTraceBlock>;
+    taskTraceBlock: ReturnType<typeof buildTaskTraceBlock> | null;
     resultBlocks?: AssistantMessageBlock[];
   },
 ) {
@@ -655,6 +656,17 @@ function buildLifecycleBlocks(
   return blocks.filter(Boolean);
 }
 
+function shouldExposeTaskTrace(task: typeof tasks.$inferSelect): boolean {
+  const routeDecision = extractTaskRouteDecision(task.payload);
+  if (routeDecision?.route !== "server_brain") {
+    return true;
+  }
+  return (
+    routeDecision.taskRoute?.needsDesktop === true ||
+    routeDecision.taskRoute?.operationalRoute === "desktop_runtime"
+  );
+}
+
 export function sanitizeHumanizedTerminalTaskContent(
   value: string | null | undefined,
   fallback: string | null | undefined = "",
@@ -689,10 +701,12 @@ export async function syncChatTaskLifecycle(
       fallbackMessage: input.message,
     }),
   );
-  const generatedTaskTraceBlock = buildTaskTraceBlock({
-    task: input.updatedTask,
-    assistantContent,
-  });
+  const generatedTaskTraceBlock = shouldExposeTaskTrace(input.updatedTask)
+    ? buildTaskTraceBlock({
+        task: input.updatedTask,
+        assistantContent,
+      })
+    : null;
   const taskTraceBlock =
     extractConnectorTaskTraceBlock(input.updatedTask) ??
     generatedTaskTraceBlock;
@@ -843,9 +857,12 @@ export async function syncChatTaskLifecycle(
     payload: {
       sessionId,
       assistantMessageId,
-      // Stream envelope'larıyla aynı otorite sözleşmesi: consumer, mesaj başına
-      // gördüğü en yüksek statusRank'in altındaki güncellemeleri yok sayar.
+      // Event sırası ile mesaj lifecycle durumu ayrı eksenlerdir. Eski
+      // istemciler için statusRank lifecycle değerini korurken yeni istemci
+      // eventRank'i metin deltası fence'i olarak kullanır.
       statusRank: chatMessageStatusRank(assistantStatus),
+      eventRank: chatStreamEventStatusRank("chat.message.updated"),
+      messageStatusRank: chatMessageStatusRank(assistantStatus),
       terminal: isTerminalChatMessageStatus(assistantStatus),
       presentation: extractTaskPresentation(input.updatedTask.payload),
       assistantMessage: shapeAssistantMessagePayload({

@@ -43,7 +43,8 @@ export function getLoadSheddingOptions(
     workload === "document_generate" ||
     workload === "table_generate" ||
     workload === "document_analysis";
-  const fastWorkload = workload === "mobile_chat_fast";
+  const fastWorkload =
+    workload === "mobile_chat_fast" || workload === "fast_route";
   const maxConcurrent = heavyWorkload
     ? brainProfile.tier === "premium"
       ? 2

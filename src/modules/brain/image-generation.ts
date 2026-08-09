@@ -18,6 +18,7 @@ import {
   extractHostedGeneratedImage,
   type HostedImageProviderConfig,
 } from "./media/hosted-image-adapter.js";
+import { resolveVisualIntentContract } from "./visual-intent-semantic.js";
 import {
   buildVisualIntentContract,
   isNegatedVisualActionRequest,
@@ -392,7 +393,20 @@ async function consumeGlobalImageDailyBudget(
 ): Promise<boolean> {
   const store = resolveReliabilityStore(app);
   if (!store) {
-    setImageGenerationBlockReason(input.metadata, "image_generation_budget_store_unavailable");
+    // Bütçe deposu yoksa üretim YAPILMAZ. Bu bilinçli bir fail-closed:
+    // global günlük tavan sayılamıyorsa harcama sınırsız olur.
+    // (Bir ara fail-open denendi; `image-generation.test.ts` içindeki devre
+    // kesici ve sağlayıcı-fallback testleri bunun tasarlanmış davranışı
+    // bozduğunu gösterdi.) Sebep artık açıkça yazılıyor ki kullanıcıya
+    // "biraz sonra tekrar dene" gibi yanlış bir öneri gitmesin ve logda iz
+    // kalsın.
+    setImageGenerationBlockReason(
+      input.metadata,
+      "image_generation_budget_store_unavailable",
+    );
+    app.log.error(
+      "image generation unavailable: reliability store (Redis) is not configured",
+    );
     return false;
   }
   const now = new Date();
@@ -452,11 +466,26 @@ function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
       : "the requested visual subject";
   if (visualIntent.intent === "image_generate") {
     return [
-      "VISUAL INTENT CONTRACT:",
+      // KULLANICININ KENDİ İSTEĞİ HER ZAMAN GİDER.
+      //
+      // `visualIntent.subject` KAPALI bir kelime listesinden türüyor:
+      // "kedi"→cat, "araba"→car eşleşiyor ama "tren" (ve İngilizce "train")
+      // eşleşmiyor, subject boş kalıyordu. Boş olunca isteme
+      // "Primary subject: the requested visual subject." yazılıyor ve model
+      // konuyu KENDİ uyduruyordu — "tren resmi çiz" isteğine çömlekçi
+      // atölyesinde kahve fincanı dönmesinin sebebi buydu.
+      //
+      // Sözlük artık yalnız bir ipucu; asıl konu kullanıcının cümlesidir.
+      "USER REQUEST (authoritative subject):",
+      prompt,
+      "",
+      "VISUAL INTENT CONTRACT (hints only; never override the user request):",
       contractText,
       "",
-      "Create a new image from this contract.",
-      `Primary subject: ${subjectText}.`,
+      "Create a new image that depicts exactly what the USER REQUEST asks for.",
+      visualIntent.subject.length > 0
+        ? `Detected subject hint: ${subjectText}.`
+        : null,
       `Subject count: ${visualIntent.count}.`,
       visualIntent.style ? `Style: ${visualIntent.style}.` : null,
       visualIntent.add.length > 0 ? `Include: ${visualIntent.add.join(", ")}.` : null,
@@ -473,11 +502,16 @@ function buildHostedImagePrompt(input: HostedImageArtifactInput): string {
   }
   if (!latestImage) {
     return [
-      "VISUAL INTENT CONTRACT:",
+      "USER REQUEST (authoritative):",
+      prompt,
+      "",
+      "VISUAL INTENT CONTRACT (hints only):",
       contractText,
       "",
       "Edit or continue the referenced image from this contract.",
-      `Primary subject: ${subjectText}.`,
+      visualIntent.subject.length > 0
+        ? `Detected subject hint: ${subjectText}.`
+        : null,
       "Use referenced image as source of truth.",
       "Preserve the existing image.",
       visualIntent.add.length > 0 ? `Only add: ${visualIntent.add.join(", ")}.` : null,
@@ -885,13 +919,17 @@ export async function maybeGenerateHostedImageArtifact(
     input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
       ? input.metadata
       : {};
+  // Niyet SEMANTİK çözülür: kapalı kelime listesi yerine modelin kendisi
+  // anlar (bkz. visual-intent-semantic.ts). Model erişilemezse deterministik
+  // çıkarıcıya düşülür, davranış hiçbir koşulda bugünkünden kötü olmaz.
   const visualIntent =
     input.visualIntent ??
-    buildVisualIntentContract({
+    (await resolveVisualIntentContract(app, {
+      userId: input.userId ?? "anonymous",
       prompt: input.prompt,
       metadata,
       sourceImageCount,
-    });
+    }));
   metadata.visualIntent = visualIntent;
   const editing =
     visualIntent.intent === "image_edit" ||
@@ -940,6 +978,19 @@ export async function maybeGenerateHostedImageArtifact(
     return cached;
   }
   if (!buildHostedImageProviderConfigs(app, input.prompt, false).length) {
+    // SESSİZ ARIZA KAPATILDI. Burası daha önce sebep yazmadan, log atmadan
+    // `null` dönüyordu. Sağlayıcı listesi yalnız TEK bir nedenle boş kalır:
+    // `GEMINI_API_KEY` tanımlı değil. O durumda kullanıcı "Görsel üretim şu
+    // anda tamamlanamadı, biraz sonra tekrar dene" mesajı alıyordu — hiçbir
+    // zaman düzelmeyecek bir arıza için "sonra tekrar dene" demek yanlış, ve
+    // hiçbir yerde iz kalmadığı için teşhis de edilemiyordu.
+    setImageGenerationBlockReason(
+      input.metadata,
+      "image_generation_provider_unconfigured",
+    );
+    app.log.error(
+      "image generation unavailable: GEMINI_API_KEY is not configured",
+    );
     return null;
   }
 
@@ -1033,7 +1084,7 @@ export async function maybeGenerateHostedImageArtifact(
     );
     if (result) {
       const premiumModel = String(
-        app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image-preview",
+        app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
       ).trim();
       const cacheMatchesRequestedTier =
         !premiumRequested ||
@@ -1137,12 +1188,28 @@ function buildHostedImageProviderConfigs(
       app.config.GEMINI_INTERACTIONS_BASE_URL ??
         "https://generativelanguage.googleapis.com/v1beta",
     ).trim();
-    const fastImageModel = String(
-      app.config.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image-preview",
-    ).trim();
-    const premiumImageModel = String(
-      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image-preview",
-    ).trim();
+    const configuredFastImageModels = String(
+      app.config.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image",
+    )
+      .split(",")
+      .map((model) => model.trim())
+      .filter(Boolean);
+    const configuredPremiumImageModels = String(
+      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+    )
+      .split(",")
+      .map((model) => model.trim())
+      .filter(Boolean);
+    const fastImageModels = [
+      ...configuredFastImageModels,
+      "gemini-3.1-flash-image",
+      "gemini-2.5-flash-image-preview",
+      "gemini-2.0-flash-preview-image-generation",
+    ].filter((model, index, values) => model && values.indexOf(model) === index);
+    const premiumImageModels = [
+      ...configuredPremiumImageModels,
+      "gemini-3-pro-image",
+    ].filter((model, index, values) => model && values.indexOf(model) === index);
     const imageSize = resolveGeminiImageSize(
       prompt,
       app.config.GEMINI_IMAGE_SIZE ?? "1K",
@@ -1165,10 +1232,10 @@ function buildHostedImageProviderConfigs(
     };
 
     if (usePremium) {
-      addGeminiProvider(premiumImageModel);
-      addGeminiProvider(fastImageModel);
+      premiumImageModels.forEach(addGeminiProvider);
+      fastImageModels.forEach(addGeminiProvider);
     } else {
-      addGeminiProvider(fastImageModel);
+      fastImageModels.forEach(addGeminiProvider);
     }
   }
 

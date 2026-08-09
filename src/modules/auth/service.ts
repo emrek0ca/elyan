@@ -54,6 +54,7 @@ import {
   shapePublicUsageSnapshot,
 } from "../billing/service.js";
 import { shapeSubscriptionTruth } from "../billing/subscription-truth.js";
+import { readSubscriptionRow } from "../billing/subscription-repository.js";
 import { getBrainProfile, shapePublicBrainProfile } from "../brain/service.js";
 import { seedRegistrationConsents } from "../consents/service.js";
 import {
@@ -235,8 +236,7 @@ async function createUserSession(
 }
 
 async function getSubscription(app: FastifyInstance, userId: string) {
-  const rows = await app.db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
-  return rows[0] ?? null;
+  return readSubscriptionRow(app.db, userId);
 }
 
 async function getUserAvatarTruth(app: FastifyInstance, userId: string): Promise<AvatarPayload> {
@@ -1013,7 +1013,6 @@ export async function getCurrentUserProfile(app: FastifyInstance, userId: string
       manageSubscriptionHint: billing.usage.manageSubscriptionHint,
       creditStatus: billing.usage.creditStatus,
       tokenStatus: billing.usage.tokenStatus,
-      trialOffer: billing.subscription.trialOffer,
     }),
     metrics: {
       desktopCount: Number(runtimeCounts[0]?.desktopCount ?? 0),

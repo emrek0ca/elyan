@@ -9,17 +9,29 @@ import type { SharedBrainWorkload } from "./workloads.js";
 
 /**
  * Reasoning depth dial for gpt-oss models. HARD analytical work gets "high"
- * so answers are thorough instead of shallow. Balanced mobile chat is also
- * high: short educational/analytical prompts were otherwise too easy to route
- * into shallow provider responses. Everything else stays low/medium to protect
- * latency.
+ * so answers are thorough instead of shallow. The fast mobile lane stays low
+ * so its first visible tokens are not delayed by an unnecessary hidden turn;
+ * balanced/deep workloads retain their deeper reasoning budget.
  */
 export function resolveReasoningEffort(
   workload: SharedBrainWorkload | undefined,
   reasoningMode: string | undefined,
 ): "low" | "medium" | "high" {
+  // The route classifier is an internal control-plane call. It must never
+  // inherit a user-turn reasoning mode and spend a hidden model pass before
+  // the actual chat can even be dispatched.
+  // AÇIK "deep" işareti hızlı şeridi de yener. Kısa devre önce geldiği için
+  // anlama katmanı turu derin olarak işaretlese bile efor low kalıyordu;
+  // yani "bunu iyice düşün" sinyali sessizce yok sayılıyordu.
+  if (reasoningMode === "deep") {
+    return "high";
+  }
+  // Rota sınıflandırıcı bir iç kontrol-düzlemi çağrısıdır ve kullanıcı turunun
+  // reasoning modunu miras almamalı.
+  if (workload === "fast_route" || workload === "mobile_chat_fast") {
+    return "low";
+  }
   if (
-    reasoningMode === "deep" ||
     workload === "planning" ||
     workload === "document_generate" ||
     workload === "document_analysis" ||
@@ -31,15 +43,8 @@ export function resolveReasoningEffort(
   if (reasoningMode === "balanced") {
     return "medium";
   }
-  if (
-    workload === "mobile_chat_fast" ||
-    workload === "vision_reasoning" ||
-    workload === "image_analyze"
-  ) {
-    // mobile_chat_fast de "medium": ana sohbet yolu artık 120b'de koşuyor ve
-    // kullanıcı beklentisi hız değil düşünce kalitesi; Groq'ta medium effort
-    // saniyeler mertebesinde kalıyor.
-    return "medium";
+  if (workload === "vision_reasoning" || workload === "image_analyze") {
+    return "low";
   }
   return "low";
 }

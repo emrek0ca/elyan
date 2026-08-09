@@ -11,6 +11,14 @@ export type VisualIntentContract = {
   spatialInstruction: string | null;
   sourceArtifactId: string | null;
   negativeConstraints: string[];
+  /**
+   * Semantik model bu turun bir GÖRSEL (resim/sahne) isteği OLMADIĞINI belirledi
+   * — ör. bir fonksiyonun grafiğini çizmek ya da veriyi grafiklemek. "çiz"
+   * kelimesi hem resim hem grafik için kullanıldığından regex ayıramaz; bu
+   * bayrak yalnız semantik yol tarafından set edilir ve görsel-üretim
+   * pipeline'ını bastırır (chart/fonksiyon yolu devralır).
+   */
+  notAnImageRequest?: boolean;
 };
 
 type VisualIntentInput = {

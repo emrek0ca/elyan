@@ -14,6 +14,7 @@ import {
 } from "../runtime/capabilities.js";
 
 export const RUNTIME_CONNECTION_STALE_AFTER_MS = 300_000; // 5 minutes — relay sends heartbeats every 2-5s so this is very forgiving
+const SHARED_BRAIN_TARGET_CACHE_TTL_MS = 2_000;
 
 type DeviceRow = {
   id: string;
@@ -40,6 +41,21 @@ type RuntimeConnectionRow = {
   connectedAt: Date;
   lastHeartbeatAt: Date;
 };
+
+type SharedBrainTargetDevice = ReturnType<typeof shapeUserDevice> & {
+  serverBrainName: string;
+};
+
+type SharedBrainTargetCacheEntry = {
+  value?: SharedBrainTargetDevice | null;
+  expiresAt: number;
+  inFlight?: Promise<SharedBrainTargetDevice | null>;
+};
+
+const sharedBrainTargetCache = new WeakMap<
+  FastifyInstance,
+  SharedBrainTargetCacheEntry
+>();
 
 const deviceRegistrationReturning = {
   id: devices.id,
@@ -258,6 +274,14 @@ async function listQueuedTaskCountsByDevice(
 }
 
 export async function getSharedBrainTargetDevice(app: FastifyInstance) {
+  const now = Date.now();
+  const cached = sharedBrainTargetCache.get(app);
+  if (cached?.inFlight) return cached.inFlight;
+  if (cached && cached.expiresAt > now && cached.value !== undefined) {
+    return cached.value;
+  }
+
+  const lookup = (async (): Promise<SharedBrainTargetDevice | null> => {
   const deviceRows = await app.db
     .select({
       id: devices.id,
@@ -326,6 +350,28 @@ export async function getSharedBrainTargetDevice(app: FastifyInstance) {
     ),
     serverBrainName: "Elyan",
   };
+  })();
+
+  sharedBrainTargetCache.set(app, {
+    value: cached?.value,
+    expiresAt: 0,
+    inFlight: lookup,
+  });
+  try {
+    const value = await lookup;
+    sharedBrainTargetCache.set(app, {
+      value,
+      expiresAt: Date.now() + SHARED_BRAIN_TARGET_CACHE_TTL_MS,
+    });
+    return value;
+  } catch (error) {
+    sharedBrainTargetCache.delete(app);
+    throw error;
+  }
+}
+
+export function invalidateSharedBrainTargetDeviceCache(app: FastifyInstance) {
+  sharedBrainTargetCache.delete(app);
 }
 
 export async function ensureSharedBrainTargetDevice(
@@ -382,6 +428,7 @@ export async function ensureSharedBrainTargetDevice(
         .where(eq(devices.id, sharedBrainDevice.id));
     }
 
+    invalidateSharedBrainTargetDeviceCache(app);
     const ensured = await getSharedBrainTargetDevice(app);
     if (!ensured) {
       throw new Error("Shared brain device bootstrap failed");
@@ -404,6 +451,7 @@ export async function ensureSharedBrainTargetDevice(
     updatedAt: now,
   });
 
+  invalidateSharedBrainTargetDeviceCache(app);
   const ensured = await getSharedBrainTargetDevice(app);
   if (!ensured) {
     throw new Error("Shared brain device bootstrap failed");
@@ -417,7 +465,41 @@ export async function getSharedBrainTargetDeviceId(app: FastifyInstance) {
   return device?.id ?? null;
 }
 
+type UserDevicesCacheEntry = {
+  value: Awaited<ReturnType<typeof listUserDevicesUncached>>;
+  expiresAt: number;
+};
+
+/**
+ * Aynı istek içinde cihaz listesini TEKİLLEŞTİRİR.
+ *
+ * Yönlendirme kararı artık iki kez cihaz durumuna bakıyor: (1) kullanıcının
+ * canlı bir masaüstü çalışma zamanı var mı — modelin "sohbet" kararının
+ * bağlayıcı olup olmadığını belirler, (2) hedef cihazın seçimi. İkisi de aynı
+ * sorguyu çalıştırıyordu; çok kısa ömürlü bu önbellek ikinci okumayı bedava
+ * yapar. TTL bilinçli olarak çok kısa: cihaz çevrimdışı olduğunda karar
+ * saniyeler içinde güncellenmeli.
+ */
+const USER_DEVICES_CACHE_TTL_MS = 2_000;
+const userDevicesCache = new WeakMap<
+  FastifyInstance,
+  Map<string, UserDevicesCacheEntry>
+>();
+
 export async function listUserDevices(app: FastifyInstance, userId: string) {
+  const now = Date.now();
+  const perApp = userDevicesCache.get(app) ?? new Map<string, UserDevicesCacheEntry>();
+  userDevicesCache.set(app, perApp);
+  const cached = perApp.get(userId);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const value = await listUserDevicesUncached(app, userId);
+  perApp.set(userId, { value, expiresAt: now + USER_DEVICES_CACHE_TTL_MS });
+  return value;
+}
+
+async function listUserDevicesUncached(app: FastifyInstance, userId: string) {
   const accessTruth = await getUserUsageAccessTruth(app.db, userId);
   const desktopAllowed = canUseDesktopConnections(accessTruth.planCode);
   const deviceRows = await app.db
@@ -947,12 +1029,24 @@ export async function deactivateUserDevice(
 
   const now = new Date();
 
-  // 1. Mark device inactive and wipe the deviceKeyHash so the old deviceSecret
-  //    can never be used to re-register or heartbeat again.
+  // 1. Mark device inactive, wipe the deviceKeyHash so the old deviceSecret
+  //    can never be used to re-register or heartbeat again, and RELEASE
+  //    OWNERSHIP.
+  //
+  //    `userId` eskiden korunuyordu: cihaz pasifleşiyor ama o hesaba AİT
+  //    kalmaya devam ediyordu. Sonuç, kullanıcının canlıda gördüğü hâl —
+  //    mobilden bağlantıyı koparıyor, sonra aynı bilgisayarı yeniden
+  //    eşleştirmek isteyince "Desktop runtime is already paired with another
+  //    user" alıyor. Kopardığı şey aslında hiç kopmamış oluyordu.
+  //
+  //    Sahiplik bırakılınca kayıt sahipsiz kalır; aynı makine herhangi bir
+  //    hesaba yeniden eşleşebilir. Geçmiş kaybolmaz: görevler `deviceId`ye
+  //    bağlı, `userId`ye değil.
   const rows = await app.db
     .update(devices)
     .set({
       isActive: false,
+      userId: null,
       deviceKeyHash: null, // invalidate stored secret
       updatedAt: now,
     })

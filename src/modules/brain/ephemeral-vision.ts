@@ -24,6 +24,7 @@ const visualTemporalSequenceSchema = z.union([
 
 const ephemeralVisionImageSchema = z.object({
   imageId: z.string().trim().min(1).max(120),
+  label: z.string().trim().min(1).max(255).optional(),
   kind: z.enum(["full_frame", "text_crop", "detail_crop"]),
   mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]),
   base64Data: z.string().min(4).max(MAX_EPHEMERAL_IMAGE_BASE64_CHARS)
@@ -66,6 +67,16 @@ const ephemeralVisionImageSchema = z.object({
   }
 });
 
+/**
+ * Tek istekte taşınabilecek en fazla görüntü.
+ *
+ * 4 idi ve taranmış bir PDF'in yalnız ilk 4 sayfası modele ulaşıyordu;
+ * kalanı SESSİZCE düşüyordu (kullanıcı belgenin tamamını gönderdiğini
+ * sanıyordu). Gerçek koruma sayfa sayısı değil, `MEDIA_INPUT_MAX_TOTAL_BYTES`
+ * toplam bayt tavanıdır — sayfa sınırı onun altında kalacak kadar gevşetildi.
+ */
+export const MAX_EPHEMERAL_VISION_INPUTS = 8;
+
 const ephemeralVisionPrivacySchema = z.object({
   metadataStripped: z.literal(true),
   userAuthorizedCloud: z.literal(true),
@@ -76,7 +87,7 @@ const ephemeralVisionV1CarrierSchema = z.object({
   version: z.literal(1),
   retention: z.literal("request_ephemeral"),
   privacy: ephemeralVisionPrivacySchema,
-  images: z.array(ephemeralVisionImageSchema).min(1).max(4),
+  images: z.array(ephemeralVisionImageSchema).min(1).max(MAX_EPHEMERAL_VISION_INPUTS),
 }).superRefine((carrier, ctx) => {
   const total = carrier.images.reduce((sum, image) => sum + image.base64Data.length, 0);
   if (total > MAX_EPHEMERAL_TOTAL_BASE64_CHARS) {
@@ -127,7 +138,7 @@ const ephemeralVisionV2CarrierSchema = z.object({
   version: z.literal(2),
   retention: z.literal("request_ephemeral"),
   privacy: ephemeralVisionPrivacySchema,
-  inputRefs: z.array(ephemeralVisionInputRefSchema).min(1).max(4),
+  inputRefs: z.array(ephemeralVisionInputRefSchema).min(1).max(MAX_EPHEMERAL_VISION_INPUTS),
 }).transform((carrier) => ({ ...carrier, images: [] as never[] }));
 
 export const ephemeralVisionCarrierSchema = z.union([
@@ -205,7 +216,7 @@ export function buildEphemeralVisionPromptBlock(
   return [
     "Ephemeral visual inputs (internal; ordered as attached):",
     ...images.map((image, index) =>
-      `- visual_${groups.get(image.imageId) ?? index + 1}/${image.kind}: size=${image.width}x${image.height}${image.box ? `; source_box=${image.box.x},${image.box.y},${image.box.w},${image.box.h}` : ""}${image.mediaIntent && image.temporalRole && image.temporalSequence !== undefined ? `; context=${image.mediaIntent}; temporal_role=${image.temporalRole}; sequence=${image.temporalSequence}` : ""}`,
+      `- visual_${groups.get(image.imageId) ?? index + 1}/${image.kind}: size=${image.width}x${image.height}${image.label ? `; file=${image.label.replace(/\s+/gu, " ").slice(0, 120)}` : ""}${image.box ? `; source_box=${image.box.x},${image.box.y},${image.box.w},${image.box.h}` : ""}${image.mediaIntent && image.temporalRole && image.temporalSequence !== undefined ? `; context=${image.mediaIntent}; temporal_role=${image.temporalRole}; sequence=${image.temporalSequence}` : ""}`,
     ),
     hasCompleteTemporalPair
       ? `For each matching context, speech_start is the earlier snapshot and speech_end is the later snapshot.${hasIntermediateSample ? " speech_sample is the latest bounded intermediate observation selected by the client." : ""} Compare only visible evidence across these ordered snapshots; do not imply continuous video or unseen events.`

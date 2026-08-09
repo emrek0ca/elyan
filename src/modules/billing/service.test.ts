@@ -511,18 +511,18 @@ test("resolveUsageAccessTruth keeps provider trialing paid plans active when no 
   assert.equal(truth.brainProfile.tier, "premium");
 });
 
-test("buildTrialSubscriptionSeed auto-activates pro trial for new users", () => {
+test("buildTrialSubscriptionSeed starts new users on the free plan (no gifted pro month)", () => {
+  // Hediye 30 günlük Pro kaldırıldı: ücretli planlar App Store üzerinden
+  // satılıyor ve hediye dönem abonelik durum makinesinde ayrı bir
+  // "trialing" kaynağı yaratıp akışı karmaşıklaştırıyordu.
   const createdAt = new Date("2030-01-01T00:00:00.000Z");
   const seed = buildTrialSubscriptionSeed(createdAt);
 
-  assert.equal(seed.planCode, "pro");
-  assert.equal(seed.status, "trialing");
-  assert.equal(seed.billingProvider, "welcome_trial");
-  assert.equal(seed.taskLimitMonthly, 2_000);
-  assert.equal(seed.aiCreditsMonthly, 2_000);
+  assert.equal(seed.planCode, "free");
+  assert.equal(seed.status, "free");
   assert.equal(seed.currentPeriodStartedAt, createdAt);
-  assert.equal(seed.trialEndsAt.getTime(), createdAt.getTime() + 30 * 24 * 60 * 60 * 1000);
-  assert.equal(seed.periodEndsAt.getTime(), seed.trialEndsAt.getTime());
+  assert.equal(seed.periodEndsAt, null);
+  assert.equal(seed.trialEndsAt, null);
 });
 
 test("resolveUsagePresentationTruth keeps active free trials on trial semantics even when a plan label could differ", () => {
@@ -784,17 +784,53 @@ test("createUpgradeOrByokRequiredError keeps the failure user-safe", () => {
   );
 });
 
-test("decideAppleSubscriptionOwnership blocks a new account when token is absent and the period is locked (no Pro leakage)", () => {
-  // Açık kapatma: A hesabı Pro aldı, aynı cihazda B hesabı açıldı. JWS'te
-  // appAccountToken yok → sahiplik kanıtlanamaz → abonelik A'da kalır, B Pro
-  // OLAMAZ. (Bu fonksiyona yalnızca makbuz farklı bir userId'ye kayıtlıyken
-  // gelinir; aynı hesabın restore'u dış kontrolde zaten geçer.)
+test("decideAppleSubscriptionOwnership transfers even when the receipt token names another account", () => {
+  // App Store aboneliği Apple ID'ye aittir. Makbuzu sunabilmek için o Apple
+  // ID'de oturum açmış olmak gerekir; dolayısıyla sunan kişi Apple'a göre
+  // sahiptir ve hesap değişimi DEVİRDİR, ihlal değil.
+  //
+  // "Tek yetki" kuralı burada değil, devir anında önceki hesabı ücretsize
+  // düşüren `releaseTransferredStoreEntitlement` ile korunuyor — böylece
+  // milyonlarca kullanıcı kendi Apple ID'siyle Pro/Solo alabilirken tek bir
+  // abonelik asla iki hesabı birden yetkilendiremez.
+  const decision = decideAppleSubscriptionOwnership({
+    appAccountToken: "22222222-2222-2222-2222-222222222222",
+    currentUserId: "11111111-1111-1111-1111-111111111111",
+    lockedByActiveStorePeriod: true,
+  });
+  assert.equal(decision.blocked, false);
+});
+
+test("decideAppleSubscriptionOwnership transfers an absent-token receipt instead of stranding the payer", () => {
+  // DEĞİŞEN SÖZLEŞME (ve nedeni):
+  //
+  // Eski kural "token yoksa blokla" idi. Ama uygulama `appAccountToken`'ı bu
+  // sürümden önce HİÇ göndermiyordu; dolayısıyla mevcut tüm satın almalarda
+  // token yok. Kural, parasını ödemiş kullanıcıyı "bu abonelik başka bir
+  // hesaba bağlı" duvarına çarpıp planından kalıcı olarak mahrum bırakıyordu.
+  //
+  // Token yokluğu "başkasının" kanıtı değildir; hiçbir şeyin kanıtı değildir.
+  // App Store aboneliği Apple ID'ye aittir ve devri Apple'ın kendi modelidir.
+  //
+  // "Pro sızıntısı" (tek abonelikle iki hesabın aynı anda Pro olması) artık
+  // BURADA değil, devir anında önceki sahibi ücretsize düşüren
+  // `releaseTransferredStoreEntitlement` ile engelleniyor — yani özellik
+  // korunuyor, yalnız doğru katmana taşındı.
   const decision = decideAppleSubscriptionOwnership({
     appAccountToken: "",
     currentUserId: "11111111-1111-1111-1111-111111111111",
     lockedByActiveStorePeriod: true,
   });
-  assert.equal(decision.blocked, true);
+  assert.equal(decision.blocked, false);
+});
+
+test("decideAppleSubscriptionOwnership accepts a receipt whose token is the current user", () => {
+  const decision = decideAppleSubscriptionOwnership({
+    appAccountToken: "11111111-1111-1111-1111-111111111111",
+    currentUserId: "11111111-1111-1111-1111-111111111111",
+    lockedByActiveStorePeriod: true,
+  });
+  assert.equal(decision.blocked, false);
 });
 
 test("decideAppleSubscriptionOwnership still reassigns an absent-token receipt once the period has expired", () => {
@@ -814,15 +850,6 @@ test("decideAppleSubscriptionOwnership allows the owner regardless of casing/das
     lockedByActiveStorePeriod: true,
   });
   assert.equal(decision.blocked, false);
-});
-
-test("decideAppleSubscriptionOwnership blocks a different user on a locked active period", () => {
-  const decision = decideAppleSubscriptionOwnership({
-    appAccountToken: "99999999-9999-9999-9999-999999999999",
-    currentUserId: "11111111-1111-1111-1111-111111111111",
-    lockedByActiveStorePeriod: true,
-  });
-  assert.equal(decision.blocked, true);
 });
 
 test("decideAppleSubscriptionOwnership does not block a different user when the period is not locked", () => {

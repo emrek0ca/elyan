@@ -153,18 +153,59 @@ function sanitizeVisionBlockValue(value: unknown, depth = 0): unknown {
   return next;
 }
 
-export function hasRawBinaryUploadHint(value: unknown, depth = 0): boolean {
+/**
+ * `clientAttachments` içindeki SINIRLI küçük resim, sözleşmenin KENDİ alanıdır.
+ *
+ * `validateClientAttachment` (brain/document-types.ts) `attachmentType:"image"`
+ * için `base64Thumbnail` bekliyor ve `MAX_THUMBNAIL_BASE64` ile sınırlıyor.
+ * Aynı anahtar burada ham-ikili şüphesi listesinde olduğu için kanonik ek
+ * sözleşmesi sohbet ucundan HİÇ kullanılamıyordu: okuyucu kabul ediyor, kapı
+ * reddediyordu ("raw binary upload payload is not accepted"). Kapının amacı
+ * megabaytlık dosyaların JSON gövdesinden geçmesini engellemek; sınırı
+ * belgelenmiş küçük bir önizleme bu değildir.
+ *
+ * Sınır AŞILIRSA yine reddedilir — muafiyet boyutla birlikte gelir.
+ */
+const CLIENT_ATTACHMENT_THUMBNAIL_MAX_CHARS = 180_000;
+
+function isBoundedClientAttachmentThumbnail(
+  normalizedKey: string,
+  value: unknown,
+  insideClientAttachments: boolean,
+): boolean {
+  if (!insideClientAttachments) return false;
+  if (normalizedKey !== "base64thumbnail" && normalizedKey !== "visionimagejpeg") {
+    return false;
+  }
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= CLIENT_ATTACHMENT_THUMBNAIL_MAX_CHARS
+  );
+}
+
+export function hasRawBinaryUploadHint(
+  value: unknown,
+  depth = 0,
+  insideClientAttachments = false,
+): boolean {
   if (depth > 8 || !value || typeof value !== "object") {
     return false;
   }
 
   if (Array.isArray(value)) {
-    return value.some((item) => hasRawBinaryUploadHint(item, depth + 1));
+    return value.some((item) =>
+      hasRawBinaryUploadHint(item, depth + 1, insideClientAttachments),
+    );
   }
 
   const record = value as Record<string, unknown>;
   for (const [rawKey, nextValue] of Object.entries(record)) {
     const normalizedKey = normalizeKey(rawKey);
+
+    if (isBoundedClientAttachmentThumbnail(normalizedKey, nextValue, insideClientAttachments)) {
+      continue;
+    }
 
     if (normalizedKey === "rawfileuploaded") {
       if (isExplicitTrue(nextValue)) {
@@ -191,7 +232,11 @@ export function hasRawBinaryUploadHint(value: unknown, depth = 0): boolean {
     }
 
     if (nextValue && typeof nextValue === "object") {
-      if (hasRawBinaryUploadHint(nextValue, depth + 1)) {
+      // Muafiyet YALNIZ `clientAttachments` alt ağacında geçerli; başka bir
+      // yere konan aynı anahtar hâlâ reddedilir.
+      const childInsideClientAttachments =
+        insideClientAttachments || normalizedKey === "clientattachments";
+      if (hasRawBinaryUploadHint(nextValue, depth + 1, childInsideClientAttachments)) {
         return true;
       }
     }

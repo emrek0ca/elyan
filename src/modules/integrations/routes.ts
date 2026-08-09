@@ -208,11 +208,7 @@ export const integrationAppRoutes: FastifyPluginAsync = async (app) => {
   registerOauthCallback(app);
 };
 
-/** Legacy/provider-admin surface kept for compatibility but not registered by V1. */
-export const integrationRoutes: FastifyPluginAsync = async (app) => {
-  registerCuratedAppRoutes(app);
-  registerOauthCallback(app);
-
+function registerLegacyProviderRoutes(app: FastifyInstance) {
   app.get("/providers", async () => ({
     providers: await listIntegrationProviders(app),
   }));
@@ -297,6 +293,18 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       requestId: context.requestId,
     });
   });
+}
+
+/** Provider/connection surface used by native clients and older runtimes. */
+export const integrationLegacyRoutes: FastifyPluginAsync = async (app) => {
+  registerLegacyProviderRoutes(app);
+};
+
+/** Legacy/provider-admin surface kept for compatibility. */
+export const integrationRoutes: FastifyPluginAsync = async (app) => {
+  registerCuratedAppRoutes(app);
+  registerOauthCallback(app);
+  registerLegacyProviderRoutes(app);
 };
 
 function redirectWithQuery(baseUrl: string, params: Record<string, string>) {

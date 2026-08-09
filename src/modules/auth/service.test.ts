@@ -621,7 +621,7 @@ test("registerUser rejects account creation without legal acceptance", async () 
   );
 });
 
-test("registerUser seeds a claimable welcome pro trial offer for a new user", async () => {
+test("registerUser seeds a free plan for a new user (gifted pro trial removed)", async () => {
   const insertedSubscriptions: Array<Record<string, unknown>> = [];
   let insertCallIndex = 0;
   const createdAt = Date.now();
@@ -761,34 +761,16 @@ test("registerUser seeds a claimable welcome pro trial offer for a new user", as
   );
 
   assert.equal(result.subscription.status, "free");
-  assert.deepEqual(result.subscription.trialOffer, {
-    code: "welcome_pro_30d",
-    planCode: "pro",
-    durationDays: 30,
-    status: "available",
-    eligible: true,
-    claimed: false,
-    claimPath: "/v1/billing/trials/pro/claim",
-    expiresAt: trialEndsAt,
-  });
+  // Hediye Pro denemesi kaldırıldı: yeni kullanıcı ücretsiz başlar.
   assert.equal(insertedSubscriptions.length, 1);
-  assert.equal(insertedSubscriptions[0].planCode, "pro");
-  assert.equal(insertedSubscriptions[0].status, "trialing");
+  assert.equal(insertedSubscriptions[0].planCode, "free");
+  assert.equal(insertedSubscriptions[0].status, "free");
   assert.ok(insertedSubscriptions[0].currentPeriodStartedAt instanceof Date);
-  assert.ok(insertedSubscriptions[0].trialEndsAt instanceof Date);
-  assert.ok(insertedSubscriptions[0].periodEndsAt instanceof Date);
-  assert.equal(
-    (insertedSubscriptions[0].periodEndsAt as Date).getTime(),
-    (insertedSubscriptions[0].trialEndsAt as Date).getTime(),
-  );
-  assert.equal(
-    (insertedSubscriptions[0].trialEndsAt as Date).getTime() -
-      (insertedSubscriptions[0].currentPeriodStartedAt as Date).getTime(),
-    30 * 24 * 60 * 60 * 1000,
-  );
+  assert.equal(insertedSubscriptions[0].trialEndsAt, null);
+  assert.equal(insertedSubscriptions[0].periodEndsAt, null);
 });
 
-test("loginWithGoogle seeds a claimable welcome pro trial offer for first-time social signup", async () => {
+test("loginWithGoogle seeds a free plan for first-time social signup", async () => {
   const insertedSubscriptions: Array<Record<string, unknown>> = [];
   let insertCallIndex = 0;
   const trialEndsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
@@ -975,10 +957,8 @@ test("loginWithGoogle seeds a claimable welcome pro trial offer for first-time s
   );
 
   assert.equal(result.subscription.status, "free");
-  assert.equal(result.subscription.trialOffer.status, "available");
-  assert.equal(result.subscription.trialOffer.eligible, true);
   assert.equal(insertedSubscriptions.length, 1);
-  assert.equal(insertedSubscriptions[0].planCode, "pro");
-  assert.equal(insertedSubscriptions[0].status, "trialing");
-  assert.ok(insertedSubscriptions[0].trialEndsAt instanceof Date);
+  assert.equal(insertedSubscriptions[0].planCode, "free");
+  assert.equal(insertedSubscriptions[0].status, "free");
+  assert.equal(insertedSubscriptions[0].trialEndsAt, null);
 });

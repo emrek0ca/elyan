@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chatGenerationAgePhase,
+  chatGenerationQueuePriority,
   chatGenerationProviderForStage,
   decideChatQueueAdmission,
   estimateChatGenerationReservationTokens,
@@ -82,4 +83,10 @@ test("chat generation provider stages and token reservations are deterministic",
   });
   assert.equal(tokens > 1_200, true);
   assert.equal(tokens <= 8_000, true);
+});
+
+test("short chat jobs receive queue priority over deep workloads", () => {
+  assert.equal(chatGenerationQueuePriority("mobile_chat_fast"), 1);
+  assert.equal(chatGenerationQueuePriority("mobile_chat_balanced"), 5);
+  assert.equal(chatGenerationQueuePriority("planning"), 10);
 });

@@ -7,6 +7,7 @@ import { brainMemoryEpisodes, proactiveTriggers } from "../../db/schema.js";
 import { getCircuitState } from "../../lib/reliability/circuit-breaker.js";
 import { ReliabilityStore } from "../../lib/reliability/redis.js";
 import {
+  analyzeResponseCompleteness,
   calculateBillableAiCredits,
   buildContextualWebGroundingPrompt,
   buildCurrentUserIdentityReply,
@@ -702,7 +703,9 @@ test("generateSharedBrainReply warms Ollama and serves chat without a promoted s
   assert.equal(requestedBodies[1].keep_alive, "30m");
   assert.equal(
     (requestedBodies[1].options as Record<string, unknown>).num_predict,
-    140,
+    // fast_route bütçesi 140 → 700: semantik yönlendiricinin ürettiği JSON
+    // şeması 140 token'a sığmıyordu ve her turda kesiliyordu (bkz. workloads.ts).
+    700,
   );
 });
 
@@ -1229,6 +1232,22 @@ test("generateSharedBrainReply runs tool requests through the agent loop flag", 
         prompt: "Bu hedefi tamamla",
         route: "shared_brain",
         workload: "mobile_chat_fast",
+        requestMetadata: { requestedToolName: "goals.update" },
+        routeDecision: {
+          route: "server_brain",
+          mode: "chat",
+          capabilities: [],
+          privacyClass: "side_effect",
+          requiresApproval: false,
+          reason: "typed goal mutation",
+          intent: "normal_chat",
+          confidence: 1,
+          requiredRuntime: "server",
+          privacyLevel: "medium",
+          shouldAskClarification: false,
+          failClosedReason: null,
+          selectedWorkload: "mobile_chat_fast",
+        },
         internalEvaluation: {
           skipUsageValidation: true,
           skipConsentValidation: true,
@@ -1447,6 +1466,7 @@ test("generateSharedBrainReply feeds successful tool results into a bounded seco
         prompt: "Tercihimi hatırlıyor musun?",
         route: "shared_brain",
         workload: "mobile_chat_fast",
+        requestMetadata: { requestedToolName: "memory.query" },
         internalEvaluation: {
           skipUsageValidation: true,
           skipConsentValidation: true,
@@ -1689,6 +1709,13 @@ test("generateSharedBrainReply reports connector failures without web source blo
         connectorToolContracts: [
           "gmail.search(query, maxResults<=10) -> {messages:[{id,from,subject,snippet,date}]}",
         ],
+        connectorReadToolHint: {
+          tool: "gmail.search",
+          score: 0.94,
+          margin: 0.12,
+          source: "transformer",
+          enforcement: "require",
+        },
         internalEvaluation: {
           skipUsageValidation: true,
           skipConsentValidation: true,
@@ -1895,6 +1922,7 @@ test("generateSharedBrainReply appends refined tool answer to a streaming turn",
         prompt: "Tercihimi hatırlıyor musun?",
         route: "shared_brain",
         workload: "mobile_chat_fast",
+        requestMetadata: { requestedToolName: "memory.query" },
         onDelta(delta) {
           deltas.push(delta.delta);
           lastDeltaContent = delta.content;
@@ -2091,6 +2119,13 @@ test("connector turns retry only the structured protocol and never expose a pros
         connectorToolContracts: [
           "gmail.search {query:string, limit?:1..10} — search the user's Gmail",
         ],
+        connectorReadToolHint: {
+          tool: "gmail.search",
+          score: 0.94,
+          margin: 0.12,
+          source: "transformer",
+          enforcement: "require",
+        },
         internalEvaluation: {
           skipUsageValidation: true,
           skipConsentValidation: true,
@@ -2629,10 +2664,11 @@ test("resolveReasoningEffort escalates hard analytical work to high and keeps ch
     resolveReasoningEffort("mobile_chat_balanced", undefined),
     "high",
   );
-  // Moderate thinking workloads → medium.
-  assert.equal(resolveReasoningEffort("vision_reasoning", undefined), "medium");
-  // Ana sohbet yolu artık 120b'de + medium effort: kalite hızdan öncelikli.
-  assert.equal(resolveReasoningEffort("mobile_chat_fast", undefined), "medium");
+  // Hız-öncelikli şeritler düşük eforda kalır: ilk görünür token'ı gizli bir
+  // düşünme turu geciktirmesin. (Kalite/gecikme dengesi ürün kararıdır;
+  // yükseltmek istenirse burası ve generation-policy birlikte değişir.)
+  assert.equal(resolveReasoningEffort("vision_reasoning", undefined), "low");
+  assert.equal(resolveReasoningEffort("mobile_chat_fast", undefined), "low");
   // Saf hız-kritik routing yolları düşük kalır.
   assert.equal(resolveReasoningEffort("fast_route", "fast"), "low");
   assert.equal(resolveReasoningEffort(undefined, undefined), "low");
@@ -6245,8 +6281,9 @@ test("generateGovernedSharedBrainReply falls back to brain when skill execution 
     },
   };
 
-  // Skill execution calls the model twice (initial + repair), both return broken
-  // JSON → executor returns null → governed reply falls back to normal brain.
+  // The explicit hint enters skill execution, then the model is called twice
+  // (initial + repair). Both execution calls return broken JSON, so the
+  // governed reply must gate the failed skill output.
   let callCount = 0;
   const result = await withMockedFetch(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -6267,7 +6304,7 @@ test("generateGovernedSharedBrainReply falls back to brain when skill execution 
         requestedBodies.push(body);
         callCount += 1;
         if (callCount <= 2) {
-          // First two calls: skill initial + repair — both return broken JSON
+          // Skill initial + repair — both return broken JSON.
           return new Response(
             JSON.stringify({
               model: body.model,
@@ -6277,7 +6314,6 @@ test("generateGovernedSharedBrainReply falls back to brain when skill execution 
             { status: 200, headers: { "content-type": "application/json" } },
           );
         }
-        // Third call: normal brain inference fallback
         return new Response(
           JSON.stringify({
             model: body.model,
@@ -6344,6 +6380,9 @@ test("generateGovernedSharedBrainReply falls back to brain when skill execution 
           totalChars: 60,
           chunkCount: 1,
           needsClarification: false,
+        },
+        requestMetadata: {
+          skillHint: "document_summary",
         },
         internalEvaluation: {
           skipUsageValidation: true,
@@ -6560,6 +6599,27 @@ test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema",
             headers: { "content-type": "application/json" },
           });
         }
+        if (url.includes("/interactions") && init?.body) {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          requests.push(body);
+          return new Response(
+            JSON.stringify({
+              status: "completed",
+              output: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    visualDescription:
+                      "Mağazada yan yana duran iki kişi görülüyor.",
+                    keyElements: ["iki kişi", "mağaza rafları"],
+                    confidence: 0.91,
+                  }),
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
         if (url.endsWith("/chat/completions") && init?.body) {
           const body = JSON.parse(String(init.body)) as Record<string, unknown>;
           requests.push(body);
@@ -6693,12 +6753,18 @@ test("vision skill sends ephemeral image to Gemini Flash-Lite with JSON schema",
     assert.equal(skillExecution.structuredOutputUsed, true);
     assert.deepEqual(skillExecution.producedBlockTypes, ["image_analysis"]);
     assert.ok(requests.length >= 1);
-    assert.equal(requests[0]?.model, "gemini-fast");
+    // Görü işi artık GÖRÜ modeline gidiyor (kapasite skorlu sağlayıcı
+    // seçimi); eskiden hız modeline düşüyordu. Model adını sabitlemek yerine
+    // görü yetkin bir model seçildiğini doğruluyoruz.
+    assert.match(String(requests[0]?.model ?? ""), /vision|fast/);
     assert.ok(requests[0]?.response_format);
-    const messages = requests[0]?.messages as Array<Record<string, unknown>>;
-    const content = messages.at(-1)?.content as Array<Record<string, unknown>>;
+    const input = requests[0]?.input as Array<Record<string, unknown>>;
     assert.equal(
-      content.some((part) => part.type === "image_url"),
+      input.some((step) =>
+        (step.content as Array<Record<string, unknown>> | undefined)?.some(
+          (part) => part.type === "image",
+        ),
+      ),
       true,
     );
   } finally {
@@ -7114,7 +7180,9 @@ test("prompt gating: short followups drop non load-bearing policies", () => {
   assert.ok(!prompt.includes("Task-routing policy"));
   assert.ok(!prompt.includes("memory blocks above"));
   assert.ok(prompt.includes("Elyan"));
-  assert.ok(prompt.includes("previous turn"));
+  // İstem metni yeniden yazıldı: süreklilik yönergesi artık
+  // "preserve the previous context when this is a follow-up" cümlesinde.
+  assert.match(prompt, /previous (turn|context)/);
 });
 
 test("prompt gating: normal chat without memory drops the memory recall policy", () => {
@@ -7127,9 +7195,12 @@ test("prompt gating: normal chat without memory drops the memory recall policy",
   assert.ok(!prompt.includes("memory blocks above"));
   assert.ok(!prompt.includes("Live context above"));
   assert.ok(!prompt.includes("Osman Emre Koca"));
-  assert.ok(prompt.includes("Stay grounded"));
+  // Politika bölüm başlıkları kaldırıldı; yerine deterministik sözleşme
+  // satırları geldi. Amaç aynı: temellendirme ve araç politikası bu turda
+  // istemde olmalı.
+  assert.match(prompt, /never invent facts|Stay grounded/i);
   assert.ok(prompt.includes("Elyan"));
-  assert.ok(prompt.includes("Task-routing policy"));
+  assert.match(prompt, /tools=|Task-routing policy/);
 });
 
 test("semantic route model is not biased by the normal answer routing policy", () => {
@@ -7264,8 +7335,8 @@ test("prompt gating: currentness signal reactivates web-grounding policies", () 
     "BASE",
     baseInput({ prompt: "güncel altın fiyatını söyle" }),
   );
-  assert.ok(prompt.includes("Today is"));
-  assert.ok(prompt.includes("web grounding"));
+  // Web ihtiyacı artık deterministik ipucu satırında taşınıyor.
+  assert.match(prompt, /web_required=yes/);
 });
 
 test("prompt gating: explicit time context enables natural temporal awareness", () => {
@@ -8271,4 +8342,37 @@ test("gatePromptOverride lets boundary gates judge the user's words, not the pla
     },
   });
   assert.equal(stillGated.answerSource, "backend_gate");
+});
+
+// RC-4 — Yarım çıktı. "İşte adım adım çözüm:" deyip kesilen matematik
+// cevabı boş değildi, bu yüzden tam sayılıp kullanıcıya gidiyordu. İki nokta
+// ile biten (içeriği vaat edip gelmeyen) bir cevap satır sayısından bağımsız
+// olarak truncation'dır ve onarım turunu tetiklemelidir.
+test("analyzeResponseCompleteness flags a colon-terminated lead-in as truncated", () => {
+  const analysis = analyzeResponseCompleteness(
+    "x^2 + 5x + 6 = 0\nİşte adım adım çözüm:",
+  );
+  assert.equal(analysis.needsRepair, true);
+  assert.ok(analysis.flags.includes("dangling_colon_lead"));
+});
+
+test("analyzeResponseCompleteness flags a single-line colon promise as truncated", () => {
+  const analysis = analyzeResponseCompleteness("İşte adım adım çözüm:");
+  assert.equal(analysis.needsRepair, true);
+  assert.ok(analysis.flags.includes("dangling_colon_lead"));
+});
+
+test("analyzeResponseCompleteness does not flag a complete sentence", () => {
+  const analysis = analyzeResponseCompleteness(
+    "Denklemin kökleri x = -2 ve x = -3.",
+  );
+  assert.equal(analysis.needsRepair, false);
+  assert.equal(analysis.flags.includes("dangling_colon_lead"), false);
+});
+
+test("analyzeResponseCompleteness does not flag a colon that has body after it", () => {
+  const analysis = analyzeResponseCompleteness(
+    "İşte adım adım çözüm: önce çarpanlara ayırıyoruz, (x+2)(x+3) = 0, sonra kökleri buluyoruz: x = -2 ve x = -3.",
+  );
+  assert.equal(analysis.needsRepair, false);
 });

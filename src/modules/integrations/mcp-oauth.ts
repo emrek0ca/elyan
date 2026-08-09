@@ -17,11 +17,8 @@ import type {
 /**
  * MCP OAuth (RFC 9728 protected-resource discovery + RFC 7591 dynamic client
  * registration + RFC 7636 PKCE authorization code flow) built on the official
- * SDK primitives. Stateless helpers only: token persistence, redirect handling
- * and the integration-connection wiring are the caller's responsibility and are
- * introduced separately once `ELYAN_MCP_SDK_ENABLED` is validated.
- *
- * This is the path that lifts Notion/GitHub/Slack out of `setup_required`.
+ * SDK primitives. Integration service owns encrypted state/token persistence;
+ * this module keeps the protocol adapter small and serializable at the boundary.
  */
 
 export type McpOAuthDiscovery = {

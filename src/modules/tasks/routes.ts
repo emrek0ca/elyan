@@ -241,11 +241,13 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
           ? (request.query as Record<string, unknown>)
           : {};
       const token = typeof query.token === "string" ? query.token : null;
+      const variant = query.variant === "thumbnail" ? "thumbnail" : "original";
       const content = await getTaskArtifactRawContent(
         app,
         params.taskId,
         params.artifactId,
         token,
+        variant,
       );
       reply
         .header("Cache-Control", "private, max-age=600")

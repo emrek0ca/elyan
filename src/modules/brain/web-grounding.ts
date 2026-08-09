@@ -10,6 +10,10 @@ import {
   isTurkicLanguageResearchPrompt,
 } from "../../core/understanding/turkic-language.js";
 import { responsePolicyForPrompt } from "./response-policy.js";
+import {
+  isExplicitChartRequest,
+  isExplicitTableRequest,
+} from "../../core/understanding/structured-output-policy.js";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { LRUCache } from "lru-cache";
@@ -105,6 +109,22 @@ const EXPLICIT_RESEARCH_ACTION_PATTERN =
 const EXPLICIT_NO_WEB_RESEARCH_PATTERN =
   /(?<!\p{L})(araştırmadan|arastirmadan|araştırma yapma|arastirma yapma|(?:araştırma|arastirma)(?:\s+(?:lütfen|lutfen))?(?=\s*(?:[.!?,;:]|$))|web(?:de|den)? araştırma yapma|web(?:de|den)? arastirma yapma|internetten araştırma yapma|internetten arastirma yapma|web araması yapma|web aramasi yapma|(?:internet(?:i)?|web(?:i)?)\s+kullanmadan(?:\s+(?:araştır|arastir))?|(?:internet(?:i)?|web(?:i)?)\s+kullanma|internetsiz|websiz|do not research|don't research|without researching|do not browse|don't browse|no web search|without using (?:the )?(?:web|internet))(?!\p{L})/iu;
 
+// RC-5 — Kullanıcının açık "web'e/internete bakma/girme" talimatını onurlandır.
+// EXPLICIT_NO_WEB_RESEARCH_PATTERN "kullanma/kullanmadan" biçimlerini yakalıyor
+// ama "bakma/bakmadan/girme/girmeden" biçimlerini kaçırıyordu — ve veri-artefakt
+// grounding tetikleyicisi (RC-5) bu boşluktan kullanıcı istemese de web'e
+// gidebiliyordu. Bu, intent-routing kelime listesi DEĞİL, açık bir kullanıcı
+// talimatına (ve gizliliğe) saygıdır.
+const EXPLICIT_NO_WEB_LOOK_PATTERN =
+  /(?<!\p{L})(?:internet(?:e|te)?|web(?:['’]?[de]e?)?|siteye|online|çevrim ?içi|cevrim ?ici)\s+(?:bakma|bakmadan|girme|girmeden|çıkma|cikma)(?!\p{L})/iu;
+
+function isExplicitNoWebInstruction(lower: string): boolean {
+  return (
+    EXPLICIT_NO_WEB_RESEARCH_PATTERN.test(lower) ||
+    EXPLICIT_NO_WEB_LOOK_PATTERN.test(lower)
+  );
+}
+
 const ENGLISH_RESEARCH_NOUN_PATTERN =
   /(?<!\p{L})research\s+(paper|article|report|study|summary|findings)(?!\p{L})/iu;
 
@@ -112,7 +132,7 @@ const REFERENTIAL_RESEARCH_DOCUMENT_ACTION_PATTERN =
   /(?<!\p{L})(summarize|translate|rewrite|edit|proofread|review)\s+(?:this|the|that|attached)\s+research\s+(paper|article|report|study|summary|findings)(?!\p{L})/iu;
 
 function hasExplicitResearchAction(lower: string): boolean {
-  if (EXPLICIT_NO_WEB_RESEARCH_PATTERN.test(lower)) {
+  if (isExplicitNoWebInstruction(lower)) {
     return false;
   }
   if (ENGLISH_RESEARCH_NOUN_PATTERN.test(lower)) {
@@ -2065,6 +2085,30 @@ export function shouldUseWebGrounding(input: {
   return classifyWebGroundingDecision(input).mode === "web_required";
 }
 
+/**
+ * RC-5 — Kullanıcı açıkça bir veri chart'ı ya da tablosu istiyor mu? Bu, veri
+ * kaynağının gerekliliğini gösteren YAPISAL bir sinyaldir (regex domain
+ * sözlüğünden bağımsız). Grounding kararını, veri-görselleştirme istekleri
+ * için "önce araştır" yönünde tetiklemek üzere kullanılır.
+ */
+export function explicitDataArtifactRequest(prompt: string): boolean {
+  return isExplicitChartRequest(prompt) || isExplicitTableRequest(prompt);
+}
+
+/**
+ * RC-5 — Prompt zaten bir sayısal veri serisi taşıyor mu? Kullanıcı veriyi
+ * satır içi verdiyse (ör. "şu verilerden tablo yap: 2020 %14, 2021 %36") o
+ * chart dışarıdan veri GEREKTİRMEZ; grounding'i zorlamak gereksiz aramadır.
+ * Bu YAPISAL bir ölçüdür (sayı yoğunluğu), kelime listesi değil. Bias bilinçli
+ * olarak "araştırmama" yönündedir: 3+ ayrı sayı varsa satır içi veri say ve
+ * aramayı zorlama — kullanıcının verisini görmezden gelip web'e gitmektense
+ * ara sıra aramamak daha güvenlidir.
+ */
+export function promptHasInlineDataSeries(prompt: string): boolean {
+  const numbers = String(prompt ?? "").match(/\d+(?:[.,]\d+)?/g) ?? [];
+  return numbers.length >= 3;
+}
+
 export function classifyWebGroundingDecision(input: {
   prompt: string;
   workload: SharedBrainWorkload;
@@ -2075,7 +2119,7 @@ export function classifyWebGroundingDecision(input: {
     return { mode: "no_web_needed", reasons: [] };
   }
   const lower = normalized.toLocaleLowerCase("tr-TR");
-  const explicitNoWebResearch = EXPLICIT_NO_WEB_RESEARCH_PATTERN.test(lower);
+  const explicitNoWebResearch = isExplicitNoWebInstruction(lower);
   const explicitWebIntent =
     !explicitNoWebResearch &&
     EXPLICIT_WEB_PATTERNS.some((pattern) => pattern.test(lower));
@@ -2367,11 +2411,33 @@ export async function searchPublicWebGrounding(
       "personal_local_only",
     ].includes(reason),
   );
+  // RC-5 — `grounding_not_attempted` bir RET sebebi değil, bir TETİKLEYİCİ
+  // olmalı. Kullanıcı açıkça bir veri chart'ı/tablosu istediğinde (yapısal
+  // sinyal: mevcut isExplicitChartRequest/isExplicitTableRequest tespiti) ve
+  // veri yerel/kişisel/ekli DEĞİLSE, veri dışarıdan gelmek zorundadır. Regex
+  // sözlüğü "enflasyon"u domain olarak tanımadığı için karar `no_web_needed`
+  // dönüyor, sonra artefakt kapısı "güvenilir veriye dayandıramadım" diye
+  // reddediyordu — HİÇ ARAMADAN. Doğru davranış: ÖNCE araştır, SONRA
+  // yeterliliği gerçek kanıt üzerinde değerlendir. (RC-2 kapısını sıkarken bu
+  // gevşetilir; ikisi aynı madalyonun iki yüzü — biri uydurur, diğeri gereksiz
+  // pes eder.)
+  const dataArtifactNeedsExternalData =
+    explicitDataArtifactRequest(query) &&
+    !forceSearchBlocked &&
+    // Veri zaten yereldeyse (ekli belge) ya da satır içi verildiyse dışarıdan
+    // arama GEREKMEZ; kullanıcının verdiği veriyi görmezden gelip web'e gitmek
+    // yanlış olur.
+    input.attachmentContextUsed !== true &&
+    !promptHasInlineDataSeries(query);
   const shouldSearch =
     shouldUseWebGrounding(input) ||
-    (input.forceSearch === true && !forceSearchBlocked);
+    (input.forceSearch === true && !forceSearchBlocked) ||
+    dataArtifactNeedsExternalData;
   if (input.forceSearch === true && shouldSearch) {
     decisionReasons.push("skill_contract:web_required");
+  }
+  if (dataArtifactNeedsExternalData && !shouldUseWebGrounding(input)) {
+    decisionReasons.push("data_artifact_needs_grounding");
   }
   const searchSource =
     app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL

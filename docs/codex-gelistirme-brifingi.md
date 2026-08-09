@@ -110,7 +110,7 @@ src/modules/brain/gemini-utility-client.ts    ortak istemci
 GEMINI_FREE_DAILY_REQUEST_LIMIT=200        tüm sistem, günde
 GEMINI_FREE_USER_DAILY_REQUEST_LIMIT=25    kullanıcı başına
 GEMINI_FREE_UTILITY_SAMPLE_PERCENT=10      örnekleme oranı
-GEMINI_FREE_MODEL_ALLOWLIST=gemini-3.1-flash-lite
+GEMINI_FREE_MODEL_ALLOWLIST=gemini-3.5-flash-lite,gemini-3.1-flash-lite
 ```
 
 Bu kotayla **ana beyin taşınamaz.** 20 aktif kullanıcıda kişi başı 10 istek

@@ -248,9 +248,20 @@ test("semantic compute includes queue wait in the caller timeout budget", async 
       timeoutMs: 10,
     });
 
+    // Kaç batch'in deadline'dan ÖNCE başladığı makine hızına bağlıdır; yavaş
+    // bir sunucuda 1, hızlı bir makinede 2 olur. Sabit sayı beklemek testi
+    // makineye bağımlı kılıyordu (VPS'te 1 !== 2 ile düşüp deploy'u
+    // kapıda durduruyordu). Test edilen SÖZLEŞME şudur: kuyrukta beklemek
+    // çağıranın zaman bütçesinden sayılır, iş yarıda kesilir ve tüm batch'ler
+    // gönderilmez.
+    const metrics = getSemanticComputeMetrics();
     assert.equal(vectors, null);
-    assert.equal(getSemanticComputeMetrics().workerRequests, 2);
-    assert.equal(getSemanticComputeMetrics().timeouts > 0, true);
+    assert.ok(metrics.workerRequests >= 1, "en az bir batch başlamalı");
+    assert.ok(
+      metrics.workerRequests < 3,
+      `deadline tüm batch'leri kesmeli, gönderilen: ${metrics.workerRequests}`,
+    );
+    assert.equal(metrics.timeouts > 0, true);
   } finally {
     resetSemanticComputeWorkerForTests();
   }

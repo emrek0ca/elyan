@@ -34,6 +34,33 @@ function readTextParts(value: unknown): string {
   return value.map(readTextPart).filter(Boolean).join("\n").trim();
 }
 
+function readNativeInteractionText(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(readNativeInteractionText).filter(Boolean).join("\n").trim();
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  if (record.thought === true || record.type === "thought") {
+    return "";
+  }
+  if (typeof record.output_text === "string" && record.output_text.trim()) {
+    return record.output_text.trim();
+  }
+  if (record.type === "text" && typeof record.text === "string") {
+    return record.text.trim();
+  }
+  for (const key of ["output", "steps", "content", "parts", "interaction"]) {
+    const text = readNativeInteractionText(record[key]);
+    if (text) return text;
+  }
+  return "";
+}
+
 export function extractResponseText(
   provider: SharedBrainProvider | string,
   payload: unknown,
@@ -43,6 +70,10 @@ export function extractResponseText(
   }
 
   const record = payload as Record<string, unknown>;
+  const nativeText = readNativeInteractionText(payload);
+  if (nativeText) {
+    return nativeText;
+  }
   if (provider === "claude") {
     const text = readTextParts(record.content);
     if (text) {
@@ -107,6 +138,13 @@ export function extractResponseDelta(payload: unknown): string {
   }
 
   const record = payload as Record<string, unknown>;
+  const nativeDelta = record.delta;
+  if (nativeDelta && typeof nativeDelta === "object" && !Array.isArray(nativeDelta)) {
+    const delta = nativeDelta as Record<string, unknown>;
+    if (delta.type === "text" && typeof delta.text === "string") {
+      return delta.text;
+    }
+  }
   const response = record.response;
   if (typeof response === "string" && response.length > 0) {
     return response;
@@ -208,6 +246,12 @@ export function supportsNativeStreamingAttempt(
   if (provider === "ollama") {
     return path === "/api/generate" || path === getChatCompletionPath(provider);
   }
+  if (provider === "gemini") {
+    return (
+      path.startsWith("/interactions") ||
+      path === getChatCompletionPath(provider)
+    );
+  }
   return (
     provider === "groq" ||
     provider === "openai" ||
@@ -223,6 +267,20 @@ export function extractResponseFinishReason(payload: unknown): string | null {
   }
 
   const record = payload as Record<string, unknown>;
+  const nativeStatus =
+    typeof record.status === "string"
+      ? record.status
+      : record.interaction &&
+          typeof record.interaction === "object" &&
+          !Array.isArray(record.interaction) &&
+          typeof (record.interaction as Record<string, unknown>).status === "string"
+        ? (record.interaction as Record<string, unknown>).status
+        : null;
+  if (typeof nativeStatus === "string" && nativeStatus.trim()) {
+    const normalized = nativeStatus.trim().toLowerCase();
+    if (["completed", "succeeded", "success"].includes(normalized)) return "stop";
+    if (["failed", "error", "cancelled", "canceled"].includes(normalized)) return "error";
+  }
   for (const key of ["finish_reason", "finishReason", "done_reason"]) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {

@@ -159,12 +159,17 @@ test("semantic privacy authority bounds model capabilities without keyword scope
     allowPrivateRead: false,
     sideEffectsRequireApproval: true,
   };
+  // `requiredCapabilities` artık BEYAZ LİSTE değil İPUCUDUR: planlayıcı doğru
+  // aracı seçebilmeli (yanlış tahmin görevi komple çökertmemeli). Bu testin
+  // koruduğu şey kapsam darlığı değil, GİZLİLİK YETKİSİ — o aynen sürüyor.
   const publicAllowed = buildAllowedCapabilities(publicOrder);
   assert.equal(publicAllowed.includes("file_read"), false);
-  assert.deepEqual(publicAllowed, []);
 
   publicOrder.capabilityAuthorization.allowPrivateRead = true;
-  assert.deepEqual(buildAllowedCapabilities(publicOrder), ["file_read"]);
+  const readAllowed = buildAllowedCapabilities(publicOrder);
+  assert.equal(readAllowed.includes("file_read"), true);
+  // İpucu olarak verilen yetenek listenin BAŞINDA gelir (öncelik korunur).
+  assert.equal(readAllowed[0], "file_read");
 
   const writerOrder = workOrder("Yerel belge üret", ["document_write"]);
   writerOrder.capabilityAuthorization = {
@@ -172,7 +177,10 @@ test("semantic privacy authority bounds model capabilities without keyword scope
     allowPrivateRead: false,
     sideEffectsRequireApproval: true,
   };
-  assert.deepEqual(buildAllowedCapabilities(writerOrder), ["document_write"]);
+  const writerAllowed = buildAllowedCapabilities(writerOrder);
+  assert.equal(writerAllowed[0], "document_write");
+  // Gizlilik yetkisi kapalıyken özel-okuma sınıfı yetenek sızmamalı.
+  assert.equal(writerAllowed.includes("file_read"), false);
 });
 
 test("planning safety gate inspects the real user goal, not the capability catalog", () => {
@@ -1198,4 +1206,51 @@ test("desktop preparation marker fails closed when no model plan is available", 
   ).desktopWorkOrder.planPreview.planPreparation;
   assert.equal(preparation.status, "failed");
   assert.equal(preparation.outcome, "model_plan_unavailable");
+});
+
+test("plan contract validation rejects invented enum values and names the valid ones", () => {
+  // Canlı arıza: planlayıcı browser_control için olmayan bir eylem uydurdu ve
+  // iş "Geçersiz tarayıcı eylemi." ile öldü. Geçerli değerler yalnız argüman
+  // açıklamasının düzyazısındaydı; hiçbir katman kontrol edemiyordu.
+  const issues = validateMaterializedPlanContracts([
+    {
+      id: "s1",
+      capability: "browser_control",
+      args: { action: "close_tab" },
+      dependsOn: [],
+      description: "Sekmeyi kapat",
+    },
+  ]);
+  assert.equal(issues.length, 1);
+  assert.match(issues[0], /args\.action="close_tab" is not a valid value/u);
+  // Hata metni geçerli listeyi TAŞIMALI: replan ancak bunu okuyarak kendini
+  // düzeltebilir. Reddetmek tek başına modele hiçbir şey öğretmez.
+  for (const allowed of ["open_url", "search", "play_youtube", "new_tab"]) {
+    assert.ok(
+      issues[0].includes(allowed),
+      `geçerli değer hata metninde yok: ${allowed}`,
+    );
+  }
+});
+
+test("plan contract validation accepts declared enum values case-insensitively", () => {
+  assert.deepEqual(
+    validateMaterializedPlanContracts([
+      {
+        id: "s1",
+        capability: "browser_control",
+        args: { action: "new_tab" },
+        dependsOn: [],
+        description: "Yeni sekme",
+      },
+      {
+        id: "s2",
+        capability: "math_solve",
+        args: { expression: "12000+8500", mode: "Evaluate" },
+        dependsOn: [],
+        description: "Hesapla",
+      },
+    ]),
+    [],
+  );
 });

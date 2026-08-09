@@ -9,6 +9,7 @@ import {
 import {
   buildVisualIntentContract,
   isVisualImageRequested,
+  latestImageArtifactFromMetadata,
 } from "./visual-intent-contract.js";
 
 async function createTestJpeg(seed = 40) {
@@ -202,7 +203,14 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     // Maliyet politikası: "poster" tek başına artık premium değil (Pro flag
     // default kapalı) ve açık çözünürlük istenmedikçe 1K üretilir.
     assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image-preview");
-    assert.equal("response_format" in requests[0]!.body, false);
+    assert.equal(requests[0]?.body.store, false);
+    const responseFormat = requests[0]?.body.response_format as Record<
+      string,
+      unknown
+    >;
+    assert.equal(responseFormat.type, "image");
+    // Gemini yalnız image/jpeg kabul ediyor; image/png her modelde 400 üretiyordu.
+    assert.equal(responseFormat.mime_type, "image/jpeg");
     const providerInput = requests[0]?.body.input as Array<Record<string, unknown>>;
     assert.equal(providerInput[0]?.type, "text");
     assert.match(String(providerInput[0]?.text ?? ""), /VISUAL INTENT CONTRACT/);
@@ -252,7 +260,14 @@ test("maybeGenerateHostedImageArtifact does not fall back to billed OpenAI when 
     );
 
     assert.equal(result, null);
-    assert.equal(requests.length, 1);
+    // Testin amacı: Gemini düşünce ÜCRETLİ OpenAI'ye geçilmesin. Gemini
+    // içinde birden çok modelin denenmesi (fallback zinciri) beklenen
+    // davranış; sayıyı sabitlemek yerine sağlayıcıyı doğruluyoruz.
+    assert.ok(requests.length > 0);
+    assert.ok(
+      requests.every((url) => url.includes("generativelanguage.googleapis.com")),
+      `OpenAI'ye düşülmemeli, çağrılan adresler: ${requests.join(", ")}`,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -299,7 +314,10 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     requests.push(body);
-    if (body.model === "gemini-3-pro-image-preview") {
+    // TÜM premium varyantları düşür: testin konusu "premium tükenince
+    // flash'a düşme". Yalnız ilk premium modeli düşürmek, zincirin ikinci
+    // premium modelde başarılı olup flash'a hiç ulaşmamasına yol açıyordu.
+    if (String(body.model).includes("pro-image")) {
       return new Response("busy", { status: 429 });
     }
     return Response.json({
@@ -345,9 +363,14 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
     );
 
     assert.ok(result);
-    assert.deepEqual(
-      requests.map((request) => request.model),
-      ["gemini-3-pro-image-preview", "gemini-3.1-flash-image-preview"],
+    // Sıra: önce premium modeller, sonra flash. Kaç premium varyantı
+    // denendiği yapılandırmaya bağlı; sabitlenen şey PREMIUM ÖNCE, FLASH
+    // SONRA kuralı.
+    const attempted = requests.map((request) => String(request.model ?? ""));
+    assert.equal(attempted[0], "gemini-3-pro-image-preview");
+    assert.ok(
+      attempted.some((model) => model.includes("flash-image")),
+      `premium tükenince flash denenmeli, denenenler: ${attempted.join(", ")}`,
     );
     assert.equal(result.mimeType, "image/jpeg");
     assert.notDeepEqual([...result.binaryBody], [...jpegBody]);
@@ -650,14 +673,22 @@ test("provider circuit opens after repeated failures and skips further upstream 
 
     const first = await maybeGenerateHostedImageArtifact(app, input);
     const second = await maybeGenerateHostedImageArtifact(app, input);
+    const callsBeforeThird = calls;
     const third = await maybeGenerateHostedImageArtifact(app, input);
 
-    // İlk iki istek Flash'ı dener (429), eşik dolunca devre açılır; üçüncü
-    // istek dış çağrı yapmadan hızlıca null döner.
+    // İlk iki istek yapılandırılmış model zincirini dener (429); her
+    // sağlayıcı+model için eşik dolunca devre açılır. Üçüncü istek HİÇ dış
+    // çağrı yapmamalı. Toplam çağrı sayısı zincirin uzunluğuna bağlı olduğu
+    // için sabitlenmiyor; sabitlenen şey üçüncü isteğin sıfır çağrı yapması.
     assert.equal(first, null);
     assert.equal(second, null);
     assert.equal(third, null);
-    assert.equal(calls, 2, "third request must be short-circuited by the open circuit");
+    assert.ok(callsBeforeThird > 0, "ilk iki istek dış çağrı yapmalı");
+    assert.equal(
+      calls,
+      callsBeforeThird,
+      "third request must be short-circuited by the open circuit",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1062,4 +1093,50 @@ test("hosted image continuation fails soft instead of generating unrelated outpu
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// RC-3 — Görsel niyet artık HER TUR semantik çözülür, ama SADECE görsel bağlam
+// varken (yapısal kontrol, prompt-regex değil). `latestImageArtifactFromMetadata`
+// bu kapının girdisidir: oturumda önceki bir görsel varsa semantik yol açılır;
+// yoksa saf sohbet turu fazladan model çağrısı üretmez.
+test("latestImageArtifactFromMetadata detects a prior session image (opens semantic path)", () => {
+  const found = latestImageArtifactFromMetadata({
+    lastVisualArtifact: {
+      id: "artifact-train-1",
+      artifactType: "image",
+      contentFamily: "image",
+    },
+  });
+  assert.ok(found);
+  assert.equal(found?.id, "artifact-train-1");
+});
+
+test("latestImageArtifactFromMetadata finds an image inside sessionArtifacts", () => {
+  const found = latestImageArtifactFromMetadata({
+    sessionArtifacts: [
+      { artifactId: "doc-1", artifactType: "document" },
+      { artifactId: "img-1", artifactType: "image", contentFamily: "image" },
+    ],
+  });
+  assert.ok(found);
+  assert.equal(found?.artifactId, "img-1");
+});
+
+test("latestImageArtifactFromMetadata returns null for a text-only turn (no wasteful semantic call)", () => {
+  assert.equal(latestImageArtifactFromMetadata({}), null);
+  assert.equal(
+    latestImageArtifactFromMetadata({
+      sessionArtifacts: [{ artifactId: "doc-1", artifactType: "document" }],
+    }),
+    null,
+  );
+});
+
+test("latestImageArtifactFromMetadata ignores a non-image lastVisualArtifact", () => {
+  assert.equal(
+    latestImageArtifactFromMetadata({
+      lastVisualArtifact: { id: "chart-1", artifactType: "chart" },
+    }),
+    null,
+  );
 });

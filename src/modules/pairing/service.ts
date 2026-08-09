@@ -5,6 +5,7 @@ import { devices, pairSessions, tasks } from "../../db/schema.js";
 import { createOpaqueCode, createPairingCode, deriveRuntimeDeviceSecret, hashSecret, verifySecret } from "../../lib/auth-crypto.js";
 import { AppError, conflict, notFound } from "../../lib/errors.js";
 import { assertDesktopPairingAllowed } from "../billing/service.js";
+import { RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
 import { invalidateBrainProfileCache } from "../brain/profile-cache.js";
 import { getSharedBrainTargetDeviceId } from "../devices/service.js";
 import { activeTaskStatuses, resequenceDeviceQueue } from "../tasks/queue.js";
@@ -260,6 +261,8 @@ async function upsertDesktopPairingDevice(
       label: devices.label,
       platform: devices.platform,
       runtimeVersion: devices.runtimeVersion,
+      isActive: devices.isActive,
+      lastSeenAt: devices.lastSeenAt,
     })
     .from(devices)
     .where(and(eq(devices.type, "desktop"), eq(devices.externalDeviceId, normalizedExternalDeviceId)))
@@ -267,11 +270,42 @@ async function upsertDesktopPairingDevice(
 
   // Anonim (girişsiz) masaüstü mevcut cihaz kaydını sahibini değiştirmeden
   // yeniden kullanabilir — kullanıcı eşleşmesi claim anında doğrulanır.
-  const conflictingRow = input.userId
-    ? existingRows.find((row) => row.userId && row.userId !== input.userId)
-    : undefined;
-  if (conflictingRow) {
+  //
+  // SAHİPLİK DEVRİ: aynı fiziksel makine başka bir hesaba kayıtlıysa bu
+  // ESKİDEN kalıcı bir kilitti — kullanıcı kendi bilgisayarını hiçbir şekilde
+  // geri alamıyordu ("başka kullanıcı bağlı" der ama masaüstünde bağlantı
+  // görünmez). Eşleştirme zaten masaüstünde gösterilen kodu gerektiriyor,
+  // yani makineye fiziksel erişimin kanıtı var.
+  //
+  // Devir yalnız eski kayıt GERÇEKTEN kopuksa yapılır: pasif ya da
+  // heartbeat'i bayat. Başka bir kullanıcının O AN bağlı makinesi asla
+  // devralınamaz — o durumda çakışma korunur.
+  const conflictingRows = input.userId
+    ? existingRows.filter((row) => row.userId && row.userId !== input.userId)
+    : [];
+  const liveConflict = conflictingRows.find((row) => {
+    if (!row.isActive) return false;
+    const lastSeen = row.lastSeenAt?.getTime() ?? 0;
+    return Date.now() - lastSeen <= RUNTIME_CONNECTION_STALE_AFTER_MS;
+  });
+  if (liveConflict) {
     throw conflict("Desktop runtime is already paired with another user");
+  }
+  if (conflictingRows.length > 0) {
+    // Bayat kayıtları serbest bırak: sahipsiz kalırlar ve aşağıdaki
+    // yeniden-kullanım yolu bu makineyi mevcut kullanıcıya bağlar.
+    await app.db
+      .update(devices)
+      .set({ isActive: false, userId: null, updatedAt: new Date() })
+      .where(inArray(devices.id, conflictingRows.map((row) => row.id)));
+    app.log.warn(
+      { externalDeviceId: normalizedExternalDeviceId, released: conflictingRows.length },
+      "stale desktop ownership released for re-pairing",
+    );
+    conflictingRows.forEach((row) => {
+      const index = existingRows.findIndex((candidate) => candidate.id === row.id);
+      if (index >= 0) existingRows[index] = { ...existingRows[index]!, userId: null };
+    });
   }
 
   const reusableRow = input.userId
@@ -477,6 +511,8 @@ export async function claimPairSession(
       status: pairSessions.status,
       expiresAt: pairSessions.expiresAt,
       currentDeviceUserId: devices.userId,
+      currentDeviceActive: devices.isActive,
+      currentDeviceLastSeenAt: devices.lastSeenAt,
     })
     .from(pairSessions)
     .innerJoin(devices, eq(devices.id, pairSessions.desktopDeviceId))
@@ -513,11 +549,37 @@ export async function claimPairSession(
     throw new AppError(409, "pairing_invalid_code", "Pairing code does not match");
   }
 
+  // SAHİPLİK DEVRİ — claim yolu.
+  //
+  // Kayıt yolunda (`registerDesktopDevice`) aynı kural zaten var; burası
+  // ATLANMIŞTI ve kullanıcının canlıda gördüğü hata tam olarak buradan
+  // geliyordu: mobilde kodu girince "Desktop runtime is already paired with
+  // another user". Yani makine sahipsiz kalsa bile kod girme adımı yine
+  // reddediyordu.
+  //
+  // Devir yalnız eski kayıt GERÇEKTEN kopuksa yapılır: pasif ya da
+  // heartbeat'i bayat. Başka birinin O AN bağlı makinesi devralınamaz.
+  // Eşleştirme kodu masaüstünde gösteriliyor, yani makineye fiziksel erişim
+  // zaten kanıtlanmış durumda.
   if (pairSession.currentDeviceUserId && pairSession.currentDeviceUserId !== input.userId) {
-    throw new AppError(
-      409,
-      "runtime_unreachable",
-      "Desktop runtime is already paired with another user",
+    const lastSeen = pairSession.currentDeviceLastSeenAt?.getTime() ?? 0;
+    const liveElsewhere =
+      pairSession.currentDeviceActive === true &&
+      Date.now() - lastSeen <= RUNTIME_CONNECTION_STALE_AFTER_MS;
+    if (liveElsewhere) {
+      throw new AppError(
+        409,
+        "runtime_unreachable",
+        "Desktop runtime is already paired with another user",
+      );
+    }
+    await app.db
+      .update(devices)
+      .set({ userId: null, isActive: false, updatedAt: new Date() })
+      .where(eq(devices.id, pairSession.desktopDeviceId));
+    app.log.warn(
+      { deviceId: pairSession.desktopDeviceId },
+      "stale desktop ownership released during claim",
     );
   }
 

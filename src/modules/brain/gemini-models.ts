@@ -30,13 +30,13 @@ function uniqueStrings(values: string[]): string[] {
 export function buildGeminiModelCatalog(
   config: GeminiModelConfigSource,
 ): GeminiModelCatalog {
-  const fastModel = compactText(config.GEMINI_FAST_MODEL) || "gemini-3.1-flash-lite";
+  const fastModel = compactText(config.GEMINI_FAST_MODEL) || "gemini-3.5-flash-lite";
   const reasoningModel =
-    compactText(config.GEMINI_REASONING_MODEL) || "gemini-3.5-flash";
+    compactText(config.GEMINI_REASONING_MODEL) || "gemini-3.6-flash";
   const textModel = compactText(config.GEMINI_TEXT_MODEL) || reasoningModel;
-  const visionModel = compactText(config.GEMINI_VISION_MODEL) || "gemini-3.5-flash";
+  const visionModel = compactText(config.GEMINI_VISION_MODEL) || "gemini-3.6-flash";
   const imageModel =
-    compactText(config.GEMINI_IMAGE_MODEL) || "gemini-3.1-flash-image-preview";
+    compactText(config.GEMINI_IMAGE_MODEL) || "gemini-3.1-flash-image";
 
   return {
     textModel,

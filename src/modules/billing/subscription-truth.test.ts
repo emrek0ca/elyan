@@ -49,16 +49,6 @@ test("shapeSubscriptionTruth keeps the mobile plan contract stable", () => {
     manageSubscriptionHint: "Manage in App Store",
     creditStatus: "available",
     tokenStatus: "available",
-    trialOffer: {
-      code: "welcome_pro_30d",
-      planCode: "pro",
-      durationDays: 30,
-      status: "unavailable",
-      eligible: false,
-      claimed: false,
-      claimPath: "/v1/billing/trials/pro/claim",
-      expiresAt: null,
-    },
   });
 });
 
@@ -93,16 +83,6 @@ test("shapeSubscriptionTruth falls back to free plan defaults", () => {
     manageSubscriptionHint: null,
     creditStatus: null,
     tokenStatus: null,
-    trialOffer: {
-      code: "welcome_pro_30d",
-      planCode: "pro",
-      durationDays: 30,
-      status: "unavailable",
-      eligible: false,
-      claimed: false,
-      claimPath: "/v1/billing/trials/pro/claim",
-      expiresAt: null,
-    },
   });
 });
 
@@ -114,16 +94,6 @@ test("shapeSubscriptionTruth exposes available welcome pro trial offers for fres
     trialEndsAt: expiresAt,
   });
 
-  assert.deepEqual(subscription.trialOffer, {
-    code: "welcome_pro_30d",
-    planCode: "pro",
-    durationDays: 30,
-    status: "available",
-    eligible: true,
-    claimed: false,
-    claimPath: "/v1/billing/trials/pro/claim",
-    expiresAt,
-  });
 });
 
 test("shapeSubscriptionTruth normalizes legacy zero-credit free rows to the current free allowance", () => {
@@ -148,16 +118,6 @@ test("shapeSubscriptionTruth marks claimed welcome pro trials after activation",
   });
 
   assert.equal(subscription.brainProfile.tier, "premium");
-  assert.deepEqual(subscription.trialOffer, {
-    code: "welcome_pro_30d",
-    planCode: "pro",
-    durationDays: 30,
-    status: "claimed",
-    eligible: false,
-    claimed: true,
-    claimPath: "/v1/billing/trials/pro/claim",
-    expiresAt,
-  });
 });
 
 test("shapeSubscriptionTruth keeps pro intelligence when stale rows carry a standard profile", () => {

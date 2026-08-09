@@ -27,6 +27,7 @@ const CHAT_SESSIONS_LIST_LATENCY_KEY = "metrics:chat:sessions:list:latency_ms";
 const CHAT_SESSIONS_LIST_BYTES_KEY = "metrics:chat:sessions:list:payload_bytes";
 const CHAT_SESSION_MESSAGES_LATENCY_KEY = "metrics:chat:sessions:messages:latency_ms";
 const CHAT_SESSION_MESSAGES_BYTES_KEY = "metrics:chat:sessions:messages:payload_bytes";
+const CHAT_MESSAGE_ACCEPT_LATENCY_KEY = "metrics:chat:message:accept:latency_ms";
 
 function estimateJsonPayloadBytes(payload: unknown) {
   return Buffer.byteLength(JSON.stringify(payload), "utf8");
@@ -232,8 +233,9 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
     const auth = getUserScopedAuth(request);
     const context = getRequestContext(request);
     const idempotencyKey = getIdempotencyKey(request);
+    const startedAt = Date.now();
 
-    return createChatMessage(app, {
+    const payload = await createChatMessage(app, {
       userId: auth.sub,
       sessionId: body.sessionId,
       targetDeviceId: body.targetDeviceId,
@@ -248,5 +250,16 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
       userAgent: context.userAgent,
       idempotencyKey,
     });
+    // Numeric-only telemetry stays detached from the response path and never
+    // records the user's prompt or generated content.
+    void recordChatRouteMetric(
+      app,
+      CHAT_MESSAGE_ACCEPT_LATENCY_KEY,
+      Date.now() - startedAt,
+    );
+    // Chat acceptance is asynchronous by contract: the task/message rows are
+    // durable and the realtime stream owns generation progress. Returning 202
+    // makes that boundary explicit without changing the response envelope.
+    return reply.code(202).send(payload);
   });
 };

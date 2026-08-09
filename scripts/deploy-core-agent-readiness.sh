@@ -14,18 +14,41 @@ echo "==> Remote backup: ${BACKUP_DIR}"
 ssh "${REMOTE_HOST}" "mkdir -p '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && cp -a package.json package-lock.json ${COMPOSE_FILE} src scripts '${BACKUP_DIR}/' && if [ -d ml-worker ]; then cp -a ml-worker '${BACKUP_DIR}/'; fi"
 
 echo "==> Sync exact backend files"
+# `bin/` DERLENMİŞ ÇIKTIDIR, kaynak değil. Geliştirici Mac'inde üretilen
+# `bin/elyan_nlp` bir Mach-O arm64 ikilisidir; Linux sunucuya kopyalanınca
+# hiç çalışamaz ve C hızlandırılmış NLP yolu sessizce ölür (23 Tem–7 Ağu
+# arası prod tam olarak bu durumdaydı: her istek yavaş JS yoluna düşüyordu).
+# Sunucuda kaynaktan derliyoruz.
+# `secrets/` YALNIZ SUNUCUDA yaşar (Apple IAP ve APNS özel anahtarları; repoda
+# yokturlar ve olmamalıdırlar). Hariç tutulmadığı için `--delete` onları
+# siliyordu; ardından compose'un bind-mount'ları yerlerine BOŞ KLASÖR yaratıyor
+# ve hata vermeden Apple abonelik doğrulaması ile push bildirimleri ölüyordu.
+# `.blob-store/` de aynı sebeple korunur: çalışma zamanı verisi.
 rsync -az --delete \
   --exclude node_modules \
   --exclude dist \
+  --exclude bin \
   --exclude .git \
   --exclude .env \
+  --exclude secrets \
+  --exclude .blob-store \
+  --exclude .codex-backups \
+  --exclude .codex-worktrees \
   ./ "${REMOTE_HOST}:${REMOTE_DIR}/"
+
+echo "==> Compile native NLP on the target architecture"
+ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && npm run compile:nlp"
 
 echo "==> Remote tests"
 ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && npm ci && npm test -- health runtime tasks chat brain auth realtime routing-policy"
 
 echo "==> Schema bootstrap and Docker restart"
-ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build redis backend training-worker ml-worker"
+# chat-worker / brain-worker / document-worker DERLENMİŞ İMAJ çalıştırıyor
+# (`node dist/workers/*.js`), volume mount değil. Listede olmadıkları için
+# deploy sonrası ESKİ imajda kalıyorlardı: backend yenilenmiş görünürken
+# sohbet üretimi hâlâ eski kodu koşuyordu — "düzelttim ama değişmedi"
+# vakalarının kaynağı buydu.
+ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build redis backend training-worker ml-worker chat-worker brain-worker document-worker"
 
 echo "==> Health poll"
 HEALTH_OK=0

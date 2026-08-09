@@ -18,6 +18,12 @@ import { RealtimeHub } from "../modules/realtime/hub.js";
 import { extractBearerToken } from "../lib/request-auth.js";
 import { unauthorized } from "../lib/errors.js";
 import { createReliabilityServices } from "../lib/reliability/index.js";
+import {
+  createProcessPressureMonitor,
+  rateLimitKeyGenerator,
+  rateLimitMaxForRequest,
+  registerProcessPressureGuard,
+} from "../lib/reliability/process-pressure.js";
 import { BlobService } from "../lib/blob/blob-service.js";
 import { enforceRouteRequestBudget } from "../lib/reliability/request-budget.js";
 import type { AuthTokenPayload } from "../types/auth.js";
@@ -36,7 +42,10 @@ import { brainRoutes } from "../modules/brain/routes.js";
 import { chatRoutes } from "../modules/chat/routes.js";
 import { goalRoutes } from "../modules/goals/routes.js";
 import { consentRoutes } from "../modules/consents/routes.js";
-import { integrationAppRoutes } from "../modules/integrations/routes.js";
+import {
+  integrationAppRoutes,
+  integrationLegacyRoutes,
+} from "../modules/integrations/routes.js";
 import { mcpRoutes } from "../modules/mcp/routes.js";
 import { adminRoutes } from "../modules/admin/routes.js";
 import { trainPanelRoutes } from "../modules/admin/train-panel.js";
@@ -45,7 +54,11 @@ import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
 import { startInProcessMemoryWorker } from "../modules/brain/worker.js";
-import { registerChatGenerationQueueLifecycle } from "../modules/brain/chat-generation-queue.js";
+import {
+  registerChatGenerationQueueLifecycle,
+  warmChatGenerationQueue,
+} from "../modules/brain/chat-generation-queue.js";
+import { createMobilePushDispatcher } from "../modules/mobile/push.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
 import { getPerfSnapshot, startPerfTelemetry } from "../lib/perf-telemetry.js";
 
@@ -163,7 +176,12 @@ export async function buildApp(envInput?: AppEnv) {
     },
     bodyLimit: 1_000_000,
     disableRequestLogging: true,
-    trustProxy: env.NODE_ENV === "production",
+    // `trustProxy: true` İNTERNETTEN gelen `X-Forwarded-For`'u olduğu gibi
+    // kabul ederdi. Hız sınırı IP'ye baktığı için bu, başlığı her istekte
+    // uydurarak sınırı tamamen atlatmak demekti. Sayı vermek "yalnız şu kadar
+    // ters vekil katmanına güven" anlamına gelir (varsayılan 1 = kutunun
+    // üstündeki nginx/caddy); geri kalan XFF içeriği yok sayılır.
+    trustProxy: env.NODE_ENV === "production" ? env.TRUST_PROXY_HOPS : false,
   });
 
   registerChatGenerationQueueLifecycle(app);
@@ -193,10 +211,24 @@ export async function buildApp(envInput?: AppEnv) {
   );
   await app.register(rateLimit, {
     global: true,
-    max: 600,
+    // Kova anahtarı ÖNCE kimlik (bearer token hash'i), yoksa IP: IP tabanlı
+    // tek anahtar hem CGNAT arkasındaki kullanıcıları birbirine bağlıyordu
+    // hem de IP döndürerek sınırı atlatmayı mümkün kılıyordu.
+    keyGenerator: rateLimitKeyGenerator,
+    // Tavan rotanın MALİYETİNE göre: `/healthz` ile LLM çıkarımı aynı
+    // 600/dk bütçesini paylaşamaz.
+    max: (request) => rateLimitMaxForRequest(env, request),
     timeWindow: "1 minute",
     redis: env.RATE_LIMIT_REDIS_ENABLED ? reliability.store.redisClient ?? undefined : undefined,
     skipOnError: !env.RELIABILITY_REDIS_REQUIRED,
+  });
+  // Süreç doyduğunda (olay döngüsü / heap) yeni iş isteklerini hızlıca 503 ile
+  // geri çevir. Yavaşça kilitlenip sağlık yoklamasını da düşürmek yerine
+  // ayakta kalıp toparlanmanın tek yolu bu.
+  const processPressure = createProcessPressureMonitor(env);
+  registerProcessPressureGuard(app, processPressure);
+  app.addHook("onClose", async () => {
+    processPressure.stop();
   });
   await app.register(cors, {
     origin: resolveCorsOrigins(env),
@@ -324,6 +356,9 @@ export async function buildApp(envInput?: AppEnv) {
     );
   });
 
+  const mobilePush = createMobilePushDispatcher(app);
+  mobilePush.start(eventBus);
+
   const services = {
     eventBus,
     realtimeHub,
@@ -332,6 +367,10 @@ export async function buildApp(envInput?: AppEnv) {
   };
 
   app.decorate("services", services);
+  // Warm API-side BullMQ connections before the first user message. This is
+  // intentionally fire-and-forget so a temporary Redis outage never blocks
+  // app startup; the enqueue path shares the same in-flight promise.
+  void warmChatGenerationQueue(app);
 
   /* Start C NLP daemon — non-fatal if binary is not yet compiled */
   nlpDaemon.start({
@@ -434,6 +473,7 @@ export async function buildApp(envInput?: AppEnv) {
     stopRealtimePruner();
     stopMemoryWorker();
     nlpDaemon.stop();
+    mobilePush.close();
     await realtimeHub.close();
     await eventBus.close();
     await reliability.store.close();
@@ -470,9 +510,45 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(goalRoutes, { prefix: "/v1/goals" });
   await app.register(consentRoutes, { prefix: "/v1/consents" });
   await app.register(integrationAppRoutes, { prefix: "/v1/integrations" });
+  await app.register(integrationLegacyRoutes, { prefix: "/v1/integrations" });
   await app.register(mcpRoutes, { prefix: "/v1/mcp" });
   await app.register(adminRoutes, { prefix: "/v1/admin" });
   await app.register(webRoutes, { prefix: "/v1/web" });
   await app.register(trainPanelRoutes);
+
+  reportDisabledCapabilities(app);
+
   return app;
+}
+
+/**
+ * Açılışta, YAPILANDIRMA EKSİKLİĞİ yüzünden kapalı kalan yetenekleri tek
+ * yerde ve yüksek sesle bildirir.
+ *
+ * NEDEN: `GEMINI_API_KEY` tanımsız olduğunda görsel üretimi, görsel
+ * düzenleme, görü çıkarımı, ücretsiz katman ve sağlayıcı seçimi AYRI AYRI ve
+ * SESSİZCE devre dışı kalıyordu. Kullanıcıya "biraz sonra tekrar dene" gibi
+ * geçici arıza mesajları gidiyor, logda hiçbir iz kalmıyordu; sonuç, teşhis
+ * edilemeyen bir "Gemini hiçbir şeyi yapamıyor" hâliydi. Tek eksik değişken
+ * artık ilk saniyede görünür.
+ */
+function reportDisabledCapabilities(app: FastifyInstance): void {
+  const disabled: string[] = [];
+
+  if (!String(app.config.GEMINI_API_KEY ?? "").trim()) {
+    disabled.push(
+      "GEMINI_API_KEY yok → görsel üretimi, görsel düzenleme, görü çıkarımı ve Gemini ücretsiz katmanı KAPALI",
+    );
+  }
+  if (!String(app.config.GROQ_API_KEY ?? "").trim()) {
+    disabled.push("GROQ_API_KEY yok → sohbet üretimi ve konuşma tanıma KAPALI");
+  }
+
+  if (disabled.length === 0) {
+    app.log.info("capability check: tüm sağlayıcı anahtarları tanımlı");
+    return;
+  }
+  for (const line of disabled) {
+    app.log.error({ capability: "disabled" }, line);
+  }
 }

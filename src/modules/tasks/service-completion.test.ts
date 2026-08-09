@@ -234,7 +234,11 @@ test("resolveNonEchoAssistantText does not expose broken generation fallback pro
     responseText: "Ceza hukuku nedir?",
   });
 
+  // Testin amacı: model kullanıcının sorusunu aynen tekrarladığında ne bozuk
+  // üretim nesri sızsın ne de sorunun kendisi cevap diye dönsün. Dolgu cümlesi
+  // yerine artık BOŞ dönülüyor; kararı çağıran katman veriyor. Metni değil
+  // bu üç koşulu sabitliyoruz.
   assert.doesNotMatch(answer, /Yanıtı düzgün üretemedim/u);
   assert.doesNotMatch(answer, /tekrar dene/u);
-  assert.equal(answer, "İsteğini aldım; eldeki bağlamla devam ediyorum.");
+  assert.notEqual(answer.trim(), "Ceza hukuku nedir?");
 });

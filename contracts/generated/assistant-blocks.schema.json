@@ -1380,10 +1380,40 @@
               ],
               "type": "string"
             },
+            "data": {
+              "items": {},
+              "maxItems": 1500,
+              "type": "array"
+            },
             "expression": {
               "maxLength": 2000,
               "minLength": 1,
               "type": "string"
+            },
+            "fixed": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "interactions": {
+              "items": {
+                "enum": [
+                  "tooltip",
+                  "trackball",
+                  "zoom",
+                  "pan",
+                  "type_switch",
+                  "fullscreen",
+                  "share"
+                ],
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
             },
             "labels": {
               "items": {
@@ -1405,6 +1435,18 @@
               "maxItems": 1500,
               "type": "array"
             },
+            "range": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "renderer": {
+              "maxLength": 40,
+              "minLength": 1,
+              "type": "string"
+            },
             "series": {
               "items": {
                 "additionalProperties": {},
@@ -1416,8 +1458,22 @@
               "maxItems": 8,
               "type": "array"
             },
+            "theme": {
+              "enum": [
+                "system",
+                "presentation",
+                "report",
+                "minimal"
+              ],
+              "type": "string"
+            },
             "title": {
               "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            "unit": {
+              "maxLength": 40,
               "minLength": 1,
               "type": "string"
             },
@@ -1427,6 +1483,25 @@
               },
               "maxItems": 240,
               "type": "array"
+            },
+            "variables": {
+              "items": {
+                "maxLength": 24,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 12,
+              "type": "array"
+            },
+            "xLabel": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            "yLabel": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
             }
           },
           "required": [
@@ -4922,9 +4997,25 @@
               "minLength": 1,
               "type": "string"
             },
+            "colorBy": {
+              "enum": [
+                "z",
+                "gradientMagnitude"
+              ],
+              "type": "string"
+            },
             "expression": {
               "maxLength": 240,
               "minLength": 1,
+              "type": "string"
+            },
+            "interactive": {
+              "type": "boolean"
+            },
+            "mode": {
+              "enum": [
+                "surface"
+              ],
               "type": "string"
             },
             "range": {
@@ -4943,6 +5034,15 @@
               "maxLength": 120,
               "minLength": 1,
               "type": "string"
+            },
+            "variables": {
+              "items": {
+                "maxLength": 24,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 4,
+              "type": "array"
             },
             "zLabel": {
               "maxLength": 160,
@@ -7998,7 +8098,7 @@
     "web_search": "WebSearchBlock"
   },
   "x-elyan-envelope-version": 1,
-  "x-elyan-schema-digest": "e4d362d3126336edf367b7df4263ca6ba3d777fea63b55d3ad34ab4a869cfb5b",
+  "x-elyan-schema-digest": "506c3b8108be084ab936459138fffe97bc258425dfbd0411496dad8b9cab419d",
   "x-elyan-source-widget-types": [
     "mail_list",
     "mail_detail",

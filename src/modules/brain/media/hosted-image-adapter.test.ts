@@ -26,8 +26,12 @@ test("Gemini image adapter builds a minimal Interactions text-to-image request",
       text: "Warm editorial illustration\n\nRequested aspect ratio: 3:2.",
     },
   ]);
-  assert.equal("response_format" in request.body, false);
-  assert.equal("store" in request.body, false);
+  assert.equal(request.body.store, false);
+  assert.deepEqual(request.body.response_format, {
+    type: "image",
+    mime_type: "image/jpeg",
+    aspect_ratio: "3:2",
+  });
   assert.equal("system_instruction" in request.body, false);
   assert.doesNotMatch(JSON.stringify(request.body), /secret-test-key/u);
 });
@@ -53,7 +57,12 @@ test("Gemini image adapter sends exact prompt and source image for editing", () 
     },
     { type: "image", data: "YWJjZA==", mime_type: "image/png" },
   ]);
-  assert.equal("response_format" in request.body, false);
+  assert.equal(request.body.store, false);
+  assert.deepEqual(request.body.response_format, {
+    type: "image",
+    mime_type: "image/jpeg",
+    image_size: "2K",
+  });
 });
 
 test("hosted image adapter normalizes Gemini inline image output", () => {

@@ -5,6 +5,7 @@ import {
   buildWebGroundingPromptBlock,
   classifyWebGroundingDecision,
   detectFactualityGrounding,
+  explicitDataArtifactRequest,
   extractDateFromText,
   extractNumericEvidenceFromGrounding,
   parseDuckDuckGoHtml,
@@ -1095,4 +1096,119 @@ test("sentence-initial result instructions do not turn arithmetic into a web loo
       reasons: ["self_contained_no_web", "intent:math"],
     },
   );
+});
+
+// RC-5 — Gereksiz reddetme. "son 5 yılın enflasyonunu tablo ve grafik göster"
+// regex domain sözlüğünde "enflasyon" olmadığı için no_web_needed sınıflanıp
+// HİÇ ARANMADAN reddediliyordu (freshData: grounding_not_attempted). Açık bir
+// veri chart'ı/tablosu isteği YAPISAL bir "veri gerekiyor" sinyalidir; yerel/
+// kişisel/ekli değilse grounding ATTEMPT edilmeli — önce araştır, sonra
+// yeterliliği gerçek kanıt üzerinde değerlendir.
+test("explicitDataArtifactRequest flags a public data chart/table request", () => {
+  assert.equal(
+    explicitDataArtifactRequest(
+      "son 5 yılın Türkiye enflasyonunu tablo ve grafik göster",
+    ),
+    true,
+  );
+  assert.equal(explicitDataArtifactRequest("bugün nasılsın"), false);
+  assert.equal(explicitDataArtifactRequest("bana bir şiir yaz"), false);
+});
+
+test("searchPublicWebGrounding now attempts grounding for a data-chart request the regex classifier missed", async () => {
+  // Ön koşul: bu istek TEK BAŞINA (chart sinyali olmadan) web_required değil —
+  // yani eski davranışta hiç aranmazdı.
+  assert.equal(
+    shouldUseWebGrounding({
+      prompt: "son 5 yılın Türkiye enflasyonunu tablo ve grafik göster",
+      workload: "mobile_chat_balanced",
+    }),
+    false,
+  );
+
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+      ELYAN_WEB_GROUNDING_TIMEOUT_MS: 2_000,
+    },
+  } as never;
+
+  let searched = false;
+  const result = await withMockedFetch(
+    async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      if (url.includes("duckduckgo.com/html")) {
+        searched = true;
+        return new Response(
+          `
+            <div class="result">
+              <a class="result__a" href="https://tuik.gov.tr/enflasyon">TÜİK Enflasyon</a>
+              <a class="result__snippet">Yıllık enflasyon oranları.</a>
+            </div>
+          `,
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      if (url === "https://tuik.gov.tr/enflasyon") {
+        return new Response(
+          `<html><head><title>TÜİK Enflasyon</title><meta name="description" content="Resmi enflasyon serisi."/></head><body><p>Veri.</p></body></html>`,
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    async () =>
+      searchPublicWebGrounding(app, {
+        prompt: "son 5 yılın Türkiye enflasyonunu tablo ve grafik göster",
+        workload: "mobile_chat_balanced",
+      }),
+  );
+
+  assert.equal(searched, true);
+  assert.equal(result.used, true);
+  assert.equal(
+    result.freshData.reasons.includes("grounding_not_attempted"),
+    false,
+  );
+  assert.equal(
+    (result.decisionReasons ?? []).includes("data_artifact_needs_grounding"),
+    true,
+  );
+});
+
+test("searchPublicWebGrounding still refuses to search a chart request that explicitly forbids the web", async () => {
+  const app = {
+    config: {
+      ELYAN_WEB_GROUNDING_ENABLED: true,
+      ELYAN_WEB_SEARCH_BASE_URL: "https://html.duckduckgo.com/html/",
+      ELYAN_WEB_GROUNDING_MAX_RESULTS: 3,
+    },
+  } as never;
+
+  let searched = false;
+  const result = await withMockedFetch(
+    async () => {
+      searched = true;
+      return new Response("<div></div>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    },
+    async () =>
+      searchPublicWebGrounding(app, {
+        prompt:
+          "internete bakma, sadece verdiğim sayılardan bir tablo ve grafik yap",
+        workload: "mobile_chat_balanced",
+      }),
+  );
+
+  assert.equal(searched, false);
+  assert.equal(result.used, false);
 });

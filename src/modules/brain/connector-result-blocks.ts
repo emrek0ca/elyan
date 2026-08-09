@@ -15,11 +15,15 @@ import type { AgentToolResult } from "./tool-registry.js";
  * Deterministically normalize successful connector/MCP read results into the
  * seven source-typed widget envelopes. The prose refinement remains a short
  * conversational summary; these blocks are the authoritative data surface.
- * The old `connector_result` builders below are retained only for stored-history
- * compatibility and are not called by the production inference path.
+ * Provider-specific results use source widgets. Arbitrary MCP results use the
+ * bounded `connector_result` compatibility envelope until a source-specific
+ * widget contract exists for that server.
  */
 
 type ConnectorResultBlock = ReturnType<typeof buildAssistantConnectorResultBlock>;
+type NormalizedConnectorBlock =
+  | SourceTypedConnectorBlock
+  | NonNullable<ConnectorResultBlock>;
 
 export type SourceTypedConnectorBlockType = SourceWidgetBlockType;
 
@@ -926,10 +930,15 @@ function slackMessagesBlock(output: Record<string, unknown>): SourceTypedConnect
  */
 export function buildSourceTypedConnectorBlocks(
   results: AgentToolResult[],
-): SourceTypedConnectorBlock[] {
-  const blocks: SourceTypedConnectorBlock[] = [];
+): NormalizedConnectorBlock[] {
+  const blocks: NormalizedConnectorBlock[] = [];
   for (const result of results) {
     if (!result.ok || result.permission !== "read" || !result.output) continue;
+    if (result.tool.startsWith("mcp__")) {
+      const block = genericConnectorBlock(result.tool, result.output);
+      if (block) blocks.push(block);
+      continue;
+    }
     const source = sourceHint(result.tool, result.output);
     if (!source) continue;
     if (source === "gmail") {
@@ -969,7 +978,7 @@ export function buildSourceTypedConnectorBlocks(
   }
   return blocks.flatMap((block) => {
     const parsed = elyanAssistantBlockEnvelopeSchema.safeParse(block);
-    return parsed.success ? [parsed.data as SourceTypedConnectorBlock] : [];
+    return parsed.success ? [parsed.data as NormalizedConnectorBlock] : [];
   });
 }
 
@@ -1336,7 +1345,7 @@ const CONNECTOR_TABLE_BUILDERS: Record<
 };
 
 /**
- * Legacy history adapter only. New production calls must use
+ * Legacy provider adapter. New provider-specific calls must use
  * `buildSourceTypedConnectorBlocks`; keeping this export prevents older stored
  * `connector_result` messages and focused compatibility tests from breaking.
  */

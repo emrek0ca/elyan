@@ -23,7 +23,6 @@ import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import { startStage } from "../../lib/perf-telemetry.js";
 import {
   buildHashedKnowledgeEmbedding,
-  canUseHybridRetrieval,
   getRetrievalStatus,
   RETRIEVAL_EMBEDDING_MODEL,
 } from "./retrieval.js";
@@ -318,11 +317,13 @@ async function ensureMemorySemanticV2Columns(app: FastifyInstance): Promise<bool
       `);
       await app.db.execute(sql`
         alter table brain_memory_facts
+          add column if not exists embedding vector(256),
           add column if not exists embedding_v2 vector(384),
           add column if not exists embedding_v2_model varchar(96)
       `);
       await app.db.execute(sql`
         alter table brain_memory_episodes
+          add column if not exists embedding vector(256),
           add column if not exists embedding_v2 vector(384),
           add column if not exists embedding_v2_model varchar(96)
       `);
@@ -334,6 +335,10 @@ async function ensureMemorySemanticV2Columns(app: FastifyInstance): Promise<bool
   })();
   memorySemanticV2Ready.set(app, pending);
   return pending;
+}
+
+async function canUseMemoryHybridRetrieval(app: FastifyInstance): Promise<boolean> {
+  return ensureMemorySemanticV2Columns(app);
 }
 
 async function insertLegacyMemoryFact(
@@ -1342,11 +1347,11 @@ export async function searchBrainMemory(
   const endStage = startStage("memory_search");
   try {
     const startedAt = Date.now();
-    // hybridReady is cached, but the first call in a fresh process hits the DB
-    // (pgvector + column checks). Include it in the total budget so a slow
-    // Postgres never blocks retrieval even before the main queries start.
+    // Memory retrieval has its own vector columns. Do not gate it on
+    // knowledge_chunks readiness; otherwise personal memory can silently fall
+    // back to lexical even when brain_memory_* is fully indexed.
     const hybridProbe = await withMemoryBudget(
-      canUseHybridRetrieval(app),
+      canUseMemoryHybridRetrieval(app),
       MEMORY_SEARCH_BUDGET_MS,
     );
     if (hybridProbe === MEMORY_BUDGET_EXPIRED) {
@@ -2780,7 +2785,7 @@ async function applyMemoryRetentionCompaction(app: FastifyInstance, userId: stri
 }
 
 async function synthesizeSelfModelSummary(app: FastifyInstance, userId: string) {
-  const [memoryStatus, retrievalStatus, recentSignals] = await Promise.all([
+  const [memoryStatus, retrievalStatus, memoryHybridReady, recentSignals] = await Promise.all([
     getBrainMemoryStatus(app, userId),
     getRetrievalStatus(app, userId).catch(() => ({
       mode: "lexical_fallback" as const,
@@ -2789,6 +2794,7 @@ async function synthesizeSelfModelSummary(app: FastifyInstance, userId: string) 
       lastIndexedAt: null,
       hybridReady: false,
     })),
+    canUseMemoryHybridRetrieval(app).catch(() => false),
     app.db
       .select({
         key: learningEvents.key,
@@ -2812,7 +2818,7 @@ async function synthesizeSelfModelSummary(app: FastifyInstance, userId: string) 
   ]);
 
   const limitations: string[] = [];
-  if (retrievalStatus.mode !== "hybrid") {
+  if (!memoryHybridReady) {
     limitations.push("retrieval_hybrid_unavailable");
   }
   if (memoryStatus.memoryIndexCoverage <= 0) {
@@ -2829,9 +2835,14 @@ async function synthesizeSelfModelSummary(app: FastifyInstance, userId: string) 
     .slice(0, 6)
     .map((row) => `${row.key}:${compactText(String(row.value ?? "")).slice(0, 80)}`)
     .filter(Boolean);
+  const memoryRetrievalMode =
+    memoryHybridReady && memoryStatus.memoryIndexCoverage > 0
+      ? "hybrid"
+      : "lexical_fallback";
 
   const surfacesSummary = [
-    `retrieval=${retrievalStatus.mode}`,
+    `memoryRetrieval=${memoryRetrievalMode}`,
+    `knowledgeRetrieval=${retrievalStatus.mode}`,
     `memoryIndexCoverage=${memoryStatus.memoryIndexCoverage}%`,
     `contestedMemory=${memoryStatus.contestedMemoryCount}`,
     `staleMemory=${memoryStatus.staleMemoryCount}`,
@@ -3594,7 +3605,7 @@ async function processMemoryIndexJob(app: FastifyInstance, job: typeof trainingJ
     };
   }
 
-  if (!(await canUseHybridRetrieval(app))) {
+  if (!(await canUseMemoryHybridRetrieval(app))) {
     return {
       status: "skipped" as const,
       processedCount: 0,

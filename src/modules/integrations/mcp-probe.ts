@@ -44,6 +44,12 @@ export type McpProbeResult = {
     name: string;
     description: string;
     inputSchemaDigest: string | null;
+    annotations?: {
+      readOnlyHint?: boolean;
+      destructiveHint?: boolean;
+      idempotentHint?: boolean;
+      openWorldHint?: boolean;
+    } | null;
     /** Ham JSON Schema. Modele araç ilan etmek için gerekli; çok büyükse null. */
     inputSchema?: Record<string, unknown> | null;
   }>;
@@ -299,7 +305,30 @@ export async function probeMcpServer(input: {
         serializedInputSchema && serializedInputSchema.length <= MAX_RECORDED_TOOL_SCHEMA_LENGTH
           ? (record.inputSchema as Record<string, unknown>)
           : null;
-      return { name, description, inputSchemaDigest, inputSchema };
+      const annotations = asRecord(record.annotations);
+      return {
+        name,
+        description,
+        inputSchemaDigest,
+        inputSchema,
+        annotations:
+          Object.keys(annotations).length > 0
+            ? {
+                ...(typeof annotations.readOnlyHint === "boolean"
+                  ? { readOnlyHint: annotations.readOnlyHint }
+                  : {}),
+                ...(typeof annotations.destructiveHint === "boolean"
+                  ? { destructiveHint: annotations.destructiveHint }
+                  : {}),
+                ...(typeof annotations.idempotentHint === "boolean"
+                  ? { idempotentHint: annotations.idempotentHint }
+                  : {}),
+                ...(typeof annotations.openWorldHint === "boolean"
+                  ? { openWorldHint: annotations.openWorldHint }
+                  : {}),
+              }
+            : null,
+      };
     })
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
 

@@ -31,6 +31,7 @@ type MobilePushMessage = {
   silent: boolean;
   collapseId: string;
   dedupeKey: string;
+  category?: string;
 };
 
 const PUSH_DEDUPE_TTL_MS = 15 * 60_000;
@@ -182,6 +183,7 @@ export function buildPushMessage(event: DomainEvent): MobilePushMessage | null {
         silent: false,
         collapseId: `task-${taskId}-${isClarification ? "question" : "approval"}`,
         dedupeKey: `waiting:${identity}`,
+        category: "elyan.approval",
       };
     }
 
@@ -202,6 +204,7 @@ export function buildPushMessage(event: DomainEvent): MobilePushMessage | null {
       silent: false,
       collapseId: `task-${taskId}-result`,
       dedupeKey: `terminal:${taskId}:${terminalStatus}`,
+      category: "elyan.task",
     };
   }
 
@@ -307,6 +310,7 @@ export class ApplePushClient {
     badge?: number;
     silent?: boolean;
     collapseId?: string;
+    category?: string;
     extra?: Record<string, unknown>;
   }): Promise<{
     ok: boolean;
@@ -349,6 +353,7 @@ export class ApplePushClient {
               body: input.body,
             },
             badge: input.badge,
+            ...(input.category ? { category: input.category } : {}),
           },
       elyan: input.extra ?? {},
     };
@@ -534,6 +539,23 @@ export class MobilePushDispatcher {
       };
     }
 
+    // Push is optional. Avoid a device query for every task event when APNs is
+    // not configured; this keeps the realtime path cheap in local/degraded
+    // environments and during rolling deploys.
+    if (this.app.config.ELYAN_PUSH_ENABLED === false || !this.client.readiness().ready) {
+      return {
+        attempted: 0,
+        delivered: 0,
+        skipped: 1,
+        failed: 0,
+        reasons: [
+          this.app.config.ELYAN_PUSH_ENABLED === false
+            ? "push_disabled"
+            : "apns_config_missing",
+        ],
+      };
+    }
+
     const now = Date.now();
     this.sweepDedupe(now);
     const userDedupeKey = `${event.userId}:${message.dedupeKey}`;
@@ -599,6 +621,7 @@ export class MobilePushDispatcher {
         body: message.body,
         silent: message.silent,
         collapseId: message.collapseId,
+        category: message.category,
         extra: {
           topic: event.topic,
           userId: event.userId,

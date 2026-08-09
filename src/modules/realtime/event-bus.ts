@@ -78,6 +78,10 @@ export class EventBus {
     Map<string, VolatileSnapshotEntry>
   >();
   private volatilePublishCount = 0;
+  // Local SSE delivery must never wait for Redis. Remote volatile publishes
+  // are ordered per channel, not globally: one slow user's Redis publish must
+  // not queue every other user's delta behind it.
+  private readonly volatileFanoutTails = new Map<string, Promise<void>>();
 
   private recordVolatileSnapshot(channels: string[], event: DomainEvent): void {
     if (!VOLATILE_SNAPSHOT_TOPICS.has(event.topic)) {
@@ -200,10 +204,35 @@ export class EventBus {
       this.emitChannel(channel, storedEvent);
     }
 
+    // Volatile chat events are already delivered to local SSE subscribers and
+    // recorded in the short-lived snapshot above. Do not make the provider
+    // stream wait for a remote Redis round trip; the durable terminal event
+    // remains recoverable from Postgres if a replica disappears mid-stream.
     if (this.options.fanout && this.fanoutStarted && channels.length > 0) {
-      await this.options.fanout.publish(channels, storedEvent).catch((error: unknown) => {
-        this.options.onFanoutError?.(error);
-      });
+      const fanout = this.options.fanout;
+      const previous = channels.map(
+        (channel) => this.volatileFanoutTails.get(channel) ?? Promise.resolve(),
+      );
+      // One Redis publish still carries all scopes for this event. Waiting on
+      // every affected channel tail preserves ordering for each scope while
+      // allowing unrelated users/tasks to publish concurrently.
+      const next = Promise.all(previous)
+        .then(() => fanout.publish(channels, storedEvent))
+        .catch((error: unknown) => {
+          this.options.onFanoutError?.(error);
+        });
+      const settled = next.then(
+        () => undefined,
+        () => undefined,
+      );
+      for (const channel of channels) {
+        this.volatileFanoutTails.set(channel, settled);
+        void settled.then(() => {
+          if (this.volatileFanoutTails.get(channel) === settled) {
+            this.volatileFanoutTails.delete(channel);
+          }
+        });
+      }
     }
 
     return storedEvent;
@@ -215,6 +244,7 @@ export class EventBus {
   }
 
   public async close(): Promise<void> {
+    await Promise.all(this.volatileFanoutTails.values());
     await this.options.fanout?.close();
   }
 

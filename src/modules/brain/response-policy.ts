@@ -366,6 +366,32 @@ function guardUnsupportedCurrentClaims(input: {
   return input.text;
 }
 
+/**
+ * Çıktısı KULLANICI METNİ DEĞİL, MAKİNE VERİSİ olan iş yükleri.
+ *
+ * Bu turlarda model katı JSON üretir ve o JSON'u başka bir kod ayrıştırır;
+ * kullanıcı asla görmez. Sohbet sanitizasyonu (cümle kırpma, "güncel iddia"
+ * söküm kuralları, jenerik son-çare cümlesi) bu içeriği BOŞALTIR.
+ *
+ * Canlı kanıt (2026-08-08): semantik yönlendirici `fast_route` iş yüküyle
+ * çalışıyordu. Model doğru JSON'u ÜRETİYORDU — doğrudan çağrıda
+ * `finish_reason=stop` ve geçerli `{"operationalRoute":"desktop_runtime",...}`
+ * dönüyordu — ama boru hattı bu JSON'u kullanıcıya gösterilemez sayıp
+ * siliyor, geriye boş metin kalıyor ve tur "Bu kez düzgün bir yanıt
+ * oluşturamadım" cümlesine düşüyordu. Yönlendirici bu yüzden HİÇ karar
+ * veremedi; hiçbir görev masaüstüne yönlenmedi ve her komut tek tek elle
+ * yamanmak zorunda kaldı.
+ *
+ * `planning` zaten muaftı; aynı muafiyet tüm makine-çıktılı yollara verilir —
+ * böylece karar ANLAMDAN gelir, komut başına kural yazmaya gerek kalmaz.
+ */
+const MACHINE_OUTPUT_WORKLOADS = new Set([
+  "planning",
+  "fast_route",
+  "intent",
+  "desktop_handoff",
+]);
+
 export function sanitizeFinalAssistantResponse(input: {
   prompt: string;
   text: string;
@@ -387,7 +413,7 @@ export function sanitizeFinalAssistantResponse(input: {
   // güncel-iddia söküm kuralları plan gövdesini (sayı dolu adımlar) boşaltıp
   // yerine "doğrulanmış veri alamadım" yedeğini koyuyordu → /desktop/plan
   // hiçbir zaman plan teslim edemiyordu. Sohbet sanitizasyonu sohbete özgüdür.
-  if (input.workload === "planning") {
+  if (MACHINE_OUTPUT_WORKLOADS.has(String(input.workload ?? ""))) {
     return String(input.text ?? "").trim();
   }
   const policy = responsePolicyForPrompt(input.prompt);
@@ -432,8 +458,42 @@ export function sanitizeFinalAssistantResponse(input: {
     /[çğıöşüÇĞİÖŞÜ]/u.test(input.prompt) ||
     /(?<!\p{L})(bana|bunu|şunu|sunu|nasıl|nasil|neden|bugün|bugun|görsel|gorsel)(?!\p{L})/iu.test(input.prompt);
   return looksTurkish
-    ? "Bu kez düzgün bir yanıt oluşturamadım. Mesajını yeniden gönderir misin?"
-    : "I couldn't produce a complete answer this time. Please send the message again.";
+    ? ASSISTANT_GENERIC_FALLBACK_TR
+    : ASSISTANT_GENERIC_FALLBACK_EN;
+}
+
+/**
+ * "Yanıt oluşturamadım" cümleleri.
+ *
+ * Bu metin SON ÇARE: yalnız hem görünür metin hem de çizilebilir çıktı
+ * yokken kullanılır. Tek bir yerde durması şart, çünkü boru hattının birden
+ * çok noktasında `sanitizeFinalAssistantResponse` çağrılıyor ve daha SONRA
+ * üretilen bir widget (sunucu tarafı grafik türetmesi gibi) bu cümleyi geri
+ * almak zorunda — string'i kopyalayarak karşılaştırmak kırılgan olurdu.
+ */
+export const ASSISTANT_GENERIC_FALLBACK_TR =
+  "Bu kez düzgün bir yanıt oluşturamadım. Mesajını yeniden gönderir misin?";
+export const ASSISTANT_GENERIC_FALLBACK_EN =
+  "I couldn't produce a complete answer this time. Please send the message again.";
+
+/**
+ * Metin, "üretemedim" son çaresinin ta kendisi mi?
+ *
+ * Boru hattının erken bir adımı bu cümleyi yazdıysa ve SONRADAN çizilebilir
+ * bir blok (grafik/tablo/belge) üretildiyse cümle DÜŞMELİ: kullanıcı ekranda
+ * hem grafiği hem "yanıt oluşturamadım"ı görmemeli.
+ */
+export function isGenericAssistantFallbackReply(text: unknown): boolean {
+  const normalized = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === ASSISTANT_GENERIC_FALLBACK_TR ||
+    normalized === ASSISTANT_GENERIC_FALLBACK_EN
+  );
 }
 
 export function buildElyanVoiceProfilePromptBlock(input: {

@@ -1,5 +1,6 @@
 import { buildGroqModelCatalog, type GroqModelConfigSource } from "./groq-models.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import type { SharedBrainConversationMessage } from "./provider-request.js";
 
 /**
  * Groq Compound entegrasyonu — mevcut OpenAI uyumlu Groq sağlayıcı boru hattını
@@ -102,8 +103,43 @@ export function resolveGroqCompoundModel(
   return fast ? catalog.compoundMiniModel : catalog.compoundModel;
 }
 
+
 /**
- * compound_custom / search_settings gövde eklentisi. Yalnız model compound ise
+ * Compound'a KENDİ araç sonuçlarının kanıt olduğunu söyleyen yönerge.
+ *
+ * CANLI ARIZA: "Maraş'ta hava durumu nasıl" sorusunda compound-mini yerleşik
+ * web aramasını çalıştırdı, dört kaynak buldu (snippet'lerde sıcaklık bilgisi
+ * dahil) ve ardından "yeterli kanıt yok, MGM sitesinden kontrol edin" dedi.
+ *
+ * Sebep: ortak sistem istemi "canlı veriyi SUNUCU getirir" diyor ve güçlü
+ * uydurma-karşıtı kurallar taşıyor. Compound ise kanıtı KENDİSİ topluyor;
+ * istemde bunun geçerli kanıt sayıldığı hiç yazmadığı için model kendi
+ * bulduğu veriyi yok sayıp reddediyordu. Kullanıcı arama sonuçlarını
+ * görüyor ama cevabı alamıyordu — mümkün olan en kötü kombinasyon.
+ *
+ * Bu yönerge YALNIZ compound modellerine eklenir; diğer modellerin davranışı
+ * (kanıtı sunucudan bekleme) aynen korunur.
+ */
+const COMPOUND_EVIDENCE_DIRECTIVE = [
+  "You have BUILT-IN web search and code execution. For questions about current or live information (weather, prices, rates, scores, news, schedules), run your search and then ANSWER FROM WHAT YOU FOUND.",
+  "Your own search results ARE valid evidence. Never say you lack evidence, and never redirect the user to go check a website themselves, when your search returned relevant results — that is the one failure mode to avoid.",
+  "State the concrete current value you found (temperature, price, score, date) in the first sentence, then add brief context. Mention the source name naturally in prose.",
+  "Only if your search genuinely returns nothing usable, say plainly that the live value could not be retrieved right now.",
+].join(" ");
+
+/**
+ * Compound modeline yönergeyi ekler. Compound değilse mesajlar aynen döner.
+ */
+export function withGroqCompoundGuidance(
+  messages: SharedBrainConversationMessage[],
+  model: unknown,
+): SharedBrainConversationMessage[] {
+  if (!isGroqCompoundModel(model)) return messages;
+  return [...messages, { role: "system", content: COMPOUND_EVIDENCE_DIRECTIVE }];
+}
+
+/**
+ * `search_settings` gövde eklentisi (kökte). Yalnız model compound ise
  * VE en az bir ayar yapılandırılmışsa döner; aksi halde boş nesne (no-op).
  * Boş dönmesi compound'un varsayılan davranışını (tam web arama) korur.
  */
@@ -123,11 +159,14 @@ export function buildGroqCompoundRequestExtensions(
   if (country) searchSettings.country = country;
 
   if (Object.keys(searchSettings).length === 0) return {};
-  return {
-    compound_custom: {
-      search_settings: searchSettings,
-    },
-  };
+  // `search_settings` GÖVDENİN KÖKÜNDE olmalı.
+  //
+  // Eskiden `compound_custom.search_settings` altında gönderiliyordu ve Groq
+  // bunu SESSİZCE YOK SAYIYORDU — geçersiz bir ülke kodu bile hata
+  // döndürmüyordu, yani ayarın işe yaramadığı fark edilemiyordu. Kökte
+  // gönderildiğinde aynı geçersiz değer 400 veriyor, yani gerçekten okunuyor.
+  // Sonuç: ülke/alan-adı filtreleri bugüne kadar ölü konfigürasyondu.
+  return { search_settings: searchSettings };
 }
 
 export type GroqCompoundCitation = {

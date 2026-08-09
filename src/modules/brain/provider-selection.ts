@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import { and, desc, eq } from "drizzle-orm";
+import { aiProviderInvocations } from "../../db/schema.js";
 import { buildGeminiModelCatalog, resolveGeminiFallbackModel } from "./gemini-models.js";
 import { buildGroqModelCatalog, resolveGroqFallbackModel } from "./groq-models.js";
 import { resolveGroqCompoundModel, shouldUseGroqCompound } from "./groq-compound.js";
@@ -11,12 +14,18 @@ import type { SharedBrainWorkload } from "./workloads.js";
 import type { VisionMediaProfile } from "./vision-media-policy.js";
 import type { VisionMediaDecision } from "./vision-media-policy.js";
 import { isGeminiFreeModelAllowed } from "./gemini-free-tier-guard.js";
+import {
+  capabilityScoreForWorkload,
+  resolveProviderModelCapabilities,
+} from "./provider-capabilities.js";
 
 export type SharedBrainProviderCandidate = {
   provider: SharedBrainProvider;
   baseUrl: string;
+  compatibilityBaseUrl?: string;
   preferredModels: string[];
   hosted: boolean;
+  routingScore?: number;
 };
 
 export type ModelRouteDecision = {
@@ -32,15 +41,21 @@ export function getConfiguredProviderApiKey(
   app: FastifyInstance,
   provider: "groq" | "gemini" | "openai",
 ): string {
+  return getConfiguredProviderApiKeys(app, provider)[0] ?? "";
+}
+
+export function getConfiguredProviderApiKeys(
+  app: FastifyInstance,
+  provider: "groq" | "gemini" | "openai",
+): string[] {
   const normalize = (value: unknown) => {
     if (typeof value !== "string") {
-      return "";
+      return [];
     }
-    const first = value
+    return value
       .split(",")
       .map((entry) => entry.trim())
-      .find((entry) => entry.length > 0);
-    return first ?? "";
+      .filter((entry) => entry.length > 0);
   };
   switch (provider) {
     case "groq":
@@ -50,8 +65,19 @@ export function getConfiguredProviderApiKey(
     case "openai":
       return normalize(app.config.OPENAI_API_KEY);
     default:
-      return "";
+      return [];
   }
+}
+
+export function getConfiguredProviderKeySlot(
+  app: FastifyInstance,
+  provider: "groq" | "gemini" | "openai",
+  requestKeySeed?: string,
+): number {
+  const keys = getConfiguredProviderApiKeys(app, provider);
+  if (keys.length <= 1 || !requestKeySeed?.trim()) return 0;
+  const digest = createHash("sha256").update(requestKeySeed).digest();
+  return digest.readUInt32BE(0) % keys.length;
 }
 
 function getConfiguredProviderBaseUrl(
@@ -66,12 +92,27 @@ function getConfiguredProviderBaseUrl(
     case "groq":
       return normalize(app.config.GROQ_BASE_URL);
     case "gemini":
-      return normalize(app.config.GEMINI_BASE_URL);
+      // Shared-brain Gemini calls use the native Interactions API. Keep the
+      // OpenAI-compatible base URL for utility clients that still need it.
+      return (
+        normalize(app.config.GEMINI_INTERACTIONS_BASE_URL) ??
+        normalize(app.config.GEMINI_BASE_URL)?.replace(/\/openai\/?$/i, "") ??
+        null
+      );
     case "openai":
       return normalize(app.config.OPENAI_BASE_URL);
     default:
       return null;
   }
+}
+
+function getConfiguredGeminiCompatibilityBaseUrl(
+  app: FastifyInstance,
+): string | null {
+  const value = typeof app.config.GEMINI_BASE_URL === "string"
+    ? app.config.GEMINI_BASE_URL.trim()
+    : "";
+  return value || null;
 }
 
 function isVisionWorkload(workload: SharedBrainWorkload): boolean {
@@ -157,6 +198,10 @@ function buildHostedProviderCandidates(
   visionProfile?: VisionMediaProfile,
   visionSensitivity?: VisionMediaDecision["sensitivity"],
   structuredOutputRequired?: boolean,
+  /** Derinlik-router: turda canlı web / güncel veri ihtiyacı sinyali. Compound
+   * bayrağı açıkken bu, uygun olmayan iş yüklerinde bile compound'u güçlendirir
+   * (bkz. shouldUseGroqCompound). Bayrak kapalıysa etkisizdir. */
+  liveWebSignal?: boolean,
 ): SharedBrainProviderCandidate[] {
   const hostedCandidates: SharedBrainProviderCandidate[] = [];
 
@@ -180,7 +225,7 @@ function buildHostedProviderCandidates(
   const compoundEligible =
     structuredOutputRequired !== true &&
     (!visionSensitivity || visionSensitivity === "none") &&
-    shouldUseGroqCompound({ config: app.config, workload });
+    shouldUseGroqCompound({ config: app.config, workload, liveWebSignal });
   const groqCompoundModel = compoundEligible
     ? resolveGroqCompoundModel(app.config, workload)
     : "";
@@ -224,19 +269,21 @@ function buildHostedProviderCandidates(
 
   const geminiApiKey = getConfiguredProviderApiKey(app, "gemini");
   const geminiBaseUrl = getConfiguredProviderBaseUrl(app, "gemini");
+  const geminiCompatibilityBaseUrl = getConfiguredGeminiCompatibilityBaseUrl(app);
   const geminiCatalog = buildGeminiModelCatalog(app.config);
-  const geminiPrimaryModel =
-    isVisionWorkload(workload) &&
-    (visionProfile === "fast" || visionProfile === "balanced")
+  // Gemini Flash is the primary multimodal lane. It receives native image
+  // parts and the provider-specific visual resolution controls; Groq remains
+  // the ordered fallback when Gemini is unavailable or policy removes it.
+  const geminiPrimaryModel = isVisionWorkload(workload)
+    ? geminiCatalog.visionModel
+    : workload === "document_analysis"
       ? geminiCatalog.fastModel
-      : workload === "document_analysis"
-        ? geminiCatalog.fastModel
       : geminiCatalog.defaultModelByWorkload[workload];
   const geminiFallbackModel =
-    workload === "document_analysis" && geminiPrimaryModel === geminiCatalog.fastModel
-      ? geminiCatalog.textModel
-      : isVisionWorkload(workload) && geminiPrimaryModel === geminiCatalog.fastModel
-        ? geminiCatalog.visionModel
+    isVisionWorkload(workload) && geminiPrimaryModel === geminiCatalog.visionModel
+      ? geminiCatalog.fastModel
+      : workload === "document_analysis" && geminiPrimaryModel === geminiCatalog.fastModel
+        ? geminiCatalog.textModel
         : resolveGeminiFallbackModel(app.config, geminiPrimaryModel) ??
           geminiCatalog.fastModel;
   if (geminiApiKey && geminiBaseUrl && geminiPrimaryModel) {
@@ -251,6 +298,9 @@ function buildHostedProviderCandidates(
       hostedCandidates.push({
         provider: "gemini",
         baseUrl: geminiBaseUrl,
+        ...(geminiCompatibilityBaseUrl
+          ? { compatibilityBaseUrl: geminiCompatibilityBaseUrl }
+          : {}),
         preferredModels,
         hosted: true,
       });
@@ -277,23 +327,211 @@ function buildHostedProviderCandidates(
         )
       : hostedCandidates;
 
-  // Gemini is the canonical multimodal adapter. The low-cost Flash-Lite model
-  // handles fast/balanced requests; Groq remains a bounded provider fallback.
+  // Keep Gemini first for every cloud visual turn so Flash's native
+  // multimodal path is authoritative. Groq remains an ordered fallback.
   const preferredProvider = "gemini";
   if (
     app.config.GEMINI_FREE_ONLY === true &&
     privacyEligibleCandidates.some(
-      (candidate) => candidate.provider === preferredProvider,
+      (candidate) => candidate.provider === "gemini",
     )
   ) {
     return privacyEligibleCandidates.filter(
-      (candidate) => candidate.provider === preferredProvider,
+      (candidate) => candidate.provider === "gemini",
     );
   }
   return [
     ...privacyEligibleCandidates.filter((candidate) => candidate.provider === preferredProvider),
     ...privacyEligibleCandidates.filter((candidate) => candidate.provider !== preferredProvider),
   ];
+}
+
+type ProviderPerformance = {
+  samples: number;
+  failures: number;
+  firstDelta: number[];
+  completion: number[];
+};
+
+type ProviderPerformanceCacheEntry = {
+  expiresAt: number;
+  values: Map<string, ProviderPerformance>;
+  pending?: Promise<Map<string, ProviderPerformance>>;
+};
+
+const providerPerformanceCache = new WeakMap<
+  FastifyInstance,
+  Map<SharedBrainWorkload, ProviderPerformanceCacheEntry>
+>();
+const PROVIDER_PERFORMANCE_CACHE_TTL_MS = 15_000;
+const PROVIDER_PERFORMANCE_ERROR_CACHE_TTL_MS = 5_000;
+
+function readMetadataNumber(metadata: unknown, key: string): number | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function percentile(samples: number[], ratio: number): number | null {
+  if (samples.length === 0) return null;
+  const sorted = [...samples].sort((left, right) => left - right);
+  const index = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.ceil(sorted.length * ratio) - 1),
+  );
+  return sorted[index] ?? null;
+}
+
+function performanceKey(provider: string, model: string): string {
+  return `${provider}:${model}`.toLowerCase();
+}
+
+async function loadRecentProviderPerformance(
+  app: FastifyInstance,
+  workload: SharedBrainWorkload,
+): Promise<Map<string, ProviderPerformance>> {
+  const appCache =
+    providerPerformanceCache.get(app) ??
+    new Map<SharedBrainWorkload, ProviderPerformanceCacheEntry>();
+  providerPerformanceCache.set(app, appCache);
+  const now = Date.now();
+  const existing = appCache.get(workload);
+  if (existing && existing.expiresAt > now) return existing.values;
+  if (existing?.pending) return existing.pending;
+
+  const entry: ProviderPerformanceCacheEntry = existing ?? {
+    expiresAt: 0,
+    values: new Map(),
+  };
+  const pending = (async () => {
+    try {
+      const rows = await app.db
+        .select({
+          provider: aiProviderInvocations.provider,
+          model: aiProviderInvocations.model,
+          status: aiProviderInvocations.status,
+          latencyMs: aiProviderInvocations.latencyMs,
+          metadata: aiProviderInvocations.metadata,
+        })
+        .from(aiProviderInvocations)
+        .where(
+          and(
+            eq(aiProviderInvocations.route, "shared_brain"),
+            eq(aiProviderInvocations.workload, workload),
+          ),
+        )
+        .orderBy(desc(aiProviderInvocations.createdAt))
+        .limit(160);
+
+      const values = new Map<string, ProviderPerformance>();
+      for (const row of rows) {
+        const key = performanceKey(row.provider, row.model);
+        const current = values.get(key) ?? {
+          samples: 0,
+          failures: 0,
+          firstDelta: [],
+          completion: [],
+        };
+        current.samples += 1;
+        if (row.status !== "success" && row.status !== "fallback") {
+          current.failures += 1;
+        }
+        const firstDelta = readMetadataNumber(row.metadata, "firstDeltaMs");
+        const completion =
+          readMetadataNumber(row.metadata, "completionLatencyMs") ?? row.latencyMs;
+        if (firstDelta != null) current.firstDelta.push(firstDelta);
+        if (completion != null) current.completion.push(completion);
+        values.set(key, current);
+      }
+      entry.values = values;
+      entry.expiresAt = Date.now() + PROVIDER_PERFORMANCE_CACHE_TTL_MS;
+      return values;
+    } catch {
+      entry.values = new Map();
+      entry.expiresAt = Date.now() + PROVIDER_PERFORMANCE_ERROR_CACHE_TTL_MS;
+      return entry.values;
+    } finally {
+      entry.pending = undefined;
+    }
+  })();
+  entry.pending = pending;
+  appCache.set(workload, entry);
+  return pending;
+}
+
+/**
+ * Ranks the already policy-filtered candidates using recent provider
+ * telemetry. This is deliberately a soft ranking: missing metrics never
+ * remove a provider, and the existing circuit/privacy/fallback gates remain
+ * authoritative.
+ */
+export async function rankInferenceProviderCandidates(input: {
+  app: FastifyInstance;
+  candidates: SharedBrainProviderCandidate[];
+  workload: SharedBrainWorkload;
+  vision?: boolean;
+  visionProfile?: VisionMediaProfile;
+  structuredOutputRequired?: boolean;
+}): Promise<SharedBrainProviderCandidate[]> {
+  if (!input.candidates.length || !input.app.db) return input.candidates;
+
+  const performance = await loadRecentProviderPerformance(
+    input.app,
+    input.workload,
+  );
+
+  const scoreModel = (provider: SharedBrainProvider, model: string): number => {
+    const capabilities = resolveProviderModelCapabilities(provider, model);
+    let score = capabilityScoreForWorkload(capabilities, input.workload, {
+      vision: input.vision,
+      profile:
+        input.visionProfile === "restricted"
+          ? undefined
+          : input.visionProfile,
+      structured: input.structuredOutputRequired,
+    });
+    const stats = performance.get(performanceKey(provider, model));
+    if (!stats) return score;
+    const latencySamples =
+      input.vision ||
+      input.workload === "mobile_chat_fast" ||
+      input.workload === "fast_route" ||
+      input.workload === "intent"
+        ? stats.firstDelta
+        : stats.completion;
+    const p75 = percentile(latencySamples, 0.75);
+    if (p75 != null) score -= Math.min(36, p75 / 180);
+    score -= Math.min(48, (stats.failures / Math.max(1, stats.samples)) * 80);
+    return score;
+  };
+
+  const ranked = input.candidates
+    .map((candidate, candidateIndex) => {
+      const preferredModels = [...candidate.preferredModels].sort((left, right) => {
+        const difference = scoreModel(candidate.provider, right) - scoreModel(candidate.provider, left);
+        return difference || candidate.preferredModels.indexOf(left) - candidate.preferredModels.indexOf(right);
+      });
+      const routingScore = preferredModels[0]
+        ? scoreModel(candidate.provider, preferredModels[0])
+        : Number.NEGATIVE_INFINITY;
+      return {
+        candidate: { ...candidate, preferredModels, routingScore },
+        candidateIndex,
+      };
+    })
+    .sort((left, right) => right.candidate.routingScore! - left.candidate.routingScore! || left.candidateIndex - right.candidateIndex)
+    .map((entry) => entry.candidate);
+
+  // Telemetry may improve model ordering, but it must not silently replace
+  // the multimodal provider policy. Gemini stays first when visual input is
+  // present; the remaining candidates keep their measured order.
+  if (input.vision && ranked.some((candidate) => candidate.provider === "gemini")) {
+    return [
+      ...ranked.filter((candidate) => candidate.provider === "gemini"),
+      ...ranked.filter((candidate) => candidate.provider !== "gemini"),
+    ];
+  }
+  return ranked;
 }
 
 function buildCandidateOrder(
@@ -335,6 +573,9 @@ export function buildInferenceProviderCandidates(input: {
   /** Katı JSON bekleniyor (plan zarfı / response schema): araç-ajanı modeller
    * zincire alınmaz — düzyazı döndürüp turu boşa harcarlar. */
   structuredOutputRequired?: boolean;
+  /** Derinlik-router sinyali: turda canlı web / güncel veri ihtiyacı. Compound
+   * bayrağı açıkken doğru turlarda compound'u tercih ettirir; kapalıysa no-op. */
+  liveWebSignal?: boolean;
 }) {
   const localCandidates = listSharedBrainProviderCandidates(input.app).map(
     (candidate) => ({
@@ -354,6 +595,7 @@ export function buildInferenceProviderCandidates(input: {
     input.visionProfile,
     input.visionSensitivity,
     input.structuredOutputRequired,
+    input.liveWebSignal,
   );
   const preferredLocalCandidate = input.runtime.ready
     ? {
@@ -388,6 +630,7 @@ export function buildInferenceProviderCandidates(input: {
 export function buildProviderHeaders(
   app: FastifyInstance,
   provider: SharedBrainProvider,
+  requestKeySeed?: string,
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -397,7 +640,12 @@ export function buildProviderHeaders(
     return headers;
   }
 
-  const apiKey = getConfiguredProviderApiKey(app, provider);
+  const apiKey =
+    provider === "groq" || provider === "gemini" || provider === "openai"
+      ? getConfiguredProviderApiKeys(app, provider)[
+          getConfiguredProviderKeySlot(app, provider, requestKeySeed)
+        ] ?? ""
+      : "";
   if (apiKey) {
     headers.Authorization = `Bearer ${apiKey}`;
   }

@@ -37,12 +37,23 @@ const attachmentContext: ResolvedAttachmentContext = {
   needsClarification: false,
 };
 
-test("router selects document_summary for summary requests", async () => {
+function classifyAs(skillId: string, confidence = 0.9) {
+  return async () => ({
+    needsSkill: true,
+    skillId,
+    confidence,
+    reason: "semantic classifier selected skill",
+    source: "classifier" as const,
+  });
+}
+
+test("router selects document_summary through semantic classification", async () => {
   resetSkillRegistryForTests();
   const decision = await routeSkill({
     prompt: "Bu belgeyi özetle",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_summary"),
   });
 
   assert.equal(decision.needsSkill, true);
@@ -62,12 +73,13 @@ test("router honors a valid manual skill hint before deterministic routing", asy
   assert.equal(decision.source, "manual_hint");
 });
 
-test("router ignores invalid manual skill hints and falls back to deterministic routing", async () => {
+test("router ignores invalid manual skill hints and falls back to semantic routing", async () => {
   const decision = await routeSkill({
     prompt: "Bu belgeyi özetle",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
     skillHint: "unknown_skill",
+    classify: classifyAs("document_summary"),
   });
 
   assert.equal(decision.needsSkill, true);
@@ -91,22 +103,24 @@ test("router does not force a hinted attachment skill without attachment context
   assert.equal(decision.source, "fallback");
 });
 
-test("router selects document_key_points for key point extraction", async () => {
+test("router selects document_key_points through semantic classification", async () => {
   const decision = await routeSkill({
     prompt: "Önemli noktalar ve aksiyonları çıkar",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_key_points"),
   });
 
   assert.equal(decision.needsSkill, true);
   assert.equal(decision.skillId, "document_key_points");
 });
 
-test("router selects document_qa for document questions", async () => {
+test("router selects document_qa through semantic classification", async () => {
   const decision = await routeSkill({
     prompt: "Burada ne yazıyor?",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_qa"),
   });
 
   assert.equal(decision.needsSkill, true);
@@ -130,22 +144,24 @@ test("router falls back when confidence is low", async () => {
   assert.equal(decision.needsSkill, false);
 });
 
-test("router selects document_qa for 'burada ne yazıyor' without question mark", async () => {
+test("router selects document_qa for semantic OCR-like attachment questions", async () => {
   const decision = await routeSkill({
     prompt: "Burada ne yazıyor",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_qa"),
   });
 
   assert.equal(decision.needsSkill, true);
   assert.equal(decision.skillId, "document_qa");
 });
 
-test("router selects document_qa for 'bunda ne var'", async () => {
+test("router selects document_qa for broad attachment questions", async () => {
   const decision = await routeSkill({
     prompt: "Bunda ne var",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_qa"),
   });
 
   assert.equal(decision.needsSkill, true);
@@ -184,28 +200,31 @@ test("router selects document_qa for image attachment with OCR question", async 
     prompt: "Bu görselde ne yazıyor",
     attachmentContext: imageContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_qa"),
   });
 
   assert.equal(decision.needsSkill, true);
   assert.equal(decision.skillId, "document_qa");
 });
 
-test("router selects document_key_points for decision/date extraction", async () => {
+test("router selects document_key_points for decision/date extraction semantically", async () => {
   const decision = await routeSkill({
     prompt: "Belgedeki kararlar ve tarihler neler?",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_key_points"),
   });
 
   assert.equal(decision.needsSkill, true);
   assert.equal(decision.skillId, "document_key_points");
 });
 
-test("router selects document_summary for 'özetini çıkar'", async () => {
+test("router selects document_summary for equivalent summary requests semantically", async () => {
   const decision = await routeSkill({
     prompt: "Bu raporun özetini çıkar",
     attachmentContext,
     skills: await listActiveSkillSummaries(),
+    classify: classifyAs("document_summary"),
   });
 
   assert.equal(decision.needsSkill, true);
@@ -270,6 +289,7 @@ test("router allows document summary skill when PDF export is explicitly request
     attachmentContext,
     skills: await listActiveSkillSummaries(),
     desiredOutputKinds: ["pdf"],
+    classify: classifyAs("document_summary"),
   });
 
   assert.equal(decision.needsSkill, true);

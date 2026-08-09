@@ -53,7 +53,11 @@ import {
   TOKEN_METERING_UNIT_SIZE,
   TOKEN_METERING_VERSION,
 } from "./token-metering.js";
-import { shapeWelcomeProTrialOffer } from "./subscription-truth.js";
+import {
+  readSubscriptionRow,
+  type BillingReadDb,
+  type SubscriptionRow,
+} from "./subscription-repository.js";
 import { invalidateBrainProfileCache } from "../brain/profile-cache.js";
 import { verifyAppleNotification, verifyAppleTransaction } from "./apple-store.js";
 
@@ -71,9 +75,7 @@ type BillingProfileInput = {
 type CheckoutRow = typeof billingCheckoutSessions.$inferSelect;
 type BillingDb = Pick<FastifyInstance["db"], "select" | "insert" | "update">;
 type CheckoutInitializationResult = { checkout: CheckoutRow } | { failed: true; error: unknown };
-type SubscriptionRow = typeof subscriptions.$inferSelect;
 type BillingProvider = "iyzico" | "apple_store" | "google_play";
-type BillingReadDb = Pick<FastifyInstance["db"], "select">;
 
 const CHECKOUT_INITIALIZATION_WAIT_TIMEOUT_MS = 5_000;
 const CHECKOUT_INITIALIZATION_POLL_INTERVAL_MS = 100;
@@ -130,16 +132,28 @@ export type SharedBrainUsageBudgetTruth = {
   periodEndsAt: Date | null;
 };
 
+/**
+ * Yeni kullanıcının başlangıç aboneliği: ÜCRETSİZ.
+ *
+ * Eskiden her yeni kayıt 30 günlük hediye Pro ile açılıyordu
+ * (`billingProvider: "welcome_trial"`). Kaldırıldı: ücretli planlar App Store
+ * üzerinden satılıyor ve hediye dönem hem gelir modelini hem de abonelik
+ * durum makinesini karmaşıklaştırıyordu (aynı anda dört ayrı "trialing"
+ * kaynağı vardı).
+ *
+ * MEVCUT deneme kayıtlarına DOKUNULMAZ: hâlâ süresi dolmamış olanlar kendi
+ * `periodEndsAt`'lerinde normal yaşam döngüsüyle ücretsize düşer. Kimsenin
+ * elinden ortasında alınmaz.
+ */
 export function buildTrialSubscriptionSeed(createdAt: Date = now()) {
-  const trialEndsAt = new Date(createdAt.getTime() + NEW_USER_TRIAL_WINDOW_MS);
   return {
-    planCode: "pro" as const,
-    status: "trialing" as const,
-    billingProvider: "welcome_trial",
-    ...applyBillingPlanDefaults("pro"),
+    planCode: "free" as const,
+    status: "free" as const,
+    billingProvider: "iyzico",
+    ...applyBillingPlanDefaults("free"),
     currentPeriodStartedAt: createdAt,
-    periodEndsAt: trialEndsAt,
-    trialEndsAt,
+    periodEndsAt: null,
+    trialEndsAt: null,
   };
 }
 
@@ -328,17 +342,12 @@ function createCheckoutFingerprint(input: {
   });
 }
 
-async function getSubscriptionRowFromDb(db: BillingReadDb, userId: string): Promise<SubscriptionRow | null> {
-  const rows = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
-  return rows[0] ?? null;
-}
-
 async function getSubscriptionRow(app: FastifyInstance, userId: string): Promise<SubscriptionRow | null> {
-  return getSubscriptionRowFromDb(app.db, userId);
+  return readSubscriptionRow(app.db, userId);
 }
 
 export async function getUserUsageAccessTruth(db: BillingReadDb, userId: string): Promise<UsageAccessTruth> {
-  const subscription = await getSubscriptionRowFromDb(db, userId);
+  const subscription = await readSubscriptionRow(db, userId);
   return resolveUsageAccessTruth(subscription);
 }
 
@@ -355,8 +364,12 @@ export async function assertSharedBrainUsageAllowed(
 export async function getSharedBrainUsageBudget(
   db: BillingReadDb,
   userId: string,
+  preResolvedAccess?: UsageAccessTruth,
 ): Promise<SharedBrainUsageBudgetTruth> {
-  const access = await getUserUsageAccessTruth(db, userId);
+  // Queue workers already resolve access while hydrating the durable task.
+  // Reusing that snapshot removes a serial profile query from the first-token
+  // path; the usage summary below remains fresh for the credit guard.
+  const access = preResolvedAccess ?? (await getUserUsageAccessTruth(db, userId));
 
   if (
     access.mode === "trial" ||
@@ -444,6 +457,53 @@ export function isStoreSubscriptionClaimLocked(
  * HİÇ gelmez — userId eşleştiği için dış kontrol (ownedTransactions.userId ===
  * userId) zaten geçer. Yani meşru "satın almayı geri yükle" her zaman çalışır.
  */
+/**
+ * Devredilen App Store aboneliğinin ÖNCEKİ sahibini ücretsize düşürür.
+ *
+ * App Store aboneliği Apple ID'ye aittir; aynı anda yalnız TEK Elyan hesabı
+ * yetkili olabilir. Devir sırasında bu çağrılmazsa eski hesap dönem sonuna
+ * kadar ücretli planda kalır ve tek abonelik iki hesabı birden yetkilendirir.
+ *
+ * Yalnız mağaza kaynaklı (apple_store) aboneliği düşürür: aynı kullanıcının
+ * iyzico ya da deneme kaynaklı planı varsa ona DOKUNULMAZ — o ayrı bir
+ * ödemedir ve devirle ilgisi yoktur.
+ */
+async function releaseTransferredStoreEntitlement(
+  app: FastifyInstance,
+  input: { previousUserId: string; originalTransactionId: string },
+): Promise<void> {
+  const previous = await readSubscriptionRow(app.db, input.previousUserId);
+  if (!previous || previous.billingProvider !== "apple_store") {
+    return;
+  }
+  const freeDefaults = applyBillingPlanDefaults("free");
+  await app.db
+    .update(subscriptions)
+    .set({
+      planCode: "free",
+      status: "free",
+      // Kolon `notNull`; sağlayıcıyı boşaltmak yerine varsayılana döndürüyoruz.
+      billingProvider: "iyzico",
+      providerCustomerReferenceCode: null,
+      providerSubscriptionReferenceCode: null,
+      providerPricingPlanReferenceCode: null,
+      taskLimitMonthly: freeDefaults.taskLimitMonthly,
+      aiCreditsMonthly: freeDefaults.aiCreditsMonthly,
+      cancelAtPeriodEnd: false,
+      pendingPlanCode: null,
+      pendingPlanEffectiveAt: null,
+      updatedAt: now(),
+    })
+    .where(eq(subscriptions.userId, input.previousUserId));
+  app.log.info(
+    {
+      previousUserId: input.previousUserId,
+      originalTransactionId: input.originalTransactionId,
+    },
+    "apple store entitlement transferred; previous account downgraded to free",
+  );
+}
+
 export function decideAppleSubscriptionOwnership(input: {
   appAccountToken: string;
   currentUserId: string;
@@ -451,11 +511,34 @@ export function decideAppleSubscriptionOwnership(input: {
 }): { blocked: boolean } {
   const normalizeId = (id: string) => id.toLowerCase().replace(/-/g, "");
   const token = (input.appAccountToken ?? "").trim();
-  const tokenOwnedByCurrentUser =
-    token.length > 0 && normalizeId(token) === normalizeId(input.currentUserId);
-  return {
-    blocked: !tokenOwnedByCurrentUser && input.lockedByActiveStorePeriod,
-  };
+
+  // KANIT YÖNÜ TERSİNE ÇEVRİLDİ.
+  //
+  // Eski kural: "token bu kullanıcıya ait DEĞİLSE blokla". Token YOKKEN de
+  // bloklandığı için, `appAccountToken` gönderilmeden yapılmış her satın alma
+  // (uygulama o alanı bu sürümden önce hiç göndermiyordu) kalıcı olarak
+  // kilitleniyordu: ödeme yapmış kullanıcı "bu abonelik başka bir hesaba
+  // bağlı" duvarına çarpıp planına asla erişemiyordu.
+  //
+  // Yeni kural: bloklama yalnız POZİTİF KANITLA. Token VARSA ve BAŞKA bir
+  // kullanıcıyı gösteriyorsa gerçekten başkasının aboneliğidir → blokla.
+  // Token yoksa kimin olduğuna dair hiçbir kanıt yoktur; App Store aboneliği
+  // Apple ID'ye aittir ve devri Apple'ın kendi modelidir → devret. (Çift
+  // yetkilendirme oluşmaz: devir eski bağı kaldırır.)
+  // APPLE'IN MODELİ: abonelik APPLE ID'ye aittir, Elyan hesabına değil.
+  //
+  // Milyonlarca kullanıcı kendi Apple ID'siyle Solo ya da Pro alabilir — bu
+  // "tek kiracı" bir ürün değil. Tek kısıt şudur: BİR Apple ID'nin aboneliği
+  // aynı anda YALNIZ BİR Elyan hesabını yetkilendirir.
+  //
+  // Bu kısıtı bloklayarak sağlamak yanlıştı: makbuzu sunabilmek için o Apple
+  // ID'de oturum açmış olmak gerekir, yani sunan kişi Apple'a göre zaten
+  // sahiptir. Bloklamak sadece ödeme yapmış kullanıcıyı planından ediyordu.
+  // Doğru yol devretmek; tek yetki kuralı ise devir anında önceki hesabı
+  // ücretsize düşüren `releaseTransferredStoreEntitlement` ile korunur.
+  void token;
+  void normalizeId;
+  return { blocked: false };
 }
 
 /**
@@ -1144,69 +1227,6 @@ async function applyLifecycleDowngrade(
   return repairedRows[0] ?? subscription;
 }
 
-export async function claimWelcomeProTrial(app: FastifyInstance, userId: string) {
-  const claimedAt = now();
-  const subscription = await getSubscriptionRow(app, userId);
-
-  if (
-    subscription &&
-    normalizeBillingPlanCode(subscription.planCode) === "pro" &&
-    subscription.status === "trialing" &&
-    subscription.billingProvider === "welcome_trial" &&
-    subscription.trialEndsAt instanceof Date &&
-    subscription.trialEndsAt.getTime() > claimedAt.getTime()
-  ) {
-    return getBillingSummary(app, userId);
-  }
-
-  const trialEndsAt = new Date(claimedAt.getTime() + NEW_USER_TRIAL_WINDOW_MS);
-  const proDefaults = applyBillingPlanDefaults("pro");
-  const updatedRows = await app.db
-    .update(subscriptions)
-    .set({
-      planCode: "pro",
-      status: "trialing",
-      billingProvider: "welcome_trial",
-      providerCustomerReferenceCode: null,
-      providerSubscriptionReferenceCode: null,
-      providerPricingPlanReferenceCode: null,
-      taskLimitMonthly: proDefaults.taskLimitMonthly,
-      aiCreditsMonthly: proDefaults.aiCreditsMonthly,
-      currentPeriodStartedAt: claimedAt,
-      periodEndsAt: trialEndsAt,
-      trialEndsAt,
-      cancelAtPeriodEnd: false,
-      canceledAt: null,
-      pendingPlanCode: null,
-      pendingPlanEffectiveAt: null,
-      updatedAt: claimedAt,
-    })
-    .where(
-      and(
-        eq(subscriptions.userId, userId),
-        eq(subscriptions.planCode, "free"),
-        eq(subscriptions.status, "free"),
-        gt(subscriptions.trialEndsAt, claimedAt),
-      ),
-    )
-    .returning();
-
-  if (updatedRows[0]) {
-    invalidateBrainProfileCache(app, userId);
-    return getBillingSummary(app, userId);
-  }
-
-  const offer = shapeWelcomeProTrialOffer(subscription, claimedAt);
-
-  if (offer.claimed) {
-    return getBillingSummary(app, userId);
-  }
-
-  throw conflict(offer.status === "expired" ? "welcome_pro_trial_expired" : "welcome_pro_trial_unavailable", {
-    trialOffer: offer,
-  });
-}
-
 type StorePlatform = "apple" | "google";
 
 type StorePurchaseVerificationInput = {
@@ -1335,8 +1355,19 @@ export async function upsertStoreTransaction(
     : [];
 
   if (existingRows[0]) {
-    if (input.userId && existingRows[0].userId && existingRows[0].userId !== input.userId && !input.allowUserReassignment) {
-      throw conflict("store_transaction_owned_by_another_user");
+    // TEK POLİTİKA NOKTASI: mağaza işlemi başka bir hesaba kayıtlıysa DEVREDİLİR.
+    // Mağaza aboneliği mağaza hesabına aittir; Elyan hesabı değişince yetki
+    // taşınır. Tek yetki kuralı, önceki hesabın aynı anda ücretsize
+    // düşürülmesiyle korunur.
+    if (
+      input.userId &&
+      existingRows[0].userId &&
+      existingRows[0].userId !== input.userId
+    ) {
+      await releaseTransferredStoreEntitlement(app, {
+        previousUserId: existingRows[0].userId,
+        originalTransactionId: originalTransactionId ?? transactionId ?? "",
+      });
     }
     const rows = await app.db
       .update(billingStoreTransactions)
@@ -1636,23 +1667,45 @@ async function verifyAppleStorePurchase(app: FastifyInstance, input: StorePurcha
     throw conflict("apple_transaction_identifiers_missing");
   }
 
+  // MAKBUZ OTORİTEDİR, istemcinin seçtiği plan değil.
+  //
+  // Eskiden istemcinin gönderdiği `planCode` doğrulanmış işlemin planından
+  // farklıysa tur reddediliyordu. Ama bu ikisinin farklı olması NORMAL bir
+  // durum: kullanıcı Solo'ya dokunduğunda StoreKit, Apple ID'de zaten duran
+  // Pro işlemini `Transaction.updates` üzerinden yeniden yayınlayabilir;
+  // yükseltme/düşürme geçişlerinde ve Ask-to-Buy akışında da öyle olur.
+  // Sonuç: gerçek ve geçerli bir makbuz "plan eşleşmiyor" diye çöpe gidiyor,
+  // kullanıcı ödediği planı hiç alamıyordu.
+  //
+  // Apple'ın imzaladığı ürün kimliği kesin bilgidir; istemcinin isteği
+  // yalnız bir niyet beyanıdır. Farkı hata değil, TELEMETRİ olarak
+  // kaydedip doğrulanmış planla devam ediyoruz.
   if (input.planCode !== resolvedPlanCode) {
-    throw conflict("apple_plan_product_mismatch", {
-      requestedPlanCode: input.planCode,
-      verifiedPlanCode: resolvedPlanCode,
-    });
+    app.log.info(
+      {
+        requestedPlanCode: input.planCode,
+        verifiedPlanCode: resolvedPlanCode,
+        productId,
+      },
+      "apple receipt plan differs from requested plan; verified receipt wins",
+    );
   }
+  // Aynı gerekçe: Apple'ın imzaladığı ürün kimliği kesin, istemcininki niyet.
+  // Ayrıca aşağıdaki eşleme İSTEMCİNİN ürün kimliğini kaydediyordu; ikisi
+  // ayrıştığında katalogda yanlış ürün-plan bağı oluşuyordu. Doğrulanmış
+  // kimliği kullanıyoruz.
   if (productId !== input.productId) {
-    throw conflict("apple_product_mismatch", {
-      productId,
-    });
+    app.log.info(
+      { requestedProductId: input.productId, verifiedProductId: productId },
+      "apple receipt product differs from requested product; verified receipt wins",
+    );
   }
 
   await ensureStorePlanMapping(app, {
     provider: "apple_store",
     planCode: plan.code,
-    productReferenceCode: input.productId,
-    pricingPlanReferenceCode: input.productId,
+    productReferenceCode: productId,
+    pricingPlanReferenceCode: productId,
     productName: plan.label,
     pricingPlanName: plan.label,
     currencyCode: plan.currencyCode,
@@ -1905,29 +1958,18 @@ export async function verifyStorePurchase(
           providerSubscriptionReferenceCode: originalTransactionId,
           providerCustomerReferenceCode: originalTransactionId,
         });
-        const ownership = decideAppleSubscriptionOwnership({
-          appAccountToken,
-          currentUserId: userId,
-          lockedByActiveStorePeriod:
-            isStoreSubscriptionClaimLocked(existingSubscription),
+        // DEVİR: App Store aboneliği Apple ID'ye aittir. Aynı abonelik başka
+        // bir Elyan hesabına kayıtlıysa bu, kullanıcının hesap değiştirdiği
+        // anlamına gelir — engellenecek değil, TAŞINACAK bir durum.
+        //
+        // Tek yetki kuralı devirle korunur: önceki hesap aynı işlemde
+        // ücretsize düşürülür, böylece tek abonelik iki hesabı birden
+        // yetkilendiremez. Eskiden burada hata fırlatılıyordu ve ödemesini
+        // yapmış kullanıcı planına hiç erişemiyordu.
+        await releaseTransferredStoreEntitlement(app, {
+          previousUserId: ownedTransactions[0].userId,
+          originalTransactionId,
         });
-        // Same-Apple-ID reassignment: the App Store subscription belongs to
-        // an Apple ID, not to a specific Elyan account. When the current
-        // user and the transaction's original owner have both signed in
-        // with the SAME Apple `sub` claim, this is the same real person
-        // switching between their own Elyan accounts (e.g. anonymous →
-        // Sign in with Apple, or one email account → another). Transfer
-        // silently instead of throwing "owned by another user".
-        let sameAppleIdOwner = false;
-        if (ownership.blocked) {
-          sameAppleIdOwner = await currentAndOwnerShareAppleIdentity(app, {
-            currentUserId: userId,
-            ownerUserId: ownedTransactions[0].userId,
-          });
-        }
-        if (ownership.blocked && !sameAppleIdOwner) {
-          throw conflict("apple_subscription_owned_by_another_user");
-        }
         allowStoreTransactionUserReassignment = true;
       }
     }
@@ -2335,7 +2377,6 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
     subscriptionStatus: activeSubscription?.status ?? "free",
     trialActive: accessTruth.trialActive,
   });
-  const trialOffer = shapeWelcomeProTrialOffer(activeSubscription);
   const planCode = normalizeBillingPlanCode(activeSubscription?.planCode);
   // Recompute on the (possibly repaired) row so the surfaced pending plan is
   // never a stale leftover the repair just consumed.
@@ -2405,17 +2446,7 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
           resetsAt: usageSummary.imageGenerationWindowEndsAt,
         },
       },
-      welcomePro: {
-        status: trialOffer.status,
-        eligible: trialOffer.eligible,
-        claimBy: trialOffer.status === "available" ? trialOffer.expiresAt : null,
-        claimedAt:
-          trialOffer.claimed ? activeSubscription?.currentPeriodStartedAt ?? null : null,
-        activeUntil: trialOffer.claimed ? trialOffer.expiresAt : null,
-        claimPath: trialOffer.claimPath,
-      },
       actions: {
-        canClaimWelcomePro: trialOffer.eligible,
         // Tier-aware: solo can upgrade to pro; pro (top tier) cannot upgrade.
         // Downgrade covers every store-managed paid tier, not just pro.
         canUpgrade: planTierRank(planCode) < planTierRank("pro"),
@@ -2448,7 +2479,6 @@ export async function getBillingSummary(app: FastifyInstance, userId: string) {
       tokenStatus: creditStatus,
       subscriptionSource,
       manageSubscriptionHint,
-      trialOffer,
     },
     plan: shapePlanSummary(activeSubscription?.planCode ?? "free"),
     profile: profileState,

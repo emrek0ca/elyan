@@ -10,6 +10,49 @@ import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
 
 const uuidSchema = z.string().uuid();
 
+const DIALOGUE_STATE_CACHE_TTL_MS = 750;
+const DIALOGUE_STATE_CACHE_MAX_ENTRIES = 4_096;
+const RELATIONSHIP_DEPTH_CACHE_TTL_MS = 5_000;
+const RELATIONSHIP_DEPTH_CACHE_MAX_ENTRIES = 4_096;
+
+type DialogueStateCacheEntry = {
+  value: DialogueStateSnapshot | null;
+  expiresAt: number;
+  pending?: Promise<DialogueStateSnapshot | null>;
+};
+
+type RelationshipDepthCacheEntry = {
+  value: number;
+  expiresAt: number;
+  pending?: Promise<number>;
+};
+
+const dialogueStateCache = new WeakMap<
+  FastifyInstance,
+  Map<string, DialogueStateCacheEntry>
+>();
+const relationshipDepthCache = new WeakMap<
+  FastifyInstance,
+  Map<string, RelationshipDepthCacheEntry>
+>();
+
+function dialogueStateCacheKey(userId: string, sessionId: string): string {
+  return `${userId}:${sessionId}`;
+}
+
+function boundedCacheInsert<T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  maxEntries: number,
+): void {
+  if (!cache.has(key) && cache.size >= maxEntries) {
+    const oldestKey = cache.keys().next().value as string | undefined;
+    if (oldestKey) cache.delete(oldestKey);
+  }
+  cache.set(key, value);
+}
+
 const styleSignatureSchema = z
   .object({
     opener: z.string().trim().max(120).nullable().default(null),
@@ -990,7 +1033,44 @@ export async function readRelationshipDepth(
   app: FastifyInstance,
   userId: string,
 ): Promise<number> {
-  return readRelationshipDepthOnDb(app.db, userId);
+  const cache =
+    relationshipDepthCache.get(app) ?? new Map<string, RelationshipDepthCacheEntry>();
+  relationshipDepthCache.set(app, cache);
+  const now = Date.now();
+  const cached = cache.get(userId);
+  if (cached && cached.expiresAt > now) {
+    return cached.pending ?? cached.value;
+  }
+
+  const entry = cached ?? { value: 0, expiresAt: 0 };
+  if (entry.pending) return entry.pending;
+
+  const pending = readRelationshipDepthOnDb(app.db, userId).then((value) => {
+    entry.value = value;
+    entry.expiresAt = Date.now() + RELATIONSHIP_DEPTH_CACHE_TTL_MS;
+    return value;
+  }).catch(() => {
+    entry.value = 0;
+    entry.expiresAt = Date.now() + 1_000;
+    return 0;
+  }).finally(() => {
+    entry.pending = undefined;
+  });
+  entry.pending = pending;
+  boundedCacheInsert(
+    cache,
+    userId,
+    entry,
+    RELATIONSHIP_DEPTH_CACHE_MAX_ENTRIES,
+  );
+  return pending;
+}
+
+export function invalidateRelationshipDepthCache(
+  app: FastifyInstance,
+  userId: string,
+): void {
+  relationshipDepthCache.get(app)?.delete(userId);
 }
 
 /** Best-effort +1 to the user's lifetime interaction depth. Never throws. */
@@ -1040,14 +1120,50 @@ export async function bumpRelationshipDepth(
   app: FastifyInstance,
   userId: string,
 ): Promise<void> {
-  return bumpRelationshipDepthOnDb(app.db, userId);
+  await bumpRelationshipDepthOnDb(app.db, userId);
+  invalidateRelationshipDepthCache(app, userId);
 }
 
 export async function readDialogueState(
   app: FastifyInstance,
   input: { userId: string; sessionId: string },
 ): Promise<DialogueStateSnapshot | null> {
-  return readDialogueStateOnDb(app.db, input);
+  const key = dialogueStateCacheKey(input.userId, input.sessionId);
+  const cache =
+    dialogueStateCache.get(app) ?? new Map<string, DialogueStateCacheEntry>();
+  dialogueStateCache.set(app, cache);
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.pending ?? cached.value;
+  }
+
+  const entry = cached ?? { value: null, expiresAt: 0 };
+  if (entry.pending) return entry.pending;
+
+  const pending = readDialogueStateOnDb(app.db, input).then((value) => {
+    entry.value = value;
+    entry.expiresAt = Date.now() + DIALOGUE_STATE_CACHE_TTL_MS;
+    return value;
+  }).catch(() => {
+    entry.value = null;
+    entry.expiresAt = Date.now() + 500;
+    return null;
+  }).finally(() => {
+    entry.pending = undefined;
+  });
+  entry.pending = pending;
+  boundedCacheInsert(cache, key, entry, DIALOGUE_STATE_CACHE_MAX_ENTRIES);
+  return pending;
+}
+
+export function invalidateDialogueStateCache(
+  app: FastifyInstance,
+  input: { userId: string; sessionId: string },
+): void {
+  dialogueStateCache
+    .get(app)
+    ?.delete(dialogueStateCacheKey(input.userId, input.sessionId));
 }
 
 export async function readDialogueStateOnDb(
@@ -1080,9 +1196,32 @@ export async function recordDialogueStateTurn(
   app: FastifyInstance,
   input: DialogueStateTurnInput,
 ): Promise<DialogueStateSnapshot | null> {
-  return recordDialogueStateTurnOnDb(app.db, input, {
+  const snapshot = await recordDialogueStateTurnOnDb(app.db, input, {
     foundationEnabled: isCognitiveFoundationEnabled(app, input.userId),
   });
+  if (input.sessionId) {
+    const key = dialogueStateCacheKey(input.userId, input.sessionId);
+    if (snapshot) {
+      const cache =
+        dialogueStateCache.get(app) ?? new Map<string, DialogueStateCacheEntry>();
+      dialogueStateCache.set(app, cache);
+      boundedCacheInsert(
+        cache,
+        key,
+        {
+          value: snapshot,
+          expiresAt: Date.now() + DIALOGUE_STATE_CACHE_TTL_MS,
+        },
+        DIALOGUE_STATE_CACHE_MAX_ENTRIES,
+      );
+    } else {
+      invalidateDialogueStateCache(app, {
+        userId: input.userId,
+        sessionId: input.sessionId,
+      });
+    }
+  }
+  return snapshot;
 }
 
 export async function recordDialogueStateTurnOnDb(

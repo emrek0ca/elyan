@@ -145,6 +145,12 @@ test("EventBus publishes volatile stream events without calling the persistor", 
   });
 
   unsubscribe();
+  // Volatile fanout artık BİLEREK bloklamıyor: sağlayıcı akışı Redis
+  // gidiş-dönüşünü beklemesin diye kanal başına sıralı bir kuyruğa
+  // devrediliyor (bkz. publishVolatile). Bu yüzden yayının gerçekleşmesi
+  // `publishVolatile` dönüşünde değil, kuyruk boşalınca garanti. `close()`
+  // tüm kuyrukları bekler.
+  await bus.close();
 
   assert.equal(persistCount, 0);
   assert.equal(event.id, undefined);

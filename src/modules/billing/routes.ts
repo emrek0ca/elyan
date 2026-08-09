@@ -12,7 +12,6 @@ import {
 } from "./schemas.js";
 import {
   cancelCurrentSubscription,
-  claimWelcomeProTrial,
   completeSubscriptionCheckout,
   createSubscriptionCheckout,
   handleAppleStoreWebhook,
@@ -212,19 +211,6 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const auth = getUserAuth(request);
     return {
       billing: await cancelCurrentSubscription(app, auth.sub),
-    };
-  });
-
-  app.post("/trials/pro/claim", async (request, reply) => {
-    await app.authenticateUser(request, reply);
-
-    if (reply.sent) {
-      return;
-    }
-
-    const auth = getUserAuth(request);
-    return {
-      billing: await claimWelcomeProTrial(app, auth.sub),
     };
   });
 

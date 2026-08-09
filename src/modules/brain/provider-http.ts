@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
 import type { SharedBrainProvider } from "./runtime.js";
-import { buildProviderHeaders } from "./provider-selection.js";
+import {
+  buildProviderHeaders,
+  getConfiguredProviderKeySlot,
+  getConfiguredProviderApiKeys,
+} from "./provider-selection.js";
 
 const DEFAULT_PROVIDER_POST_TIMEOUT_MS = 60_000;
 
@@ -19,6 +23,46 @@ function positiveInt(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0
     ? Math.max(1, Math.trunc(parsed))
     : fallback;
+}
+
+function providerRequestUrl(
+  provider: SharedBrainProvider,
+  url: string,
+  streaming: boolean,
+): string {
+  if (
+    provider === "gemini" &&
+    streaming &&
+    url.includes("/interactions") &&
+    !url.includes("alt=sse")
+  ) {
+    return `${url}${url.includes("?") ? "&" : "?"}alt=sse`;
+  }
+  return url;
+}
+
+function providerRequestHeaders(
+  app: FastifyInstance,
+  provider: SharedBrainProvider,
+  url: string,
+  requestKeySeed?: string,
+): Record<string, string> {
+  const headers = buildProviderHeaders(app, provider, requestKeySeed);
+  if (provider !== "gemini" || !url.includes("/interactions")) {
+    return headers;
+  }
+
+  const authorization = headers.Authorization;
+  if (authorization?.startsWith("Bearer ")) {
+    headers["x-goog-api-key"] = authorization.slice("Bearer ".length);
+    delete headers.Authorization;
+  }
+  if (url.includes("alt=sse")) {
+    headers.Accept = "text/event-stream";
+  }
+  // Required by the current native multimodal Interactions REST contract.
+  headers["Api-Revision"] = "2026-05-20";
+  return headers;
 }
 
 function providerRateLimitStoreUnavailable(): AppError {
@@ -42,6 +86,7 @@ export async function acquireProviderRequestPermit(
   app: FastifyInstance,
   provider: SharedBrainProvider,
   now = Date.now(),
+  requestKeySeed?: string,
 ): Promise<void> {
   if (provider !== "groq" && provider !== "gemini") return;
 
@@ -60,7 +105,16 @@ export async function acquireProviderRequestPermit(
     Math.floor(now / PROVIDER_RATE_WINDOW_MS) * PROVIDER_RATE_WINDOW_MS;
   const windowEndsAt = windowStartedAt + PROVIDER_RATE_WINDOW_MS;
   const retryAfterMs = Math.max(250, windowEndsAt - now);
-  const key = `provider-rate:${provider}:requests:${windowStartedAt}`;
+  const keyCount =
+    provider === "groq" || provider === "gemini"
+      ? Math.max(1, getConfiguredProviderApiKeys(app, provider).length)
+      : 1;
+  const keySlot =
+    provider === "groq" || provider === "gemini"
+      ? getConfiguredProviderKeySlot(app, provider, requestKeySeed)
+      : 0;
+  const keyScope = keyCount > 1 ? `:key-${keySlot}` : "";
+  const key = `provider-rate:${provider}${keyScope}:requests:${windowStartedAt}`;
 
   let budget: { allowed: boolean; used: number } | null = null;
   try {
@@ -107,14 +161,15 @@ export async function postJson(
   url: string,
   body: Record<string, unknown>,
   timeoutMs: number = DEFAULT_PROVIDER_POST_TIMEOUT_MS,
+  requestKeySeed?: string,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    await acquireProviderRequestPermit(app, provider);
+    await acquireProviderRequestPermit(app, provider, Date.now(), requestKeySeed);
     return await fetch(url, {
       method: "POST",
-      headers: buildProviderHeaders(app, provider),
+      headers: providerRequestHeaders(app, provider, url, requestKeySeed),
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -131,33 +186,35 @@ export async function postStreamingJson(
   timeoutMs: number,
   firstPayloadTimeoutMs: number | null,
   onPayload: (payload: unknown) => void | Promise<void>,
+  requestKeySeed?: string,
 ): Promise<Response> {
   const controller = new AbortController();
   // TIMEOUT SEMANTİĞİ: timeoutMs toplam süre değil, son chunk'tan bu yana
   // sessizlik süresidir. Aktif token akışı devam ederken uzun yanıt kesilmez.
-  let stallTimer: ReturnType<typeof setTimeout> | null = setTimeout(
-    () => controller.abort(),
-    timeoutMs,
-  );
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
   const resetStallTimer = () => {
     if (stallTimer) {
       clearTimeout(stallTimer);
     }
     stallTimer = setTimeout(() => controller.abort(), timeoutMs);
   };
-  const hardCapTimer = setTimeout(
-    () => controller.abort(),
-    STREAMING_HARD_CAP_MS,
-  );
-  let firstPayloadTimer: ReturnType<typeof setTimeout> | null =
-    typeof firstPayloadTimeoutMs === "number" && firstPayloadTimeoutMs > 0
-      ? setTimeout(() => controller.abort(), firstPayloadTimeoutMs)
-      : null;
+  let hardCapTimer: ReturnType<typeof setTimeout> | null = null;
+  let firstPayloadTimer: ReturnType<typeof setTimeout> | null = null;
   try {
-    await acquireProviderRequestPermit(app, provider);
-    const response = await fetch(url, {
+    await acquireProviderRequestPermit(app, provider, Date.now(), requestKeySeed);
+    // Redis/provider admission is outside the model first-token budget. Start
+    // network and stream timers only after this request owns provider capacity;
+    // otherwise a busy rate-limit store can abort the request before fetch().
+    resetStallTimer();
+    hardCapTimer = setTimeout(() => controller.abort(), STREAMING_HARD_CAP_MS);
+    firstPayloadTimer =
+      typeof firstPayloadTimeoutMs === "number" && firstPayloadTimeoutMs > 0
+        ? setTimeout(() => controller.abort(), firstPayloadTimeoutMs)
+        : null;
+    const requestUrl = providerRequestUrl(provider, url, true);
+    const response = await fetch(requestUrl, {
       method: "POST",
-      headers: buildProviderHeaders(app, provider),
+      headers: providerRequestHeaders(app, provider, requestUrl, requestKeySeed),
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -183,17 +240,18 @@ export async function postStreamingJson(
           continue;
         }
         try {
-          if (firstPayloadTimer) {
-            clearTimeout(firstPayloadTimer);
-            firstPayloadTimer = null;
-          }
           const data = trimmed.startsWith("data:")
             ? trimmed.slice(5).trim()
             : trimmed;
           if (!data || data === "[DONE]") {
             continue;
           }
-          await onPayload(JSON.parse(data));
+          const payload = JSON.parse(data);
+          if (firstPayloadTimer) {
+            clearTimeout(firstPayloadTimer);
+            firstPayloadTimer = null;
+          }
+          await onPayload(payload);
         } catch {
           // Ignore malformed provider chunks; final response validity decides fallback.
         }
@@ -207,15 +265,16 @@ export async function postStreamingJson(
     const trailing = buffer.trim();
     if (trailing) {
       try {
-        if (firstPayloadTimer) {
-          clearTimeout(firstPayloadTimer);
-          firstPayloadTimer = null;
-        }
         const data = trailing.startsWith("data:")
           ? trailing.slice(5).trim()
           : trailing;
         if (data && data !== "[DONE]") {
-          await onPayload(JSON.parse(data));
+          const payload = JSON.parse(data);
+          if (firstPayloadTimer) {
+            clearTimeout(firstPayloadTimer);
+            firstPayloadTimer = null;
+          }
+          await onPayload(payload);
         }
       } catch {
         // See malformed chunk note above.
@@ -227,7 +286,7 @@ export async function postStreamingJson(
     if (stallTimer) {
       clearTimeout(stallTimer);
     }
-    clearTimeout(hardCapTimer);
+    if (hardCapTimer) clearTimeout(hardCapTimer);
     if (firstPayloadTimer) {
       clearTimeout(firstPayloadTimer);
     }

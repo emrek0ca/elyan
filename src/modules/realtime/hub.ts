@@ -209,6 +209,27 @@ export class RealtimeHub {
     return Boolean(connection && connection.socket.readyState === WebSocket.OPEN);
   }
 
+  /**
+   * Bu kullanıcının CANLI bir masaüstü çalışma zamanı var mı.
+   *
+   * Yönlendirme kararı için gerekir: semantik rota modelini çağırmak yalnızca
+   * gerçekten yönlendirilecek bir masaüstü varsa anlamlıdır. Bellek içi soket
+   * haritasından okunur — ek sorgu, ek gecikme yoktur.
+   */
+  public hasConnectedRuntimeForUser(userId: string): boolean {
+    const target = String(userId || "").trim();
+    if (!target) return false;
+    for (const connection of this.runtimeSockets.values()) {
+      if (
+        connection.userId === target &&
+        connection.socket.readyState === WebSocket.OPEN
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public sendToRuntime(deviceId: string, message: unknown): boolean {
     const connection = this.runtimeSockets.get(deviceId);
 

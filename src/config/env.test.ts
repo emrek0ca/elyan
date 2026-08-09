@@ -43,12 +43,12 @@ test("loadEnv derives iyzico public base url from app base url", () => {
     env.GEMINI_INTERACTIONS_BASE_URL,
     "https://generativelanguage.googleapis.com/v1beta",
   );
-  assert.equal(env.GEMINI_TEXT_MODEL, "gemini-3.5-flash");
-  assert.equal(env.GEMINI_FAST_MODEL, "gemini-3.1-flash-lite");
-  assert.equal(env.GEMINI_REASONING_MODEL, "gemini-3.5-flash");
-  assert.equal(env.GEMINI_VISION_MODEL, "gemini-3.5-flash");
-  assert.equal(env.GEMINI_IMAGE_MODEL, "gemini-3.1-flash-image-preview");
-  assert.equal(env.GEMINI_IMAGE_PRO_MODEL, "gemini-3-pro-image-preview");
+  assert.equal(env.GEMINI_TEXT_MODEL, "gemini-3.6-flash");
+  assert.equal(env.GEMINI_FAST_MODEL, "gemini-3.5-flash-lite");
+  assert.equal(env.GEMINI_REASONING_MODEL, "gemini-3.6-flash");
+  assert.equal(env.GEMINI_VISION_MODEL, "gemini-3.6-flash");
+  assert.equal(env.GEMINI_IMAGE_MODEL, "gemini-3.1-flash-image");
+  assert.equal(env.GEMINI_IMAGE_PRO_MODEL, "gemini-3-pro-image");
   // Maliyet politikası: default tavan 1K — 2K/4K yalnızca operatör açarsa.
   assert.equal(env.GEMINI_IMAGE_SIZE, "1K");
   assert.equal(env.GEMINI_IMAGE_PRO_ENABLED, false);
@@ -77,6 +77,7 @@ test("loadEnv derives iyzico public base url from app base url", () => {
     "qwen2.5:7b-instruct-q5_K_M",
   );
   assert.equal(env.ELYAN_WORLD_CONTEXT_PACKETS_ENABLED, true);
+  assert.equal(env.ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED, true);
   assert.equal(env.ELYAN_MODEL_CANARY_ENABLED, false);
   assert.equal(env.ELYAN_MODEL_PRIMARY_ENABLED, false);
 });

@@ -332,10 +332,30 @@ export async function warmSharedBrainRuntime(app: FastifyInstance): Promise<Shar
   return selectedPromise;
 }
 
-export async function selectSharedBrainRuntime(app: FastifyInstance): Promise<SharedBrainRuntimeSnapshot> {
+export async function selectSharedBrainRuntime(
+  app: FastifyInstance,
+  options: { skipProbe?: boolean } = {},
+): Promise<SharedBrainRuntimeSnapshot> {
   const snapshot = getSharedBrainRuntimeSnapshot(app);
   if (snapshot.ready) {
     return snapshot;
+  }
+
+  // The latency-critical hosted lane already has an authenticated provider
+  // configured. A health probe adds a network round trip before the real
+  // request and can be stale by the time it returns; let the request/circuit
+  // path own failure handling instead.
+  if (options.skipProbe) {
+    const candidate = getPrimaryProviderCandidate(app);
+    const hostedProvider =
+      candidate.provider === "groq" ||
+      candidate.provider === "gemini" ||
+      candidate.provider === "openai" ||
+      candidate.provider === "openrouter" ||
+      candidate.provider === "claude";
+    if (hostedProvider && getConfiguredProviderApiKey(app, candidate.provider)) {
+      return storeCacheEntry(app, buildCandidateSnapshot(candidate, true, "config"));
+    }
   }
 
   return warmSharedBrainRuntime(app);

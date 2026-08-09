@@ -15,6 +15,14 @@ import { createOpaqueCode } from "../../lib/auth-crypto.js";
 import { createPkcePair } from "../../lib/oauth-pkce.js";
 import { createAuditLog } from "../audit/service.js";
 import {
+  beginMcpAuthorization,
+  completeMcpAuthorization,
+  discoverMcpOAuth,
+  refreshMcpAuthorization,
+  registerMcpOAuthClient,
+} from "./mcp-oauth.js";
+import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
+import {
   isConnectionMcpProbeFresh,
   readConnectionMcpProbe,
 } from "./mcp-probe.js";
@@ -30,6 +38,26 @@ import {
   isProviderConfigured,
   type RemoteMcpSelectionMetadata,
 } from "./provider-registry.js";
+
+const CONNECTED_CAPABILITY_GRANT_CACHE_TTL_MS = 3_000;
+const CONNECTED_CAPABILITY_GRANT_CACHE_MAX_ENTRIES = 4_096;
+
+type ConnectedCapabilityGrant = {
+  provider: ConnectionProvider;
+  scopes: string[];
+  capabilities: string[];
+};
+
+type CapabilityGrantCacheEntry = {
+  value?: ConnectedCapabilityGrant[];
+  expiresAt: number;
+  pending?: Promise<ConnectedCapabilityGrant[]>;
+};
+
+const capabilityGrantCache = new WeakMap<
+  FastifyInstance,
+  Map<string, CapabilityGrantCacheEntry>
+>();
 
 function getCallbackUrl(
   app: FastifyInstance,
@@ -105,6 +133,11 @@ type GoogleOAuthPayload = {
   tokenType: string;
   scope: string | null;
   raw: Record<string, unknown>;
+  mcpOAuth?: {
+    serverUrl: string;
+    authorizationServerUrl: string;
+    clientInformation: OAuthClientInformationFull;
+  };
 };
 
 function stringList(value: unknown): string[] {
@@ -569,6 +602,108 @@ async function refreshProviderOAuthAccessToken(
     .where(eq(integrationCredentials.connectionId, connectionId));
 
   return accessToken;
+}
+
+function hydrateMcpClientInformation(
+  value: unknown,
+): OAuthClientInformationFull | null {
+  const record = recordValue(value);
+  const redirectUris = Array.isArray(record.redirect_uris)
+    ? record.redirect_uris.flatMap((item) => {
+        try {
+          return [new URL(String(item))];
+        } catch {
+          return [];
+        }
+      })
+    : [];
+  if (typeof record.client_id !== "string" || redirectUris.length === 0) {
+    return null;
+  }
+  return {
+    ...record,
+    redirect_uris: redirectUris,
+  } as unknown as OAuthClientInformationFull;
+}
+
+async function refreshMcpOAuthAccessToken(
+  app: FastifyInstance,
+  connectionId: string,
+  tokenPayload: GoogleOAuthPayload,
+  timeoutMs = 12_000,
+): Promise<string> {
+  const mcpOAuth = tokenPayload.mcpOAuth;
+  if (!mcpOAuth || !tokenPayload.refreshToken) {
+    throw new AppError(
+      400,
+      "connector_auth_required",
+      "MCP connection needs re-authentication",
+    );
+  }
+  const clientInformation = hydrateMcpClientInformation(
+    mcpOAuth.clientInformation,
+  );
+  if (!clientInformation) {
+    throw new AppError(
+      400,
+      "connector_auth_required",
+      "MCP OAuth client information is missing",
+    );
+  }
+
+  try {
+    const discovery = await discoverMcpOAuth(mcpOAuth.serverUrl);
+    const refresh = refreshMcpAuthorization({
+      authorizationServerUrl: mcpOAuth.authorizationServerUrl,
+      authorizationServer: discovery.authorizationServer,
+      clientInformation,
+      refreshToken: tokenPayload.refreshToken,
+      resource: new URL(mcpOAuth.serverUrl),
+    });
+    const tokens = await Promise.race([
+      refresh,
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error("mcp_oauth_refresh_timeout")),
+          timeoutMs,
+        );
+        timer.unref?.();
+      }),
+    ]);
+    const accessToken = tokens.access_token;
+    if (!accessToken) throw new Error("mcp_oauth_access_token_missing");
+    const nextRefreshToken = tokens.refresh_token ?? tokenPayload.refreshToken;
+    await app.db
+      .update(integrationCredentials)
+      .set({
+        encryptedPayload: encryptJson(app.config, {
+          ...tokenPayload,
+          accessToken,
+          refreshToken: nextRefreshToken,
+          tokenType: tokens.token_type,
+          scope: tokens.scope ?? tokenPayload.scope,
+          raw: tokens,
+          mcpOAuth: {
+            ...mcpOAuth,
+            clientInformation,
+          },
+        }),
+        expiresAt:
+          typeof tokens.expires_in === "number"
+            ? new Date(Date.now() + tokens.expires_in * 1_000)
+            : undefined,
+        updatedAt: new Date(),
+      })
+      .where(eq(integrationCredentials.connectionId, connectionId));
+    return accessToken;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      400,
+      "connector_auth_required",
+      "MCP authorization could not be refreshed; reconnect the integration",
+    );
+  }
 }
 
 const PROVIDER_REVOKE_URLS: Partial<Record<ConnectionProvider, string>> = {
@@ -1111,6 +1246,9 @@ export async function startOauthAppConnection(
   if (entry.stage === "setup_required") {
     throw badRequest("Integration app requires provider setup");
   }
+  if (entry.authStrategy === "mcp_oauth") {
+    return startMcpOAuthConnection(app, input, entry);
+  }
   return startOauthConnection(app, {
     userId: input.userId,
     provider: entry.provider,
@@ -1120,6 +1258,123 @@ export async function startOauthAppConnection(
     ipAddress: input.ipAddress,
     userAgent: input.userAgent,
   });
+}
+
+async function startMcpOAuthConnection(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    appId: string;
+    redirectUri?: string;
+    ipAddress?: string;
+    userAgent?: string;
+  },
+  entry: NonNullable<ReturnType<typeof getIntegrationMcpApp>>,
+) {
+  if (
+    app.config.ELYAN_MCP_SDK_ENABLED !== true ||
+    !entry.serverUrl
+  ) {
+    throw badRequest("MCP OAuth is not enabled");
+  }
+
+  const callbackUrl = getCallbackUrl(app, entry.provider);
+  const redirectUri = normalizeOauthRedirectUri(
+    input.redirectUri,
+    app.config.APP_BASE_URL,
+  );
+  const state = createOpaqueCode(24);
+  const scopes = mergeUnique(input.appId ? entry.oauthScopes : []);
+
+  let discovery: Awaited<ReturnType<typeof discoverMcpOAuth>>;
+  let clientInformation: OAuthClientInformationFull;
+  let authorizationUrl: URL;
+  let codeVerifier: string;
+  try {
+    discovery = await discoverMcpOAuth(entry.serverUrl);
+    clientInformation = await registerMcpOAuthClient({
+      authorizationServerUrl: discovery.authorizationServerUrl,
+      authorizationServer: discovery.authorizationServer,
+      clientMetadata: {
+        redirect_uris: [callbackUrl],
+        token_endpoint_auth_method: "none",
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        client_name: "Elyan",
+        software_id: "elyan",
+        software_version: "1",
+      },
+      scope: scopes.length > 0 ? joinScopes(scopes) : undefined,
+    });
+    const started = await beginMcpAuthorization({
+      authorizationServerUrl: discovery.authorizationServerUrl,
+      authorizationServer: discovery.authorizationServer,
+      clientInformation,
+      redirectUrl: callbackUrl,
+      scope: scopes.length > 0 ? joinScopes(scopes) : undefined,
+      state,
+      resource: new URL(entry.serverUrl),
+    });
+    authorizationUrl = started.authorizationUrl;
+    codeVerifier = started.codeVerifier;
+  } catch (error) {
+    app.log.warn?.(
+      {
+        appId: entry.id,
+        error: error instanceof Error ? error.message : "mcp_oauth_discovery_failed",
+      },
+      "MCP OAuth discovery or registration failed",
+    );
+    throw badRequest("MCP OAuth bağlantısı başlatılamadı");
+  }
+
+  await app.db.insert(oauthStates).values({
+    userId: input.userId,
+    provider: entry.provider,
+    state,
+    redirectUri,
+    requestedScopes: scopes,
+    codeVerifier,
+    // Client secrets returned by DCR stay encrypted while the short-lived
+    // state is pending; callback rehydrates this payload before code exchange.
+    metadata: {
+      appId: entry.id,
+      mcpOAuthState: encryptJson(app.config, {
+        serverUrl: entry.serverUrl,
+        authorizationServerUrl: discovery.authorizationServerUrl,
+        clientInformation,
+      }),
+    },
+    expiresAt: new Date(Date.now() + 10 * 60_000),
+  });
+
+  await createAuditLog(app, {
+    userId: input.userId,
+    actorType: "user",
+    actorId: input.userId,
+    action: "integration.oauth.start",
+    resourceType: "oauth_state",
+    resourceId: createHash("sha256").update(state).digest("hex"),
+    status: "success",
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+    payload: {
+      provider: entry.provider,
+      appId: entry.id,
+      authStrategy: "mcp_oauth",
+      scopeHash: createHash("sha256")
+        .update(JSON.stringify(scopes))
+        .digest("hex"),
+    },
+  });
+
+  return {
+    provider: entry.provider,
+    appId: entry.id,
+    authUrl: authorizationUrl.toString(),
+    state,
+    expiresAt: new Date(Date.now() + 10 * 60_000),
+  };
 }
 
 export async function handleOauthCallback(
@@ -1192,20 +1447,96 @@ export async function handleOauthCallback(
     throw badRequest("OAuth callback code is missing");
   }
 
-  const tokenPayload = await exchangeOAuthCode(
-    app,
-    input.provider,
-    input.code,
-    oauthState.codeVerifier,
-    appId || undefined,
-  );
+  let mcpOAuthCredential: GoogleOAuthPayload["mcpOAuth"] | undefined;
+  let tokenPayload: Record<string, unknown>;
+  const encryptedMcpOAuthState = oauthMetadata.mcpOAuthState;
+  if (appId && typeof encryptedMcpOAuthState === "string") {
+    let mcpState: {
+      serverUrl: string;
+      authorizationServerUrl: string;
+      clientInformation: OAuthClientInformationFull;
+    };
+    try {
+      const decrypted = decryptJson<{
+        serverUrl: string;
+        authorizationServerUrl: string;
+        clientInformation: OAuthClientInformationFull;
+      }>(app.config, encryptedMcpOAuthState);
+      const rawClientInformation = decrypted.clientInformation as unknown as Record<
+        string,
+        unknown
+      >;
+      const redirectUris = Array.isArray(rawClientInformation.redirect_uris)
+        ? rawClientInformation.redirect_uris.map((value) => new URL(String(value)))
+        : [];
+      mcpState = {
+        serverUrl: decrypted.serverUrl,
+        authorizationServerUrl: decrypted.authorizationServerUrl,
+        clientInformation: {
+          ...rawClientInformation,
+          redirect_uris: redirectUris,
+        } as unknown as OAuthClientInformationFull,
+      };
+    } catch {
+      throw badRequest("MCP OAuth state is invalid");
+    }
+    let discovery: Awaited<ReturnType<typeof discoverMcpOAuth>>;
+    try {
+      discovery = await discoverMcpOAuth(mcpState.serverUrl);
+      const tokens = await completeMcpAuthorization({
+        authorizationServerUrl: mcpState.authorizationServerUrl,
+        authorizationServer: discovery.authorizationServer,
+        clientInformation: mcpState.clientInformation,
+        authorizationCode: input.code,
+        codeVerifier: oauthState.codeVerifier ?? "",
+        redirectUri: getCallbackUrl(app, input.provider),
+        resource: new URL(mcpState.serverUrl),
+      });
+      tokenPayload = { ...tokens };
+      mcpOAuthCredential = {
+        serverUrl: mcpState.serverUrl,
+        authorizationServerUrl: mcpState.authorizationServerUrl,
+        clientInformation: mcpState.clientInformation,
+      };
+    } catch (error) {
+      app.log.warn?.(
+        {
+          provider: input.provider,
+          appId,
+          error: error instanceof Error ? error.message : "mcp_oauth_exchange_failed",
+        },
+        "MCP OAuth callback exchange failed",
+      );
+      throw badRequest("MCP OAuth yetkilendirmesi tamamlanamadı");
+    }
+  } else {
+    tokenPayload = await exchangeOAuthCode(
+      app,
+      input.provider,
+      input.code,
+      oauthState.codeVerifier,
+      appId || undefined,
+    );
+  }
   const accessToken = tokenPayload.access_token;
 
   if (typeof accessToken !== "string" || !accessToken) {
     throw badRequest("OAuth provider did not return an access token");
   }
 
-  const identity = await fetchProviderIdentity(input.provider, accessToken);
+  const identity = await fetchProviderIdentity(input.provider, accessToken).catch(
+    (error) => {
+      if (!mcpOAuthCredential || !appId) throw error;
+      return {
+        externalAccountId: `${appId}:${createHash("sha256")
+          .update(accessToken)
+          .digest("hex")
+          .slice(0, 24)}`,
+        displayName: getIntegrationMcpApp(appId)?.displayName ?? input.provider,
+        metadata: {},
+      };
+    },
+  );
   const effectiveScopes = grantedOauthScopes(
     tokenPayload,
     oauthState.requestedScopes,
@@ -1318,6 +1649,7 @@ export async function handleOauthCallback(
           : "Bearer",
       scope: typeof tokenPayload.scope === "string" ? tokenPayload.scope : null,
       raw: tokenPayload,
+      ...(mcpOAuthCredential ? { mcpOAuth: mcpOAuthCredential } : {}),
     });
     const expiresAt = getExpiresAtFromTokenPayload(tokenPayload);
 
@@ -1352,6 +1684,7 @@ export async function handleOauthCallback(
     }
     return nextConnection;
   });
+  invalidateConnectedCapabilityGrantsCache(app, oauthState.userId);
 
   await createAuditLog(app, {
     userId: oauthState.userId,
@@ -1407,6 +1740,7 @@ export async function disconnectIntegration(
   if (!connection) {
     throw notFound("Integration connection not found");
   }
+  invalidateConnectedCapabilityGrantsCache(app, input.userId);
 
   await createAuditLog(app, {
     userId: input.userId,
@@ -1477,6 +1811,7 @@ export async function disconnectIntegrationApp(
   await app.db
     .delete(integrationCredentials)
     .where(eq(integrationCredentials.connectionId, connection.id));
+  invalidateConnectedCapabilityGrantsCache(app, input.userId);
 
   await createAuditLog(app, {
     userId: input.userId,
@@ -1534,18 +1869,27 @@ async function getConnectionAccessToken(
   if (provider === "google") {
     return (
       await getGoogleMailAccessToken(app, connectionId, appId, refreshTimeoutMs)
-    ).accessToken;
+      ).accessToken;
   }
   const { credential, tokenPayload } = await loadGoogleOAuthTokenPayload(
     app,
     connectionId,
   );
+  const catalogEntry = appId ? getIntegrationMcpApp(appId) : undefined;
   if (
     credential.expiresAt &&
     credential.expiresAt.getTime() <= Date.now() + 30_000
   ) {
     if (!tokenPayload.refreshToken) {
       throw new AppError(400, "connector_auth_required", "Integration connection needs re-authentication");
+    }
+    if (catalogEntry?.authStrategy === "mcp_oauth") {
+      return refreshMcpOAuthAccessToken(
+        app,
+        connectionId,
+        tokenPayload,
+        refreshTimeoutMs,
+      );
     }
     return refreshProviderOAuthAccessToken(
       app,
@@ -1557,6 +1901,14 @@ async function getConnectionAccessToken(
     );
   }
   if (!tokenPayload.accessToken) {
+    if (catalogEntry?.authStrategy === "mcp_oauth" && tokenPayload.refreshToken) {
+      return refreshMcpOAuthAccessToken(
+        app,
+        connectionId,
+        tokenPayload,
+        refreshTimeoutMs,
+      );
+    }
     throw badRequest("Integration access token is missing");
   }
   return tokenPayload.accessToken;
@@ -1677,7 +2029,7 @@ function boundedMcpCapabilities(value: unknown, limit = 24): string[] {
   ].slice(0, limit);
 }
 
-function normalizeSafePublicMcpUrl(value: unknown): string | null {
+export function normalizeSafePublicMcpUrl(value: unknown): string | null {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
     const url = new URL(value.trim());
@@ -1941,16 +2293,10 @@ export async function resolveRemoteMcpRequestedCapabilities(
   return (await resolveRemoteMcpRequest(app, input)).requestedCapabilities;
 }
 
-export async function listConnectedCapabilityGrants(
+async function queryConnectedCapabilityGrants(
   app: FastifyInstance,
   userId: string,
-): Promise<
-  Array<{
-    provider: ConnectionProvider;
-    scopes: string[];
-    capabilities: string[];
-  }>
-> {
+): Promise<ConnectedCapabilityGrant[]> {
   const rows = await app.db
     .select({
       provider: integrationConnections.provider,
@@ -1971,6 +2317,50 @@ export async function listConnectedCapabilityGrants(
       capabilities: stringList(row.capabilities),
     }))
     .filter((row) => row.capabilities.length > 0);
+}
+
+export function invalidateConnectedCapabilityGrantsCache(
+  app: FastifyInstance,
+  userId: string,
+): void {
+  capabilityGrantCache.get(app)?.delete(userId);
+}
+
+export async function listConnectedCapabilityGrants(
+  app: FastifyInstance,
+  userId: string,
+): Promise<ConnectedCapabilityGrant[]> {
+  const now = Date.now();
+  let cache = capabilityGrantCache.get(app);
+  if (!cache) {
+    cache = new Map();
+    capabilityGrantCache.set(app, cache);
+  }
+  const cached = cache.get(userId);
+  if (cached?.value && cached.expiresAt > now) {
+    return cached.value;
+  }
+  if (cached?.pending) {
+    return cached.pending;
+  }
+
+  if (!cached && cache.size >= CONNECTED_CAPABILITY_GRANT_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey === "string") cache.delete(oldestKey);
+  }
+  const pending = queryConnectedCapabilityGrants(app, userId);
+  cache.set(userId, { expiresAt: 0, pending });
+  try {
+    const value = await pending;
+    cache.set(userId, {
+      value,
+      expiresAt: Date.now() + CONNECTED_CAPABILITY_GRANT_CACHE_TTL_MS,
+    });
+    return value;
+  } catch (error) {
+    cache.delete(userId);
+    throw error;
+  }
 }
 
 export async function listRuntimeMcpConnections(

@@ -16,28 +16,29 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
   assert.equal(catalog.fastModel, "openai/gpt-oss-20b");
   assert.equal(catalog.fallbackModel, "qwen/qwen3.6-27b");
   assert.deepEqual(catalog.defaultModelByWorkload, {
-    intent: "openai/gpt-oss-20b",
-    fast_route: "openai/gpt-oss-20b",
+    // Yönlendirme/niyet KATI JSON ister → reasoning-dışı model. gpt-oss gizli
+    // düşünme turunda bütçeyi tüketip JSON'u boş bırakıyordu (canlı 2026-08-08).
+    intent: "llama-3.1-8b-instant",
+    fast_route: "llama-3.1-8b-instant",
     mobile_chat_fast: "openai/gpt-oss-20b",
     mobile_chat_balanced: "openai/gpt-oss-120b",
     mobile_chat_deep_refine: "openai/gpt-oss-120b",
     document_analysis: "qwen/qwen3.6-27b",
     document_generate: "openai/gpt-oss-120b",
     table_generate: "openai/gpt-oss-120b",
-    image_analyze: "meta-llama/llama-4-scout-17b-16e-instruct",
+    image_analyze: "qwen/qwen3.6-27b",
     planning: "openai/gpt-oss-120b",
     // Public research yolları kalite-öncelikli: büyük reasoning modelinde.
     public_research: "openai/gpt-oss-120b",
     public_deep_research: "openai/gpt-oss-120b",
     public_quantum_research: "openai/gpt-oss-120b",
     desktop_handoff: "openai/gpt-oss-20b",
-    vision_reasoning: "meta-llama/llama-4-scout-17b-16e-instruct",
+    vision_reasoning: "qwen/qwen3.6-27b",
   });
   assert.deepEqual(catalog.models, [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
     "qwen/qwen3.6-27b",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
   ]);
 });
 

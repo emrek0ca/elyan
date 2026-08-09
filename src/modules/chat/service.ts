@@ -29,9 +29,7 @@ import {
 } from "../billing/catalog.js";
 import {
   createUpgradeOrByokRequiredError,
-  getBillingSummary,
   getUserUsageAccessTruth,
-  shapePublicUsageSnapshot,
 } from "../billing/service.js";
 import {
   calculateBillablePlanTokens,
@@ -103,6 +101,7 @@ const RECENT_DUPLICATE_CHAT_TURN_WINDOW_MS = 20_000;
 const CHAT_TURN_ADMISSION_LOCK_TTL_MS = 30_000;
 const CHAT_TURN_ADMISSION_WAIT_MS = 2_500;
 const CHAT_TURN_ADMISSION_POLL_MS = 125;
+const CHAT_MESSAGE_INLINE_CONTENT_MAX_BYTES = 64 * 1024;
 
 type ChatSessionCursor = {
   timestamp: string;
@@ -188,6 +187,10 @@ function estimateMessageTokens(value: string) {
   return Math.max(1, Math.ceil(normalized.length / 4));
 }
 
+function shouldStoreChatMessageContentBlob(value: string): boolean {
+  return Buffer.byteLength(value, "utf8") > CHAT_MESSAGE_INLINE_CONTENT_MAX_BYTES;
+}
+
 async function findRecentDuplicateChatTurn(
   app: FastifyInstance,
   input: {
@@ -269,8 +272,7 @@ async function findRecentDuplicateChatTurn(
   return null;
 }
 
-async function shapeDuplicateChatTurnResponse(
-  app: FastifyInstance,
+function shapeDuplicateChatTurnResponse(
   input: {
     userId: string;
     targetDeviceId?: string;
@@ -282,7 +284,6 @@ async function shapeDuplicateChatTurnResponse(
     Awaited<ReturnType<typeof findRecentDuplicateChatTurn>>
   >,
 ) {
-  const billing = await getBillingSummary(app, input.userId);
   // Görev üretmeyen sohbet turlarında task null olur; yanıt şekli korunur.
   const shapedTask = duplicateTurn.task
     ? shapeTaskFeedItem(duplicateTurn.task)
@@ -299,14 +300,6 @@ async function shapeDuplicateChatTurnResponse(
   const resultRecord = readRecord(
     (duplicateTurn.task as Record<string, unknown> | null)?.result,
   );
-  const pendingTokenDebit = estimatePendingChatTokenDebit({
-    route: routeDecision.route,
-    reused: true,
-    taskStatus: duplicateTurn.task?.status,
-    content: input.content,
-    workload: routeDecision.selectedWorkload ?? "mobile_chat_fast",
-    brainProfile: billing.subscription.brainProfile,
-  });
   return {
     session,
     userMessage: shapeChatMessageForResponse(duplicateTurn.userMessage),
@@ -329,11 +322,9 @@ async function shapeDuplicateChatTurnResponse(
       webSourceCount: readNumber(taskBrainRecord, "webSourceCount"),
       estimatedCostBucket: "deduped_inflight",
     },
-    usage: shapePublicUsageSnapshot({
-      usage: billing.usage,
-      subscription: billing.subscription,
-      pendingTokens: pendingTokenDebit,
-    }),
+    // Tam kullanım bakiyesi bootstrap/SSE üzerinden güncellenir. Chat POST'u
+    // tam billing özetini beklemez; bu, her mesajı çoklu ağır sorguya bağlar.
+    usage: null,
     dispatched: false,
     reused: true,
     deduped: true,
@@ -1087,6 +1078,35 @@ function presentationForRoute(
   return "chat";
 }
 
+function shouldDeferChatContextHydration(input: {
+  routeDecision: { route?: string; selectedWorkload?: string | null };
+  metadata: Record<string, unknown>;
+  ephemeralVision?: EphemeralVisionCarrier;
+}) {
+  if (input.routeDecision.route !== "server_brain") return false;
+
+  const workload = String(input.routeDecision.selectedWorkload ?? "").trim();
+  const needsVisualContext =
+    workload === "image_analyze" || workload === "vision_reasoning";
+  const hasEphemeralVision = countDistinctEphemeralImages(input.ephemeralVision) > 0;
+  const hasMediaReferences =
+    Array.isArray(input.metadata.mediaInputRefs) &&
+    input.metadata.mediaInputRefs.length > 0;
+  const hasAttachmentMetadata =
+    extractAttachmentMetadataCarrier(input.metadata) != null;
+
+  // Plain text turns can use the compact client snapshot immediately and let
+  // the generation worker hydrate authoritative history/context in parallel.
+  // Any media or structured visual workload keeps the request-time context so
+  // attachment and continuation semantics remain exact.
+  return !(
+    needsVisualContext ||
+    hasEphemeralVision ||
+    hasMediaReferences ||
+    hasAttachmentMetadata
+  );
+}
+
 export function buildChatDispatchDeliverySnapshot(input: {
   task: {
     id?: string;
@@ -1444,6 +1464,28 @@ function readRouteContinuity(
     : undefined;
 }
 
+function shouldResolveRemoteMcpForChat(input: {
+  requestedCapabilities: string[];
+  metadata?: Record<string, unknown>;
+  targetDeviceId?: string;
+  existingSessionMetadata?: unknown;
+}): boolean {
+  const explicitMcpCapability = input.requestedCapabilities.some((value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s.-]+/g, "_")
+      .startsWith("mcp_"),
+  );
+  const metadata = input.metadata ?? {};
+  return (
+    explicitMcpCapability ||
+    metadata.desktopDispatch === true ||
+    Boolean(input.targetDeviceId?.trim()) ||
+    readRouteContinuity(input.existingSessionMetadata) === "desktop_runtime"
+  );
+}
+
 export async function listChatSessions(
   app: FastifyInstance,
   input: {
@@ -1522,6 +1564,9 @@ export async function listChatSessions(
     }),
     nextCursor,
     hasMore,
+    revision: pageRows
+      .map((session) => `${session.id}:${(session.lastMessageAt ?? session.updatedAt).toISOString()}`)
+      .join("|") || "empty",
   };
 }
 
@@ -1614,6 +1659,9 @@ export async function listChatSessionMessages(
     messages: pageMessages,
     nextCursor,
     hasMore,
+    revision: pageMessages
+      .map((message) => `${message.id}:${message.updatedAt.toISOString()}`)
+      .join("|") || "empty",
   };
 }
 
@@ -1654,7 +1702,7 @@ export async function updateChatSession(
     .returning();
   const session = rows[0];
 
-  await app.services.eventBus.publish({
+  void app.services.eventBus.publish({
     topic: "chat.session.updated",
     userId: input.userId,
     deviceId: session.targetDeviceId,
@@ -1663,7 +1711,7 @@ export async function updateChatSession(
     },
   });
 
-  await createAuditLog(app, {
+  void createAuditLog(app, {
     userId: input.userId,
     actorType: "user",
     actorId: input.userId,
@@ -1817,7 +1865,7 @@ export async function deleteChatSession(
     },
   });
 
-  await createAuditLog(app, {
+  void createAuditLog(app, {
     userId: input.userId,
     actorType: "user",
     actorId: input.userId,
@@ -1898,9 +1946,11 @@ export async function clearChatSessions(
       before: input.before?.toISOString() ?? null,
       sessionIds: sessions.map((session) => session.id),
     },
+  }).catch((error) => {
+    app.log.warn({ error, userId: input.userId }, "chat session event deferred");
   });
 
-  await createAuditLog(app, {
+  void createAuditLog(app, {
     userId: input.userId,
     actorType: "user",
     actorId: input.userId,
@@ -1915,6 +1965,8 @@ export async function clearChatSessions(
       deletedCount: sessions.length,
       before: input.before?.toISOString() ?? null,
     },
+  }).catch((error) => {
+    app.log.warn({ error, userId: input.userId }, "chat session audit deferred");
   });
 
   return {
@@ -1965,16 +2017,20 @@ export async function createChatSession(
 
   const session = rows[0];
 
-  await app.services.eventBus.publish({
-    topic: "chat.session.created",
-    userId: input.userId,
-    deviceId: targetDevice.device.id,
-    payload: {
-      session,
-    },
-  });
+  void app.services.eventBus
+    .publish({
+      topic: "chat.session.created",
+      userId: input.userId,
+      deviceId: targetDevice.device.id,
+      payload: {
+        session,
+      },
+    })
+    .catch((error) => {
+      app.log.warn({ error, userId: input.userId }, "chat session event deferred");
+    });
 
-  await createAuditLog(app, {
+  void createAuditLog(app, {
     userId: input.userId,
     actorType: "user",
     actorId: input.userId,
@@ -1989,6 +2045,8 @@ export async function createChatSession(
       source: input.source,
       targetDeviceId: targetDevice.device.id,
     },
+  }).catch((error) => {
+    app.log.warn({ error, userId: input.userId }, "chat session audit deferred");
   });
 
   return shapeChatSessionForResponse(session);
@@ -2012,17 +2070,27 @@ export async function createChatMessage(
     idempotencyKey?: string;
   },
 ) {
-  const existingSession = input.sessionId
-    ? await findOwnedChatSession(app, input.userId, input.sessionId)
-    : null;
-  const [usageAccess, remoteMcpResolution] = await Promise.all([
+  const [existingSession, usageAccess] = await Promise.all([
+    input.sessionId
+      ? findOwnedChatSession(app, input.userId, input.sessionId)
+      : Promise.resolve(null),
     getUserUsageAccessTruth(app.db, input.userId),
-    resolveRemoteMcpRequest(app, {
-      userId: input.userId,
-      prompt: input.content,
-      requestedCapabilities: input.requestedCapabilities,
-    }),
   ]);
+  const remoteMcpResolution = await (shouldResolveRemoteMcpForChat({
+    requestedCapabilities: input.requestedCapabilities,
+    metadata: input.metadata,
+    targetDeviceId: input.targetDeviceId,
+    existingSessionMetadata: existingSession?.metadata,
+  })
+    ? resolveRemoteMcpRequest(app, {
+        userId: input.userId,
+        prompt: input.content,
+        requestedCapabilities: input.requestedCapabilities,
+      })
+    : Promise.resolve({
+        requestedCapabilities: input.requestedCapabilities,
+        selection: null,
+      }));
   const effectiveRequestedCapabilities =
     remoteMcpResolution.requestedCapabilities;
   const routeDecision = await routeChatTurn(app, {
@@ -2057,11 +2125,13 @@ export async function createChatMessage(
     if (!usageAccess.serverBrainAllowed) {
       throw createUpgradeOrByokRequiredError(usageAccess);
     }
-    if (usageAccess.mode === "trial" && usageAccess.planCode === "free") {
-      const trialQuota = await getTrialQuotaUsage(app.db, input.userId);
-      assertTrialTaskQuotaAllowedFromUsage(trialQuota);
-    }
   }
+  const trialQuotaPromise =
+    routeDecision.route === "server_brain" &&
+    usageAccess.mode === "trial" &&
+    usageAccess.planCode === "free"
+      ? getTrialQuotaUsage(app.db, input.userId)
+      : Promise.resolve(null);
   if (routeDecision.route === "server_brain") {
     const dispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
       isSharedBrain: true,
@@ -2078,6 +2148,10 @@ export async function createChatMessage(
         input.ephemeralVision,
       );
     }
+  }
+  const trialQuota = await trialQuotaPromise;
+  if (trialQuota) {
+    assertTrialTaskQuotaAllowedFromUsage(trialQuota);
   }
   const sessionTargetDeviceId = resolveChatSessionTargetDeviceId(
     routeDecision,
@@ -2112,22 +2186,11 @@ export async function createChatMessage(
         ipAddress: input.ipAddress,
         userAgent: input.userAgent,
       });
-  const requestChatMetadata = useDirectDesktopFastPath
-    ? buildChatMetadata(routingMetadata)
-    : await enrichChatMetadataForRequest(app, {
-        userId: input.userId,
-        sessionId: session.id,
-        targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
-        metadata: routingMetadata,
-      });
-  // Skill/tool outcomes are server-owned completion truth. Never let request
-  // metadata pre-seed an assistant badge before a verified execution occurs.
-  const assistantRequestMetadata = {
-    ...requestChatMetadata,
-    skillUsed: false,
-    skillId: null,
-    executedSkillId: null,
-  };
+  const deferChatContextHydration = shouldDeferChatContextHydration({
+    routeDecision,
+    metadata: routingMetadata,
+    ephemeralVision: input.ephemeralVision,
+  });
   const admissionLockKey = buildChatTurnAdmissionLockKey({
     userId: input.userId,
     sessionId: session.id,
@@ -2152,7 +2215,6 @@ export async function createChatMessage(
         });
         if (lockedDuplicateTurn) {
           return shapeDuplicateChatTurnResponse(
-            app,
             input,
             session,
             routeDecision,
@@ -2187,19 +2249,68 @@ export async function createChatMessage(
       admissionLockAcquired = false;
     }
     return shapeDuplicateChatTurnResponse(
-      app,
       input,
       session,
       routeDecision,
       duplicateTurn,
     );
   }
-  const priorChatContext = await loadChatConversation(app, {
-    userId: input.userId,
-    sessionId: session.id,
-  });
+  // These reads are independent once duplicate admission has succeeded.
+  // Running them together removes one full DB/cache round trip from the
+  // request-to-queue path without weakening either context source.
+  const [requestChatMetadata, priorChatContext] = await Promise.all([
+    useDirectDesktopFastPath || deferChatContextHydration
+      ? Promise.resolve(
+          buildChatMetadata(
+            deferChatContextHydration
+              ? {
+                  ...routingMetadata,
+                  chatContextHydration: {
+                    mode: "worker",
+                    deferred: true,
+                    // A newly created session has no history. Persist that
+                    // fact so the worker does not spend its first-token
+                    // budget re-reading an empty session from Postgres.
+                    conversationSnapshotProvided: !existingSession,
+                  },
+                }
+              : routingMetadata,
+          ),
+        )
+      : enrichChatMetadataForRequest(app, {
+          userId: input.userId,
+          sessionId: session.id,
+          targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
+          metadata: routingMetadata,
+        }),
+    deferChatContextHydration
+      ? Promise.resolve<LoadedChatContext>({
+          conversation: [],
+          attachmentCandidates: [],
+        })
+      : existingSession
+      ? loadChatConversation(app, {
+          userId: input.userId,
+          sessionId: session.id,
+        })
+      : Promise.resolve({
+          conversation: [],
+          attachmentCandidates: [],
+        }),
+  ]);
+  // Skill/tool outcomes are server-owned completion truth. Never let request
+  // metadata pre-seed an assistant badge before a verified execution occurs.
+  const assistantRequestMetadata = {
+    ...requestChatMetadata,
+    skillUsed: false,
+    skillId: null,
+    executedSkillId: null,
+  };
+  const hasAttachmentContextInput =
+    countDistinctEphemeralImages(input.ephemeralVision) > 0 ||
+    priorChatContext.attachmentCandidates.length > 0;
   const attachmentContext =
-    routeDecision.route === "server_brain"
+    routeDecision.route === "server_brain" && hasAttachmentContextInput
       ? await resolveAttachmentContextWithCache(
           app.services.reliability.store,
           {
@@ -2225,6 +2336,13 @@ export async function createChatMessage(
       (Array.isArray(attachmentContext?.visionBlocks) &&
         (attachmentContext!.visionBlocks!.length ?? 0) > 0),
   });
+  const exposeLiveTaskTrace =
+    routeDecision.taskRoute?.needsDesktop === true ||
+    routeDecision.taskRoute?.operationalRoute === "desktop_runtime" ||
+    routeDecision.route === "desktop_runtime" ||
+    routeDecision.route === "pairing_required" ||
+    routeDecision.route === "unavailable" ||
+    effectiveWorkload === "desktop_handoff";
   const assistantAckText =
     routeDecision.route === "server_brain"
       ? buildSharedBrainAckText(effectiveWorkload)
@@ -2246,66 +2364,74 @@ export async function createChatMessage(
       : "queued";
   const userMessageId = randomUUID();
   const assistantMessageId = randomUUID();
-  const userMessageBlob = await app.services?.blobs?.storeText({
-    ownerType: "chat_message",
-    ownerId: userMessageId,
-    userId: input.userId,
-    slot: "content",
-    scope: "chat_message_content",
-    value: input.content,
-    contentType: "text/plain",
-  });
-  const assistantAckBlob = await app.services?.blobs?.storeText({
-    ownerType: "chat_message",
-    ownerId: assistantMessageId,
-    userId: input.userId,
-    slot: "content",
-    scope: "chat_message_content",
-    value: assistantAckText,
-    contentType: "text/plain",
-  });
+  const [userMessageBlob, assistantAckBlob] = await Promise.all([
+    shouldStoreChatMessageContentBlob(input.content)
+      ? app.services?.blobs?.storeText({
+          ownerType: "chat_message",
+          ownerId: userMessageId,
+          userId: input.userId,
+          slot: "content",
+          scope: "chat_message_content",
+          value: input.content,
+          contentType: "text/plain",
+        })
+      : Promise.resolve(null),
+    assistantAckText.trim().length > 0
+      ? app.services?.blobs?.storeText({
+          ownerType: "chat_message",
+          ownerId: assistantMessageId,
+          userId: input.userId,
+          slot: "content",
+          scope: "chat_message_content",
+          value: assistantAckText,
+          contentType: "text/plain",
+        })
+      : undefined,
+  ]);
 
-  const userMessageRows = await app.db
+  const messageRows = await app.db
     .insert(chatMessages)
-    .values({
-      id: userMessageId,
-      sessionId: session.id,
-      userId: input.userId,
-      role: "user",
-      status: "completed",
-      content: input.content,
-      contentBlobId: userMessageBlob?.blobId ?? null,
-      preview: compactMessagePreview(input.content),
-      tokenCount: estimateMessageTokens(input.content),
-      metadata: requestChatMetadata,
-    })
-    .returning();
-
-  const userMessage = userMessageRows[0];
-
-  const assistantMessageRows = await app.db
-    .insert(chatMessages)
-    .values({
-      id: assistantMessageId,
-      sessionId: session.id,
-      userId: input.userId,
-      role: "assistant",
-      status: assistantAckStatus,
-      content: assistantAckText,
-      contentBlobId: assistantAckBlob?.blobId ?? null,
-      preview: compactMessagePreview(assistantAckText),
-      tokenCount: estimateMessageTokens(assistantAckText),
-      metadata: {
-        ...withAssistantBlocksMetadata(assistantRequestMetadata, {
-          content: assistantAckText,
-          streaming: true,
-        }),
-        ...assistantAckMetadata,
+    .values([
+      {
+        id: userMessageId,
+        sessionId: session.id,
+        userId: input.userId,
+        role: "user",
+        status: "completed",
+        content: input.content,
+        contentBlobId: userMessageBlob?.blobId ?? null,
+        preview: compactMessagePreview(input.content),
+        tokenCount: estimateMessageTokens(input.content),
+        metadata: requestChatMetadata,
       },
-    })
+      {
+        id: assistantMessageId,
+        sessionId: session.id,
+        userId: input.userId,
+        role: "assistant",
+        status: assistantAckStatus,
+        content: assistantAckText,
+        contentBlobId: assistantAckBlob?.blobId ?? null,
+        preview: compactMessagePreview(assistantAckText),
+        tokenCount: estimateMessageTokens(assistantAckText),
+        metadata: {
+          ...withAssistantBlocksMetadata(assistantRequestMetadata, {
+            content: assistantAckText,
+            streaming: true,
+          }),
+          ...assistantAckMetadata,
+        },
+      },
+    ])
     .returning();
 
-  const assistantMessage = assistantMessageRows[0];
+  const userMessage = messageRows.find((message) => message.id === userMessageId);
+  const assistantMessage = messageRows.find(
+    (message) => message.id === assistantMessageId,
+  );
+  if (!userMessage || !assistantMessage) {
+    throw new AppError(500, "chat_message_insert_failed", "Chat message could not be created");
+  }
 
   let chatMessageCreatedPublished = false;
   let responseAssistantMessage = {
@@ -2328,11 +2454,13 @@ export async function createChatMessage(
       return;
     }
 
-    const taskTraceBlock = buildTaskTraceBlock({
-      task: inputTask,
-      assistantContent: assistantAckText,
-    });
-    const assistantRows = await app.db
+    const taskTraceBlock = exposeLiveTaskTrace
+      ? buildTaskTraceBlock({
+          task: inputTask,
+          assistantContent: assistantAckText,
+        })
+      : null;
+    const assistantUpdate = app.db
       .update(chatMessages)
       .set({
         taskId: inputTask.id,
@@ -2344,7 +2472,7 @@ export async function createChatMessage(
           {
             ...withAssistantBlocksMetadata(requestChatMetadata, {
               content: assistantAckText,
-              blocks: [taskTraceBlock],
+              ...(taskTraceBlock ? { blocks: [taskTraceBlock] } : {}),
               streaming: true,
             }),
             ...assistantAckMetadata,
@@ -2352,21 +2480,19 @@ export async function createChatMessage(
         )}::jsonb`,
         updatedAt: new Date(),
       })
-      .where(eq(chatMessages.id, assistantMessage.id))
+      .where(
+        and(
+          eq(chatMessages.id, assistantMessage.id),
+          // A very short fast-lane answer can complete before this deferred
+          // metadata write. Never let the late ACK move a terminal message
+          // back to running.
+          sql`${chatMessages.status} not in ('completed', 'failed', 'canceled')`,
+        ),
+      )
       .returning();
 
-    responseAssistantMessage =
-      (assistantRows[0]
-        ? shapeChatMessageForResponse(assistantRows[0])
-        : undefined) ??
-      ({
-        ...shapeChatMessageForResponse(assistantMessage),
-        taskId: inputTask.id,
-        status: assistantAckStatus,
-      } as typeof responseAssistantMessage);
-
     responseLastMessageAt = new Date();
-    await app.db
+    const sessionUpdate = app.db
       .update(chatSessions)
       .set({
         title: titleFromChatPreview(session.title, input.content),
@@ -2389,6 +2515,22 @@ export async function createChatMessage(
       })
       .where(eq(chatSessions.id, session.id));
 
+    const [assistantRows] = await Promise.all([
+      assistantUpdate,
+      sessionUpdate,
+    ]);
+    // A fast completion or a queue failure can terminally update the
+    // assistant row before this deferred ACK metadata write. Do not publish a
+    // stale running snapshot in that race; it can resurrect the mobile
+    // loading indicator after the real terminal event.
+    if (!assistantRows[0]) {
+      chatMessageCreatedPublished = true;
+      return;
+    }
+
+    responseAssistantMessage =
+      shapeChatMessageForResponse(assistantRows[0]);
+
     responseSession = {
       ...session,
       title: titleFromChatPreview(session.title, input.content),
@@ -2409,52 +2551,62 @@ export async function createChatMessage(
       updatedAt: responseLastMessageAt,
     };
 
-    await app.services.eventBus.publish({
-      topic: "chat.message.created",
-      userId: input.userId,
-      deviceId: inputTask.targetDeviceId ?? session.targetDeviceId,
-      taskId: inputTask.id,
-      payload: {
-        sessionId: session.id,
-        presentation: presentationForRoute(routeDecision),
-        userMessage,
-        assistantMessage: responseAssistantMessage,
-        task: inputTask,
-        dispatched: false,
-        reused: options.reused,
-      },
-    });
-
-    await app.services.eventBus.publishVolatile({
-      topic: "message.created",
-      userId: input.userId,
-      deviceId: inputTask.targetDeviceId ?? session.targetDeviceId,
-      taskId: inputTask.id,
-      payload: {
-        event: "message.created",
+    void app.services.eventBus
+      .publish({
+        topic: "chat.message.created",
+        userId: input.userId,
+        deviceId: inputTask.targetDeviceId ?? session.targetDeviceId,
         taskId: inputTask.id,
-        sessionId: session.id,
-        messageId: responseAssistantMessage.id,
-        assistantMessageId: responseAssistantMessage.id,
-        seq: 0,
-        timestamp: new Date().toISOString(),
-        presentation: presentationForRoute(routeDecision),
-        userMessage,
-        assistantMessage: responseAssistantMessage,
-        task: inputTask,
-        dispatched: false,
-        reused: options.reused,
-      },
-    });
+        payload: {
+          sessionId: session.id,
+          presentation: presentationForRoute(routeDecision),
+          userMessage,
+          assistantMessage: responseAssistantMessage,
+          task: inputTask,
+          dispatched: false,
+          reused: options.reused,
+        },
+      })
+      .catch((error) => {
+        app.log.warn(
+          { error, requestId: input.requestId },
+          "chat message realtime persistence deferred",
+        );
+      });
+    void app.services.eventBus
+      .publishVolatile({
+        topic: "message.created",
+        userId: input.userId,
+        deviceId: inputTask.targetDeviceId ?? session.targetDeviceId,
+        taskId: inputTask.id,
+        payload: {
+          event: "message.created",
+          taskId: inputTask.id,
+          sessionId: session.id,
+          messageId: responseAssistantMessage.id,
+          assistantMessageId: responseAssistantMessage.id,
+          seq: 0,
+          timestamp: new Date().toISOString(),
+          presentation: presentationForRoute(routeDecision),
+          userMessage,
+          assistantMessage: responseAssistantMessage,
+          task: inputTask,
+          dispatched: false,
+          reused: options.reused,
+        },
+      })
+      .catch((error) => {
+        app.log.warn(
+          { error, requestId: input.requestId },
+          "chat message volatile event failed",
+        );
+      });
 
     chatMessageCreatedPublished = true;
   };
-  const chatContext = await loadChatConversation(app, {
-    userId: input.userId,
-    sessionId: session.id,
-  });
   const taskResult = await createTask(app, {
     userId: input.userId,
+    usageAccess,
     targetDeviceId: session.targetDeviceId,
     requestedTargetDeviceId: input.targetDeviceId,
     title: deriveChatTitle(input.title ?? session.title, input.content),
@@ -2476,9 +2628,11 @@ export async function createChatMessage(
         },
       },
       brainContext: {
-        conversation: chatContext.conversation,
-        ...(chatContext.attachmentCandidates.length > 0
-          ? { attachmentCandidates: chatContext.attachmentCandidates }
+        ...(deferChatContextHydration
+          ? {}
+          : { conversation: priorChatContext.conversation ?? [] }),
+        ...(priorChatContext.attachmentCandidates.length > 0
+          ? { attachmentCandidates: priorChatContext.attachmentCandidates }
           : {}),
       },
     },
@@ -2489,16 +2643,39 @@ export async function createChatMessage(
     requestId: input.requestId,
     idempotencyKey: input.idempotencyKey,
     ephemeralVision: input.ephemeralVision,
+    preResolvedChatFast: routeDecision.route === "server_brain",
     onTaskReady: async ({ task, reused }) => {
+      if (routeDecision.route === "server_brain") {
+        // The fast chat path publishes exactly once after createTask returns.
+        // createTask can notify this callback before its durable dispatch
+        // branch finishes; publishing here as well creates a race that can
+        // duplicate message.created and briefly resurrect the ACK snapshot.
+        return;
+      }
       await publishChatMessageCreated(task, { reused });
     },
   });
 
-  await publishChatMessageCreated(taskResult.task, {
+  // The task row and chat message rows are already durable at this point. The
+  // remaining ACK/session metadata update is not acceptance-critical. Defer it
+  // so a Redis retry or a second metadata write cannot hold the mobile POST
+  // open while the worker is already able to stream the answer.
+  void publishChatMessageCreated(taskResult.task, {
     reused: taskResult.reused,
+  }).catch((error) => {
+    app.log.warn(
+      { error, taskId: taskResult.task.id, requestId: input.requestId },
+      "chat acceptance metadata deferred",
+    );
   });
 
-  await createAuditLog(app, {
+  responseAssistantMessage = {
+    ...shapeChatMessageForResponse(assistantMessage),
+    taskId: taskResult.task.id,
+    status: assistantAckStatus,
+  };
+
+  void createAuditLog(app, {
     userId: input.userId,
     actorType: "user",
     actorId: input.userId,
@@ -2515,25 +2692,26 @@ export async function createChatMessage(
       taskId: taskResult.task.id,
       source: input.source,
     },
+  }).catch((error) => {
+    app.log.warn(
+      { error, requestId: input.requestId },
+      "chat audit log deferred",
+    );
   });
 
-  const billing = await getBillingSummary(app, input.userId);
-  const pendingTokenDebit = estimatePendingChatTokenDebit({
-    route: routeDecision.route,
-    reused: taskResult.reused,
-    taskStatus: taskResult.task.status,
-    content: input.content,
-    workload: effectiveWorkload,
-    brainProfile: billing.subscription.brainProfile,
-  });
   const taskBrainRecord = readRecord(
     (taskResult.task as Record<string, unknown>).brain,
   );
   if (admissionLockAcquired && admissionLockKey) {
-    await app.services.reliability.store.releaseLock(
+    void app.services.reliability.store.releaseLock(
       admissionLockKey,
       admissionLockOwner,
-    );
+    ).catch((error) => {
+      app.log.warn(
+        { error, requestId: input.requestId },
+        "chat admission lock release deferred",
+      );
+    });
     admissionLockAcquired = false;
   }
   return {
@@ -2557,11 +2735,10 @@ export async function createChatMessage(
       webGroundingUsed: readBoolean(taskBrainRecord, "webGroundingUsed"),
       webSourceCount: readNumber(taskBrainRecord, "webSourceCount"),
     },
-    usage: shapePublicUsageSnapshot({
-      usage: billing.usage,
-      subscription: billing.subscription,
-      pendingTokens: pendingTokenDebit,
-    }),
+    // Tam kullanım bakiyesi bootstrap/SSE üzerinden güncellenir. Chat POST'u
+    // tam billing özetini beklemez; bu, yanıt kabulünü ağır raporlama
+    // sorgularına bağlamaz.
+    usage: null,
     dispatched: taskResult.dispatched,
     reused: taskResult.reused,
   };

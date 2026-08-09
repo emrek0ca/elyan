@@ -241,16 +241,48 @@ const chartDataSchema = z.looseObject({
   labels: z.array(z.string().min(1).max(120)).max(240).optional(),
   values: z.array(z.number()).max(240).optional(),
   points: z.array(stringRecordSchema).max(1_500).optional(),
+  data: z.array(z.unknown()).max(1_500).optional(),
   series: z.array(stringRecordSchema).max(8).optional(),
   expression: z.string().min(1).max(2_000).optional(),
+  variables: z.array(z.string().min(1).max(24)).max(12).optional(),
+  range: stringRecordSchema.optional(),
+  fixed: z.record(z.string(), z.number()).optional(),
+  xLabel: z.string().min(1).max(120).optional(),
+  yLabel: z.string().min(1).max(120).optional(),
+  // `unit`, `interactions` ve `theme` sözleşmenin görünür yüzeyidir: istemci
+  // ekseni birimle etiketler, bildirilen etkileşimleri açar ve temayı uygular.
+  // Şemada tanımlı OLMADIKLARI sürece mobil parite testi bunları "bilinmeyen
+  // alan" sayıyor, bu da backend'in ürettiğini istemcinin yok saymasına yol
+  // açıyordu.
+  unit: z.string().min(1).max(40).optional(),
+  renderer: z.string().min(1).max(40).optional(),
+  interactions: z
+    .array(
+      z.enum([
+        "tooltip",
+        "trackball",
+        "zoom",
+        "pan",
+        "type_switch",
+        "fullscreen",
+        "share",
+      ]),
+    )
+    .max(8)
+    .optional(),
+  theme: z.enum(["system", "presentation", "report", "minimal"]).optional(),
   caption: z.string().min(1).max(240).optional(),
 });
 const mathSurface3dDataSchema = z.looseObject({
   title: z.string().min(1).max(120).optional(),
   expression: z.string().min(1).max(240).optional(),
+  variables: z.array(z.string().min(1).max(24)).max(4).optional(),
   range: stringRecordSchema.optional(),
   resolution: z.number().int().min(10).max(120).optional(),
   zLabel: z.string().min(1).max(160).optional(),
+  colorBy: z.enum(["z", "gradientMagnitude"]).optional(),
+  mode: z.enum(["surface"]).optional(),
+  interactive: z.boolean().optional(),
   caption: z.string().min(1).max(240).optional(),
 });
 const mathDataSchema = z.looseObject({

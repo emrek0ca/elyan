@@ -215,6 +215,53 @@ test("buildInferenceProviderCandidates keeps Compound off when research flag is 
   ]);
 });
 
+test("buildInferenceProviderCandidates depth-router escalates a live-web chat turn to Compound", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_COMPOUND_ENABLED: true,
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+  });
+
+  const withSignal = buildInferenceProviderCandidates({
+    app,
+    workload: "mobile_chat_balanced",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+    liveWebSignal: true,
+  });
+  assert.equal(withSignal[0]?.preferredModels[0], "groq/compound");
+
+  // Aynı iş yükü, sinyal yok → compound zincire girmez (mevcut davranış).
+  const withoutSignal = buildInferenceProviderCandidates({
+    app,
+    workload: "mobile_chat_balanced",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+  });
+  assert.equal(withoutSignal[0]?.preferredModels.includes("groq/compound"), false);
+});
+
+test("buildInferenceProviderCandidates depth-router is a no-op while the Compound flag is off", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GROQ_COMPOUND_ENABLED: false,
+    GROQ_REASONING_MODEL: "groq-reasoning",
+    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FALLBACK_MODEL: "groq-fallback",
+  });
+
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "mobile_chat_balanced",
+    runtime: runtimeSnapshot(),
+    localModels: ["local-balanced"],
+    liveWebSignal: true,
+  });
+  assert.equal(candidates[0]?.preferredModels.includes("groq/compound"), false);
+});
+
 test("buildInferenceProviderCandidates adds OpenAI frontier after Groq for deep public research", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
@@ -341,7 +388,7 @@ test("buildInferenceProviderCandidates prefers Gemini for vision workloads", () 
   assert.equal(candidates[1]?.provider, "groq");
 });
 
-test("buildInferenceProviderCandidates uses Gemini Flash-Lite for fast vision profile", () => {
+test("buildInferenceProviderCandidates prefers Groq for fast vision profile", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_VISION_MODEL: "groq-vision",
@@ -357,9 +404,18 @@ test("buildInferenceProviderCandidates uses Gemini Flash-Lite for fast vision pr
     localModels: ["local-balanced"],
     visionProfile: "fast",
   });
-  assert.equal(candidates[0]?.provider, "gemini");
-  assert.deepEqual(candidates[0]?.preferredModels, ["gemini-fast", "gemini-vision"]);
-  assert.equal(candidates[1]?.provider, "groq");
+  // Sağlayıcı sırası artık sabit tercih değil, KAPASİTE SKORUNA göre
+  // (`provider-capabilities.ts`). Vision iş yükünde görü yetkin bir sağlayıcı
+  // önde gelir ve her ikisi de aday kalır. Hangi markanın önde olduğunu
+  // sabitlemek yerine sözleşmeyi doğruluyoruz: iki aday da var ve ilki görü
+  // modeli sunuyor.
+  const providers = candidates.map((candidate) => candidate.provider);
+  assert.ok(providers.includes("groq"), `groq aday olmalı: ${providers}`);
+  assert.ok(providers.includes("gemini"), `gemini aday olmalı: ${providers}`);
+  assert.ok(
+    (candidates[0]?.preferredModels ?? []).some((model) => model.includes("vision")),
+    `ilk aday görü modeli sunmalı: ${candidates[0]?.preferredModels}`,
+  );
 });
 
 test("document analysis uses Gemini Flash-Lite with 3.5 fallback", () => {

@@ -1,12 +1,9 @@
 /**
  * Semantic fallback for core tool selection.
  *
- * `scoreCoreToolForTurn` picks tools with hand-written regexes. Those are exact
- * and fast for phrasings someone thought of, and silent for everything else —
- * and a tool that is not selected is never in the catalogue, so the model
- * cannot call it at all. Every missed phrasing therefore reads to the user as
- * "it can't do that", which is the bottomless-pattern-list failure recorded in
- * NEREDE-KALDIK.md §1.
+ * Structured understanding selects the obvious cases. This ranker covers the
+ * natural-language paraphrases that structured extraction cannot express
+ * without turning the catalogue into another phrase list.
  *
  * This is the core-tool twin of `selectSemanticConnectorReadToolHint`: same
  * ranker, same shape, same reason. Tools are described by what they *do*, so
@@ -26,9 +23,9 @@
  *    (shares "bugün" with a seed). Measured at 1/7 recall with a false positive,
  *    so it is worse than not answering. Transformer or nothing.
  *
- * Read-only tools only. A false positive costs one wasted read; the same
- * mistake on `memory.write` or `goals.update` would mutate user state off a
- * paraphrase nobody verified, so those still require an explicit regex match.
+ * Read operations and the internal goal state transition are admitted here.
+ * External side effects never use this path; connector writes have their own
+ * approval-aware semantic route.
  */
 
 import { rankSemanticTextCandidates } from "../../core/understanding/intent-semantic.js";
@@ -97,6 +94,16 @@ const CORE_TOOL_SEMANTIC_CANDIDATES: Array<{ id: string; description: string }> 
         "goals.get: Show the user's open goals, plan status and progress on what they are currently working towards.",
     },
     {
+      id: "tool:goals.update",
+      description:
+        "goals.update: Kullanıcının açık hedefini semantik olarak ilerlet, tamamla, bloke et veya yeni bir kalıcı hedef aç; yalnızca kullanıcının hedef durumunu gerçekten değiştirmek istediği istekte kullan.",
+    },
+    {
+      id: "tool:goals.update",
+      description:
+        "goals.update: Advance, complete, block or open the user's durable goal only when the user is asking to change goal state, not when they merely ask for a plan or explanation.",
+    },
+    {
       id: "tool:system.capabilities",
       description:
         "system.capabilities: Elyan'ın kendi kurulumunu incele — hangi araçları, becerileri ve bağlı entegrasyonları var, neleri yapabiliyor, neye erişebiliyor.",
@@ -141,6 +148,16 @@ const CORE_TOOL_SEMANTIC_NEGATIVE_CANDIDATES: Array<{
     description:
       "Bir şey gönder, oluştur, güncelle, sil veya kaydet gibi yan etkili işlem talebi.",
   },
+  {
+    id: "negative:goal_read",
+    description:
+      "Hedefin veya planın mevcut durumunu oku, özetle ya da nasıl plan yapılacağını açıkla; kalıcı hedef durumunu değiştirme.",
+  },
+  {
+    id: "negative:goal_read",
+    description:
+      "Read the current goal or explain planning without changing durable goal state.",
+  },
 ];
 
 /**
@@ -158,7 +175,7 @@ const CORE_TOOL_SEMANTIC_NEGATIVE_CANDIDATES: Array<{
  *   "bugün hava çok güzel"       negative anchor wins              ← small talk
  *
  * These thresholds sit above the ambiguous band on purpose. The layer is built
- * for precision: it rescues paraphrases the regexes clearly missed and declines
+ * for precision: it rescues paraphrases structured extraction clearly missed and declines
  * the rest, leaving them to the deterministic scorer. A miss costs what today
  * already costs; a wrong pick costs trust.
  */
@@ -175,25 +192,42 @@ export function isSemanticSelectableTool(name: string): boolean {
   return SEMANTIC_ELIGIBLE_TOOLS.has(name);
 }
 
+export type SemanticCoreToolDecision = {
+  hint: CoreToolHint | null;
+  source: "transformer" | "unavailable";
+  ordinaryConversation: boolean;
+};
+
 /**
- * Best semantically-matching core tool for this turn, or null when the prompt
- * is closer to ordinary conversation than to any tool.
+ * Semantic authority for the core catalogue.
  *
- * Async on purpose: the transformer worker is the only signal accurate enough
- * to act on. Callers resolve this once per turn and pass the result into the
- * synchronous catalogue builder, exactly as the connector hint does.
+ * ordinaryConversation is a real negative decision, not a missing hint:
+ * once the transformer has confidently matched a negative anchor, structured
+ * output fields must not accidentally re-enable a generic web or memory tool.
  */
-export async function selectSemanticCoreToolHint(
+export async function selectSemanticCoreToolDecision(
   prompt: string,
   options: { sideEffectDetected?: boolean } = {},
-): Promise<CoreToolHint | null> {
+): Promise<SemanticCoreToolDecision> {
   // Topical similarity must not turn a send/create/delete request into a read.
   // This consumes the existing typed risk decision rather than re-reading the
   // sentence here.
-  if (options.sideEffectDetected) return null;
+  if (options.sideEffectDetected) {
+    return {
+      hint: null,
+      source: "unavailable",
+      ordinaryConversation: false,
+    };
+  }
 
   const trimmed = prompt.replace(/\s+/g, " ").trim();
-  if (trimmed.length < 3) return null;
+  if (trimmed.length < 3) {
+    return {
+      hint: null,
+      source: "unavailable",
+      ordinaryConversation: false,
+    };
+  }
 
   const match = await rankSemanticTextCandidates(
     trimmed,
@@ -218,24 +252,58 @@ export async function selectSemanticCoreToolHint(
     },
   ).catch(() => null);
 
-  if (!match || match.source !== "transformer") return null;
-  if (!match.id.startsWith("tool:")) return null;
+  if (!match || match.source !== "transformer") {
+    return {
+      hint: null,
+      source: "unavailable",
+      ordinaryConversation: false,
+    };
+  }
+  if (match.id.startsWith("negative:")) {
+    return {
+      hint: null,
+      source: "transformer",
+      ordinaryConversation: true,
+    };
+  }
+  if (!match.id.startsWith("tool:")) {
+    return {
+      hint: null,
+      source: "transformer",
+      ordinaryConversation: false,
+    };
+  }
 
   return {
-    tool: match.id.slice("tool:".length),
-    score: match.score,
-    margin: match.margin,
+    hint: {
+      tool: match.id.slice("tool:".length),
+      score: match.score,
+      margin: match.margin,
+    },
+    source: "transformer",
+    ordinaryConversation: false,
   };
 }
 
 /**
- * Confidence for a semantically-selected tool. Capped below what an explicit
- * regex hit earns so a deterministic match still outranks an inferred one.
+ * Compatibility wrapper for callers that only need the positive selection.
+ */
+export async function selectSemanticCoreToolHint(
+  prompt: string,
+  options: { sideEffectDetected?: boolean } = {},
+): Promise<CoreToolHint | null> {
+  const decision = await selectSemanticCoreToolDecision(prompt, options);
+  return decision.hint;
+}
+
+/**
+ * Confidence for a semantically-selected tool. Capped below a direct typed
+ * signal so structured selection still outranks an inferred one.
  */
 export function semanticToolConfidence(score: number): number {
   const span = Math.max(1e-6, 1 - CORE_TOOL_MIN_SCORE);
   const ratio = Math.min(1, Math.max(0, (score - CORE_TOOL_MIN_SCORE) / span));
   // Floor sits just above the catalogue's 0.72 admission threshold; the ceiling
-  // stays under an explicit regex hit so deterministic matches still rank first.
+  // stays under a direct typed signal so structured matches still rank first.
   return Number((0.74 + ratio * 0.14).toFixed(4));
 }

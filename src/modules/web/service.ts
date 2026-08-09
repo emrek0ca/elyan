@@ -57,7 +57,6 @@ export async function getWebBootstrap(app: FastifyInstance, userId: string) {
       manageSubscriptionHint: billing.usage.manageSubscriptionHint,
       creditStatus: billing.usage.creditStatus,
       tokenStatus: billing.usage.tokenStatus,
-      trialOffer: billing.subscription.trialOffer,
     }),
     usage: shapePublicUsageSnapshot({
       usage: billing.usage,

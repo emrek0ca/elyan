@@ -16,7 +16,12 @@ import {
   semanticToolConfidence,
   type CoreToolHint,
 } from "./tool-semantic.js";
-import { callMcpTool, isMcpToolName } from "./mcp-tools.js";
+import {
+  callMcpTool,
+  isMcpToolName,
+  resolveMcpToolDeclaration,
+  resolveMcpToolPermission,
+} from "./mcp-tools.js";
 import { searchBrainMemory } from "./memory.js";
 import { recordTurnMemoryOps } from "./memory-fabric.js";
 import { cognitiveMemoryRepository } from "./cognitive-memory-repository.js";
@@ -72,12 +77,26 @@ export type AgentToolSelectionContext = {
   requiredCapabilities?: readonly string[];
   advertisedConnectorTools?: readonly string[];
   connectorReadHint?: { tool: string; score: number } | null;
+  connectorWriteHint?: { tool: string; score: number } | null;
+  /** Parsed input fact; URL parsing is separate from natural-language routing. */
+  hasExplicitUrl?: boolean;
   /**
-   * Resolved once per turn by `selectSemanticCoreToolHint` and passed in, since
+   * Resolved once per turn by `selectSemanticCoreToolDecision` and passed in, since
    * the transformer call is async and this builder is synchronous — the same
    * arrangement `connectorReadHint` uses.
    */
   coreToolHint?: CoreToolHint | null;
+  /**
+   * True when the transformer returned a semantic positive or negative result.
+   * In that case the core catalogue must not fall back to structured hints
+   * that were only weakly inferred for the same turn.
+   */
+  semanticToolSelectionResolved?: boolean;
+  /**
+   * Public web tools are fail-closed. They are advertised only after the
+   * turn-level semantic/typed policy has explicitly admitted web access.
+   */
+  webToolsAllowed?: boolean;
   deterministicToolNames?: readonly string[];
   memoryCandidateCount?: number;
   sideEffectRequested?: boolean;
@@ -252,8 +271,8 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   "system.capabilities": {
     purpose:
       "Inspect Elyan's own installed tools, skills and connected integrations before claiming or refusing a capability.",
-    intents: ["chat", "planning", "automation"],
-    capabilities: [],
+    intents: ["capability_introspection"],
+    capabilities: ["system.capabilities"],
     desiredOutputKinds: ["chat_reply"],
     resultBlockTypes: ["tool_call"],
     modelContract:
@@ -261,7 +280,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   },
   "web.search": {
     purpose: "Search current public-web evidence for research or time-sensitive questions.",
-    intents: ["research", "document"],
+    intents: ["research"],
     capabilities: ["browser.read"],
     desiredOutputKinds: ["chat_reply", "pdf", "docx", "artifact"],
     resultBlockTypes: ["web_search", "tool_call"],
@@ -269,7 +288,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   },
   "web.fetch_url": {
     purpose: "Read one explicit public URL after the user supplies it or research identifies it.",
-    intents: ["research", "document"],
+    intents: ["url_read"],
     capabilities: ["browser.read", "document.read"],
     desiredOutputKinds: ["chat_reply", "pdf", "docx", "artifact"],
     resultBlockTypes: ["web_search", "tool_call"],
@@ -277,7 +296,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   },
   "web.numeric_facts": {
     purpose: "Extract verified numeric series suitable for tables and charts from public-web evidence.",
-    intents: ["research", "math", "document"],
+    intents: ["numeric_research"],
     capabilities: ["browser.read", "table.generate", "chart.generate"],
     desiredOutputKinds: ["table", "chart", "xlsx"],
     resultBlockTypes: ["table", "chart", "web_search", "tool_call"],
@@ -286,7 +305,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   },
   "memory.query": {
     purpose: "Read durable user memory only when the user explicitly refers to prior preferences or conversations.",
-    intents: ["chat", "planning"],
+    intents: ["memory_recall"],
     capabilities: ["memory.query"],
     desiredOutputKinds: ["chat_reply"],
     resultBlockTypes: ["memory_echo", "tool_call"],
@@ -294,7 +313,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   },
   "memory.write": {
     purpose: "Persist an explicit user fact, correction, preference, or forget request.",
-    intents: ["chat"],
+    intents: ["memory_write"],
     capabilities: ["memory.write"],
     desiredOutputKinds: ["chat_reply", "action"],
     resultBlockTypes: ["memory_echo", "tool_call"],
@@ -302,7 +321,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   },
   "goals.get": {
     purpose: "Read the active goal and its recent execution events before continuing goal work.",
-    intents: ["planning", "automation"],
+    intents: ["goal_review"],
     capabilities: ["goal.read"],
     desiredOutputKinds: ["chat_reply", "task_result"],
     resultBlockTypes: ["goal_progress", "tool_call"],
@@ -310,7 +329,7 @@ const AGENT_TOOL_SELECTION_HINTS: Record<string, AgentToolSelectionHints> = {
   },
   "goals.update": {
     purpose: "Open, advance, complete, or block an explicit durable user goal.",
-    intents: ["planning", "automation"],
+    intents: ["goal_mutation"],
     capabilities: ["goal.update"],
     desiredOutputKinds: ["action", "task_result"],
     resultBlockTypes: ["goal_progress", "tool_call"],
@@ -1259,14 +1278,17 @@ function scoreCoreToolForTurn(
   tool: AgentToolMetadata,
   input: AgentToolSelectionContext,
 ): { confidence: number; reasons: string[] } | null {
-  const prompt = normalizeSelectionText(input.prompt);
+  // The catalogue is driven by the already-produced understanding envelope.
+  // This layer must not reinterpret the user's sentence with another phrase
+  // list; natural-language recovery happens in `tool-semantic.ts`.
   const intent = normalizeSelectionText(input.intent ?? "");
+  const action = normalizeSelectionText(input.action ?? "");
   const desiredOutputKinds = input.desiredOutputKinds ?? [];
   const requiredCapabilities = input.requiredCapabilities ?? [];
   const hint = tool.selectionHints;
   const reasons: string[] = [];
-
   const intentMatch = Boolean(intent && hint.intents.includes(intent));
+  const actionMatch = Boolean(action && hint.intents.includes(action));
   const capabilityMatch = hasAnySelectionValue(
     requiredCapabilities,
     hint.capabilities,
@@ -1275,88 +1297,104 @@ function scoreCoreToolForTurn(
     desiredOutputKinds,
     hint.desiredOutputKinds,
   );
+  const researchIntent = intent === "research" || action === "research";
+  const numericOutput = desiredOutputKinds.some((kind) =>
+    ["table", "chart", "xlsx"].includes(normalizeSelectionText(kind)),
+  );
 
-  if (tool.name === "system.capabilities") {
-    // Deliberately broad. "Ne yapabiliyorsun", "hangi araçların var", "bunu
-    // yapabilir misin" are the turns where a wrong answer costs the most
-    // trust, and the tool is read-only and cheap, so a false positive is
-    // nearly free while a false negative produces a confident lie.
-    const selfQuery =
-      /(?<!\p{L})(ne\s+yapabil\p{L}*|neler\s+yapabil\p{L}*|yapabilir\s+misin|hangi\s+(araç|arac|yetenek|skill|beceri|özellik|ozellik)\p{L}*|araçlar\p{L}*|yeteneklerin|becerilerin|özelliklerin|ozelliklerin|kendini\s+tanıt|nelere\s+erişebil\p{L}*|erişimin\s+var|bağlı\s+mı|bagli\s+mi|what\s+can\s+you\s+do|your\s+(tools|skills|capabilities)|can\s+you\s+(do|access))(?!\p{L})/iu.test(
-        prompt,
-      );
-    if (!selfQuery && !capabilityMatch) return null;
-    reasons.push(selfQuery ? "self_capability_query" : "capability_match");
-    return { confidence: selfQuery ? 0.94 : 0.78, reasons };
+  // A typed route may already have selected a core tool before inference. Keep
+  // that server-produced decision authoritative; natural-language semantic
+  // ranking is only the fallback for turns without a typed selection.
+  if (input.deterministicToolNames?.includes(tool.name)) {
+    if (tool.name === "goals.update" && input.sideEffectRequested !== true) {
+      return null;
+    }
+    return {
+      confidence: 1,
+      reasons: ["typed_deterministic_action"],
+    };
   }
 
-  if (tool.name === "web.search") {
-    const explicitResearch =
-      intent === "research" ||
-      // "bugün"/"latest" alone are time words, not research requests: they fire
-      // on "bugün hava çok güzel" just as readily as on a real query. They now
-      // count only alongside another research signal; the semantic layer covers
-      // the genuine time-sensitive phrasings this drops.
-      /(?<!\p{L})(araştır\p{L}*|arastir\p{L}*|research\p{L}*|güncel|guncel|kaynak\p{L}*|source\p{L}*|internetten|webden)(?!\p{L})/iu.test(
-        prompt,
-      );
-    if (!explicitResearch && !capabilityMatch) return null;
-    reasons.push(explicitResearch ? "explicit_research" : "capability_match");
-    return { confidence: explicitResearch ? 0.92 : 0.82, reasons };
+  if (
+    (tool.name === "web.search" ||
+      tool.name === "web.fetch_url" ||
+      tool.name === "web.numeric_facts") &&
+    input.webToolsAllowed !== true &&
+    !(tool.name === "web.fetch_url" && input.hasExplicitUrl === true)
+  ) {
+    return null;
+  }
+
+  if (
+    input.semanticToolSelectionResolved === true &&
+    isSemanticSelectableTool(tool.name) &&
+    !(tool.name === "web.fetch_url" && input.hasExplicitUrl === true)
+  ) {
+    return null;
+  }
+
+  if (tool.name === "system.capabilities") {
+    if (!intentMatch && !actionMatch && !capabilityMatch) return null;
+    reasons.push(
+      capabilityMatch
+        ? "capability_match"
+        : "structured_capability_introspection",
+    );
+    return { confidence: capabilityMatch ? 0.88 : 0.86, reasons };
   }
 
   if (tool.name === "web.fetch_url") {
-    const explicitUrl = /https?:\/\/[^\s]+/iu.test(input.prompt);
-    if (!explicitUrl && intent !== "research") return null;
-    reasons.push(explicitUrl ? "explicit_url" : "research_followup");
-    return { confidence: explicitUrl ? 0.96 : 0.76, reasons };
+    if (!input.hasExplicitUrl || input.sideEffectRequested === true) return null;
+    reasons.push("typed_url_input");
+    return { confidence: 0.95, reasons };
   }
 
   if (tool.name === "web.numeric_facts") {
-    const numericOutput = desiredOutputKinds.some((kind) =>
-      ["table", "chart", "xlsx"].includes(kind),
-    );
-    const numericPrompt =
-      /(?<!\p{L})(veri|istatistik|oran|fiyat|kur|trend|seri|grafik|chart|tablo|table)(?!\p{L})/iu.test(
-        prompt,
-      );
-    if (!numericOutput || (!numericPrompt && intent !== "research")) return null;
-    reasons.push("numeric_output", numericPrompt ? "numeric_prompt" : "research_intent");
-    return { confidence: 0.88, reasons };
+    if (!numericOutput || input.sideEffectRequested === true) return null;
+    if (!researchIntent && !capabilityMatch) return null;
+    reasons.push("structured_numeric_output");
+    if (researchIntent) reasons.push("research_intent");
+    if (capabilityMatch) reasons.push("capability_match");
+    return { confidence: 0.9, reasons };
+  }
+
+  if (tool.name === "web.search") {
+    if (input.sideEffectRequested === true || input.hasExplicitUrl) return null;
+    if (!researchIntent && !capabilityMatch) return null;
+    if (numericOutput) return null;
+    reasons.push(researchIntent ? "research_intent" : "capability_match");
+    return { confidence: researchIntent ? 0.9 : 0.82, reasons };
   }
 
   if (tool.name === "memory.query") {
-    const explicitMemoryRead =
-      /(?<!\p{L})(hatırl\p{L}*|hatirla\p{L}*|daha önce|daha once|geçen sefer|gecen sefer|önceden|onceden|tercihim|beni tanıyor|beni taniyor|remember|previously|last time)(?!\p{L})/iu.test(
-        prompt,
-      );
-    if (!explicitMemoryRead) return null;
-    return { confidence: 0.9, reasons: ["explicit_memory_read"] };
+    if (!capabilityMatch) return null;
+    return { confidence: 0.86, reasons: ["memory_capability"] };
   }
 
   if (tool.name === "memory.write") {
-    if ((input.memoryCandidateCount ?? 0) <= 0) return null;
-    return { confidence: 0.96, reasons: ["typed_memory_candidate"] };
+    if ((input.memoryCandidateCount ?? 0) <= 0 && !capabilityMatch) return null;
+    return {
+      confidence: 0.96,
+      reasons: [
+        input.memoryCandidateCount ? "typed_memory_candidate" : "memory_capability",
+      ],
+    };
   }
 
-  if (tool.name === "goals.get" || tool.name === "goals.update") {
-    const explicitGoal =
-      /(?<!\p{L})(hedef\p{L}*|goal\p{L}*|ilerle\p{L}*|tamamla\p{L}*|planımı|planimi|görev planı|gorev plani)(?!\p{L})/iu.test(
-        prompt,
-      );
-    if (!explicitGoal) return null;
-    if (
-      tool.name === "goals.update" &&
-      !/(?<!\p{L})(oluştur\p{L}*|olustur\p{L}*|aç\p{L}*|ac\p{L}*|başlat\p{L}*|baslat\p{L}*|güncelle\p{L}*|guncelle\p{L}*|ilerlet\p{L}*|tamamla\p{L}*|engelle\p{L}*|block\p{L}*|create\p{L}*|start\p{L}*|update\p{L}*|advance\p{L}*|complete\p{L}*)(?!\p{L})/iu.test(
-        prompt,
-      )
-    ) {
-      return null;
-    }
-    reasons.push(intentMatch ? "planning_intent" : "explicit_goal");
+  if (tool.name === "goals.get") {
+    if (!capabilityMatch && !intentMatch && !actionMatch) return null;
     return {
-      confidence: tool.name === "goals.get" ? 0.88 : 0.82,
-      reasons,
+      confidence: 0.84,
+      reasons: [capabilityMatch ? "goal_capability" : "structured_goal_review"],
+    };
+  }
+
+  if (tool.name === "goals.update") {
+    if (input.sideEffectRequested !== true) return null;
+    if (!capabilityMatch && !intentMatch && !actionMatch) return null;
+    return {
+      confidence: 0.86,
+      reasons: [capabilityMatch ? "goal_mutation_capability" : "structured_goal_mutation"],
     };
   }
 
@@ -1368,17 +1406,47 @@ function scoreCoreToolForTurn(
 }
 
 /**
- * Runs after the deterministic scorer has declined, so an explicit phrasing
- * always keeps its higher confidence and its reason string. This only rescues
- * the paraphrases the patterns never anticipated.
+ * Runs after structured signals have declined. The transformer result rescues
+ * natural-language paraphrases without adding another phrase list.
  */
 function scoreCoreToolFallbackSemantic(
   tool: AgentToolMetadata,
   input: AgentToolSelectionContext,
 ): { confidence: number; reasons: string[] } | null {
+  if (
+    (tool.name === "web.search" ||
+      tool.name === "web.fetch_url" ||
+      tool.name === "web.numeric_facts") &&
+    input.webToolsAllowed !== true &&
+    !(tool.name === "web.fetch_url" && input.hasExplicitUrl === true)
+  ) {
+    return null;
+  }
   const hint = input.coreToolHint;
   if (!hint || hint.tool !== tool.name) return null;
   if (!isSemanticSelectableTool(tool.name)) return null;
+  if (
+    input.sideEffectRequested === true &&
+    tool.name !== "goals.update"
+  ) {
+    return null;
+  }
+  if (
+    tool.name === "goals.update" &&
+    input.intent !== "planning" &&
+    input.action !== "plan"
+  ) {
+    return null;
+  }
+  if (tool.name === "web.fetch_url" && input.hasExplicitUrl !== true) return null;
+  if (
+    tool.name === "web.numeric_facts" &&
+    !(input.desiredOutputKinds ?? []).some((kind) =>
+      ["table", "chart", "xlsx"].includes(normalizeSelectionText(kind)),
+    )
+  ) {
+    return null;
+  }
   return {
     confidence: semanticToolConfidence(hint.score),
     reasons: ["semantic_paraphrase_match"],
@@ -1404,64 +1472,19 @@ function scoreConnectorToolForTurn(
         reasons: ["connected_capability", "semantic_connector_hint"],
       };
     }
-    const prompt = normalizeSelectionText(input.prompt);
-    const deterministicRead =
-      tool.name === "gmail.search"
-        ? /(?=.*(?<!\p{L})(e-?posta\p{L}*|email\p{L}*|mail\p{L}*|gelen kutu\p{L}*|inbox)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|kontrol\p{L}*|son|yeni|bugün|bugun|search\p{L}*|find\p{L}*|list\p{L}*|recent|latest)(?!\p{L}))/iu.test(
-            prompt,
-          )
-        : tool.name === "calendar.list_events"
-          ? /(?=.*(?<!\p{L})(takvim\p{L}*|etkinlik\p{L}*|toplantı\p{L}*|toplanti\p{L}*|calendar|event\p{L}*|meeting\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(listele\p{L}*|göster\p{L}*|goster\p{L}*|bak\p{L}*|bugün|bugun|yarın|yarin|yaklaşan|yaklasan|list\p{L}*|show\p{L}*|today|tomorrow|upcoming)(?!\p{L}))/iu.test(
-              prompt,
-            )
-            : tool.name === "drive.search"
-              ? /(?=.*(?<!\p{L})drive\p{L}*(?!\p{L}))(?=.*(?<!\p{L})(dosya\p{L}*|belge\p{L}*|doküman\p{L}*|dokuman\p{L}*|file\p{L}*|document\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|son|yeni|benim|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|recent|latest|my)(?!\p{L}))/iu.test(
-                  prompt,
-                )
-              : tool.name === "notion.search"
-                ? /(?=.*(?<!\p{L})notion(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|benim|notlarım|notlarim|çalışma alan\p{L}*|calisma alan\p{L}*|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|my|workspace)(?!\p{L}))/iu.test(
-                    prompt,
-                  )
-                : tool.name === "github.search"
-                  ? /(?=.*(?<!\p{L})github(?!\p{L}))(?=.*(?<!\p{L})(issue\p{L}*|pull request\p{L}*|pr\p{L}*|repo\p{L}*|activity)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|benim|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|my)(?!\p{L}))/iu.test(
-                      prompt,
-                    )
-                  : tool.name === "slack.search"
-                    ? /(?=.*(?<!\p{L})slack(?!\p{L}))(?=.*(?<!\p{L})(mesaj\p{L}*|kanal\p{L}*|message\p{L}*|channel\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(ara\p{L}*|bul\p{L}*|listele\p{L}*|göster\p{L}*|goster\p{L}*|benim|search\p{L}*|find\p{L}*|list\p{L}*|show\p{L}*|my)(?!\p{L}))/iu.test(
-                        prompt,
-                      )
-                    : false;
-    return deterministicRead
-      ? {
-          confidence: 0.88,
-          reasons: ["connected_capability", "deterministic_connector_intent"],
-        }
-      : null;
+    // Connected-account reads are selected by the live semantic connector
+    // hint. No connector name or user phrase is inspected here.
+    return null;
   }
 
   if (input.sideEffectRequested !== true) return null;
-  const prompt = normalizeSelectionText(input.prompt);
-  if (
-    /(?<!\p{L})(gönderme\p{L}*|gonderme\p{L}*|gönderilme\p{L}*|gonderilme\p{L}*|ekleme\p{L}*|oluşturma\p{L}*|olusturma\p{L}*|do not send|don't send|do not create|don't create|without sending|without creating)(?!\p{L})/iu.test(
-      prompt,
-    )
-  ) {
-    return null;
-  }
-  const explicitWrite =
-    tool.name === "gmail.send"
-      ? /(?=.*(?<!\p{L})(e-?posta\p{L}*|email\p{L}*|mail\p{L}*)(?!\p{L}))(?=.*(?<!\p{L})(gönder\p{L}*|gonder\p{L}*|send\p{L}*)(?!\p{L}))/iu.test(
-          prompt,
-        )
-      : tool.name === "calendar.create_event"
-        ? /(?=.*(?<!\p{L})(takvim\p{L}*|etkinlik\p{L}*|toplantı\p{L}*|toplanti\p{L}*|calendar|event|meeting)(?!\p{L}))(?=.*(?<!\p{L})(ekle\p{L}*|oluştur\p{L}*|olustur\p{L}*|planla\p{L}*|ayarla\p{L}*|create\p{L}*|add\p{L}*|schedule\p{L}*)(?!\p{L}))/iu.test(
-            prompt,
-          )
-        : false;
-  if (!explicitWrite) return null;
+  if (input.connectorWriteHint?.tool !== tool.name) return null;
+  const score = Number.isFinite(input.connectorWriteHint.score)
+    ? Math.max(0, Math.min(1, input.connectorWriteHint.score))
+    : 0;
   return {
-    confidence: 0.96,
-    reasons: ["connected_capability", "explicit_side_effect"],
+    confidence: score,
+    reasons: ["connected_capability", "semantic_side_effect_hint"],
   };
 }
 
@@ -1515,6 +1538,18 @@ export function decideAgentToolApproval(input: {
   explicitApproval?: boolean;
 }): UserToolApprovalDecision {
   const metadata = getAgentToolMetadata(input.tool);
+  // Dynamic MCP metadata is request-scoped and is intentionally not copied
+  // into the process-global registry. Permission is resolved again inside
+  // executeDynamicMcpTool, after the user's live connection catalog is read.
+  // Let the engine reach that resolver; it still fails closed for writes and
+  // unknown tools before any remote call is made.
+  if (isMcpToolName(input.tool) && !metadata) {
+    return {
+      requiresApproval: false,
+      automatic: true,
+      reason: "read_only",
+    };
+  }
   return decideUserToolApproval({
     mode: input.mode ?? DEFAULT_USER_APPROVAL_MODE,
     permission: metadata?.permission,
@@ -1556,12 +1591,8 @@ const TOOL_RATE_MAX_CALLS = 30;
 const WRITE_TOOL_RATE_MAX_CALLS = 10;
 
 /**
- * Dinamik MCP aracı çalıştırma.
- *
- * Yerleşik araçlarla aynı kapılardan geçer (kullanıcı kapsamı, iptal, hız
- * sınırı) ama onay kapısından geçmez: ürün kararı gereği MCP araçları
- * okuma/yazma diye ayrılmıyor. Hız sınırı için `write` sayılıyorlar —
- * kotaları okuma araçlarından ayrı ve daha dar tutulsun.
+ * Dinamik MCP aracı çalıştırma. Katalog ve permission her çağrıda canlı
+ * bağlantıdan yeniden çözülür; modelin isim üretmesi tek başına yetki değildir.
  */
 async function executeDynamicMcpTool(
   app: FastifyInstance,
@@ -1569,7 +1600,7 @@ async function executeDynamicMcpTool(
   request: AgentToolRequest,
   startedAt: number,
 ): Promise<AgentToolResult> {
-  const permission: AgentToolPermission = "write";
+  let permission: AgentToolPermission = "side_effect";
   const fail = (code: string, message: string): AgentToolResult => ({
     tool: request.tool,
     ok: false,
@@ -1592,7 +1623,44 @@ async function executeDynamicMcpTool(
   if (context.shouldAbort && (await context.shouldAbort())) {
     return fail("task_canceled", "Tool execution was canceled.");
   }
-  const rateCheck = checkToolRateLimit(context.userId, permission);
+
+  const declaration = await resolveMcpToolDeclaration(
+    app,
+    context.userId,
+    request.tool,
+  );
+  if (!declaration) {
+    return fail(
+      "mcp_tool_not_available",
+      "Bu MCP aracı bağlı değil ya da katalogda yok.",
+    );
+  }
+  const resolvedPermission = await resolveMcpToolPermission(app, declaration);
+  const effectivePermission: AgentToolPermission = resolvedPermission;
+  permission = effectivePermission;
+  if (
+    effectivePermission === "side_effect" &&
+    (context.allowSideEffects !== true || context.approvalGranted !== true)
+  ) {
+    return {
+      tool: request.tool,
+      ok: false,
+      permission: effectivePermission,
+      durationMs: Date.now() - startedAt,
+      output: {
+        source: "mcp",
+        app: declaration.appId,
+        appDisplayName: declaration.appDisplayName,
+        tool: declaration.remoteToolName,
+        approvalRequired: true,
+      },
+      error: {
+        code: "mcp_approval_required",
+        message: "Bu MCP aracı bağlı hesapta değişiklik yapabilir; açık onay gerekiyor.",
+      },
+    };
+  }
+  const rateCheck = checkToolRateLimit(context.userId, effectivePermission);
   if (!rateCheck.allowed) {
     return fail(
       "tool_rate_limited",
@@ -1617,7 +1685,7 @@ async function executeDynamicMcpTool(
   return {
     tool: request.tool,
     ok: true,
-    permission,
+    permission: outcome.permission,
     durationMs: Date.now() - startedAt,
     output: outcome.output,
     error: null,

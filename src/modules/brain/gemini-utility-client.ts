@@ -13,6 +13,11 @@ import {
   type GeminiFreeDataLineage,
   type GeminiFreeFeature,
 } from "./gemini-free-tier-guard.js";
+import {
+  buildRequestBody,
+  getNativeChatPath,
+  type SharedBrainConversationMessage,
+} from "./provider-request.js";
 
 function extractJson(text: string): unknown | null {
   const trimmed = text.trim();
@@ -52,6 +57,18 @@ export async function callGeminiFreeStructured<T>(
 ): Promise<T | null> {
   const model = String(app.config.GEMINI_FAST_MODEL || "").trim();
   if (!(await isGeminiFreeOutputBudgetAvailable(app, input.feature))) return null;
+  const maxOutputTokens = Math.min(1_200, Math.max(120, input.maxOutputTokens ?? 600));
+  const messages: SharedBrainConversationMessage[] = [
+    { role: "system", content: input.system },
+    { role: "user", content: JSON.stringify(input.payload) },
+  ];
+  const nativeImages = (input.images ?? []).map((image, index) => ({
+    documentId: `gemini-utility-${index + 1}`,
+    label: `utility-image-${index + 1}`,
+    mimeType: image.mimeType,
+    base64: image.base64Data,
+    detail: "high" as const,
+  }));
   const userContent: unknown = input.images?.length
     ? [
         { type: "text", text: JSON.stringify(input.payload) },
@@ -61,10 +78,10 @@ export async function callGeminiFreeStructured<T>(
         })),
       ]
     : JSON.stringify(input.payload);
-  const requestBody = {
+  const compatibilityBody = {
     model,
     temperature: 0,
-    max_tokens: Math.min(1_200, Math.max(120, input.maxOutputTokens ?? 600)),
+    max_tokens: maxOutputTokens,
     messages: [
       { role: "system", content: input.system },
       { role: "user", content: userContent },
@@ -74,11 +91,33 @@ export async function callGeminiFreeStructured<T>(
       json_schema: { name: `elyan_${input.feature}`, strict: true, schema: input.jsonSchema },
     },
   };
+  const nativeBody = buildRequestBody(
+    "gemini",
+    model,
+    messages,
+    maxOutputTokens,
+    undefined,
+    false,
+    nativeImages,
+    "hidden",
+    "low",
+    0,
+    input.jsonSchema,
+    false,
+    true,
+  );
+  const nativeBaseUrl = (
+    String(app.config.GEMINI_INTERACTIONS_BASE_URL ?? "").trim() ||
+    String(app.config.GEMINI_BASE_URL ?? "").trim().replace(/\/openai\/?$/i, "")
+  ).replace(/\/+$/, "");
+  const compatibilityBaseUrl = String(app.config.GEMINI_BASE_URL ?? "")
+    .trim()
+    .replace(/\/+$/, "");
   const permit = await acquireGeminiFreePermit(app, {
     feature: input.feature,
     userId: input.userId,
     model,
-    requestPayload: requestBody,
+    requestPayload: nativeBody,
     sensitivity: input.sensitivity,
     userAuthorizedCloud: input.userAuthorizedCloud,
     dataLineage: {
@@ -91,13 +130,39 @@ export async function callGeminiFreeStructured<T>(
     return null;
   }
 
-  const response = await postJson(
+  let response = await postJson(
     app,
     "gemini",
-    joinProviderUrl(app.config.GEMINI_BASE_URL, "/chat/completions"),
-    requestBody,
+    joinProviderUrl(nativeBaseUrl, getNativeChatPath("gemini")),
+    nativeBody,
     Math.min(8_000, Math.max(1_000, input.timeoutMs ?? 5_000)),
   ).catch(() => null);
+  if (
+    (!response || !response.ok) &&
+    compatibilityBaseUrl &&
+    (!response || [400, 404, 405, 415, 422].includes(response.status))
+  ) {
+    const compatibilityPermit = await acquireGeminiFreePermit(app, {
+      feature: input.feature,
+      userId: input.userId,
+      model,
+      requestPayload: compatibilityBody,
+      sensitivity: input.sensitivity,
+      userAuthorizedCloud: input.userAuthorizedCloud,
+      dataLineage: {
+        ...input.dataLineage,
+        ...(input.images?.length ? { attachment: true } : {}),
+      },
+    });
+    if (!compatibilityPermit.allowed) return null;
+    response = await postJson(
+      app,
+      "gemini",
+      joinProviderUrl(compatibilityBaseUrl, "/chat/completions"),
+      compatibilityBody,
+      Math.min(8_000, Math.max(1_000, input.timeoutMs ?? 5_000)),
+    ).catch(() => null);
+  }
   if (!response) return null;
   const providerPayload = await response.json().catch(() => null);
   if (!response.ok) {

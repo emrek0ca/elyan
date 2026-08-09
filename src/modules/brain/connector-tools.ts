@@ -186,6 +186,10 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
     requiredScopes: ["https://www.googleapis.com/auth/gmail.send"],
     contract:
       "gmail.send {to:string, subject:string, body:string, cc?:string, bcc?:string} — draft an email to send from the user's Gmail. REQUIRES the user to approve the draft first; never sends silently.",
+    semanticDescriptions: [
+      "Bağlı Gmail hesabımdan belirli alıcılara bir e-posta gönder; alıcı, konu ve gövdeyi kullanarak gönderim taslağı oluştur ve onayı bekle.",
+      "Send an email from my connected Gmail account to the specified recipients with the requested subject and body; prepare the approval draft first.",
+    ],
   },
   {
     name: "calendar.create_event",
@@ -194,6 +198,10 @@ export const CONNECTOR_TOOL_CONTRACTS: ConnectorToolContract[] = [
     requiredScopes: ["https://www.googleapis.com/auth/calendar.events"],
     contract:
       "calendar.create_event {title:string, start:ISO8601, end:ISO8601, description?:string, location?:string, attendees?:string[]} — draft a primary-calendar event. REQUIRES the user to approve the draft first; never creates silently.",
+    semanticDescriptions: [
+      "Bağlı takvimimde belirli tarih ve saat için toplantı veya etkinlik oluştur; başlık, zaman ve katılımcılarla onay taslağı hazırla.",
+      "Create an event or meeting in my connected calendar for the specified time, title and attendees; prepare the approval draft first.",
+    ],
   },
 ];
 
@@ -377,6 +385,9 @@ export function connectorContractsForSemanticReadHint(
     // A read hint prioritizes one read tool, but it must never strip the
     // side_effect (write) contracts from the advertisement: dropping gmail.send
     // here is what left "send this email" with no draftable tool.
+    // Dynamic MCP contracts are request-scoped and already permission-gated by
+    // their live declaration; keep them available for the model catalogue.
+    if (name?.startsWith("mcp__")) return true;
     return CONNECTOR_TOOL_BY_NAME.get(name ?? "")?.permission === "side_effect";
   });
   return filtered.length > 0 ? filtered : advertisedContracts;
@@ -385,7 +396,7 @@ export function connectorContractsForSemanticReadHint(
 /**
  * Selects a read-only connector operation from the contracts already allowed
  * for this request. The candidates come from the live connector registry, not
- * from user-phrase rules, so new paraphrases do not require new regexes.
+ * from user-phrase rules, so new paraphrases do not require code changes.
  *
  * Only a high-confidence multilingual transformer result is accepted. Hash
  * fallback, meta/explanation prompts, write requests, and ambiguous matches
@@ -451,6 +462,81 @@ export async function selectSemanticConnectorReadToolHint(
     source: "transformer",
     enforcement:
       match.score >= CONNECTOR_READ_REQUIRE_MIN_SCORE ? "require" : "prefer",
+  };
+}
+
+const CONNECTOR_WRITE_SEMANTIC_NEGATIVE_CANDIDATES = [
+  {
+    id: "negative:read_only",
+    description:
+      "Read, list, search, inspect, explain, or draft text without changing any connected account data.",
+  },
+  {
+    id: "negative:read_only",
+    description:
+      "Bağlı hesaptaki verileri yalnızca oku veya listele; e-posta metni yaz ama gönderme; takvim uygulamasını genel olarak açıkla ve veri değiştirme.",
+  },
+  {
+    id: "negative:general_action",
+    description:
+      "Local desktop action, file operation, payment, purchase, or an unrelated side effect outside the advertised connector.",
+  },
+] as const;
+
+/**
+ * Selects an advertised connector write operation from the semantic meaning of
+ * the request. This is a routing hint only; approval and execution policy stay
+ * in tool-registry and connector-write-approvals.
+ */
+export async function selectSemanticConnectorWriteToolHint(
+  prompt: string,
+  advertisedContracts: string[],
+  policy: ConnectorReadSelectionPolicy = {},
+): Promise<ConnectorReadToolHint | null> {
+  if (policy.sideEffectDetected !== true) return null;
+
+  const advertisedNames = advertisedConnectorNames(advertisedContracts);
+  const writeContracts = CONNECTOR_TOOL_CONTRACTS.filter(
+    (entry) =>
+      entry.permission === "side_effect" &&
+      entry.semanticRoutable !== false &&
+      advertisedNames.has(entry.name),
+  );
+  if (writeContracts.length === 0) return null;
+
+  const match = await rankSemanticTextCandidates(
+    prompt,
+    [
+      ...writeContracts.flatMap((entry) =>
+        (entry.semanticDescriptions?.length
+          ? entry.semanticDescriptions
+          : [entry.contract]
+        ).map((description) => ({
+          id: `tool:${entry.name}`,
+          description: `${entry.name}: ${description}`,
+        })),
+      ),
+      ...CONNECTOR_WRITE_SEMANTIC_NEGATIVE_CANDIDATES,
+    ],
+    {
+      transformerMinScore: 0.82,
+      transformerMinMargin: 0.01,
+      transformerTimeoutMs: 8_000,
+      hashMinScore: 1.1,
+      hashMinMargin: 1.1,
+    },
+  );
+  if (!match || match.source !== "transformer") return null;
+  if (!match.id.startsWith("tool:")) return null;
+
+  const tool = match.id.slice("tool:".length);
+  if (!writeContracts.some((entry) => entry.name === tool)) return null;
+  return {
+    tool,
+    score: match.score,
+    margin: match.margin,
+    source: "transformer",
+    enforcement: "require",
   };
 }
 

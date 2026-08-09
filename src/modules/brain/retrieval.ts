@@ -131,18 +131,21 @@ async function hasKnowledgeChunkEmbeddingColumn(app: FastifyInstance): Promise<b
 
   const pending = (async () => {
     try {
-      const result = await app.db.execute(sql`
-        select exists (
-          select 1
-          from information_schema.columns
-          where table_schema = 'public'
-            and table_name = 'knowledge_chunks'
-            and column_name = 'embedding'
-        ) as "ready"
+      await app.db.execute(sql`create extension if not exists vector`);
+      await app.db.execute(sql`
+        alter table knowledge_chunks
+          add column if not exists embedding vector(256),
+          add column if not exists embedding_v2 vector(384)
       `);
-      const row = Array.isArray(result) ? result[0] : (result as { rows?: Array<Record<string, unknown>> }).rows?.[0];
-      return row?.ready === true || row?.ready === "t";
-    } catch {
+      await app.db.execute(sql`
+        create index if not exists knowledge_chunks_embedding_ivfflat_idx
+          on knowledge_chunks using ivfflat (embedding vector_cosine_ops)
+          with (lists = 100)
+      `).catch(() => undefined);
+      pgvectorAvailabilityCache.set(app, Promise.resolve(true));
+      return true;
+    } catch (error) {
+      app.log?.warn?.({ error }, "knowledge chunk embedding columns unavailable");
       return false;
     }
   })();
@@ -152,11 +155,7 @@ async function hasKnowledgeChunkEmbeddingColumn(app: FastifyInstance): Promise<b
 }
 
 export async function canUseHybridRetrieval(app: FastifyInstance): Promise<boolean> {
-  const [extensionReady, columnReady] = await Promise.all([
-    isPgvectorAvailable(app),
-    hasKnowledgeChunkEmbeddingColumn(app),
-  ]);
-  return extensionReady && columnReady;
+  return hasKnowledgeChunkEmbeddingColumn(app);
 }
 
 const semanticV2ColumnReady = new WeakMap<FastifyInstance, Promise<boolean>>();

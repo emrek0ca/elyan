@@ -6,7 +6,18 @@ import { shapeTaskFeedItem } from "../tasks/service-helpers.js";
 import { agentEngineRepository } from "./agent-engine-repository.js";
 import { agentPlanEnvelopeSchema, agentVerificationSchema, hardenAgentPlanVerification, type AgentPlanEnvelope } from "./agent-plan.js";
 import { canCompleteAgentRun, verifyAgentStep, type AgentEvidenceInput } from "./agent-verifier.js";
-import { decideAgentToolApproval, executeAgentTool, getAgentToolMetadata, type AgentToolContext, type AgentToolResult } from "./tool-registry.js";
+import {
+  decideAgentToolApproval,
+  executeAgentTool,
+  getAgentToolMetadata,
+  type AgentToolContext,
+  type AgentToolResult,
+} from "./tool-registry.js";
+import {
+  isMcpToolName,
+  resolveMcpToolDeclaration,
+  resolveMcpToolPermission,
+} from "./mcp-tools.js";
 import { getUserApprovalMode } from "../approval-policy/service.js";
 import { updateGoal } from "../goals/service.js";
 
@@ -232,23 +243,50 @@ async function executeStep(input: {
 }) {
   const repository = agentEngineRepository(input.app);
   const metadata = getAgentToolMetadata(input.planStep.tool_request.tool);
+  let dynamicMcpPermission: "read" | "side_effect" | null = null;
   if (!metadata) {
-    await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: true });
-    const result = await executeAgentTool(input.app, input.context, input.planStep.tool_request);
-    await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "failed", toolResult: result });
-    return { verification: null, waitingApproval: false };
-  }
-  const approvalDecision = decideAgentToolApproval({
-    tool: input.planStep.tool_request.tool,
-    mode: input.context.approvalMode,
-    explicitApproval:
-      input.context.approvalGranted === true ||
-      input.context.allowSideEffects === true,
-  });
-  if (approvalDecision.requiresApproval) {
-    await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: false });
-    await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "waiting_approval" });
-    return { verification: null, waitingApproval: true };
+    if (!isMcpToolName(input.planStep.tool_request.tool)) {
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: true });
+      const result = await executeAgentTool(input.app, input.context, input.planStep.tool_request);
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "failed", toolResult: result });
+      return { verification: null, waitingApproval: false };
+    }
+
+    const declaration = await resolveMcpToolDeclaration(
+      input.app,
+      input.userId,
+      input.planStep.tool_request.tool,
+    );
+    if (!declaration) {
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: true });
+      const result = await executeAgentTool(input.app, input.context, input.planStep.tool_request);
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "failed", toolResult: result });
+      return { verification: null, waitingApproval: false };
+    }
+
+    const permission = await resolveMcpToolPermission(input.app, declaration);
+    dynamicMcpPermission = permission;
+    if (
+      permission === "side_effect" &&
+      (input.context.approvalGranted !== true || input.context.allowSideEffects !== true)
+    ) {
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: false });
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "waiting_approval" });
+      return { verification: null, waitingApproval: true };
+    }
+  } else {
+    const approvalDecision = decideAgentToolApproval({
+      tool: input.planStep.tool_request.tool,
+      mode: input.context.approvalMode,
+      explicitApproval:
+        input.context.approvalGranted === true ||
+        input.context.allowSideEffects === true,
+    });
+    if (approvalDecision.requiresApproval) {
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: false });
+      await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "waiting_approval" });
+      return { verification: null, waitingApproval: true };
+    }
   }
 
   await repository.transitionStep({ userId: input.userId, stepId: input.step.id, to: "executing", incrementAttempt: true });
@@ -272,7 +310,7 @@ async function executeStep(input: {
   const canRetry =
     !verification.passed &&
     input.step.attempt + 1 < input.step.maxAttempts &&
-    metadata.idempotency === "read_only";
+    (metadata?.idempotency === "read_only" || dynamicMcpPermission === "read");
   if (canRetry) {
     await repository.transitionStep({
       userId: input.userId,

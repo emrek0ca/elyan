@@ -3,7 +3,10 @@ import type { FastifyInstance } from "fastify";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
 import { selectPolicyWorkload } from "../../core/understanding/policy-rules.js";
 import { selectToolSkillForTurn } from "../../core/understanding/tool-skill-selector.js";
-import type { UnderstandingIntent } from "../../core/understanding/types.js";
+import type {
+  IntentClassification,
+  UnderstandingIntent,
+} from "../../core/understanding/types.js";
 import {
   isMateriallyAmbiguousUserPrompt,
   isShortFollowUpPrompt,
@@ -891,9 +894,27 @@ function shouldOverrideModelServerRouteForDesktop(input: {
   message: string;
   metadata: unknown;
   modelTaskRoute: TaskRoute | null;
+  classification?: IntentClassification;
+  hasLiveDesktopRuntime?: boolean;
 }): boolean {
   if (input.modelTaskRoute?.operationalRoute !== "server_brain") return false;
   if (isDesktopAdviceOnlyRequest(input.message)) return false;
+  // Sınıflandırıcının KENDİ kararı da geçerli bir sinyaldir.
+  //
+  // Canlı kanıt (2026-08-08): "Masaüstünde Emre adında klasör oluştur" turu
+  // `intent: computer, requiresLocalRuntime: true, privacyRisk: high` olarak
+  // doğru sınıflandı — yani sistem turun yerel yürütme gerektirdiğini BİLİYOR.
+  // Buna rağmen rota modeli "server_brain" dedi ve sınıflandırıcının kararı
+  // nihai kararda hiç kullanılmadığı için tur sohbete düştü; kullanıcı
+  // "dosya sistemine erişemiyorum" cevabı aldı. Model yanılabilir; yerel
+  // çalışma zamanı GERÇEKTEN bağlıyken ve sınıflandırıcı yerel yürütme
+  // diyorken onun "sohbet" kararı bağlayıcı olmamalı.
+  if (
+    input.hasLiveDesktopRuntime === true &&
+    input.classification?.requiresLocalRuntime === true
+  ) {
+    return true;
+  }
   return hasConcreteDesktopFallbackSignal(input.message, input.metadata);
 }
 
@@ -1928,6 +1949,47 @@ function parseTaskRouteFallbackResponse(rawText: string): TaskRoute | null {
   }
 }
 
+/**
+ * Bağlı masaüstünün GERÇEKTEN duyurduğu yeteneklerden okunabilir bir yetenek
+ * özeti üretir.
+ *
+ * NEDEN: yönlendirici modele bugüne kadar yalnız soyut politika veriliyordu;
+ * "şu an neye sahibim" bilgisi YOKTU. Model de genel LLM refleksiyle "yerel
+ * dosyalara erişemem" deyip apaçık masaüstü komutlarını sohbete yolluyordu.
+ * Kendi ekosistemini görmeyen bir yönlendirici doğru yönlendiremez.
+ *
+ * Liste cihazın kendi kayıt anında bildirdiği canlı gerçektir (100+ ad);
+ * ham hâliyle prompt'a konursa hem gürültü hem token israfıdır. Bu yüzden
+ * aileler hâlinde özetlenir. Burada yapılan bir NİYET tespiti değildir —
+ * kendi sonlu yetenek kayıt defterimizi okunur biçime çevirmektir.
+ */
+function summarizeDesktopCapabilities(capabilities: unknown): string {
+  const names = normalizeRuntimeCapabilities(
+    Array.isArray(capabilities) ? (capabilities as unknown[]) : [],
+  ).map((name) => String(name).toLowerCase().replace(/[.]/g, "_"));
+  if (names.length === 0) return "";
+  const has = (...fragments: string[]) =>
+    fragments.some((fragment) => names.some((name) => name.includes(fragment)));
+
+  const families: string[] = [];
+  if (has("file_", "directory", "folder"))
+    families.push("create/read/write/move local files and folders");
+  if (has("screen", "observe")) families.push("read what is on the screen");
+  if (has("open_app", "close_app", "app_")) families.push("open and close apps");
+  if (has("browser")) families.push("control the browser");
+  if (has("shell", "terminal")) families.push("run shell commands");
+  if (has("calendar", "reminder")) families.push("read/write calendar and reminders");
+  if (has("play_media", "media", "spotify")) families.push("play media");
+  if (has("document_", "spreadsheet", "presentation", "canvas"))
+    families.push("produce documents, spreadsheets and presentations");
+  if (has("clipboard")) families.push("read/write the clipboard");
+  if (has("operator", "computer_control")) families.push("drive the computer directly (click/type)");
+  if (has("skill")) families.push("run multi-step local skills");
+  if (has("mail", "email", "whatsapp")) families.push("draft/send messages");
+  if (families.length === 0) return "";
+  return families.join("; ");
+}
+
 export function buildCommandRouteModelPrompt(input: {
   message: string;
   promptSummary: string;
@@ -2124,7 +2186,14 @@ async function resolveAmbiguousTaskRouteFallback(
       const outcome = await resolveTaskRouteFromModel(app, input);
       if (!outcome.fallbackAllowed && outcome.route) {
         cacheModelRoute(cacheKey, outcome.route);
-        await writeDistributedModelRouteCache(app, cacheKey, outcome.route);
+        void writeDistributedModelRouteCache(app, cacheKey, outcome.route).catch(
+          (error) => {
+            app.log.warn(
+              { error, cacheKey },
+              "distributed model route cache write deferred",
+            );
+          },
+        );
       }
       return outcome;
     } finally {
@@ -2139,6 +2208,106 @@ async function resolveAmbiguousTaskRouteFallback(
       modelRouteInFlight.delete(cacheKey);
     }
   }
+}
+
+/**
+ * "Bu tur kesin biçimde sohbettir" testi.
+ *
+ * Yalnız `chat`/`writing` gibi masaüstü ile ilgisi olmayan niyetler ve yüksek
+ * güven bunu sağlar. Amaç: seçili masaüstü varken bile "Merhaba" turunun
+ * fazladan bir rota-modeli gidiş-dönüşü ödememesi, ama "devam et ve orada aç"
+ * gibi belirsiz turların modele sorulmaya devam etmesi.
+ */
+function isConfidentConversationalTurn(
+  classification: IntentClassification,
+): boolean {
+  if (classification.requiresLocalRuntime) return false;
+  if (classification.privacyRisk === "high") return false;
+  if (classification.confidence < 0.7) return false;
+  return classification.primaryIntent === "chat";
+}
+
+function shouldConsultRouteModelForClassification(input: {
+  classification: IntentClassification;
+  message: string;
+  metadata: Record<string, unknown>;
+  selectedDeviceId?: string;
+  /** Bellek içi gerçek: bu kullanıcının canlı bir masaüstü çalışma zamanı var mı. */
+  hasLiveDesktopRuntime?: boolean;
+  routeContinuity?: CommandRouteInput["routeContinuity"];
+  desktopDispatchRequested: boolean;
+}): boolean {
+  // These signals explicitly preserve the desktop decision surface. The
+  // classifier below is the semantic source for ordinary turns; this guard
+  // only decides whether a second, network-bound routing model is necessary.
+  //
+  // `selectedDeviceId` BİLEREK BURADA DEĞİL. Seçili masaüstü bir TERCİHTİR,
+  // "bu tur masaüstü gerektiriyor"un kanıtı değil. Kapıda olduğu sürece,
+  // eşleştirilmiş masaüstü olan her kullanıcı için HER mesaj — "Merhaba"
+  // dahil — ACK dönmeden önce fazladan bir rota-modeli tur atıyordu. İlk
+  // token'ın geç gelmesinin ana sebebi buydu; mobil bağlı bir masaüstü
+  // varsa `selectedDeviceId`'yi kendiliğinden dolduruyor, yani pratikte
+  // kapı hep açıktı.
+  //
+  // Masaüstü kararı korumasız kalmıyor: aşağıdaki sınıflandırıcı
+  // (unknown / düşük güven / requiresLocalRuntime / yüksek gizlilik riski)
+  // ve son çit olan `hasConcreteDesktopFallbackSignal` iki bağımsız ağ
+  // olarak duruyor.
+  if (
+    input.desktopDispatchRequested ||
+    input.routeContinuity === "desktop_runtime"
+  ) {
+    return true;
+  }
+
+  // Seçili masaüstü TEK BAŞINA modeli çağırmaz, ama tamamen de yok sayılmaz.
+  // Kesin biçimde sohbet olan turlarda ("Merhaba") atlanır — asıl gecikme
+  // kazancı buradan gelir. Belirsiz turlarda ("devam et ve orada aç") ise
+  // masaüstü kararı hâlâ modele sorulur; aksi hâlde gerçekten masaüstü
+  // gerektiren istekler sessizce server_brain'e düşerdi.
+  //
+  // KRİTİK: burada İSTEMCİNİN gönderdiği `selectedDeviceId`'ye GÜVENİLMEZ.
+  // Canlı kanıt (2026-08-07): mobil bu alanı boş gönderiyordu; "Chrome'u kapat"
+  // gibi apaçık masaüstü komutları bu yüzden semantik router'a HİÇ sorulmadan
+  // sohbete düşüyor, masaüstü hiç görev almıyordu (50/50 tur shared_brain'e
+  // gitti). Kullanıcının kullanılabilir bir masaüstü olup olmadığı SUNUCUDA
+  // bilinir; karar oraya dayandırılır.
+  // CANLI MASAÜSTÜ VARSA, BELİRSİZ HER TUR SEMANTİK MODELE SORULUR.
+  //
+  // Canlı kanıt (2026-08-07): "Chrome'u kapat" turu — apaçık bir masaüstü
+  // komutu — `intent: chat, confidence: 0.55` ile sınıflandı, mobil
+  // `selectedDeviceId`'yi BOŞ gönderdi ve `hasConcreteDesktopFallbackSignal`
+  // regex'i "Chromeu kapat" yazımını (kesme işareti yok) tanımadı. Üç koşul da
+  // tutmayınca semantik router HİÇ ÇAĞRILMADI, tur sohbete düştü. Son 2 günde
+  // 50/50 görev sunucu beynine gitti; masaüstü hiç iş almadı.
+  //
+  // Ölçüm: sınıflandırıcı tanımadığı her şeyi `chat / 0.55` kovasına atıyor —
+  // "Chromeu kapat", "spotify aç", "ekranıma bak" hepsi orada. Tek bir kesme
+  // işareti komutu sohbete düşürüyor. Bu yüzden karar ne istemcinin bir alanı
+  // doldurmasına ne de kelime desenine bırakılabilir.
+  //
+  // Kapı, YÖNLENDİRİLECEK BİR MASAÜSTÜ VARSA açılır: model çağrısı yalnız o
+  // zaman anlamlıdır. Masaüstü yoksa (kullanıcıların çoğu) belirsiz turlar
+  // eskisi gibi doğrudan sohbete gider — gecikme artmaz.
+  if (
+    (input.selectedDeviceId?.trim() || input.hasLiveDesktopRuntime === true) &&
+    !isConfidentConversationalTurn(input.classification)
+  ) {
+    return true;
+  }
+
+  if (
+    input.classification.primaryIntent === "unknown" ||
+    input.classification.confidence < 0.5 ||
+    input.classification.requiresLocalRuntime ||
+    input.classification.privacyRisk === "high"
+  ) {
+    return true;
+  }
+
+  // Son emniyet çiti: sınıflandırıcının hafife aldığı açık yerel yürütme
+  // ipuçları. Tek başına bir turu masaüstüne yönlendirmez.
+  return hasConcreteDesktopFallbackSignal(input.message, input.metadata);
 }
 
 export async function decideCommandRoute(
@@ -2169,22 +2338,100 @@ export async function decideCommandRoute(
     explicitRequestedCapabilities,
   ).includes("mcp.call.tool");
   const desktopDispatchRequested = metadata.desktopDispatch === true;
+  // Bu kullanıcının CANLI masaüstü çalışma zamanı var mı (bellek içi soket
+  // haritası; ek sorgu yok). Hem rota modelinin çağrılıp çağrılmayacağını hem
+  // de modelin "sohbet" kararının bağlayıcı olup olmadığını belirler.
+  // Önce bellek içi soket haritası (bedava). Bu süreçte soket yoksa —
+  // dağıtım çok süreçlidir: WebSocket'i API süreci tutar, üretim ayrı bir
+  // worker'da koşabilir — ve tur yerel yürütme istiyorsa DB'ye bakılır.
+  // Böylece karar hangi süreçte alınırsa alınsın aynı sonucu verir.
+  // Canlı masaüstü var mı? Önce bellek içi soket haritası (bedava). Dağıtım
+  // ÇOK SÜREÇLİDİR: WebSocket'i API süreci tutar, yönlendirme başka bir
+  // süreçte çalışabilir ve o sürecin haritası BOŞ olur — canlı kanıt
+  // (2026-08-08): masaüstü DB'de `online`, heartbeat 3sn, Redis presence
+  // anahtarı var; buna rağmen hub `false` döndü ve görev sohbete düştü.
+  // Bu yüzden hub boş dönerse ve tur yerel yürütme istiyorsa DB'ye bakılır
+  // (süreçten bağımsız tek gerçek). Sorgu `listUserDevices` üzerinden gider
+  // ve kısa ömürlü önbellek sayesinde aşağıdaki hedef seçimiyle paylaşılır —
+  // ek maliyet yoktur.
+  let hasLiveDesktopRuntime = Boolean(
+    app.services?.realtimeHub?.hasConnectedRuntimeForUser?.(input.userId),
+  );
+  // Cihazı yakala: yalnız "var mı" değil, NE YAPABİLDİĞİ de modele gider.
+  let liveDesktopTarget: Awaited<
+    ReturnType<typeof getDefaultDesktopTaskTarget>
+  > = null;
+  if (!hasLiveDesktopRuntime && classification.requiresLocalRuntime === true) {
+    try {
+      liveDesktopTarget = await getDefaultDesktopTaskTarget(app, input.userId, []);
+      hasLiveDesktopRuntime = Boolean(liveDesktopTarget);
+    } catch {
+      hasLiveDesktopRuntime = false;
+    }
+  }
+  const desktopCapabilitySummary = liveDesktopTarget
+    ? summarizeDesktopCapabilities(liveDesktopTarget.runtime?.capabilities)
+    : "";
+  // SÜREKLİLİK SIRADAN SOHBETE TAŞINMAZ.
+  //
+  // Yönlendirici prompt'u "önceki tur masaüstü kullandıysa aynı yüzeyi koru"
+  // diyor; "konu değiştiyse bağımsız yönlendir" kuralı yazılı olsa da model
+  // buna uymuyor. Canlı sonuç (2026-08-08): "Chrome u kapat" turundan sonra
+  // gelen "Naber" masaüstü görevine dönüştü — sıradan sohbet için görev satırı,
+  // plan ve adım izi üretildi. Kullanıcı sohbet ederken masaüstü çalışmamalı.
+  //
+  // Sınıflandırıcı turu SOHBET diyor ve yerel çalışma zamanı istemiyorsa
+  // süreklilik ipucu düşürülür: karar bu turun KENDİ anlamından verilir.
+  const continuityForTurn =
+    classification.primaryIntent === "chat" &&
+    classification.requiresLocalRuntime !== true
+      ? undefined
+      : input.routeContinuity;
   const shouldConsultRouteModel =
     !runtimeMcpRequested &&
     explicitRequestedCapabilities.length === 0 &&
     (input.source === "mobile" ||
       input.source === "desktop" ||
-      desktopDispatchRequested);
+      desktopDispatchRequested) &&
+    shouldConsultRouteModelForClassification({
+      classification,
+      message,
+      metadata,
+      selectedDeviceId: input.selectedDeviceId,
+      hasLiveDesktopRuntime,
+      routeContinuity: continuityForTurn,
+      desktopDispatchRequested,
+    });
   const modelRouteOutcome = shouldConsultRouteModel
     ? await resolveAmbiguousTaskRouteFallback(app, {
         userId: input.userId,
         message,
         brainProfile: input.brainProfile,
         activeChatSessionId: input.activeChatSessionId,
-        routeContinuity: input.routeContinuity,
-        promptSummary: desktopDispatchRequested
-          ? "The user prefers desktop cowork when real execution is needed."
-          : "Decide semantically whether this mobile turn needs real desktop execution.",
+        routeContinuity: continuityForTurn,
+        // SİSTEM FARKINDALIĞI: modele o anki GERÇEĞİ söyle.
+        //
+        // Prompt bugüne kadar yalnız politikayı anlatıyordu; modelin elinde
+        // "şu an bağlı bir masaüstüm var mı, neler yapabiliyorum" bilgisi
+        // YOKTU. Model de genel LLM refleksiyle "ben dosya sistemine
+        // erişemem" deyip apaçık masaüstü komutlarını sohbete yolluyordu
+        // (canlı: "Masaüstünde Cabir adında klasör oluştur" → server_brain,
+        // prompt'ta neredeyse birebir karşı örnek olmasına rağmen).
+        // Yeteneğinin farkında olmayan bir yönlendirici doğru yönlendiremez.
+        promptSummary: [
+          desktopDispatchRequested
+            ? "The user prefers desktop cowork when real execution is needed."
+            : "Decide semantically whether this mobile turn needs real desktop execution.",
+          hasLiveDesktopRuntime
+            ? [
+                "SYSTEM STATE: a paired desktop runtime is CONNECTED and READY right now.",
+                desktopCapabilitySummary
+                  ? `It currently advertises these capabilities: ${desktopCapabilitySummary}.`
+                  : "It can execute local actions on the user's computer.",
+                "You are not a chat-only assistant in this turn: if the request needs the user's real computer, route it to desktop_runtime instead of explaining that you cannot access local files.",
+              ].join(" ")
+            : "SYSTEM STATE: no desktop runtime is connected right now, so local execution cannot be performed this turn.",
+        ].join(" "),
       })
     : null;
   const modelTaskRoute = modelRouteOutcome?.route ?? null;
@@ -2192,6 +2439,8 @@ export async function decideCommandRoute(
     message,
     metadata,
     modelTaskRoute,
+    classification,
+    hasLiveDesktopRuntime,
   });
   const modelNoDesktopRouteOverride =
     modelRouteOutcome?.failure === "no_desktop_route" &&
@@ -2237,10 +2486,49 @@ export async function decideCommandRoute(
   const modelRequiresDesktop =
     modelTaskRoute?.needsDesktop === true &&
     modelTaskRoute.operationalRoute === "desktop_runtime";
+  // Sınıflandırıcı "bu tur yerel çalışma zamanı ister" diyor VE kullanıcının
+  // görev alabilir durumda bir masaüstü var → tur masaüstüne gider.
+  //
+  // Bu dal olmadan masaüstüne giden TEK yol semantik rota modeliydi. Canlı
+  // ölçüm (2026-08-08, üretim container'ında gerçek kodla):
+  //   CLS        intent=computer, requiresLocalRuntime=true   (doğru anlaşıldı)
+  //   DEV        masaüstü online=true, canReceiveTasks=true   (cihaz hazır)
+  //   ROUTEMODEL false                                        (model YOK)
+  // Rota modeli üretimde yapılandırılmadığı için `modelRequiresDesktop` asla
+  // true olmuyor; geriye yalnız regex çiti kalıyor ve o da "Masaüstünde Cabir
+  // adında klasör oluştur" gibi cümleleri tanımıyordu. Sonuç: sistem turun
+  // masaüstü gerektirdiğini BİLİYOR, cihazın hazır olduğunu BİLİYOR, ama
+  // görevi yine de sohbete gönderiyordu.
+  //
+  // Karar burada iki OLGUYA dayanır — kelime desenine değil: sınıflandırıcının
+  // yerel-çalışma-zamanı verdisi + cihazın gerçekten görev alabilir olması.
+  // ÖNEMLİ: model GERÇEKTEN karar verdiyse (fallbackAllowed=false) onun kararı
+  // geçerlidir — "masaüstüne kaydetmek iyi fikir mi?" gibi TAVSİYE turlarını
+  // yürütmeye çevirmeyiz. Bu dal yalnız semantik router karar ÜRETEMEDİĞİNDE
+  // (yapılandırılmamış, kota, zaman aşımı, bozuk çıktı) devreye girer.
+  // Semantik router ya karar ÜRETEMEDİ (fallbackAllowed) ya da turu yanlışlıkla
+  // SOHBET saydı (operationalRoute=server_brain). Üretimde ikincisi görüldü:
+  // `commandRouteModel` servisi yok ama kod doğrudan LLM'e soruyor ve LLM
+  // "Masaüstünde Cabir adında klasör oluştur" için server_brain döndürüyor.
+  // Model yanılabilir; sınıflandırıcı yerel çalışma zamanı diyor ve cihaz
+  // gerçekten hazırsa modelin sohbet kararı bağlayıcı olmamalı.
+  //
+  // Model AÇIKÇA masaüstü dediyse (needsDesktop=true) bu dal zaten gereksizdir;
+  // TAVSİYE turları (`isDesktopAdviceOnlyRequest`) dışarıda tutulur.
+  const modelDidNotClaimDesktop =
+    modelRouteOutcome?.fallbackAllowed === true ||
+    modelTaskRoute?.operationalRoute === "server_brain";
+  const classifierRequiresReadyDesktop =
+    modelDidNotClaimDesktop &&
+    classification.requiresLocalRuntime === true &&
+    hasLiveDesktopRuntime &&
+    !isDesktopAdviceOnlyRequest(message);
+
   const userWantsDesktop =
     explicitRuntimeCapabilityRequested ||
     modelRequiresDesktop ||
-    failClosedDesktopFallback;
+    failClosedDesktopFallback ||
+    classifierRequiresReadyDesktop;
 
   if (userWantsDesktop) {
     const needsPrivateDesktopData =

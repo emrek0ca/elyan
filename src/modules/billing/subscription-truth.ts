@@ -27,52 +27,54 @@ type SubscriptionTruthInput = {
   manageSubscriptionHint?: string | null;
   creditStatus?: string | null;
   tokenStatus?: string | null;
-  trialOffer?: WelcomeProTrialOffer | null;
 };
 
-export type WelcomeProTrialOfferStatus = "available" | "claimed" | "expired" | "unavailable";
-
-export type WelcomeProTrialOffer = {
-  code: "welcome_pro_30d";
-  planCode: "pro";
-  durationDays: 30;
-  status: WelcomeProTrialOfferStatus;
-  eligible: boolean;
-  claimed: boolean;
-  claimPath: "/v1/billing/trials/pro/claim";
-  expiresAt: Date | null;
-};
-
+/**
+ * Kullanıcının abonelik gerçeği — istemciye giden TEK şekil.
+ *
+ * TEK KELİME: `token`. Sistemde tek bir sayaç var; "kredi" onun eski adı.
+ * Yarım kalmış bir yeniden adlandırma yüzünden aynı değer iki isimle
+ * taşınıyordu (`aiCreditsMonthly`/`tokensMonthly`, `creditBalance`/
+ * `tokenBalance`, …) ve okuyan herkes "acaba ikisi farklı mı?" diye
+ * duraksıyordu. Farklı değiller; aşağıdaki `@deprecated` alanlar kanonik
+ * alanların birebir kopyasıdır ve YALNIZCA yayındaki eski istemciler için
+ * duruyor (kullanıcının telefonundaki kurulu sürüm hâlâ `credit*` okuyor —
+ * kablodan kaldırmak onu kırardı).
+ *
+ * Yeni kod SADECE `token*` okur/yazar. Eski adlar, istemci sürümleri
+ * geçtikten sonra tek hamlede silinebilsin diye tek bir blokta toplandı.
+ */
 export type SubscriptionTruth = {
   planCode: BillingPlanCode;
   qualityProfile: QualityProfile;
   status: string;
-  aiCreditsMonthly: number;
-  tokensMonthly: number;
   taskLimitMonthly: number;
   brainProfile: PlanBrainProfile;
   periodEndsAt: Date | null;
   trialEndsAt: Date | null;
-  creditBalance: number;
-  tokenBalance: number;
-  creditGrantedThisPeriod: number;
-  tokensGrantedThisPeriod: number;
-  creditPeriodEndsAt: Date | null;
-  tokenPeriodEndsAt: Date | null;
   billingProvider: string | null;
   subscriptionSource: string | null;
   manageSubscriptionHint: string | null;
-  creditStatus: string | null;
-  tokenStatus: string | null;
-  trialOffer: WelcomeProTrialOffer;
-};
 
-const WELCOME_PRO_TRIAL_OFFER_BASE = {
-  code: "welcome_pro_30d",
-  planCode: "pro",
-  durationDays: 30,
-  claimPath: "/v1/billing/trials/pro/claim",
-} as const;
+  // Kanonik sayaç alanları.
+  tokensMonthly: number;
+  tokenBalance: number;
+  tokensGrantedThisPeriod: number;
+  tokenPeriodEndsAt: Date | null;
+  tokenStatus: string | null;
+
+  // --- Eski adlar (yayındaki istemciler için; yeni kod kullanmaz) ---
+  /** @deprecated `tokensMonthly` ile aynı değer. */
+  aiCreditsMonthly: number;
+  /** @deprecated `tokenBalance` ile aynı değer. */
+  creditBalance: number;
+  /** @deprecated `tokensGrantedThisPeriod` ile aynı değer. */
+  creditGrantedThisPeriod: number;
+  /** @deprecated `tokenPeriodEndsAt` ile aynı değer. */
+  creditPeriodEndsAt: Date | null;
+  /** @deprecated `tokenStatus` ile aynı değer. */
+  creditStatus: string | null;
+};
 
 function shapePlanBrainProfile(planCode: BillingPlanCode, input?: PlanBrainProfile | null): PlanBrainProfile {
   const planProfile = getBillingPlan(planCode).brainProfile;
@@ -112,31 +114,6 @@ function resolveMonthlyTaskLimit(planCode: BillingPlanCode, inputValue: number |
   return inputValue ?? planDefault;
 }
 
-export function shapeWelcomeProTrialOffer(
-  input?: Pick<SubscriptionTruthInput, "planCode" | "status" | "trialEndsAt"> | null,
-  currentTime: Date = new Date(),
-): WelcomeProTrialOffer {
-  const planCode = normalizeBillingPlanCode(input?.planCode);
-  const status = String(input?.status ?? "free").trim().toLowerCase();
-  const expiresAt = input?.trialEndsAt ?? null;
-  const hasFutureExpiry = expiresAt instanceof Date && expiresAt.getTime() > currentTime.getTime();
-  let offerStatus: WelcomeProTrialOfferStatus = "unavailable";
-
-  if (planCode === "free" && status === "free" && expiresAt instanceof Date) {
-    offerStatus = hasFutureExpiry ? "available" : "expired";
-  } else if (planCode === "pro" && status === "trialing" && hasFutureExpiry) {
-    offerStatus = "claimed";
-  }
-
-  return {
-    ...WELCOME_PRO_TRIAL_OFFER_BASE,
-    status: offerStatus,
-    eligible: offerStatus === "available",
-    claimed: offerStatus === "claimed",
-    expiresAt,
-  };
-}
-
 export function shapeSubscriptionTruth(input?: SubscriptionTruthInput | null): SubscriptionTruth {
   const plan = getBillingPlan(input?.planCode);
   const planCode = normalizeBillingPlanCode(input?.planCode);
@@ -154,29 +131,26 @@ export function shapeSubscriptionTruth(input?: SubscriptionTruthInput | null): S
     planCode,
     qualityProfile: plan.brainProfile.qualityProfile,
     status: input?.status ?? "free",
-    aiCreditsMonthly: monthlyTokens,
-    tokensMonthly: monthlyTokens,
     taskLimitMonthly: resolveMonthlyTaskLimit(planCode, input?.taskLimitMonthly, plan.taskLimitMonthly),
     brainProfile: shapePlanBrainProfile(planCode, input?.brainProfile ?? plan.brainProfile),
     periodEndsAt: input?.periodEndsAt ?? null,
     trialEndsAt: input?.trialEndsAt ?? null,
-    creditBalance: tokenBalance,
-    tokenBalance,
-    creditGrantedThisPeriod: tokensGrantedThisPeriod,
-    tokensGrantedThisPeriod,
-    creditPeriodEndsAt: tokenPeriodEndsAt,
-    tokenPeriodEndsAt,
     billingProvider: input?.billingProvider ?? null,
     subscriptionSource: input?.subscriptionSource ?? null,
     manageSubscriptionHint: input?.manageSubscriptionHint ?? null,
-    creditStatus: tokenStatus,
+
+    // Kanonik sayaç: her değer BİR kez hesaplanır.
+    tokensMonthly: monthlyTokens,
+    tokenBalance,
+    tokensGrantedThisPeriod,
+    tokenPeriodEndsAt,
     tokenStatus,
-    trialOffer:
-      input?.trialOffer ??
-      shapeWelcomeProTrialOffer({
-        planCode,
-        status: input?.status,
-        trialEndsAt: input?.trialEndsAt,
-      }),
+
+    // Eski adlar — aynı değerlerin kopyası, yalnız yayındaki istemciler için.
+    aiCreditsMonthly: monthlyTokens,
+    creditBalance: tokenBalance,
+    creditGrantedThisPeriod: tokensGrantedThisPeriod,
+    creditPeriodEndsAt: tokenPeriodEndsAt,
+    creditStatus: tokenStatus,
   };
 }

@@ -7,17 +7,23 @@ import {
 } from "bullmq";
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
+import { getUserUsageAccessTruth } from "../billing/service.js";
 import {
   chatGenerationAgePhase,
+  chatGenerationQueuePriority,
   estimateChatGenerationReservationTokens,
   getChatGenerationQueueLimits,
   getChatGenerationTiming,
+  getGeminiProviderKeyCount,
+  getGroqProviderKeyCount,
   type ChatGenerationProviderStage,
 } from "./chat-generation-policy.js";
+import type { SharedBrainWorkload } from "./workloads.js";
 
 export type ChatGenerationJobData = {
   taskId: string;
   userId: string;
+  workload?: SharedBrainWorkload;
 };
 
 export type ChatGenerationQueueFailure = {
@@ -28,25 +34,43 @@ export type ChatGenerationQueueFailure = {
 };
 
 const PRIMARY_QUEUE_NAME = "elyan-chat-primary-v1";
+// A priority value inside one BullMQ queue cannot preempt provider calls that
+// already occupy every worker slot. Keep short conversational turns on a
+// separate lane so a long balanced/vision generation cannot hide them behind
+// an active job. Provider admission remains shared below.
+const FAST_QUEUE_NAME = "elyan-chat-fast-v1";
 const FALLBACK_QUEUE_NAME = "elyan-chat-fallback-v1";
 const WORKER_HEARTBEAT_KEY = "elyan:chat-generation:worker-ready";
-const WORKER_HEARTBEAT_TTL_MS = 45_000;
-const WORKER_HEARTBEAT_INTERVAL_MS = 15_000;
+const WORKER_HEARTBEAT_TTL_MS = 15_000;
+const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
 const QUEUE_RECOVERY_INTERVAL_MS = 30_000;
 const QUEUE_DEADLINE_SWEEP_INTERVAL_MS = 5_000;
 const QUEUE_OPERATION_TIMEOUT_MS = 3_000;
 const CHAT_ADMISSION_SLOT_KEY = "chat-generation:admission:active-v1";
+const CHAT_LEASE_RETRY_BASE_MS = 250;
+const CHAT_LEASE_RETRY_JITTER_MS = 250;
 // Backstop for a slot whose task crashed without releasing. Kept well above any
 // single chat generation but far below the previous 60 min, so a stuck task
 // frees its slot in minutes instead of locking capacity for an hour.
 const CHAT_ADMISSION_SLOT_TTL_MS = 10 * 60_000;
 
+function chatLeaseRetryDelayMs(): number {
+  // A lease collision is expected with multiple workers. Keep the retry
+  // jitter short so a normal turn does not add a visible second of latency.
+  return (
+    CHAT_LEASE_RETRY_BASE_MS +
+    Math.floor(Math.random() * (CHAT_LEASE_RETRY_JITTER_MS + 1))
+  );
+}
+
 type QueueResources = {
+  fast: Queue<ChatGenerationJobData>;
   primary: Queue<ChatGenerationJobData>;
   fallback: Queue<ChatGenerationJobData>;
 };
 
 type WorkerResources = {
+  fast: Worker<ChatGenerationJobData>;
   primary: Worker<ChatGenerationJobData>;
   fallback: Worker<ChatGenerationJobData>;
   heartbeat: ReturnType<typeof setInterval>;
@@ -55,6 +79,10 @@ type WorkerResources = {
 };
 
 const queues = new WeakMap<FastifyInstance, QueueResources>();
+const queueInitializations = new WeakMap<
+  FastifyInstance,
+  Promise<QueueResources | null>
+>();
 const workers = new WeakMap<FastifyInstance, WorkerResources>();
 const queueLifecycleRegistered = new WeakSet<FastifyInstance>();
 
@@ -63,6 +91,7 @@ async function closeChatGenerationQueues(app: FastifyInstance): Promise<void> {
   if (!resources) return;
   queues.delete(app);
   await Promise.all([
+    resources.fast.close().catch(() => undefined),
     resources.primary.close().catch(() => undefined),
     resources.fallback.close().catch(() => undefined),
   ]);
@@ -145,8 +174,8 @@ function connection(redisUrl: string) {
   };
 }
 
-function queueName(stage: ChatGenerationProviderStage): string {
-  return stage === "primary" ? PRIMARY_QUEUE_NAME : FALLBACK_QUEUE_NAME;
+function isFastChatWorkload(workload?: SharedBrainWorkload): boolean {
+  return workload === "mobile_chat_fast" || workload === "fast_route";
 }
 
 export function chatGenerationJobId(
@@ -177,34 +206,65 @@ async function queueResourcesFor(
   }
   const existing = queues.get(app);
   if (existing) return existing;
-  const options = {
-    connection: connection(app.config.REDIS_URL) as never,
-    defaultJobOptions: {
-      attempts: 1,
-      removeOnComplete: true,
-      removeOnFail: { age: 86_400, count: 1_000 },
-    },
-  };
-  const resources = {
-    primary: new Queue<ChatGenerationJobData>(PRIMARY_QUEUE_NAME, options),
-    fallback: new Queue<ChatGenerationJobData>(FALLBACK_QUEUE_NAME, options),
-  };
+  const initializing = queueInitializations.get(app);
+  if (initializing) return initializing;
+
+  const initialization = (async (): Promise<QueueResources> => {
+    const options = {
+      connection: connection(app.config.REDIS_URL!) as never,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: true,
+        removeOnFail: { age: 86_400, count: 1_000 },
+      },
+    };
+    const resources = {
+      fast: new Queue<ChatGenerationJobData>(FAST_QUEUE_NAME, options),
+      primary: new Queue<ChatGenerationJobData>(PRIMARY_QUEUE_NAME, options),
+      fallback: new Queue<ChatGenerationJobData>(FALLBACK_QUEUE_NAME, options),
+    };
+    try {
+      await withQueueTimeout(
+        Promise.all([
+          resources.fast.waitUntilReady(),
+          resources.primary.waitUntilReady(),
+          resources.fallback.waitUntilReady(),
+        ]),
+      );
+    } catch (error) {
+      await Promise.all([
+        resources.fast.close().catch(() => undefined),
+        resources.primary.close().catch(() => undefined),
+        resources.fallback.close().catch(() => undefined),
+      ]);
+      throw error;
+    }
+    queues.set(app, resources);
+    return resources;
+  })();
+  queueInitializations.set(app, initialization);
   try {
-    await withQueueTimeout(
-      Promise.all([
-        resources.primary.waitUntilReady(),
-        resources.fallback.waitUntilReady(),
-      ]),
-    );
-  } catch (error) {
-    await Promise.all([
-      resources.primary.close().catch(() => undefined),
-      resources.fallback.close().catch(() => undefined),
-    ]);
-    throw error;
+    return await initialization;
+  } finally {
+    if (queueInitializations.get(app) === initialization) {
+      queueInitializations.delete(app);
+    }
   }
-  queues.set(app, resources);
-  return resources;
+}
+
+/**
+ * Opens the API-side queue connections during app startup. The first chat
+ * request then only performs `queue.add`; concurrent first requests also
+ * share the same initialization promise.
+ */
+export async function warmChatGenerationQueue(
+  app: FastifyInstance,
+): Promise<void> {
+  try {
+    await queueResourcesFor(app);
+  } catch (error) {
+    app.log.warn({ error }, "chat generation queue warmup unavailable");
+  }
 }
 
 export async function enqueueSharedBrainChatTask(
@@ -214,13 +274,30 @@ export async function enqueueSharedBrainChatTask(
 ): Promise<boolean> {
   const resources = await queueResourcesFor(app);
   if (!resources) return false;
-  const queue = stage === "primary" ? resources.primary : resources.fallback;
+  // Redis accepting a job is not enough: without a live consumer the task
+  // would remain in the loading state until the long deadline sweep. Fail the
+  // detached dispatch quickly so the durable task can expose a transient,
+  // retryable state instead of looking frozen to the client.
+  if (!(await isChatGenerationWorkerReady(app))) {
+    app.log.warn(
+      { taskId: input.taskId, stage },
+      "chat generation worker is not ready; skipping enqueue",
+    );
+    return false;
+  }
+  const queue =
+    stage === "primary" && isFastChatWorkload(input.workload)
+      ? resources.fast
+      : stage === "primary"
+        ? resources.primary
+        : resources.fallback;
   const jobId = chatGenerationJobId(stage, input.taskId);
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       await withQueueTimeout(
         queue.add("generate", input, {
           jobId,
+          priority: chatGenerationQueuePriority(input.workload),
         }),
       );
       return true;
@@ -397,7 +474,7 @@ async function enqueueFallback(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.",
+        "Bu turda yanıt oluşturulamadı. Tekrar dene.",
         {
           transient: false,
           retrySuggested: false,
@@ -423,12 +500,18 @@ async function processGenerationJob(
   token?: string,
 ) {
   const service = await import("../tasks/service.js");
+  // Task hydration and the access snapshot are independent reads. Starting
+  // them together removes a serial subscription lookup from the first-token
+  // path while the worker still uses fresh access truth for this attempt.
+  const usageAccessPromise = getUserUsageAccessTruth(app.db, job.data.userId);
+  void usageAccessPromise.catch(() => undefined);
   const snapshot = await service.getQueuedSharedBrainChatTask(app, job.data);
   if (!snapshot) return;
   if (snapshot.terminal) {
     await service.processQueuedSharedBrainChatTask(app, {
       ...job.data,
       providerStage: stage,
+      snapshot,
     });
     return;
   }
@@ -441,7 +524,7 @@ async function processGenerationJob(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        "Bu tur beklediğimden uzun sürdü. İsteğini aldım; işlem güvenliyse kısa cevapla devam ediyorum.",
+        "Yanıt zamanında tamamlanamadı. Lütfen yeniden dene.",
         {
           transient: true,
           retrySuggested: true,
@@ -458,32 +541,41 @@ async function processGenerationJob(
 
   const lockOwner = randomUUID();
   const lockTtlMs = 30_000;
-  const taskLeaseAcquired = await app.services.reliability.store.acquireLock(
-    taskLeaseKey(job.data.taskId),
-    lockOwner,
-    lockTtlMs,
-    true,
-  );
+  // These leases protect independent scopes: the task fence prevents duplicate
+  // generation, while the user fence preserves per-user turn ordering. Acquire
+  // them together so the normal path pays one Redis round trip instead of two.
+  const [taskLeaseAcquired, userLockAcquired] = await Promise.all([
+    app.services.reliability.store.acquireLock(
+      taskLeaseKey(job.data.taskId),
+      lockOwner,
+      lockTtlMs,
+      true,
+    ),
+    app.services.reliability.store.acquireLock(
+      userLockKey(job.data.userId),
+      lockOwner,
+      lockTtlMs,
+      true,
+    ),
+  ]);
   if (!taskLeaseAcquired) {
+    if (userLockAcquired) {
+      await app.services.reliability.store
+        .releaseLock(userLockKey(job.data.userId), lockOwner)
+        .catch(() => undefined);
+    }
     // Lease başka bir worker'da: görev zaten işleniyor. Chat satırına/faz
     // durumuna DOKUNMA — buradaki "Yanıt hazırlanıyor." yeniden-yayını, akan
     // cevabın üstüne yazan eski ACK snapshot'larının kaynağıydı. Sadece bekle.
-    return delayJob(job, token, 750 + Math.floor(Math.random() * 500));
+    return delayJob(job, token, chatLeaseRetryDelayMs());
   }
-
-  const userLockAcquired = await app.services.reliability.store.acquireLock(
-    userLockKey(job.data.userId),
-    lockOwner,
-    lockTtlMs,
-    true,
-  );
   if (!userLockAcquired) {
     await app.services.reliability.store
       .releaseLock(taskLeaseKey(job.data.taskId), lockOwner)
       .catch(() => undefined);
     // Kullanıcının başka bir turu işleniyor: faz/chat satırı yeniden yazılmaz
     // (yukarıdaki lease yorumuyla aynı gerekçe). Sadece bekle.
-    return delayJob(job, token, 750 + Math.floor(Math.random() * 500));
+    return delayJob(job, token, chatLeaseRetryDelayMs());
   }
 
   const leaseFence = createChatGenerationLeaseFence();
@@ -522,18 +614,20 @@ async function processGenerationJob(
   try {
     if (stage === "primary") {
       const limits = getChatGenerationQueueLimits(app);
+      const groqTokenLimit =
+        limits.groqTpmLimit * getGroqProviderKeyCount(app);
       const now = Date.now();
       const windowStartedAt = Math.floor(now / 60_000) * 60_000;
       const ttlMs = windowStartedAt + 65_000 - now;
       const reservation = estimateChatGenerationReservationTokens({
         prompt: snapshot.prompt,
         workload: snapshot.workload,
-        limit: limits.groqTpmLimit,
+        limit: groqTokenLimit,
       });
       const budget = await app.services.reliability.store.tryConsumeBudget(
         `chat-generation:groq-tokens:${windowStartedAt}`,
         reservation,
-        limits.groqTpmLimit,
+        groqTokenLimit,
         ttlMs,
         true,
       );
@@ -556,6 +650,8 @@ async function processGenerationJob(
       await service.processQueuedSharedBrainChatTask(app, {
         ...job.data,
         providerStage: stage,
+        snapshot,
+        usageAccess: await usageAccessPromise,
         shouldAbort: leaseFence.shouldAbort,
       });
       return;
@@ -654,14 +750,15 @@ async function recoverQueuedChatTasks(app: FastifyInstance): Promise<number> {
       recoverable
         .slice(offset, offset + 50)
         .map(async (job) => {
-          const [primaryJob, fallbackJob] = await Promise.all([
+          const [fastJob, primaryJob, fallbackJob] = await Promise.all([
+            resources.fast.getJob(chatGenerationJobId("primary", job.taskId)),
             resources.primary.getJob(chatGenerationJobId("primary", job.taskId)),
             resources.fallback.getJob(
               chatGenerationJobId("fallback", job.taskId),
             ),
           ]);
           const represented = await Promise.all(
-            [primaryJob, fallbackJob]
+            [fastJob, primaryJob, fallbackJob]
               .filter((value): value is Job<ChatGenerationJobData> => value != null)
               .map(async (value) => {
                 const state = String(await value.getState());
@@ -681,7 +778,11 @@ async function recoverQueuedChatTasks(app: FastifyInstance): Promise<number> {
           try {
             await enqueueSharedBrainChatTask(
               app,
-              { taskId: job.taskId, userId: job.userId },
+              {
+                taskId: job.taskId,
+                userId: job.userId,
+                workload: job.workload,
+              },
               "primary",
             );
           } catch (error) {
@@ -730,6 +831,9 @@ async function sweepOverdueQueuedChatTasks(
           ),
         });
         const jobs = await Promise.all([
+          resources.fast.getJob(
+            chatGenerationJobId("primary", candidate.taskId),
+          ),
           resources.primary.getJob(
             chatGenerationJobId("primary", candidate.taskId),
           ),
@@ -775,7 +879,10 @@ async function sweepOverdueQueuedChatTasks(
           });
           if (!snapshot || snapshot.terminal) return;
 
-          const [primaryJob, fallbackJob] = await Promise.all([
+          const [fastJob, primaryJob, fallbackJob] = await Promise.all([
+            resources.fast.getJob(
+              chatGenerationJobId("primary", candidate.taskId),
+            ),
             resources.primary.getJob(
               chatGenerationJobId("primary", candidate.taskId),
             ),
@@ -792,15 +899,19 @@ async function sweepOverdueQueuedChatTasks(
             fallbackState !== "failed" &&
             fallbackState !== "unknown"
           ) {
-            await primaryJob?.remove().catch(() => undefined);
+            await Promise.all([
+              fastJob?.remove().catch(() => undefined),
+              primaryJob?.remove().catch(() => undefined),
+            ]);
             return;
           }
           if (fallbackJob) {
             await fallbackJob.remove().catch(() => undefined);
           }
 
-          const primaryState = primaryJob
-            ? String(await primaryJob.getState())
+          const activePrimaryJob = fastJob ?? primaryJob;
+          const primaryState = activePrimaryJob
+            ? String(await activePrimaryJob.getState())
             : "unknown";
           // Acquiring the task lease proves an "active" Bull job is only
           // waiting on this replica's shared local gate; a provider call that
@@ -811,7 +922,10 @@ async function sweepOverdueQueuedChatTasks(
             userId: candidate.userId,
           });
           if (primaryState !== "active") {
-            await primaryJob?.remove().catch(() => undefined);
+            await Promise.all([
+              fastJob?.remove().catch(() => undefined),
+              primaryJob?.remove().catch(() => undefined),
+            ]);
           }
         } finally {
           await app.services.reliability.store
@@ -833,16 +947,40 @@ export async function ensureChatGenerationWorkers(
   const resources = await queueResourcesFor(app);
   if (!resources) return;
   const limits = getChatGenerationQueueLimits(app);
+  const groqRpmLimit = limits.groqRpmLimit * getGroqProviderKeyCount(app);
+  const geminiRpmLimit =
+    limits.geminiRpmLimit * getGeminiProviderKeyCount(app);
   const withLocalConcurrency = createLocalConcurrencyGate(
     limits.workerConcurrency,
   );
+  // This gate is intentionally separate from balanced/fallback work. A slow
+  // generation must not consume the local slots reserved for short replies.
+  const withFastLocalConcurrency = createLocalConcurrencyGate(
+    limits.workerConcurrency,
+  );
   await Promise.all([
+    resources.fast.setGlobalConcurrency(limits.primaryGlobalConcurrency),
     resources.primary.setGlobalConcurrency(limits.primaryGlobalConcurrency),
     resources.fallback.setGlobalConcurrency(limits.fallbackGlobalConcurrency),
   ]);
 
+  let fastWorker: Worker<ChatGenerationJobData>;
   let primaryWorker: Worker<ChatGenerationJobData>;
   let fallbackWorker: Worker<ChatGenerationJobData>;
+  fastWorker = new Worker<ChatGenerationJobData>(
+    FAST_QUEUE_NAME,
+    (job, token) =>
+      withFastLocalConcurrency(() =>
+        processGenerationJob(app, "primary", fastWorker, job, token),
+      ),
+    {
+      connection: connection(app.config.REDIS_URL) as never,
+      concurrency: limits.workerConcurrency,
+      lockDuration: 30_000,
+      stalledInterval: 5_000,
+      limiter: { max: groqRpmLimit, duration: 60_000 },
+    },
+  );
   primaryWorker = new Worker<ChatGenerationJobData>(
     PRIMARY_QUEUE_NAME,
     (job, token) =>
@@ -854,7 +992,7 @@ export async function ensureChatGenerationWorkers(
       concurrency: limits.workerConcurrency,
       lockDuration: 30_000,
       stalledInterval: 5_000,
-      limiter: { max: limits.groqRpmLimit, duration: 60_000 },
+      limiter: { max: groqRpmLimit, duration: 60_000 },
     },
   );
   fallbackWorker = new Worker<ChatGenerationJobData>(
@@ -868,15 +1006,14 @@ export async function ensureChatGenerationWorkers(
       concurrency: limits.workerConcurrency,
       lockDuration: 30_000,
       stalledInterval: 5_000,
-      limiter: { max: limits.geminiRpmLimit, duration: 60_000 },
+      limiter: { max: geminiRpmLimit, duration: 60_000 },
     },
   );
   await Promise.all([
+    fastWorker.waitUntilReady(),
     primaryWorker.waitUntilReady(),
     fallbackWorker.waitUntilReady(),
   ]);
-  await sweepOverdueQueuedChatTasks(app);
-  await recoverQueuedChatTasks(app);
 
   const writeHeartbeat = () =>
     app.services.reliability.store.set(
@@ -885,6 +1022,21 @@ export async function ensureChatGenerationWorkers(
       WORKER_HEARTBEAT_TTL_MS,
     );
   await writeHeartbeat();
+  // Queue readiness is the liveness contract for the API. Recovery and
+  // deadline scans may touch many jobs after a restart, so they must not delay
+  // the heartbeat or the first newly accepted chat turn.
+  void sweepOverdueQueuedChatTasks(app).catch((error) => {
+    app.log.warn(
+      { errorCode: error instanceof Error ? error.name : "unknown" },
+      "initial chat generation deadline sweep failed",
+    );
+  });
+  void recoverQueuedChatTasks(app).catch((error) => {
+    app.log.warn(
+      { errorCode: error instanceof Error ? error.name : "unknown" },
+      "initial chat generation queue recovery failed",
+    );
+  });
   const heartbeat = setInterval(() => {
     void writeHeartbeat().catch(() => undefined);
   }, WORKER_HEARTBEAT_INTERVAL_MS);
@@ -905,7 +1057,7 @@ export async function ensureChatGenerationWorkers(
     });
   }, QUEUE_DEADLINE_SWEEP_INTERVAL_MS);
 
-  for (const worker of [primaryWorker, fallbackWorker]) {
+  for (const worker of [fastWorker, primaryWorker, fallbackWorker]) {
     worker.on("failed", (job, error) => {
       app.log.warn(
         {
@@ -924,6 +1076,7 @@ export async function ensureChatGenerationWorkers(
     });
   }
   const workerResources = {
+    fast: fastWorker,
     primary: primaryWorker,
     fallback: fallbackWorker,
     heartbeat,
@@ -938,6 +1091,7 @@ export async function ensureChatGenerationWorkers(
     clearInterval(recovery);
     clearInterval(deadlineSweep);
     await Promise.all([
+      fastWorker.close().catch(() => undefined),
       primaryWorker.close().catch(() => undefined),
       fallbackWorker.close().catch(() => undefined),
     ]);
@@ -948,10 +1102,10 @@ export async function isChatGenerationWorkerReady(
   app: FastifyInstance,
 ): Promise<boolean> {
   if (!isChatGenerationQueueEnabled(app)) return true;
+  const store = app.services?.reliability?.store;
+  if (!store) return false;
   return (
-    (await app.services.reliability.store
-      .get(WORKER_HEARTBEAT_KEY)
-      .catch(() => null)) === "ready"
+    (await store.get(WORKER_HEARTBEAT_KEY).catch(() => null)) === "ready"
   );
 }
 
@@ -960,18 +1114,20 @@ export async function getChatGenerationQueueCounts(
 ): Promise<{ waiting: number; active: number; delayed: number } | null> {
   const resources = await queueResourcesFor(app);
   if (!resources) return null;
-  const [primary, fallback] = await Promise.all([
+  const [fast, primary, fallback] = await Promise.all([
+    resources.fast.getJobCounts("waiting", "active", "delayed"),
     resources.primary.getJobCounts("waiting", "active", "delayed"),
     resources.fallback.getJobCounts("waiting", "active", "delayed"),
   ]);
   return {
-    waiting: primary.waiting + fallback.waiting,
-    active: primary.active + fallback.active,
-    delayed: primary.delayed + fallback.delayed,
+    waiting: fast.waiting + primary.waiting + fallback.waiting,
+    active: fast.active + primary.active + fallback.active,
+    delayed: fast.delayed + primary.delayed + fallback.delayed,
   };
 }
 
 export const CHAT_GENERATION_QUEUE_NAMES = {
+  fast: FAST_QUEUE_NAME,
   primary: PRIMARY_QUEUE_NAME,
   fallback: FALLBACK_QUEUE_NAME,
 } as const;

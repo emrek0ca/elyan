@@ -21,6 +21,8 @@ export type DesktopCapabilityManifestEntry = {
   liveNarration: string[];
   failureModes: string[];
   fewShots: Array<Record<string, unknown>>;
+  utterances: string[];
+  notFor: string[];
   privacyClass: string;
   skillAffinity: string[];
 };
@@ -106,6 +108,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "yarın 14:00'e toplantı ekle",
+      "cuma günü için takvime randevu koy",
+      "takvimime etkinlik gir"
+    ],
+    "notFor": [
+      "takvimimde ne var",
+      "takvim uygulaması nasıl çalışır",
+      "bana hatırlat"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -184,6 +196,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "akşam süt almayı hatırlat",
+      "bana yarın sabah şunu anımsat",
+      "hatırlatıcı kur"
+    ],
+    "notFor": [
+      "takvime toplantı ekle",
+      "hatırlatıcılarımı göster"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -209,6 +230,19 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "query"
       ],
+      "properties": {
+        "query": {
+          "type": "STRING"
+        },
+        "target": {
+          "type": "STRING"
+        },
+        "cloudAllowed": {
+          "type": "BOOLEAN",
+          "description": "Yalnız açık onayla bulut vision kullanımına izin verir."
+        }
+      },
+      "additionalProperties": false,
       "target": "active_window only in v1",
       "cloudDefault": "local_only"
     },
@@ -235,6 +269,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "BLANK_CAPTURE"
     ],
     "fewShots": [],
+    "utterances": [
+      "ekranda ne var",
+      "ekrandaki hatayı oku ve ne olduğunu söyle",
+      "şu an ne görüyorsun ekranda"
+    ],
+    "notFor": [
+      "ekranı kapat",
+      "klasördeki dosyaları listele"
+    ],
     "privacyClass": "local_private_screen",
     "skillAffinity": []
   },
@@ -289,6 +332,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "siteye gir ve formu doldur",
+      "şu sayfada adım adım işlemi tamamla",
+      "tarayıcıda gerekli adımları kendin yap"
+    ],
+    "notFor": [],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -296,13 +345,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "name": "browser_control",
     "displayName": "Tarayıcı kontrolü",
     "description": "Tarayıcıda bir URL açar, web araması yapar, YouTube'da video açar veya yeni sekme açar.",
-    "usage": "Web adresi açma/arama/YouTube/yeni sekme için. 'Yeni sekme aç' isteği action='new_tab'tır — 'yeni sekme' metnini ASLA aramaya çevirme. Uygulamanın kendisini açmak için open_app kullan.",
+    "usage": "KAPATMA YAPMAZ (close/quit/close_tab action YOK — kapatmak için close_app). Yalnız açma/arama: web adresi, arama, YouTube, yeni sekme. 'Yeni sekme aç' = action='new_tab'; aramaya çevirme. Uygulama aç…",
     "requiredArgs": [
       "action"
     ],
     "requiresApproval": true,
     "whenToUse": [
-      "Web adresi açma/arama/YouTube/yeni sekme için. 'Yeni sekme aç' isteği action='new_tab'tır — 'yeni sekme' metnini ASLA aramaya çevirme. Uygulamanın kendisini açmak için open_app kullan."
+      "KAPATMA YAPMAZ (close/quit/close_tab action YOK — kapatmak için close_app). Yalnız açma/arama: web adresi, arama, YouTube, yeni sekme. 'Yeni sekme aç' = action='new_tab'; aramaya çevirme. Uygulama aç…"
     ],
     "whenNotToUse": [
       "Do not use when required inputs (action) are missing or ambiguous."
@@ -314,7 +363,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "properties": {
         "action": {
           "type": "STRING",
-          "description": "İşlem türü: 'open_url' (belirli adres), 'search' (web araması), 'play_youtube' (YouTube video), 'new_tab' (yeni boş sekme — ARAMA DEĞİLDİR)."
+          "description": "İşlem türü: 'open_url' (belirli adres), 'search' (web araması), 'play_youtube' (YouTube video), 'new_tab' (yeni boş sekme — ARAMA DEĞİLDİR).",
+          "enum": [
+            "open_url",
+            "search",
+            "play_youtube",
+            "new_tab"
+          ]
         },
         "url": {
           "type": "STRING",
@@ -370,6 +425,23 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "github.com'u aç",
+      "şu linki açar mısın",
+      "google'da uçak bileti ara",
+      "yeni sekme aç",
+      "tarayıcıda bu adrese git",
+      "chrome'da şu sayfayı aç",
+      "safaride şunu açar mısın",
+      "open this website"
+    ],
+    "notFor": [
+      "chrome'u kapat",
+      "tarayıcıyı kapat",
+      "tarayıcı hakkında bilgi ver",
+      "internet nasıl çalışır",
+      "sadece web araştırması raporu yaz"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -423,6 +495,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "sayfadaki giriş butonuna tıkla",
+      "şu bağlantıya tıkla",
+      "kabul et butonuna bas"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -463,6 +541,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "tarayıcı oturumunu sonlandır",
+      "otomasyon oturumunu kapat"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -520,6 +603,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bu sayfadan pdf'i indir",
+      "dosyayı siteden indir"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -573,6 +661,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "sayfadaki tüm başlıkları çıkar",
+      "tablodaki verileri topla",
+      "listedeki linkleri al"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -622,6 +716,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "oturumda şu adrese git",
+      "aynı sayfada kalarak bu adrese geç"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -667,6 +766,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "sayfada hangi butonlar var",
+      "tıklanabilir öğeleri listele"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -728,6 +832,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "arama kutusuna elyan yaz",
+      "forma bu metni gir ve enter'a bas"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -751,6 +860,56 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Yalnız tablo/xlsx isteniyorsa spreadsheet_write kullan."
     ],
     "inputContract": {
+      "required": [
+        "outputPath"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "STRING",
+          "description": "Üretilecek PDF/PNG içeriği ve tasarım talimatı."
+        },
+        "outputPath": {
+          "type": "STRING",
+          "description": "Kaydedilecek .pdf veya .png yolu."
+        },
+        "title": {
+          "type": "STRING",
+          "description": "Belgenin/görsel panonun başlığı."
+        },
+        "blocks": {
+          "type": "ARRAY",
+          "description": "Text/table/chart/image blokları; önceki adım çıktıları burada kullanılabilir."
+        },
+        "sections": {
+          "type": "ARRAY",
+          "description": "Rapor bölümleri."
+        },
+        "outputFormat": {
+          "type": "STRING",
+          "description": "pdf veya png."
+        },
+        "width": {
+          "type": "NUMBER",
+          "description": "Genişlik (px)."
+        },
+        "height": {
+          "type": "NUMBER",
+          "description": "Yükseklik (px)."
+        },
+        "sourceContext": {
+          "type": "STRING",
+          "description": "Önceki adım metni veya {{steps.<id>.output}} referansı."
+        },
+        "sourcePath": {
+          "type": "STRING",
+          "description": "Dönüştürülecek kaynak dosya."
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Üzerine yaz."
+        }
+      },
+      "additionalProperties": false,
       "requiredDecision": "outputFormat must be pdf or png",
       "contentFields": [
         "prompt",
@@ -802,6 +961,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "tek sayfalık görsel afiş çıktısı üret",
+      "sayfa düzenli bir png tasarım hazırla"
+    ],
+    "notFor": [],
     "privacyClass": "local_private_write",
     "skillAffinity": [
       "document.pdf_report",
@@ -827,6 +991,33 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Grafikli PDF için chart_generate sonrası canvas_write kullan."
     ],
     "inputContract": {
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING"
+        },
+        "chartType": {
+          "type": "STRING"
+        },
+        "xColumn": {
+          "type": "STRING"
+        },
+        "yColumn": {
+          "type": "STRING"
+        },
+        "title": {
+          "type": "STRING"
+        },
+        "outputPath": {
+          "type": "STRING"
+        },
+        "sourceContext": {
+          "type": "STRING"
+        }
+      },
+      "additionalProperties": false,
       "dataSourceRequired": "path or sourceContext",
       "chartTypeRecommended": true
     },
@@ -864,6 +1055,17 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "yColumn": "gelir"
         }
       }
+    ],
+    "utterances": [
+      "bu verinin grafiğini çiz",
+      "polinomun grafiğini çiz",
+      "sonuçları grafiğe dök",
+      "bar chart oluştur"
+    ],
+    "notFor": [
+      "bana bir manzara resmi çiz",
+      "grafik nedir açıkla",
+      "veriyi analiz et yorumla"
     ],
     "privacyClass": "local_private_write",
     "skillAffinity": []
@@ -910,6 +1112,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "panodaki metni oku",
+      "kopyaladığım şey neydi",
+      "panoda ne var"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -959,6 +1167,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bunu panoya kopyala",
+      "şu metni kopyala da yapıştırayım"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -966,13 +1179,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "name": "close_app",
     "displayName": "Uygulama kapatma",
     "description": "Çalışan bir masaüstü uygulamasını kapatır.",
-    "usage": "Kullanıcı bir uygulamayı kapatmak istediğinde.",
+    "usage": "Kullanıcı bir uygulamayı KAPATMAK istediğinde — tarayıcılar (Chrome/Safari/Brave/Edge) dahil. 'Chrome'u kapat' isteği BUDUR; browser_control kapatma yapamaz.",
     "requiredArgs": [
       "app_name"
     ],
     "requiresApproval": true,
     "whenToUse": [
-      "Kullanıcı bir uygulamayı kapatmak istediğinde."
+      "Kullanıcı bir uygulamayı KAPATMAK istediğinde — tarayıcılar (Chrome/Safari/Brave/Edge) dahil. 'Chrome'u kapat' isteği BUDUR; browser_control kapatma yapamaz."
     ],
     "whenNotToUse": [
       "Do not use when required inputs (app_name) are missing or ambiguous."
@@ -1015,6 +1228,22 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "Chrome'u kapat",
+      "chrome kapansın artık",
+      "tarayıcıyı kapat",
+      "Spotify'ı kapat",
+      "açık olan Word'ü kapat",
+      "şu uygulamadan çık",
+      "quit the app"
+    ],
+    "notFor": [
+      "bilgisayarı kapat",
+      "ekranı kapat",
+      "sistemi kapat",
+      "uygulama nasıl kapatılır",
+      "ayarlardaki bildirimleri kapat"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -1044,7 +1273,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         },
         "mode": {
           "type": "STRING",
-          "description": "'summary', 'profile' veya 'preview'."
+          "description": "'summary', 'profile' veya 'preview'.",
+          "enum": [
+            "summary",
+            "profile",
+            "preview"
+          ]
         },
         "columns": {
           "type": "ARRAY",
@@ -1072,6 +1306,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "şu csv'yi analiz et",
+      "excel verisinin özetini çıkar",
+      "veri setini profille"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1134,6 +1374,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "cuma günkü toplantıyı takvimden sil",
+      "o etkinliği iptal et takvimden kaldır"
+    ],
+    "notFor": [],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -1187,6 +1432,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "hakkımdaki şu kaydı sil",
+      "o bilgiyi hafızandan çıkar"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1240,6 +1490,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "otomasyonu durdur",
+      "yaptığın işlemi iptal et"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1266,6 +1521,42 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "actionType"
       ],
+      "properties": {
+        "actionType": {
+          "type": "STRING"
+        },
+        "targetText": {
+          "type": "STRING"
+        },
+        "elementType": {
+          "type": "STRING"
+        },
+        "bbox": {
+          "type": "OBJECT"
+        },
+        "text": {
+          "type": "STRING"
+        },
+        "keys": {
+          "type": "ARRAY"
+        },
+        "delta": {
+          "type": "NUMBER",
+          "description": "Kaydırma miktarı."
+        },
+        "duration": {
+          "type": "NUMBER",
+          "description": "Süre (sn)."
+        },
+        "appName": {
+          "type": "STRING",
+          "description": "Hedef uygulama."
+        },
+        "reason": {
+          "type": "STRING"
+        }
+      },
+      "additionalProperties": false,
       "targetOrReasonRequired": true,
       "mustDependOnObservation": true
     },
@@ -1286,6 +1577,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "ACTION_BLOCKED"
     ],
     "fewShots": [],
+    "utterances": [
+      "kaydet butonuna tıkla",
+      "şu alana yaz",
+      "aşağı kaydır"
+    ],
+    "notFor": [],
     "privacyClass": "local_private_action",
     "skillAffinity": []
   },
@@ -1336,6 +1633,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "şu pencereyi öne al",
+      "o uygulamaya geç"
+    ],
+    "notFor": [],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -1394,6 +1696,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "ekranda şu butonu bul",
+      "o yazı ekranın neresinde"
+    ],
+    "notFor": [],
     "privacyClass": "local_private_screen",
     "skillAffinity": []
   },
@@ -1414,6 +1721,19 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Tek dosya/görsel için image_read kullan."
     ],
     "inputContract": {
+      "required": [],
+      "properties": {
+        "query": {
+          "type": "STRING"
+        },
+        "target": {
+          "type": "STRING"
+        },
+        "preserveScreenshot": {
+          "type": "BOOLEAN"
+        }
+      },
+      "additionalProperties": false,
       "queryRecommended": true,
       "preserveScreenshotOnlyWhenNeeded": true
     },
@@ -1433,6 +1753,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "NO_ACTIVE_WINDOW"
     ],
     "fewShots": [],
+    "utterances": [
+      "ekran görüntüsü al",
+      "ekranı gözlemle"
+    ],
+    "notFor": [],
     "privacyClass": "local_private_screen",
     "skillAffinity": []
   },
@@ -1458,6 +1783,37 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "goal"
       ],
+      "properties": {
+        "goal": {
+          "type": "STRING"
+        },
+        "action": {
+          "type": "STRING",
+          "description": "Tek eylem kısayolu (varsa)."
+        },
+        "targetText": {
+          "type": "STRING",
+          "description": "Hedef öğe metni (varsa)."
+        },
+        "elementType": {
+          "type": "STRING",
+          "description": "Öğe tipi (varsa)."
+        },
+        "text": {
+          "type": "STRING",
+          "description": "Yazılacak metin (varsa)."
+        },
+        "appName": {
+          "type": "STRING"
+        },
+        "steps": {
+          "type": "ARRAY"
+        },
+        "maxActions": {
+          "type": "NUMBER"
+        }
+      },
+      "additionalProperties": false,
       "goalMustIncludeStopCondition": true,
       "maxActionsRecommended": true
     },
@@ -1488,6 +1844,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "appName": "System Settings"
         }
       }
+    ],
+    "utterances": [
+      "şu uygulamada ayarlara gir ve bildirimleri kapat",
+      "bilgisayarda bu işi adım adım yap",
+      "uygulamada gerekli tıklamaları yaparak tamamla"
+    ],
+    "notFor": [
+      "masaüstü uygulamaları hakkında tavsiye ver",
+      "bilgisayarda yapmadan planla",
+      "uygulamayı kapat"
     ],
     "privacyClass": "local_private_action",
     "skillAffinity": []
@@ -1529,6 +1895,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "şu anda hangi uygulama önde",
+      "aktif pencere hangisi",
+      "hangi ekrandayım"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1574,6 +1946,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "ayarlardan ekran kaydı iznini aç",
+      "sistem izin ekranını aç",
+      "erişilebilirlik ayarlarına götür beni"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1614,6 +1992,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "hangi izinler eksik",
+      "erişim izinleri tamam mı",
+      "izin durumunu kontrol et"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1663,6 +2047,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "açık uygulamaları listele",
+      "arka planda neler çalışıyor",
+      "hangi programlar açık şu an"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1703,6 +2093,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "masaüstü entegrasyonu çalışıyor mu",
+      "yerel yetenekler hazır mı"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1723,6 +2118,19 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Belge metni okumak için document_read/file_read kullan."
     ],
     "inputContract": {
+      "required": [],
+      "properties": {
+        "path": {
+          "type": "STRING"
+        },
+        "max_depth": {
+          "type": "NUMBER"
+        },
+        "max_entries": {
+          "type": "NUMBER"
+        }
+      },
+      "additionalProperties": false,
       "defaults": {
         "path": "workspace",
         "max_depth": 3
@@ -1744,6 +2152,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TOO_MANY_ENTRIES"
     ],
     "fewShots": [],
+    "utterances": [
+      "proje klasörünün yapısını göster",
+      "indirilenler klasöründe ne var",
+      "bu dizindeki dosyaları listele"
+    ],
+    "notFor": [
+      "yeni klasör oluştur",
+      "dosya içeriğinde metin ara"
+    ],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -1769,6 +2186,22 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "path"
       ],
+      "properties": {
+        "path": {
+          "type": "STRING"
+        },
+        "text": {
+          "type": "STRING",
+          "description": "Doğrudan metin verilecekse (path yerine)."
+        },
+        "mode": {
+          "type": "STRING"
+        },
+        "max_chars": {
+          "type": "NUMBER"
+        }
+      },
+      "additionalProperties": false,
       "selectedPathsAllowed": true
     },
     "outputContract": {
@@ -1794,6 +2227,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "EMPTY_DOCUMENT"
     ],
     "fewShots": [],
+    "utterances": [
+      "şu pdf'i özetle",
+      "raporun içindekileri oku bana anlat",
+      "bu docx'te ne yazıyor"
+    ],
+    "notFor": [
+      "pdf raporu oluştur",
+      "belge nasıl okunur anlat",
+      "sayfadan dosya indir"
+    ],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -1815,6 +2258,46 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Tablo/xlsx isteniyorsa spreadsheet_write kullan."
     ],
     "inputContract": {
+      "required": [],
+      "properties": {
+        "prompt": {
+          "type": "STRING",
+          "description": "Belge içeriği/talimatı."
+        },
+        "outputPath": {
+          "type": "STRING",
+          "description": "Kaydedilecek .docx veya .pdf yolu."
+        },
+        "outputFormat": {
+          "type": "STRING",
+          "description": "docx veya pdf."
+        },
+        "title": {
+          "type": "STRING",
+          "description": "Belge başlığı."
+        },
+        "sections": {
+          "type": "ARRAY",
+          "description": "Başlık ve gövdeden oluşan bölümler."
+        },
+        "blocks": {
+          "type": "ARRAY",
+          "description": "Text/table/chart/image blokları."
+        },
+        "sourcePath": {
+          "type": "STRING",
+          "description": "Dönüştürülecek/özetlenecek kaynak belge."
+        },
+        "sourceContext": {
+          "type": "STRING",
+          "description": "Önceki adım çıktısı veya kullanıcı metni."
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Var olan dosyanın üzerine yaz."
+        }
+      },
+      "additionalProperties": false,
       "contentFields": [
         "prompt",
         "sections",
@@ -1866,6 +2349,17 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "prompt": "Elektrikli araç pazarı hakkında 1 sayfalık özet"
         }
       }
+    ],
+    "utterances": [
+      "masaüstüne pdf rapor hazırla",
+      "bunu word belgesi yap",
+      "bir rapor dosyası oluştur ve kaydet"
+    ],
+    "notFor": [
+      "pdf nedir açıkla",
+      "word belgesi nasıl hazırlanır",
+      "belgeyi oku ve özetle",
+      "excel tablosu oluştur"
     ],
     "privacyClass": "local_private_write",
     "skillAffinity": [
@@ -1946,6 +2440,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "müşteriye e-posta taslağı hazırla",
+      "şöyle bir mail yaz ama gönderme"
+    ],
+    "notFor": [
+      "maili şimdi gönder"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2024,6 +2525,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "maili gönder",
+      "e-postayı yolla artık"
+    ],
+    "notFor": [
+      "e-posta taslağı hazırla ama gönderme",
+      "mail nasıl atılır"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -2083,6 +2592,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bu dosyayı masaüstüne taşı",
+      "dosyanın adını rapor_final yap",
+      "şunu arşiv klasörüne al"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2146,6 +2661,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "şu satırı dosyada değiştir",
+      "config.json'daki değeri güncelle",
+      "dosyadaki bu ifadeyi şununla değiştir"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2171,6 +2692,21 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "path"
       ],
+      "properties": {
+        "path": {
+          "type": "STRING"
+        },
+        "max_bytes": {
+          "type": "NUMBER"
+        },
+        "start_line": {
+          "type": "NUMBER"
+        },
+        "end_line": {
+          "type": "NUMBER"
+        }
+      },
+      "additionalProperties": false,
       "largeFiles": "use max_bytes or line range"
     },
     "outputContract": {
@@ -2195,6 +2731,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "path": "/Users/x/Desktop/notlar.txt"
         }
       }
+    ],
+    "utterances": [
+      "package.json'u oku",
+      "şu dosyanın içeriğini göster",
+      "koddaki bu dosyayı aç bakalım"
+    ],
+    "notFor": [
+      "dosyayı bul nerede",
+      "pdf belgeyi özetle",
+      "dosyaya yaz"
     ],
     "privacyClass": "local_private_read",
     "skillAffinity": []
@@ -2221,6 +2767,28 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "query"
       ],
+      "properties": {
+        "query": {
+          "type": "STRING"
+        },
+        "path": {
+          "type": "STRING"
+        },
+        "glob": {
+          "type": "STRING"
+        },
+        "regex": {
+          "type": "BOOLEAN"
+        },
+        "case_sensitive": {
+          "type": "BOOLEAN",
+          "description": "Büyük/küçük harf duyarlı."
+        },
+        "max_results": {
+          "type": "NUMBER"
+        }
+      },
+      "additionalProperties": false,
       "optionalScope": [
         "path",
         "glob"
@@ -2249,6 +2817,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "projede TODO geçen yerleri bul",
+      "son indirdiğim dosyayı bul",
+      "bu metnin geçtiği dosyaları ara",
+      "dosyalarımın içinde arama yap"
+    ],
+    "notFor": [
+      "internette ara",
+      "dosyanın içeriğini oku"
+    ],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -2274,6 +2852,18 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "path"
       ],
+      "properties": {
+        "path": {
+          "type": "STRING"
+        },
+        "content": {
+          "type": "STRING"
+        },
+        "overwrite": {
+          "type": "BOOLEAN"
+        }
+      },
+      "additionalProperties": false,
       "contentRequiredUnlessEmptyFile": true,
       "overwriteMustBeExplicit": true
     },
@@ -2301,6 +2891,17 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "WRITE_BLOCKED"
     ],
     "fewShots": [],
+    "utterances": [
+      "notes.txt diye bir dosya oluştur içine merhaba yaz",
+      "şunu bir metin dosyasına kaydet",
+      "yeni bir kod dosyası yaz"
+    ],
+    "notFor": [
+      "pdf rapor hazırla",
+      "excel dosyası oluştur",
+      "kaydetmeden sadece anlat",
+      "klasör oluştur"
+    ],
     "privacyClass": "local_private_write",
     "skillAffinity": []
   },
@@ -2361,6 +2962,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "bu haftaki etkinliklerim neler",
+      "yarın programım nasıl",
+      "takvimimde ne var"
+    ],
+    "notFor": [
+      "takvime etkinlik ekle",
+      "etkinliği sil"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2418,6 +3028,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "hatırlatıcılarımı göster",
+      "yapılacaklar listemde ne var"
+    ],
+    "notFor": [
+      "hatırlatıcı kur",
+      "bana anımsat"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2469,6 +3087,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "bugün hava nasıl",
+      "yarın yağmur var mı",
+      "İstanbul'da hava kaç derece"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2522,6 +3146,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "kanalımın son video performansını raporla",
+      "youtube istatistiklerimi göster"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2579,6 +3208,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "yeni bir branch aç",
+      "dal oluştur ve ona geç"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2636,6 +3270,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "değişiklikleri commit'le",
+      "şu mesajla kaydet depoya"
+    ],
+    "notFor": [
+      "git durumuna bak",
+      "commit nedir açıkla"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2689,6 +3331,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "ne değişmiş göster",
+      "farkları görmek istiyorum"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2734,6 +3381,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "git durumuna bak",
+      "depoda ne durumdayız",
+      "hangi dosyalar değişmiş"
+    ],
+    "notFor": [
+      "git nedir",
+      "değişiklikleri commit'le"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2759,8 +3415,48 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "inputContract": {
       "required": [
-        "prompt"
+        "prompt",
+        "sourcePath"
       ],
+      "properties": {
+        "prompt": {
+          "type": "STRING"
+        },
+        "sourcePath": {
+          "type": "STRING",
+          "description": "Düzenlenecek ana görsel yolu."
+        },
+        "sourcePaths": {
+          "type": "ARRAY",
+          "description": "İsteğe bağlı ek referans görsel yolları."
+        },
+        "outputPath": {
+          "type": "STRING"
+        },
+        "title": {
+          "type": "STRING",
+          "description": "Çıktı başlığı/dosya adı."
+        },
+        "aspectRatio": {
+          "type": "STRING",
+          "description": "Çıktı en-boy oranı."
+        },
+        "imageSize": {
+          "type": "STRING",
+          "description": "Çözünürlük: '1K', '2K' veya '4K'."
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Üzerine yaz."
+        },
+        "imagePath": {
+          "type": "STRING"
+        },
+        "sourceImagePath": {
+          "type": "STRING"
+        }
+      },
+      "additionalProperties": false,
       "sourceImageRequired": "imagePath or latestArtifactRef.imagePath",
       "mustPreserveSubject": true
     },
@@ -2796,6 +3492,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "bu görseldeki arka planı değiştir",
+      "resme şunu ekle",
+      "az önceki görseli düzelt"
+    ],
+    "notFor": [],
     "privacyClass": "external_model_optional",
     "skillAffinity": []
   },
@@ -2857,6 +3559,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "eyfel kulesinin gerçek fotoğrafını indir",
+      "bu konuda gerçek bir fotoğraf bul ve kaydet"
+    ],
+    "notFor": [
+      "hayali bir görsel üret",
+      "çizim yap"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2882,6 +3592,58 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "prompt"
       ],
+      "properties": {
+        "prompt": {
+          "type": "STRING"
+        },
+        "outputPath": {
+          "type": "STRING"
+        },
+        "title": {
+          "type": "STRING",
+          "description": "Görsel başlığı/dosya adı."
+        },
+        "aspectRatio": {
+          "type": "STRING",
+          "description": "En-boy oranı, örn. '1:1', '16:9' veya '9:16'.",
+          "enum": [
+            "1:1",
+            "1:4",
+            "1:8",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:1",
+            "4:3",
+            "4:5",
+            "5:4",
+            "8:1",
+            "9:16",
+            "16:9",
+            "21:9"
+          ]
+        },
+        "imageSize": {
+          "type": "STRING",
+          "description": "Çözünürlük: '1K', '2K' veya açık istekle '4K'.",
+          "enum": [
+            "1K",
+            "2K",
+            "4K"
+          ]
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Üzerine yaz."
+        },
+        "size": {
+          "type": "STRING"
+        },
+        "style": {
+          "type": "STRING"
+        }
+      },
+      "additionalProperties": false,
       "promptMustBeFullVisualSpec": true,
       "followUpMustReusePreviousPrompt": true
     },
@@ -2917,6 +3679,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "bana bir kedi resmi çiz",
+      "şöyle bir görsel üret",
+      "hayali bir manzara tasarla"
+    ],
+    "notFor": [
+      "verinin grafiğini çiz",
+      "gerçek bir fotoğrafını bul",
+      "bu görselde ne yazıyor"
+    ],
     "privacyClass": "external_model_optional",
     "skillAffinity": []
   },
@@ -2942,6 +3714,24 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "path"
       ],
+      "properties": {
+        "path": {
+          "type": "STRING"
+        },
+        "mode": {
+          "type": "STRING",
+          "description": "'summary' (açıklama), 'metadata' veya 'palette' (renkler).",
+          "enum": [
+            "summary",
+            "metadata",
+            "palette"
+          ]
+        },
+        "query": {
+          "type": "STRING"
+        }
+      },
+      "additionalProperties": false,
       "queryOptional": true
     },
     "outputContract": {
@@ -2961,6 +3751,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "LOW_CONFIDENCE"
     ],
     "fewShots": [],
+    "utterances": [
+      "bu fotoğrafta ne var",
+      "görseli analiz et",
+      "resimde neler görüyorsun"
+    ],
+    "notFor": [],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -2990,7 +3786,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         },
         "mode": {
           "type": "STRING",
-          "description": "'parse' veya 'normalize'."
+          "description": "'parse' veya 'normalize'.",
+          "enum": [
+            "parse",
+            "normalize"
+          ]
         }
       },
       "additionalProperties": false
@@ -3014,6 +3814,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bu latex ifadesini normalize et",
+      "formülü sembolik forma çevir"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3063,6 +3868,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "Masaüstünde Cabir adında klasör oluştur",
+      "yeni bir klasör aç adı Arşiv olsun",
+      "şuraya bir dizin yarat"
+    ],
+    "notFor": [
+      "klasördeki dosyaları listele",
+      "klasör yapısını göster"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3089,6 +3903,22 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "expression"
       ],
+      "properties": {
+        "expression": {
+          "type": "STRING"
+        },
+        "mode": {
+          "type": "STRING",
+          "enum": [
+            "solve",
+            "simplify",
+            "factor",
+            "expand",
+            "evaluate"
+          ]
+        }
+      },
+      "additionalProperties": false,
       "expressionMustBeConcrete": true,
       "examples": [
         "12000+8500",
@@ -3117,6 +3947,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "expression": "12 * (3 + 4)"
         }
       }
+    ],
+    "utterances": [
+      "x^2 + 3x - 4 = 0 çöz",
+      "türevini al",
+      "şu ifadeyi sadeleştir",
+      "hesapla: 12000+8500"
+    ],
+    "notFor": [
+      "matematik nasıl çalışılır",
+      "grafiğini çiz"
     ],
     "privacyClass": "local_safe_compute",
     "skillAffinity": [
@@ -3180,6 +4020,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bağlı mcp aracını çağır",
+      "harici entegrasyondaki aracı kullan"
+    ],
+    "notFor": [],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -3241,6 +4086,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "taranmış faturadaki yazıyı çıkar",
+      "bu görüntüdeki metni oku",
+      "fotoğraftaki yazıyı metne çevir"
+    ],
+    "notFor": [],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -3301,6 +4152,19 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "app_name": "Notes"
         }
       }
+    ],
+    "utterances": [
+      "Finder'ı açar mısın",
+      "Spotify uygulamasını başlat",
+      "Notlar'ı aç",
+      "hesap makinesini açsana",
+      "open the Notes app"
+    ],
+    "notFor": [
+      "yeni bir klasör aç",
+      "yeni bir branch aç",
+      "terminal oturumu aç",
+      "bu adresi aç"
     ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
@@ -3367,6 +4231,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "şu şarkıyı çal",
+      "spotify'da çalma listemi başlat",
+      "youtube'da lofi aç",
+      "müzik aç"
+    ],
+    "notFor": [
+      "spotify'ı kapat",
+      "müzik uygulaması nasıl kullanılır"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -3387,6 +4261,32 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Word raporu için document_write kullan."
     ],
     "inputContract": {
+      "required": [],
+      "properties": {
+        "prompt": {
+          "type": "STRING"
+        },
+        "outputPath": {
+          "type": "STRING"
+        },
+        "title": {
+          "type": "STRING"
+        },
+        "slides": {
+          "type": "ARRAY"
+        },
+        "blocks": {
+          "type": "ARRAY"
+        },
+        "sourceContext": {
+          "type": "STRING"
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Üzerine yaz."
+        }
+      },
+      "additionalProperties": false,
       "contentFields": [
         "prompt",
         "slides",
@@ -3429,6 +4329,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "sunum hazırla 10 slayt olsun",
+      "bunu powerpoint'e dök",
+      "slaytlara böl"
+    ],
+    "notFor": [],
     "privacyClass": "local_private_write",
     "skillAffinity": [
       "presentation.deck_from_context"
@@ -3480,6 +4386,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "kuantum sonucunu klasikle karşılaştır",
+      "klasik baseline'a göre nasıl"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3533,6 +4444,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "kuantum deneyi için teknik rapor üret",
+      "deney metriklerini raporla"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3586,6 +4502,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bu optimizasyon problemini qubo modeline dök",
+      "ising formülasyonuna çevir"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3643,6 +4564,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "qaoa deneyini çalıştır",
+      "vqe simülasyonunu koştur"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3704,6 +4630,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "daha önce bu konuda ne konuşmuştuk",
+      "geçen seferki notlarıma bak"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3729,6 +4660,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "skillId"
       ],
+      "properties": {
+        "skillId": {
+          "type": "STRING"
+        },
+        "payload": {
+          "type": "OBJECT"
+        }
+      },
+      "additionalProperties": false,
       "skillIdMustExistInCatalog": true,
       "payloadMustSatisfyRequiredParameters": true
     },
@@ -3751,6 +4691,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "STEP_FAILED"
     ],
     "fewShots": [],
+    "utterances": [
+      "hazır iş akışını çalıştır",
+      "katalogdaki o beceriyi uygula"
+    ],
+    "notFor": [
+      "sen neler yapabiliyorsun",
+      "yeteneklerini anlat"
+    ],
     "privacyClass": "local_private_mixed",
     "skillAffinity": []
   },
@@ -3818,6 +4766,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "kahve sevmediğimi unutma",
+      "bunu aklında tut",
+      "beni böyle bilmeni istiyorum"
+    ],
+    "notFor": [
+      "hafızandaki kaydı sil",
+      "daha önce ne konuşmuştuk",
+      "numarayı kişi olarak kaydet"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -3878,6 +4836,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bu numarayı Ayşe olarak kaydet",
+      "kişiyi rehbere ekle"
+    ],
+    "notFor": [
+      "kişiye mesaj gönder",
+      "hakkımda bir bilgi kaydet"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -3944,6 +4910,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "Ahmet'e whatsapp'tan geç kalacağımı yaz",
+      "şu kişiye mesaj at",
+      "whatsapp'tan haber ver"
+    ],
+    "notFor": [
+      "whatsapp nasıl kullanılır",
+      "kişiyi rehbere kaydet",
+      "e-posta gönder"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -4014,6 +4990,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "npm install çalıştır",
+      "şu komutu terminalde koştur"
+    ],
+    "notFor": [
+      "terminal nedir",
+      "komut çalıştırmadan anlat"
+    ],
     "privacyClass": "permission_gated",
     "skillAffinity": []
   },
@@ -4063,6 +5047,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "terminal oturumunu kapat",
+      "kabuğu sonlandır"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -4118,6 +5107,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "kalıcı terminal oturumu aç",
+      "çalışma dizini korunsun bir kabuk başlat"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -4184,6 +5178,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "aynı terminalde testleri koştur",
+      "açık oturumda şu komutu çalıştır"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -4237,6 +5236,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "mikrofonu aç kayıt başlat",
+      "ses kaydını durdur"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -4294,6 +5298,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "ses kaydını yazıya dök",
+      "bu kaydı metne çevir",
+      "dikte ettiğimi yaz"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -4315,6 +5325,35 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Grafik görseli tek başına isteniyorsa chart_generate kullan."
     ],
     "inputContract": {
+      "required": [],
+      "properties": {
+        "prompt": {
+          "type": "STRING"
+        },
+        "outputPath": {
+          "type": "STRING"
+        },
+        "title": {
+          "type": "STRING"
+        },
+        "columns": {
+          "type": "ARRAY"
+        },
+        "rows": {
+          "type": "ARRAY"
+        },
+        "sourceContext": {
+          "type": "STRING"
+        },
+        "overwrite": {
+          "type": "BOOLEAN",
+          "description": "Üzerine yaz."
+        },
+        "sheets": {
+          "type": "ARRAY"
+        }
+      },
+      "additionalProperties": false,
       "structuredInputs": [
         "sheets",
         "columns",
@@ -4356,6 +5395,16 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "prompt": "Gelir-gider tablosu, 3 aylık"
         }
       }
+    ],
+    "utterances": [
+      "excel tablosu oluştur",
+      "xlsx olarak kaydet",
+      "bu verileri bir çalışma kitabına yaz"
+    ],
+    "notFor": [
+      "verinin grafiğini çiz",
+      "excel nedir",
+      "tabloyu oku ve analiz et"
     ],
     "privacyClass": "local_private_write",
     "skillAffinity": [
@@ -4414,6 +5463,17 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
+    "utterances": [
+      "pil yüzde kaç",
+      "diskte ne kadar yer kalmış",
+      "bilgisayarın RAM'i ne durumda",
+      "saat kaç",
+      "battery status"
+    ],
+    "notFor": [
+      "bilgisayar nasıl hızlandırılır",
+      "açık uygulamaları listele"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -4440,6 +5500,18 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "prompt"
       ],
+      "properties": {
+        "prompt": {
+          "type": "STRING"
+        },
+        "sourceContext": {
+          "type": "STRING"
+        },
+        "mode": {
+          "type": "STRING"
+        }
+      },
+      "additionalProperties": false,
       "sourceContextRecommended": true
     },
     "outputContract": {
@@ -4459,6 +5531,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "INSUFFICIENT_CONTEXT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bulguları karar odaklı özete çevir",
+      "bunu profesyonel bir değerlendirmeye dönüştür",
+      "riskleri çıkar ve yorumla"
+    ],
+    "notFor": [],
     "privacyClass": "local_or_server_context",
     "skillAffinity": []
   },
@@ -4520,6 +5598,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "TIMEOUT"
     ],
     "fewShots": [],
+    "utterances": [
+      "bu metni sesli oku",
+      "yüksek sesle okur musun"
+    ],
+    "notFor": [],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -4545,6 +5628,18 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [
         "query"
       ],
+      "properties": {
+        "query": {
+          "type": "STRING"
+        },
+        "max_results": {
+          "type": "NUMBER"
+        },
+        "language_hint": {
+          "type": "STRING"
+        }
+      },
+      "additionalProperties": false,
       "queryMustBePublic": true,
       "maxPrivateData": "none"
     },
@@ -4576,6 +5671,17 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "language_hint": "tr"
         }
       }
+    ],
+    "utterances": [
+      "bu konuyu internetten araştır ve kaynak ver",
+      "kuantum bilgisayarlar hakkında kaynak topla",
+      "güncel bilgileri webden derle",
+      "research this topic with sources"
+    ],
+    "notFor": [
+      "tarayıcıda siteyi aç",
+      "yerel dosyalarda ara",
+      "internete bakma kendi bilginle cevapla"
     ],
     "privacyClass": "public_web",
     "skillAffinity": []

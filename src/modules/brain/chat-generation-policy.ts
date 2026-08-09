@@ -61,6 +61,23 @@ export function getChatGenerationQueueLimits(
   };
 }
 
+/**
+ * GROQ_API_KEY accepts a comma-separated pool. Each key has its own provider
+ * quota, while the single-key deployment keeps the existing limit unchanged.
+ */
+export function getGroqProviderKeyCount(app: FastifyInstance): number {
+  const raw = String(app.config.GROQ_API_KEY ?? "");
+  return countProviderKeys(raw);
+}
+
+export function getGeminiProviderKeyCount(app: FastifyInstance): number {
+  return countProviderKeys(String(app.config.GEMINI_API_KEY ?? ""));
+}
+
+function countProviderKeys(raw: string): number {
+  return Math.max(1, raw.split(",").map((entry) => entry.trim()).filter(Boolean).length);
+}
+
 export function getChatGenerationTiming(
   workload: SharedBrainWorkload,
 ): ChatGenerationTiming {
@@ -121,4 +138,22 @@ export function chatGenerationProviderForStage(
   stage: ChatGenerationProviderStage,
 ): "groq" | "gemini" {
   return stage === "primary" ? "groq" : "gemini";
+}
+
+/**
+ * BullMQ uses a lower number as a higher priority. Keep short conversational
+ * turns ahead of long-running planning and artifact jobs while leaving the
+ * provider rate limits and admission gates as the actual capacity boundary.
+ */
+export function chatGenerationQueuePriority(
+  workload?: SharedBrainWorkload,
+): number {
+  if (workload === "mobile_chat_fast" || workload === "fast_route") return 1;
+  if (
+    workload === "mobile_chat_balanced" ||
+    workload === "mobile_chat_deep_refine"
+  ) {
+    return 5;
+  }
+  return 10;
 }

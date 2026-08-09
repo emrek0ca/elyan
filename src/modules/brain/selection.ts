@@ -36,6 +36,23 @@ export type SharedBrainSelection = {
   trainingPlan: Record<string, unknown> | null;
 };
 
+// Model artifacts change through explicit mutation paths, which invalidate
+// this cache. A longer TTL keeps ordinary turns from reopening the same two
+// artifact queries for every user while preserving mutation freshness.
+const SHARED_BRAIN_SELECTION_CACHE_TTL_MS = 30_000;
+const SHARED_BRAIN_SELECTION_CACHE_MAX_ENTRIES = 4_096;
+
+type SelectionCacheEntry = {
+  value?: SharedBrainSelection;
+  expiresAt: number;
+  pending?: Promise<SharedBrainSelection>;
+};
+
+const selectionCache = new WeakMap<
+  FastifyInstance,
+  Map<string, SelectionCacheEntry>
+>();
+
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
@@ -81,7 +98,58 @@ export function isCompleteReadyBrainModelArtifact(model: BrainModelRow | null | 
   );
 }
 
-export async function resolveSharedBrainSelection(app: FastifyInstance, userId: string): Promise<SharedBrainSelection> {
+export function invalidateSharedBrainSelection(
+  app: FastifyInstance,
+  userId?: string,
+): void {
+  if (userId) {
+    selectionCache.get(app)?.delete(userId);
+  } else {
+    selectionCache.delete(app);
+  }
+}
+
+export async function resolveSharedBrainSelection(
+  app: FastifyInstance,
+  userId: string,
+): Promise<SharedBrainSelection> {
+  let cache = selectionCache.get(app);
+  if (!cache) {
+    cache = new Map();
+    selectionCache.set(app, cache);
+  }
+  const now = Date.now();
+  const cached = cache.get(userId);
+  if (cached?.value && cached.expiresAt > now) {
+    return cached.value;
+  }
+  if (cached?.pending) {
+    return cached.pending;
+  }
+
+  if (!cached && cache.size >= SHARED_BRAIN_SELECTION_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey === "string") cache.delete(oldestKey);
+  }
+  const pending = querySharedBrainSelection(app, userId);
+  cache.set(userId, { expiresAt: 0, pending });
+  try {
+    const value = await pending;
+    cache.set(userId, {
+      value,
+      expiresAt: Date.now() + SHARED_BRAIN_SELECTION_CACHE_TTL_MS,
+    });
+    return value;
+  } catch (error) {
+    cache.delete(userId);
+    throw error;
+  }
+}
+
+async function querySharedBrainSelection(
+  app: FastifyInstance,
+  userId: string,
+): Promise<SharedBrainSelection> {
   const [models, warmupJobs] = await Promise.all([
     app.db
       .select({

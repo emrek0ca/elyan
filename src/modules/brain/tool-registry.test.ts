@@ -222,6 +222,9 @@ test("tool selection catalog excludes irrelevant and disconnected tools", () => 
     desiredOutputKinds: ["chat_reply"],
     advertisedConnectorTools: [],
     includeCoreTools: true,
+    // Web araçları artık ayrı bir kapıdan geçiyor (`webToolsAllowed`);
+    // üretimde bunu `inference.ts` turun gerçek web ihtiyacına göre kuruyor.
+    webToolsAllowed: true,
   });
   assert.equal(research.some((tool) => tool.name === "web.search"), true);
   assert.equal(research.some((tool) => tool.name === "memory.write"), false);
@@ -325,6 +328,7 @@ test("tool selection catalog requires explicit side-effect intent and fails clos
     intent: "chat",
     sideEffectRequested: true,
     advertisedConnectorTools: ["gmail.send"],
+    connectorWriteHint: { tool: "gmail.send", score: 0.94 },
     includeCoreTools: true,
   });
   assert.equal(explicitWrite.some((tool) => tool.name === "gmail.send"), true);
@@ -334,6 +338,7 @@ test("tool selection catalog requires explicit side-effect intent and fails clos
     intent: "chat",
     sideEffectRequested: true,
     advertisedConnectorTools: ["gmail.send", "calendar.create_event"],
+    connectorWriteHint: { tool: "gmail.send", score: 0.94 },
     includeCoreTools: true,
   });
   assert.deepEqual(mixedWrites.map((tool) => tool.name), ["gmail.send"]);
@@ -398,6 +403,7 @@ test("tool selection deterministically matches every existing read connector wid
       intent: "chat",
       desiredOutputKinds: ["chat_reply"],
       advertisedConnectorTools: [fixture.tool],
+      connectorReadHint: { tool: fixture.tool, score: 0.94 },
       includeCoreTools: false,
     });
     assert.deepEqual(

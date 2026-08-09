@@ -45,7 +45,20 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
     workload: "fast_route",
     timeoutMs: 5_500,
     firstDeltaBudgetMs: 1_800,
-    maxTokens: 140,
+    // 140 → 700. Bu iş yükü semantik YÖNLENDİRİCİYİ koşturur ve ondan iç içe
+    // `semanticDesktopContract` alanı olan bir JSON nesnesi ister. 140 token o
+    // şemayı yazmaya YETMİYORDU: ölçüm (2026-08-08, llama-3.1-8b-instant,
+    // gerçek router prompt'u) → max_tokens=140 `finish_reason=length` ile
+    // JSON'u ortasında kesiyor, çıktı geçersiz oluyor ve tur "yanıt
+    // oluşturamadım" fallback'ine düşüyordu; max_tokens=700 ile aynı model
+    // `finish_reason=stop` ve GEÇERLİ JSON döndürüp doğru cevabı
+    // ("desktop_runtime") veriyor.
+    //
+    // Yani yönlendirici yanlış karar vermiyordu — kararını YAZMAYI
+    // bitiremiyordu. Bu tek sayı yüzünden hiçbir görev masaüstüne
+    // yönlenmiyordu. max_tokens bir TAVANdır: kısa çıktı stop token'da erken
+    // biter, fatura gerçek kullanımadır — tavanı yükseltmek maliyeti artırmaz.
+    maxTokens: 700,
     streamingEnabled: true,
     cachePolicy: "safe_ephemeral",
     fallbackWorkload: "mobile_chat_fast",

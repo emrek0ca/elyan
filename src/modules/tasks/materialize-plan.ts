@@ -9,7 +9,10 @@ import {
   normalizeRuntimeCapabilities,
   supportsRequestedCapabilities,
 } from "../runtime/capabilities.js";
-import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
+import {
+  DESKTOP_CAPABILITY_MANIFEST,
+  type DesktopCapabilityManifestEntry,
+} from "./desktop-capability-manifest.js";
 import { DESKTOP_SKILL_MANIFEST } from "./desktop-skill-manifest.js";
 import {
   MAX_WORK_ORDER_STEPS,
@@ -665,6 +668,56 @@ function limitUtf8Lines(value: string, maxBytes: number): string {
   return selected.join("\n");
 }
 
+/**
+ * Katalogda tekrar eden alanları tespit eder.
+ *
+ * `verificationPlan` 81 yeteneğin 60'ında birebir aynı ("Structured result
+ * must return ok=true…"), `liveNarration` da öyle. Her planlama çağrısında
+ * bunları basmak token yakar ve modele hiçbir ayırt edici bilgi vermez —
+ * üstelik yeri, gerçekten ayırt edici olan kullanıcı-dili örneklerinden
+ * çalınmış olur.
+ *
+ * Sabit metin listelemek yerine frekansla karar veriyoruz: katalog değişince
+ * kural kendini günceller, elle bakım gerekmez.
+ */
+const BOILERPLATE_SHARE_THRESHOLD = 0.25;
+
+function buildBoilerplateSet(
+  read: (entry: DesktopCapabilityManifestEntry) => string[],
+): Set<string> {
+  const counts = new Map<string, number>();
+  for (const entry of DESKTOP_CAPABILITY_MANIFEST) {
+    const value = read(entry);
+    if (value.length === 0) continue;
+    const key = JSON.stringify(value);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const limit = DESKTOP_CAPABILITY_MANIFEST.length * BOILERPLATE_SHARE_THRESHOLD;
+  const shared = new Set<string>();
+  for (const [key, count] of counts.entries()) {
+    if (count > limit) shared.add(key);
+  }
+  return shared;
+}
+
+let boilerplateVerification: Set<string> | null = null;
+let boilerplateNarration: Set<string> | null = null;
+
+function isSharedBoilerplate(
+  value: string[],
+  kind: "verify" | "live",
+): boolean {
+  if (value.length === 0) return true;
+  if (kind === "verify") {
+    boilerplateVerification ??= buildBoilerplateSet(
+      (entry) => entry.verificationPlan,
+    );
+    return boilerplateVerification.has(JSON.stringify(value));
+  }
+  boilerplateNarration ??= buildBoilerplateSet((entry) => entry.liveNarration);
+  return boilerplateNarration.has(JSON.stringify(value));
+}
+
 function renderCapabilityCatalog(
   allowed: Set<string>,
   detailed: Set<string> = allowed,
@@ -707,13 +760,23 @@ function renderCapabilityCatalog(
         Object.keys(entry.artifactContract).length > 0
           ? ` | artifact: ${compactCatalogValue(entry.artifactContract, 220)}`
           : "";
-      const verify =
-        entry.verificationPlan.length > 0
-          ? ` | verify: ${compactCatalogValue(entry.verificationPlan, 260)}`
+      const verify = isSharedBoilerplate(entry.verificationPlan, "verify")
+        ? ""
+        : ` | verify: ${compactCatalogValue(entry.verificationPlan, 260)}`;
+      const live = isSharedBoilerplate(entry.liveNarration, "live")
+        ? ""
+        : ` | live: ${compactCatalogValue(entry.liveNarration, 180)}`;
+      // Kullanıcı-dili örnekleri. Modelin asıl zorlandığı yer, resmî beyan ile
+      // gerçek cümle arasındaki mesafeydi ("şarj" ↔ "pil", "ajanda" ↔
+      // "takvim"). Örnek cümle bu mesafeyi düzyazı açıklamadan çok daha
+      // ucuza kapatır; boşalan token bütçesi de buradan geliyor.
+      const phrases =
+        entry.utterances.length > 0
+          ? ` | said as: ${entry.utterances.slice(0, 5).join(" / ")}`
           : "";
-      const live =
-        entry.liveNarration.length > 0
-          ? ` | live: ${compactCatalogValue(entry.liveNarration, 180)}`
+      const notFor =
+        entry.notFor.length > 0
+          ? ` | NOT for: ${entry.notFor.slice(0, 4).join(" / ")}`
           : "";
       const privacyDetail = entry.privacyClass
         ? ` | privacy: ${entry.privacyClass}`
@@ -726,7 +789,7 @@ function renderCapabilityCatalog(
         entry.fewShots.length > 0
           ? ` | example: ${compactCatalogValue(entry.fewShots[0], 260)}`
           : "";
-      return `- ${entry.name}: ${entry.description}${usage}${req}${approval}${when}${avoid}${input}${output}${artifact}${verify}${live}${privacyDetail}${skills}${example}`;
+      return `- ${entry.name}: ${entry.description}${usage}${req}${approval}${when}${avoid}${phrases}${notFor}${input}${output}${artifact}${verify}${live}${privacyDetail}${skills}${example}`;
     })
     .join("\n");
 }

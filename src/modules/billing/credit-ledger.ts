@@ -1,8 +1,8 @@
 import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { billingCreditLedger } from "../../db/schema.js";
+import type { BillingReadDb } from "./subscription-repository.js";
 
-type BillingReadDb = Pick<FastifyInstance["db"], "select">;
 type BillingWriteDb = Pick<FastifyInstance["db"], "select" | "insert">;
 
 export type CreditStatus = "available" | "depleted" | "trial" | "inactive";

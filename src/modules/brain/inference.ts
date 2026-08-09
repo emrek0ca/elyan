@@ -22,6 +22,7 @@ import {
 import {
   assertSharedBrainUsageBudgetAllowed,
   getSharedBrainUsageBudget,
+  type UsageAccessTruth,
 } from "../billing/service.js";
 import { assertAiDataSharingConsent } from "../consents/service.js";
 import { normalizePlanBrainProfile } from "../billing/catalog.js";
@@ -98,8 +99,9 @@ import {
   getAgentToolMetadata,
 } from "./tool-registry.js";
 import {
-  selectSemanticCoreToolHint,
+  selectSemanticCoreToolDecision,
   type CoreToolHint,
+  type SemanticCoreToolDecision,
 } from "./tool-semantic.js";
 import {
   connectorContractsForSemanticReadHint,
@@ -107,10 +109,16 @@ import {
   connectorWriteToolsForCapabilityGrants,
   isConnectorTool,
   selectSemanticConnectorReadToolHint,
+  selectSemanticConnectorWriteToolHint,
   type ConnectorReadToolHint,
 } from "./connector-tools.js";
 import { stageConnectorWriteApproval } from "./connector-write-approvals.js";
-import { listMcpToolDeclarations } from "./mcp-tools.js";
+import {
+  listMcpToolDeclarations,
+  selectSemanticMcpTool,
+  type McpToolDeclaration,
+  type McpToolSelection,
+} from "./mcp-tools.js";
 import { getUserApprovalMode } from "../approval-policy/service.js";
 import {
   listConnectedCapabilityGrants,
@@ -182,6 +190,7 @@ import {
   buildWebGroundingAbstentionBlock,
   buildWebGroundingPromptBlock,
   buildUnavailableWebGroundingResult,
+  explicitDataArtifactRequest,
   searchPublicWebGrounding,
   shouldUseWebGrounding,
   type WebGroundingResult,
@@ -282,15 +291,18 @@ import {
   buildRequestBody,
   buildSharedBrainRequestAttempt,
   getChatCompletionPath,
+  getNativeChatPath,
   type SharedBrainConversationMessage,
   type SharedBrainRequestAttempt,
 } from "./provider-request.js";
 import {
   buildInferenceProviderCandidates,
   buildModelRouteDecision,
+  rankInferenceProviderCandidates,
 } from "./provider-selection.js";
 import {
   buildGroqCompoundRequestExtensions,
+  withGroqCompoundGuidance,
   extractGroqCompoundEvidence,
   hasGroqCompoundEvidence,
   isGroqCompoundModel,
@@ -442,6 +454,25 @@ import {
   resolveUsageIdentityContext,
 } from "../quota/service.js";
 
+function providerBaseUrlForPath(
+  candidate: {
+    provider: SharedBrainProvider;
+    baseUrl: string;
+    compatibilityBaseUrl?: string;
+  },
+  path: string,
+): string {
+  return candidate.provider === "gemini" && !path.startsWith("/interactions")
+    ? candidate.compatibilityBaseUrl ?? candidate.baseUrl
+    : candidate.baseUrl;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 const CONNECTOR_TOOL_WORKLOADS: ReadonlySet<SharedBrainWorkload> = new Set([
   "mobile_chat_fast",
   "mobile_chat_balanced",
@@ -478,6 +509,9 @@ type SharedBrainInferenceInput = {
    * tool_requests. Empty/undefined means advertise nothing.
    */
   connectorToolContracts?: string[];
+  /** Live MCP declarations and the request-scoped semantic selection. */
+  mcpToolDeclarations?: McpToolDeclaration[];
+  mcpToolSelection?: McpToolSelection | null;
   /** Request-scoped registry view. Only these tools may be requested or run. */
   agentToolCatalog?: AgentToolCatalogEntry[];
   /**
@@ -486,6 +520,7 @@ type SharedBrainInferenceInput = {
    * it is never execution authorization.
    */
   connectorReadToolHint?: ConnectorReadToolHint | null;
+  connectorWriteToolHint?: ConnectorReadToolHint | null;
   requestMetadata?: Record<string, unknown>;
   route?: string;
   routeDecision?: CommandRouteDecision | null;
@@ -494,9 +529,13 @@ type SharedBrainInferenceInput = {
   /** Stable per-task phase used to meter nested model calls idempotently. */
   usageLedgerPhase?: string;
   planCode?: string | null;
+  /** Access resolved at durable task admission/worker hydration. */
+  usageAccess?: UsageAccessTruth;
   brainProfile?: unknown;
   /** Internal worker boundary: constrain one durable queue to one hosted provider. */
   providerAllowlist?: readonly SharedBrainProvider[];
+  /** Stable request seed used to balance configured provider key pools. */
+  providerKeySeed?: string;
   providerDataSharingAuthorized?: boolean;
   loadSheddingConcurrencyOverride?: number;
   shouldAbort?: () => boolean | Promise<boolean>;
@@ -554,12 +593,14 @@ function inheritedProviderExecutionPolicy(
 ): Pick<
   SharedBrainInferenceInput,
   | "providerAllowlist"
+  | "providerKeySeed"
   | "providerDataSharingAuthorized"
   | "loadSheddingConcurrencyOverride"
   | "shouldAbort"
 > {
   return {
     providerAllowlist: input.providerAllowlist,
+    providerKeySeed: input.providerKeySeed,
     providerDataSharingAuthorized: input.providerDataSharingAuthorized,
     loadSheddingConcurrencyOverride: input.loadSheddingConcurrencyOverride,
     shouldAbort: input.shouldAbort,
@@ -991,10 +1032,15 @@ function buildCheapSocialTurnReply(
       ? "Aye-aye. Madagaskar'da yaşayan, uzun orta parmağıyla ağaç kabuklarının içindeki böcekleri çıkaran oldukça tuhaf görünümlü bir primat."
       : "Aye-aye. It is a wonderfully odd-looking primate from Madagascar that uses its long middle finger to find insects inside tree bark.";
   }
-  if (workload !== "mobile_chat_fast" && workload !== "fast_route") {
+  if (!isSocialChatPrompt(prompt)) {
     return null;
   }
-  if (!isSocialChatPrompt(prompt)) {
+  const isChatRoute = input.routeDecision?.mode === "chat";
+  if (
+    workload !== "mobile_chat_fast" &&
+    workload !== "fast_route" &&
+    !isChatRoute
+  ) {
     return null;
   }
   const name = readPreferredUserName(input.understandingContext);
@@ -1484,6 +1530,24 @@ const MOBILE_CHAT_MAX_TOKENS = 2_800;
 // altına düşürülmez. ~1400: tipik gizli düşünme + kısa/orta cevap için yeterli,
 // 2800 sert tavanın altında.
 const REASONING_CHAT_COMPLETION_FLOOR = 1_400;
+// Yapısal widget turu (chart / table / 3B yüzey): GÖRÜNÜR cevabın kendisi bir
+// JSON bloğudur — 96 örnekli bir seri tek başına birkaç yüz token, çok serili
+// bir tablo daha da fazla. Sohbet turu tavanı (192/384, reasoning'de 1400) bu
+// bloğu ortasında kesiyor; Groq boş üretimle `json_validate_failed` dönüyor ve
+// tur kullanıcıya `continuity fallback` olarak sızıyordu (RC-4 ailesi).
+// max_tokens bir TAVANdır — gerçek kullanım faturalanır, kısa cevap stop
+// token'da erken biter — bu yüzden taban yükseltmek maliyeti artırmaz.
+const WIDGET_CHAT_COMPLETION_FLOOR = 1_800;
+const REASONING_WIDGET_CHAT_COMPLETION_FLOOR = 2_600;
+
+/** Bu turda gerçekten yapısal bir widget bekleniyor mu? */
+function isStructuredWidgetTurn(prompt: string): boolean {
+  return (
+    isExplicitChartRequest(prompt) ||
+    isExplicitTableRequest(prompt) ||
+    isExplicitMathSurface3DRequest(prompt)
+  );
+}
 const SHARED_BRAIN_PROVIDER_MAX_RETRIES = 1;
 const CHEAP_SOCIAL_TURN_MAX_CHARS = 48;
 const RESPONSE_CACHE_TTL_MS_BY_WORKLOAD: Partial<
@@ -1680,7 +1744,7 @@ function buildRetrievalNeuralPolicy(rawProfile: unknown): {
   };
 }
 
-function analyzeResponseCompleteness(
+export function analyzeResponseCompleteness(
   value: string,
 ): ResponseCompletenessAnalysis {
   const normalized = compactText(value);
@@ -1765,7 +1829,17 @@ function analyzeResponseCompleteness(
   if (/\|\s*$/.test(normalized) && normalized.includes("|")) {
     flags.push("broken_table_row");
   }
-  if (lineCount >= 3 && /[:;,]\s*$/.test(normalized)) {
+  // A reply whose final visible character is a colon is a lead-in that
+  // promised content which never arrived. Prod (RC-4): "x² + 5x + 6 = 0 /
+  // İşte adım adım çözüm:" then nothing — the answer was cut right before the
+  // steps. This is a truncation regardless of how many lines precede it; the
+  // `lineCount >= 3` guard on `dangling_list_lead` below silently accepted the
+  // two-line case as complete, so "İşte adım adım çözüm:" reached the user as
+  // a finished answer. A colon can end a real sentence only when body follows.
+  if (/:\s*$/.test(normalized)) {
+    flags.push("dangling_colon_lead");
+  }
+  if (lineCount >= 3 && /[;,]\s*$/.test(normalized)) {
     flags.push("dangling_list_lead");
   }
 
@@ -1780,6 +1854,7 @@ function analyzeResponseCompleteness(
       "dangling_heading",
       "broken_table_row",
       "dangling_list_lead",
+      "dangling_colon_lead",
       "unclosed_display_math",
       "unclosed_inline_math",
       "unclosed_math_env",
@@ -2098,6 +2173,22 @@ function advertisedConnectorReadToolHint(
   input: SharedBrainInferenceInput,
 ): ConnectorReadToolHint | null {
   const hint = input.connectorReadToolHint;
+  if (!hint) return null;
+  const advertised = new Set(
+    (input.connectorToolContracts ?? [])
+      .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
+      .filter((name): name is string => Boolean(name)),
+  );
+  const eligible = new Set(
+    (input.agentToolCatalog ?? []).map((tool) => tool.name),
+  );
+  return advertised.has(hint.tool) && eligible.has(hint.tool) ? hint : null;
+}
+
+function advertisedConnectorWriteToolHint(
+  input: SharedBrainInferenceInput,
+): ConnectorReadToolHint | null {
+  const hint = input.connectorWriteToolHint;
   if (!hint) return null;
   const advertised = new Set(
     (input.connectorToolContracts ?? [])
@@ -2663,6 +2754,17 @@ function buildReasoningProtocolPromptBlock(input: {
     lines.push(
       '- VISION STRUCTURED EXTRACTION: when the image (or its OCR evidence) contains tabular data — a receipt, invoice, menu, price list, schedule, or table — extract it into a {"type":"table"} block with clean columns and rows instead of describing it in prose. When it shows a chart/graph, read the visible values and re-emit them as a {"type":"chart"} block only if the numbers are clearly legible; otherwise summarize the trend in text. When it shows a math problem or formula, restate it as a {"type":"math"} block with LaTeX and solve step by step. Emit each block exactly once, follow the block schema examples, and keep a short natural-language answer alongside the widget.',
     );
+    // El yazısı, formül ve taranmış sayfa: cihaz OCR'ı bunları PRENSİP OLARAK
+    // çıkaramaz (Vision satır tabanlı metin okur; matematik dizgisini,
+    // el yazısını ve şema düzenini okuyamaz). Bu içerikler yalnız buraya,
+    // görüntünün kendisine bakılarak çözülebilir — istem bunu açıkça söylemezse
+    // model cihaz OCR'ının boş çıktısına bakıp "okunamadı" diyor.
+    lines.push(
+      "- HANDWRITING & MATH IN IMAGES: read handwritten text directly from the image; device OCR cannot transcribe handwriting, so its silence is not evidence of an empty page. Transcribe mathematical notation as LaTeX inside a math block — fractions, integrals, sums, matrices, sub/superscripts, Greek letters — and keep the original line structure of a derivation. For a scanned page, read it as a document: preserve headings, numbered items and table layout instead of returning one flat paragraph. When a symbol is genuinely ambiguous, transcribe your best reading and say which part is uncertain rather than dropping it.",
+    );
+    lines.push(
+      "- MULTI-PAGE IMAGES: several attached images may be consecutive pages of ONE document (page order matches attachment order). Read them as a single continuous document, carry context across pages, and do not repeat a per-page summary for each one.",
+    );
   }
 
   return lines.join("\n");
@@ -2819,6 +2921,174 @@ export function buildSocialChatSystemPrompt(
     .join("\n\n");
 }
 
+function canUseLeanFastChatPrompt(input: SharedBrainInferenceInput): boolean {
+  const fastWorkload =
+    input.workload === "mobile_chat_fast" || input.workload === "fast_route";
+  const routeDecision = input.routeDecision;
+  const envelope = input.understandingContext?.understandingEnvelope;
+  const desiredOutputKinds = envelope?.desired_outputs.map((output) => output.kind) ?? [];
+
+  // CANLI BAĞLAM VARSA YALIN YOL KULLANILMAZ.
+  //
+  // Yalın istem gecikmeyi düşürmek için politika satırlarını atıyor — ama
+  // cihazdan gelen bağlam paketlerini (sağlık, konum, takvim, zaman) de
+  // birlikte atıyordu. Mobil sohbetin varsayılan iş yükü `mobile_chat_fast`
+  // olduğu için pratikte canlı bağlam NORMAL sohbette hiç modele ulaşmıyordu:
+  // sinyaller yükleniyor, paketleniyor, sonra istem kurulurken sessizce
+  // düşüyordu. Kullanıcıya "bağlam çalışmıyor" diye görünen şey buydu.
+  //
+  // `silent` paketler modele metin olarak girmesi gerekmeyen paketlerdir;
+  // yalnız gerçekten kullanılacak olanlar (implicit/explicit_when_relevant)
+  // yalın yolu iptal eder, böylece kısa sohbetlerin hızı da korunur.
+  const usableContextPackets = (
+    input.understandingContext?.contextPackets ?? []
+  ).filter(
+    (packet) =>
+      packet.freshness !== "stale" &&
+      (packet.mentionPolicy === "explicit_when_relevant" ||
+        packet.mentionPolicy === "implicit"),
+  );
+
+  // KİMLİK TURLARI da yalın yoldan muaf. Yalın istem, "bu soru kullanıcı
+  // hakkında, Elyan hakkında değil" yönergesini ve "Elyan'ı kim yazdı"
+  // cevabını taşıyan satırları da atıyordu; sonuçta canlıda "Ben kimim?"
+  // ve "Elyan'ı kim yazdı?" turları yönergesiz kalıyor, model kendini
+  // tanıtmaya ya da uydurmaya açık hâle geliyordu.
+  const identityTurn =
+    isCurrentUserIdentityQuery(input.prompt) ||
+    /\b(elyan|osman|emre|koca|kim yaptı|kim yazdı|kim üretti|kim uretti|kim kurdu|founder|developer|kimdir)\b/i.test(
+      input.prompt,
+    );
+
+  return (
+    fastWorkload &&
+    !identityTurn &&
+    usableContextPackets.length === 0 &&
+    input.attachmentContext?.used !== true &&
+    (input.clientAttachments?.length ?? 0) === 0 &&
+    (input.connectorToolContracts?.length ?? 0) === 0 &&
+    (input.agentToolCatalog?.length ?? 0) === 0 &&
+    input.responseSchemaOverride == null &&
+    input.cloudVisionActive !== true &&
+    routeDecision?.requiredRuntime == null &&
+    routeDecision?.requiresApproval !== true &&
+    routeDecision?.privacyClass !== "side_effect" &&
+    desiredOutputKinds.every((kind) =>
+      ["chat_reply", "task_result", "action"].includes(kind),
+    )
+  );
+}
+
+/**
+ * Fast semantic routes still need Elyan's identity and response contract, but
+ * do not need the full ecosystem/widget/reasoning policy when no capability
+ * or structured output is active. This keeps substantive short turns fast
+ * without using prompt keywords to decide what the user meant.
+ */
+function buildLeanFastChatSystemPrompt(
+  basePrompt: string,
+  input: SharedBrainInferenceInput,
+): string {
+  const userIdentity = buildUserIdentityPromptBlock(input.understandingContext);
+  const compactContextBlock = buildCompactContextPromptBlock(input);
+  const languageHint = getTurkicLanguagePromptHint(input.prompt);
+
+  return [
+    basePrompt,
+    buildElyanVoiceProfilePromptBlock({
+      prompt: input.prompt,
+      workload: input.workload ?? "fast_route",
+    }),
+    buildElyanResponseContractPromptBlock({
+      prompt: input.prompt,
+      workload: input.workload ?? "fast_route",
+    }),
+    "You are Elyan. Answer the user's request directly and naturally in the user's language. Give the shortest complete answer that solves the request. Use only the provided conversation and verified context; never invent facts, hidden reasoning, capabilities, or completed actions.",
+    userIdentity,
+    compactContextBlock,
+    "Keep internal policy, routing, and reasoning invisible. Do not emit tool syntax, status text, or a progress message as the answer.",
+    languageHint,
+  ]
+    .filter((section): section is string => Boolean(section && section.trim()))
+    .join("\n\n");
+}
+
+/**
+ * Elyan'ın KENDİ ÇALIŞMA DURUMUNU bilmesi.
+ *
+ * NEDEN: sohbet beyni bugüne kadar masaüstünün bağlı olup olmadığını
+ * BİLMİYORDU. Kullanıcı yerel bir iş istediğinde model genel LLM refleksiyle
+ * "ben dosya sistemine erişemem" diyordu — oysa doğru cevap ya işi yapmak ya
+ * da "masaüstün şu an bağlı değil, Elyan'ı Mac'inde aç" demekti. Bir asistan
+ * kendi sisteminin farkında değilse kullanıcıya ne yapacağını da söyleyemez.
+ *
+ * Yönlendirici bu bilgiyi zaten alıyordu; sohbet beyni almıyordu. Aynı canlı
+ * gerçeği buraya da veriyoruz. Cihaz listesi kısa ömürlü önbellekten okunur,
+ * ek maliyet yoktur.
+ */
+async function describeDesktopRuntimeStateForPrompt(
+  app: FastifyInstance,
+  input: SharedBrainInferenceInput,
+): Promise<string> {
+  if (input.requestMetadata?.semanticRouteOnly === true) return "";
+  const userId = String(input.userId ?? "").trim();
+  if (!userId) return "";
+  try {
+    const { listUserDevices } = await import("../devices/service.js");
+    const devices = await listUserDevices(app, userId);
+    const desktops = devices.filter((device) => device.type === "desktop");
+    const ready = desktops.find((device) => device.canReceiveTasks);
+    if (ready) {
+      const families = summarizeRuntimeCapabilityFamilies(
+        ready.runtime?.capabilities,
+      );
+      return [
+        "SYSTEM STATE (live, authoritative): the user's paired desktop runtime is CONNECTED and READY right now.",
+        families
+          ? `Through it you can actually: ${families}.`
+          : "Through it you can actually run local actions on the user's computer.",
+        "So never say you cannot access the user's files, screen or apps. If this turn needs the real computer, it is dispatched there; describe what will happen, do not refuse.",
+      ].join(" ");
+    }
+    if (desktops.length > 0) {
+      return [
+        "SYSTEM STATE (live, authoritative): the user HAS a paired desktop, but it is OFFLINE right now, so local actions cannot run this turn.",
+        "If the request needs the real computer, do not say you are incapable — say the desktop app is not connected and ask the user to open Elyan on their computer, then offer what you can still do here.",
+      ].join(" ");
+    }
+    return [
+      "SYSTEM STATE (live, authoritative): no desktop runtime is paired with this account, so local computer actions are unavailable.",
+      "If the request needs the real computer, explain that pairing the Elyan desktop app enables it, and offer the closest thing you can do without it.",
+    ].join(" ");
+  } catch {
+    return "";
+  }
+}
+
+/** Yetenek adlarını okunur ailelere indirger (ham 100+ ad prompt'a konmaz). */
+function summarizeRuntimeCapabilityFamilies(capabilities: unknown): string {
+  const names = (Array.isArray(capabilities) ? capabilities : [])
+    .map((value) => String(value ?? "").toLowerCase().replace(/[.]/g, "_"))
+    .filter(Boolean);
+  if (names.length === 0) return "";
+  const has = (...fragments: string[]) =>
+    fragments.some((fragment) => names.some((name) => name.includes(fragment)));
+  const families: string[] = [];
+  if (has("file_", "directory", "folder"))
+    families.push("create/read/write/move local files and folders");
+  if (has("screen", "observe")) families.push("read what is on the screen");
+  if (has("open_app", "close_app")) families.push("open and close apps");
+  if (has("browser")) families.push("control the browser");
+  if (has("shell", "terminal")) families.push("run shell commands");
+  if (has("calendar", "reminder")) families.push("read/write calendar and reminders");
+  if (has("play_media")) families.push("play media");
+  if (has("document_", "spreadsheet", "presentation"))
+    families.push("produce documents and spreadsheets");
+  if (has("clipboard")) families.push("use the clipboard");
+  if (has("skill")) families.push("run multi-step local skills");
+  return families.join("; ");
+}
+
 export function buildStructuredSystemPrompt(
   basePrompt: string,
   input: SharedBrainInferenceInput,
@@ -2843,6 +3113,9 @@ export function buildStructuredSystemPrompt(
   // language, tone, completion + the user's name, and drops everything else.
   if (isSocialChatPrompt(input.prompt)) {
     return buildSocialChatSystemPrompt(basePrompt, input);
+  }
+  if (canUseLeanFastChatPrompt(input)) {
+    return buildLeanFastChatSystemPrompt(basePrompt, input);
   }
   // Kısa takip mesajları için lean profil. Full path'in ~35 policy satırı
   // "devam et" gibi 8 karakterlik bir mesaj için gereksiz — model overload
@@ -2885,6 +3158,7 @@ export function buildStructuredSystemPrompt(
     ? "This question is about the user, not Elyan. Answer only from the current-user identity, preference, project, understanding-envelope, and memory-profile evidence above. Do not introduce or describe Elyan. If no verified user facts are available, say that you do not know the user yet and offer to learn."
     : null;
   const connectorReadHint = advertisedConnectorReadToolHint(input);
+  const connectorWriteHint = advertisedConnectorWriteToolHint(input);
   const eligibleConnectorToolContracts = (input.agentToolCatalog ?? [])
     .filter((tool) => Boolean(tool.selectionHints.connectorCapability))
     .map((tool) => tool.selectionHints.modelContract);
@@ -3042,6 +3316,9 @@ export function buildStructuredSystemPrompt(
       ? connectorReadHint.enforcement === "prefer"
         ? `Possible connector match (low confidence): the request MIGHT concern the user's connected account via the read-only tool ${connectorReadHint.tool}. If the user is genuinely asking about their own account data, emit exactly one hidden tool_requests item for ${connectorReadHint.tool}; if this is a general question answerable without private account data, answer directly WITHOUT any tool request. Keep reply.text free of tool names, JSON, arguments, query syntax, and planning text.`
         : `High-confidence semantic connector selection: the user's request requires the advertised read-only tool ${connectorReadHint.tool}. Return a TurnEnvelope with exactly one hidden tool_requests item for ${connectorReadHint.tool}, using only the flat arguments defined by its advertised contract. Keep reply.text free of tool names, JSON, arguments, query syntax, and planning text. This selection is not permission to use any unadvertised tool or perform a side effect.`
+      : null,
+    connectorWriteHint
+      ? `High-confidence semantic side-effect selection: the user's request requires the advertised connector operation ${connectorWriteHint.tool}. Emit only that hidden tool request with flat contract arguments; the existing approval flow must stage the action and wait for explicit confirmation. Never claim that a message was sent or an event was created before approved execution evidence exists.`
       : null,
     (input.agentToolCatalog?.length ?? 0) > 0
       ? `Eligible server tools for THIS turn only: ${input
@@ -4440,6 +4717,7 @@ function shouldAugmentKnowledge(input: {
   prompt: string;
   brainProfile: ReturnType<typeof normalizePlanBrainProfile>;
   attachmentContextUsed?: boolean;
+  understandingIntent?: string | null;
 }): boolean {
   const normalized = String(input.prompt ?? "").trim();
   if (!normalized || isSocialChatPrompt(normalized)) {
@@ -4454,6 +4732,13 @@ function shouldAugmentKnowledge(input: {
     })
   ) {
     return true;
+  }
+
+  // A typed self-contained math intent must not inherit the balanced chat
+  // default of launching retrieval/web grounding. Explicit fresh-data
+  // requests have already returned above.
+  if (input.understandingIntent === "math") {
+    return false;
   }
 
   if (
@@ -4580,16 +4865,36 @@ function resolveCostGuardedMaxTokens(input: {
     return input.baseMaxTokens;
   }
   const normalizedPrompt = compactText(input.prompt);
-  if (!normalizedPrompt || normalizedPrompt.length > 120) {
-    return input.baseMaxTokens;
+  // Widget turu uzunluk kapısından ÖNCE gelir: "grafiğini çiz" 13 karakter,
+  // "son 5 yılın enflasyon verisini tablo ve grafik olarak ver" 57 — ikisi de
+  // aynı yapısal bütçeyi ister ve ikisi de kısa-prompt cap'ine yakalanıyordu.
+  if (isStructuredWidgetTurn(normalizedPrompt)) {
+    return Math.max(
+      input.baseMaxTokens,
+      input.isReasoningModel
+        ? REASONING_WIDGET_CHAT_COMPLETION_FLOOR
+        : WIDGET_CHAT_COMPLETION_FLOOR,
+    );
   }
   // Reasoning modeli (gpt-oss): gizli düşünme turu max_tokens'a sayılır ve
-  // sohbet bütçesi (260-720) bu tur için yetersiz — model düşünmede tükenip
+  // sohbet bütçesi (140-720) bu tur için yetersiz — model düşünmede tükenip
   // JSON'u boş bırakıyor (Groq json_validate_failed). Düşünme + kısa cevap için
   // taban bırak. max_tokens TAVANdır: kısa cevap stop token'da erken biter,
   // fatura gerçek kullanımadır — taban maliyeti artırmaz, yalnız kesilmeyi önler.
+  //
+  // TABAN, PROMPT UZUNLUĞUNDAN ÖNCE UYGULANIR. Eskiden aşağıdaki
+  // "uzun prompt → baseMaxTokens" erken çıkışı bu tabanı atlıyordu ve mantık
+  // TERSTİ: uzun/şemalı prompt daha AZ değil daha ÇOK token ister. Canlı sonuç
+  // (2026-08-08): semantik yönlendirici `fast_route` (gpt-oss-20b, 140 token)
+  // ile çağrılıyor, prompt 2000+ karakter olduğu için taban atlanıyor, model
+  // 140 token'ı düşünmede tüketip BOŞ dönüyordu. Yönlendirici bu yüzden HİÇ
+  // çalışmadı ve hiçbir görev masaüstüne yönlenmedi; kullanıcı da bunun yerine
+  // "Bu kez düzgün bir yanıt oluşturamadım" cümlesini gördü.
   if (input.isReasoningModel) {
     return Math.max(input.baseMaxTokens, REASONING_CHAT_COMPLETION_FLOOR);
+  }
+  if (!normalizedPrompt || normalizedPrompt.length > 120) {
+    return input.baseMaxTokens;
   }
   if (
     input.workload === "mobile_chat_fast" ||
@@ -5126,6 +5431,7 @@ export function createDeltaPublisher(input: {
   startedAt: number;
   provider: SharedBrainProvider;
   model: string;
+  lowLatency?: boolean;
   onDelta?: (delta: SharedBrainInferenceDelta) => void | Promise<void>;
 }) {
   return createDeltaPublisherCore({
@@ -5239,13 +5545,20 @@ async function runSharedBrainInferenceProbe(
           ]
         : [
             {
-              path: getChatCompletionPath(candidate.provider),
+              path: getNativeChatPath(candidate.provider),
               body: buildRequestBody(
                 candidate.provider,
                 attemptedModel,
                 probeMessages,
                 maxTokens,
                 app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+                false,
+                [],
+                "hidden",
+                "low",
+                undefined,
+                undefined,
+                candidate.provider === "gemini",
               ),
             },
           ];
@@ -5255,7 +5568,10 @@ async function runSharedBrainInferenceProbe(
         const response = await postJson(
           app,
           candidate.provider,
-          joinProviderUrl(candidate.baseUrl, attempt.path),
+          joinProviderUrl(
+            providerBaseUrlForPath(candidate, attempt.path),
+            attempt.path,
+          ),
           attempt.body,
           timeoutMs,
         );
@@ -5458,12 +5774,20 @@ export async function generateSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
 ): Promise<SharedBrainInferenceResult> {
+  // A plain fast turn has no reason to wait for dialogue-state enrichment.
+  // Keep this conservative: any request carrying image context still gets
+  // the full preparation path so visual continuity is never lost.
+  const fastTextCandidate =
+    (input.workload === "mobile_chat_fast" || input.workload === "fast_route") &&
+    countDistinctEphemeralImages(input.ephemeralVision) === 0 &&
+    (input.attachmentContext?.visionImages?.length ?? 0) === 0;
   const skillMemoryAuthorized =
     input.skillToolAllowlist === undefined ||
     input.skillToolAllowlist.includes("memory.query");
   if (
     app.config?.ELYAN_DIALOGUE_STATE_ENABLED === true &&
-    skillMemoryAuthorized
+    skillMemoryAuthorized &&
+    !fastTextCandidate
   ) {
     const sessionId = resolveDialogueStateSessionId(input.requestMetadata);
     if (sessionId) {
@@ -5539,6 +5863,8 @@ export async function generateSharedBrainReply(
     resolveEffectiveWorkload(input),
     cloudVisionActive,
   );
+  const fastTextTurn =
+    workload === "mobile_chat_fast" || workload === "fast_route";
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
   const deterministicMathSurfaceResult = buildMathSurface3DResult(
     input,
@@ -5560,6 +5886,19 @@ export async function generateSharedBrainReply(
     return deterministicMathSurfaceResult;
   }
   const mailOpenBlockAction = readMailOpenBlockAction(input.requestMetadata);
+  const requestedToolName = readRequestedAgentToolName(input.requestMetadata);
+  let mcpToolDeclarations: McpToolDeclaration[] = input.mcpToolDeclarations ?? [];
+  let mcpToolSelection: McpToolSelection | null = input.mcpToolSelection ?? null;
+  const mcpTurnMayNeedContracts =
+    app.config?.ELYAN_MCP_DYNAMIC_TOOLS_ENABLED === true &&
+    !input.internalEvaluation?.refinementPass;
+  const connectorTurnMayNeedContracts =
+    !fastTextTurn ||
+    mailOpenBlockAction != null ||
+    requestedToolName != null ||
+    (input.connectorToolContracts?.length ?? 0) > 0 ||
+    readRecord(input.requestMetadata)?.remoteMcpSelection != null ||
+    input.routeDecision?.privacyClass === "side_effect";
   // Connector tools (gmail/calendar/drive read) are advertised only on
   // chat/planning-shaped turns where the agent loop can actually run them, and
   // only when the user has a matching integration connected. Resolved once and
@@ -5569,6 +5908,7 @@ export async function generateSharedBrainReply(
   if (
     input.connectorToolContracts === undefined &&
     !input.internalEvaluation?.refinementPass &&
+    connectorTurnMayNeedContracts &&
     (app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED === true ||
       app.config?.ELYAN_AGENT_LOOP_ENABLED === true ||
       isAgentEngineV2Enabled(app, input.userId) ||
@@ -5602,9 +5942,8 @@ export async function generateSharedBrainReply(
       // Bağlı uzak MCP sunucularının KENDİ araç kataloğu. Buraya kadar her
       // MCP uygulamasından yalnız elle yazılmış tek bir arama aracı
       // ulaşıyordu; sunucunun geri kalanı sadece masaüstü lease'inde vardı.
-      const mcpContracts = (
-        await listMcpToolDeclarations(app, input.userId)
-      ).map((entry) => entry.contract);
+      mcpToolDeclarations = await listMcpToolDeclarations(app, input.userId);
+      const mcpContracts = mcpToolDeclarations.map((entry) => entry.contract);
       input.connectorToolContracts = [
         ...readContracts,
         ...writeContracts,
@@ -5622,9 +5961,23 @@ export async function generateSharedBrainReply(
     }
   }
   if (
+    mcpToolDeclarations.length === 0 &&
+    !input.internalEvaluation?.refinementPass &&
+    (connectorTurnMayNeedContracts || mcpTurnMayNeedContracts) &&
+    (app.config?.ELYAN_MCP_DYNAMIC_TOOLS_ENABLED === true ||
+      app.config?.ELYAN_MCP_SDK_ENABLED === true)
+  ) {
+    try {
+      mcpToolDeclarations = await listMcpToolDeclarations(app, input.userId);
+    } catch {
+      mcpToolDeclarations = [];
+    }
+  }
+  if (
     input.connectorReadToolHint === undefined &&
     mailOpenBlockAction == null &&
     !input.internalEvaluation?.refinementPass &&
+    connectorTurnMayNeedContracts &&
     app.config?.ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED === true &&
     (input.connectorToolContracts?.length ?? 0) > 0
   ) {
@@ -5653,6 +6006,64 @@ export async function generateSharedBrainReply(
       input.connectorReadToolHint = null;
     }
   }
+  if (
+    input.connectorWriteToolHint === undefined &&
+    mailOpenBlockAction == null &&
+    !input.internalEvaluation?.refinementPass &&
+    connectorTurnMayNeedContracts &&
+    app.config?.ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED === true &&
+    (input.connectorToolContracts?.length ?? 0) > 0
+  ) {
+    try {
+      input.connectorWriteToolHint = await selectSemanticConnectorWriteToolHint(
+        input.prompt,
+        input.connectorToolContracts ?? [],
+        {
+          sideEffectDetected:
+            input.routeDecision?.privacyClass === "side_effect" ||
+            input.routeDecision?.requiresApproval === true ||
+            input.understandingContext?.understandingEnvelope?.risk
+              .side_effect === true,
+        },
+      );
+    } catch (error) {
+      app.log.debug?.(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "connector_write_semantic_hint_failed",
+        },
+        "connector write semantic hint skipped",
+      );
+      input.connectorWriteToolHint = null;
+    }
+  }
+  if (
+    mcpToolSelection === null &&
+    mcpToolDeclarations.length > 0 &&
+    !input.internalEvaluation?.refinementPass &&
+    (connectorTurnMayNeedContracts || mcpTurnMayNeedContracts) &&
+    app.config?.ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED === true
+  ) {
+    try {
+      mcpToolSelection = await selectSemanticMcpTool(
+        input.prompt,
+        mcpToolDeclarations,
+        {
+          sideEffectDetected:
+            input.routeDecision?.privacyClass === "side_effect" ||
+            input.routeDecision?.requiresApproval === true ||
+            input.understandingContext?.understandingEnvelope?.risk
+              .side_effect === true,
+        },
+      );
+    } catch {
+      mcpToolSelection = null;
+    }
+  }
+  input.mcpToolDeclarations = mcpToolDeclarations;
+  input.mcpToolSelection = mcpToolSelection;
   if (mailOpenBlockAction) {
     // A row tap is already a typed read intent. Do not let semantic routing
     // replace it with gmail.search; the exact message ID remains metadata-only.
@@ -5664,6 +6075,13 @@ export async function generateSharedBrainReply(
       mailOpenBlockAction ? undefined : input.connectorReadToolHint?.tool,
     );
   }
+  const fastTextToolsExplicitlyRequested =
+    mailOpenBlockAction != null ||
+    requestedToolName != null ||
+    (input.connectorToolContracts?.length ?? 0) > 0 ||
+    readRecord(input.requestMetadata)?.remoteMcpSelection != null ||
+    input.routeDecision?.privacyClass === "side_effect" ||
+    input.routeDecision?.requiresApproval === true;
   const agentToolProtocolEnabled =
     !input.responseSchemaOverride &&
     !input.internalEvaluation?.refinementPass &&
@@ -5673,11 +6091,35 @@ export async function generateSharedBrainReply(
       // this the catalogue would be empty whenever connectors are disabled.
       app.config?.ELYAN_CORE_TOOLS_ENABLED !== false ||
       isAgentEngineV2Enabled(app, input.userId) ||
-      isAgentEngineShadowEnabled(app));
+      isAgentEngineShadowEnabled(app)) &&
+    (!fastTextTurn || fastTextToolsExplicitlyRequested);
+  const understandingEnvelope =
+    input.understandingContext?.understandingEnvelope;
+  const typedResearchIntent =
+    understandingEnvelope?.intent.name === "research" ||
+    understandingEnvelope?.intent.action === "research" ||
+    input.routeDecision?.capabilities.includes("web_research") === true ||
+    workload === "public_research" ||
+    workload === "public_deep_research" ||
+    workload === "public_quantum_research";
+  const explicitUrl = promptContainsUrl(input.mediaIntentPrompt ?? input.prompt);
+  // Güncellik sinyali de web'i açar. Kapı yalnız TİPLİ sinyallere bakıyordu
+  // (skill/URL/araştırma iş yükü); "Güncel ekonomi haberleri" gibi anlaşılır
+  // biçimde taze veri isteyen turlar, istemde modele `web_required=yes`
+  // denmesine rağmen grounding kapısından geçemiyordu — model "araştır" diye
+  // yönlendiriliyor ama arama hiç yapılmıyordu.
+  let webToolsAllowedForTurn =
+    input.skillWebGroundingRequired === true ||
+    explicitUrl ||
+    typedResearchIntent ||
+    shouldUseWebGrounding({
+      prompt: input.prompt,
+      workload,
+      attachmentContextUsed: input.attachmentContext?.used === true,
+    });
+  let semanticWebToolSelected = false;
+  let semanticWebToolDenied = false;
   if (agentToolProtocolEnabled) {
-    const understandingEnvelope =
-      input.understandingContext?.understandingEnvelope;
-    const requestedToolName = readRequestedAgentToolName(input.requestMetadata);
     const advertisedConnectorTools = (input.connectorToolContracts ?? [])
       .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
       .filter((name): name is string => Boolean(name));
@@ -5685,8 +6127,12 @@ export async function generateSharedBrainReply(
       input.routeDecision?.privacyClass === "side_effect" ||
       input.routeDecision?.requiresApproval === true ||
       understandingEnvelope?.risk.side_effect === true;
-    const buildCatalog = (coreToolHint: CoreToolHint | null) =>
-      buildAgentToolCatalogForTurn({
+    const buildCatalog = (
+      coreToolHint: CoreToolHint | null,
+      semanticToolSelectionResolved = false,
+      webToolsAllowed = webToolsAllowedForTurn,
+    ): AgentToolCatalogEntry[] => {
+      const catalog = buildAgentToolCatalogForTurn({
       prompt: input.prompt,
       intent: understandingEnvelope?.intent.name ?? null,
       action: understandingEnvelope?.intent.action ?? null,
@@ -5704,7 +6150,16 @@ export async function generateSharedBrainReply(
             score: input.connectorReadToolHint.score,
           }
         : null,
+      connectorWriteHint: input.connectorWriteToolHint
+        ? {
+            tool: input.connectorWriteToolHint.tool,
+            score: input.connectorWriteToolHint.score,
+          }
+        : null,
+      hasExplicitUrl: explicitUrl,
       coreToolHint,
+      semanticToolSelectionResolved,
+      webToolsAllowed,
       deterministicToolNames: [
         ...(mailOpenBlockAction ? ["gmail.read"] : []),
         ...(requestedToolName ? [requestedToolName] : []),
@@ -5727,26 +6182,89 @@ export async function generateSharedBrainReply(
         isAgentEngineV2Enabled(app, input.userId) ||
         isAgentEngineShadowEnabled(app),
       });
+      const selectedMcpDeclaration = mcpToolSelection
+        ? mcpToolDeclarations.find(
+            (declaration) => declaration.name === mcpToolSelection?.tool,
+          )
+        : null;
+      if (selectedMcpDeclaration && mcpToolSelection) {
+        const permission =
+          mcpToolSelection.operation === "read" ? "read" : "side_effect";
+        catalog.push({
+          name: selectedMcpDeclaration.name,
+          permission,
+          timeoutMs: 20_000,
+          idempotency: permission === "read" ? "read_only" : "non_idempotent",
+          approvalScope: "user_action",
+          parallelSafe: permission === "read",
+          selectionHints: {
+            purpose: `${selectedMcpDeclaration.appDisplayName}: ${selectedMcpDeclaration.description}`,
+            intents: ["chat", "research", "planning"],
+            capabilities: [`mcp.${selectedMcpDeclaration.appId}`],
+            desiredOutputKinds: ["chat_reply", "task_result", "table", "chart", "artifact"],
+            resultBlockTypes: ["connector_result", "tool_call"],
+            modelContract: selectedMcpDeclaration.contract,
+            connectorCapability: `mcp:${selectedMcpDeclaration.appId}`,
+          },
+          selectionConfidence: Math.min(0.98, mcpToolSelection.score),
+          selectionReasons: [
+            "connected_mcp_server",
+            "semantic_mcp_tool_match",
+            ...(permission === "read" ? ["read_only_operation"] : ["approval_gated_side_effect"]),
+          ],
+        });
+      }
+      return catalog.sort(
+        (left, right) =>
+          right.selectionConfidence - left.selectionConfidence ||
+          left.name.localeCompare(right.name),
+      );
+    };
 
-    // Deterministic pass first. The semantic ranker is a *rescue* for phrasings
-    // the patterns missed, so it only runs when they in fact caught nothing —
-    // paying for an embed on every turn would put worker latency on the hot
-    // path of turns that were already answered correctly.
-    let catalog = buildCatalog(null);
-    const deterministicCoreHit = catalog.some(
-      (entry) => !entry.selectionHints.connectorCapability,
-    );
+    // Structured fields provide useful hints, but the semantic decision is
+    // authoritative for core tools once the transformer has answered. This
+    // also lets a semantic negative close weak candidates instead of adding
+    // web.search to a self-contained question.
+    let semanticDecision: SemanticCoreToolDecision = {
+      hint: null,
+      source: "unavailable",
+      ordinaryConversation: false,
+    };
     if (
-      !deterministicCoreHit &&
+      workload !== "mobile_chat_fast" &&
+      workload !== "fast_route" &&
       app.config?.ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED === true
     ) {
-      const coreToolHint = await selectSemanticCoreToolHint(input.prompt, {
+      semanticDecision = await selectSemanticCoreToolDecision(input.prompt, {
         sideEffectDetected: coreToolSideEffect,
-      }).catch(() => null);
-      if (coreToolHint) {
-        catalog = buildCatalog(coreToolHint);
-      }
+      }).catch(() => ({
+        hint: null,
+        source: "unavailable" as const,
+        ordinaryConversation: false,
+      }));
     }
+    semanticWebToolSelected =
+      semanticDecision.source === "transformer" &&
+      (semanticDecision.hint?.tool === "web.search" ||
+        semanticDecision.hint?.tool === "web.fetch_url" ||
+        semanticDecision.hint?.tool === "web.numeric_facts");
+    semanticWebToolDenied =
+      semanticDecision.source === "transformer" &&
+      semanticDecision.ordinaryConversation;
+    if (semanticWebToolSelected) {
+      webToolsAllowedForTurn = true;
+    }
+    if (
+      semanticWebToolDenied &&
+      input.skillWebGroundingRequired !== true &&
+      !explicitUrl
+    ) {
+      webToolsAllowedForTurn = false;
+    }
+    const catalog = buildCatalog(
+      semanticDecision.source === "transformer" ? semanticDecision.hint : null,
+      semanticDecision.source === "transformer",
+    );
     input.agentToolCatalog = catalog;
   } else {
     input.agentToolCatalog = [];
@@ -5795,9 +6313,20 @@ export async function generateSharedBrainReply(
     planBrainProfile,
     input.planCode,
   );
-  if (input.providerAllowlist?.length) {
+  const isChatWorkload = [
+    "fast_route",
+    "mobile_chat_fast",
+    "mobile_chat_balanced",
+    "mobile_chat_deep_refine",
+  ].includes(workload);
+  if (input.providerAllowlist?.length || isChatWorkload) {
+    const providerLane = input.providerAllowlist?.includes("gemini")
+      ? "fallback"
+      : workload === "mobile_chat_fast" || workload === "fast_route"
+        ? "fast"
+        : "primary";
     loadSheddingOptions.namespace = `${loadSheddingOptions.namespace}:chat_${
-      input.providerAllowlist.includes("gemini") ? "fallback" : "primary"
+      providerLane
     }`;
   }
   if (
@@ -5810,8 +6339,44 @@ export async function generateSharedBrainReply(
   }
 
   return await withLoadSheddingPermit(app, loadSheddingOptions, async () => {
-    const brain = await resolveSharedBrainSelection(app, input.userId);
-    const runtime = await selectSharedBrainRuntime(app);
+    // Usage validation is authoritative, but it does not depend on model
+    // selection or prompt assembly. Start it while the rest of the request is
+    // being prepared so billing does not add a second serial DB round-trip.
+    const usageBudgetPromise = input.internalEvaluation?.skipUsageValidation
+      ? Promise.resolve({
+          access: {
+            mode: "paid" as const,
+          },
+          remainingAiCredits: null,
+          grantedAiCredits: null,
+          periodEndsAt: null,
+        })
+      : getSharedBrainUsageBudget(app.db, input.userId, input.usageAccess);
+    // The authoritative error is still re-thrown at the await below, while
+    // this handler prevents an early DB rejection from becoming unhandled
+    // during the parallel prompt/model preparation window.
+    void usageBudgetPromise.catch(() => undefined);
+    // Hosted fast turns use the configured provider/model directly. They do
+    // not consult per-user artifact selection, so skip two database reads on
+    // the latency-critical path. Artifact-backed/local workloads retain the
+    // full selection contract.
+    const skipFastHostedSelection =
+      fastTextTurn &&
+      Boolean(
+        app.config.GROQ_API_KEY?.trim() ||
+          app.config.GEMINI_API_KEY?.trim() ||
+          app.config.OPENAI_API_KEY?.trim() ||
+          app.config.OPENROUTER_API_KEY?.trim(),
+      );
+    // Selection and runtime health are independent. Resolve them together so
+    // a cold worker does not serialize two unrelated cache/probe waits before
+    // it can build the first provider request.
+    const [brain, runtime] = await Promise.all([
+      skipFastHostedSelection
+        ? Promise.resolve(null)
+        : resolveSharedBrainSelection(app, input.userId),
+      selectSharedBrainRuntime(app, { skipProbe: fastTextTurn }),
+    ]);
     const modelResolution = await resolveSharedBrainModel(app, {
       userId: input.userId,
       workload,
@@ -5877,7 +6442,20 @@ export async function generateSharedBrainReply(
         ? input.onDelta
         : undefined;
     if (deferredVisionOnDelta) input.onDelta = undefined;
-    const providerCandidates = buildInferenceProviderCandidates({
+    // Derinlik-router: turda canlı web / güncel veri gerçekten gerekiyorsa
+    // (web_required kararı veya açık veri chart/table isteği — RC-5 sinyaliyle
+    // aynı kaynak) ve iş yükü hız-kritik dahili bir yol DEĞİLSE, Groq Compound
+    // bayrağı açıkken compound tercih edilir → canlı web + hesap ile grounded,
+    // daha iyi cevap. Bayrak kapalıysa bu sinyal etkisizdir (no-op).
+    const depthRouterInternalWorkload =
+      workload === "intent" ||
+      workload === "fast_route" ||
+      workload === "desktop_handoff";
+    const liveWebSignal =
+      !depthRouterInternalWorkload &&
+      (shouldUseWebGrounding({ prompt: input.prompt, workload }) ||
+        explicitDataArtifactRequest(input.prompt));
+    let providerCandidates = buildInferenceProviderCandidates({
       app,
       workload,
       runtime,
@@ -5894,13 +6472,8 @@ export async function generateSharedBrainReply(
       structuredOutputRequired:
         isDesktopPlanMachineJsonRoute(input.route) ||
         Boolean(input.responseSchemaOverride),
+      liveWebSignal,
     });
-    const primaryCandidate = providerCandidates[0] ?? null;
-    const servingProvider =
-      primaryCandidate?.provider ??
-      (runtime.ready
-        ? runtime.provider
-        : app.config.ELYAN_SHARED_BRAIN_PROVIDER);
     const knowledgeQuery = compactText(
       input.knowledgeQueryOverride ?? input.prompt,
     );
@@ -5908,6 +6481,10 @@ export async function generateSharedBrainReply(
       ...input,
       prompt: knowledgeQuery,
     });
+    // Knowledge augmentation may still serve private memory or the local
+    // corpus, but public web access has its own fail-closed admission gate.
+    // A balanced workload alone is never permission to browse.
+    const webGroundingAllowed = webToolsAllowedForTurn;
     const skillToolPolicyActive = input.skillToolAllowlist !== undefined;
     const skillTools = new Set(input.skillToolAllowlist ?? []);
     const retrievalAuthorized =
@@ -5919,12 +6496,20 @@ export async function generateSharedBrainReply(
     const shouldAugment =
       (retrievalAuthorized || memoryAuthorized || webAuthorized) &&
       ((webAuthorized && input.skillWebGroundingRequired === true) ||
-        shouldAugmentKnowledge({
-          workload,
-          prompt: webGroundingPrompt,
-          brainProfile: planBrainProfile,
-          attachmentContextUsed: input.attachmentContext?.used === true,
-        }));
+        // Hızlı tur kısıtı, TAZE VERİ gerektiği tespit edilmişse aşılır.
+        // Aksi hâlde ana mobil sohbette "güncel ..." soruları hiç aranmadan
+        // cevaplanıyordu: kendinden emin ama eski/yanlış cevap, biraz daha
+        // yavaş doğru cevaptan kötüdür.
+        ((!fastTextTurn || webToolsAllowedForTurn) &&
+          shouldAugmentKnowledge({
+            workload,
+            prompt: webGroundingPrompt,
+            brainProfile: planBrainProfile,
+            attachmentContextUsed: input.attachmentContext?.used === true,
+            understandingIntent:
+              input.understandingContext?.understandingEnvelope?.intent.name ??
+              null,
+          })));
     const brainCorpusDomains = detectBrainCorpusDomains(knowledgeQuery);
     const retrievalQuery = buildBrainCorpusRetrievalQuery(knowledgeQuery);
     const retrievalNeuralPolicy = buildRetrievalNeuralPolicy(input.brainProfile);
@@ -5961,7 +6546,7 @@ export async function generateSharedBrainReply(
                 results: [],
                 degradedReason: null,
               }),
-          webAuthorized
+          webAuthorized && webGroundingAllowed
             ? searchPublicWebGrounding(app, {
                 prompt: webGroundingPrompt,
                 workload,
@@ -5969,7 +6554,9 @@ export async function generateSharedBrainReply(
                 forceSearch: input.skillWebGroundingRequired === true,
               }).catch(() =>
                 buildUnavailableWebGroundingResult({
-                  enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
+                  enabled:
+                    app.config.ELYAN_WEB_GROUNDING_ENABLED &&
+                    webGroundingAllowed,
                   prompt: webGroundingPrompt,
                   degradedReason: "web_search_unavailable",
                 }),
@@ -5994,7 +6581,9 @@ export async function generateSharedBrainReply(
             degradedReason: null,
           },
           buildUnavailableWebGroundingResult({
-            enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
+            enabled:
+              app.config.ELYAN_WEB_GROUNDING_ENABLED &&
+              webGroundingAllowed,
             prompt: webGroundingPrompt,
             degradedReason: null,
           }),
@@ -6193,30 +6782,84 @@ export async function generateSharedBrainReply(
             enhancedCount: 0,
             derivedCropCount: 0,
           }));
-    const verifiedPhysicalImageCount = new Set(
-      preprocessedVision.variants.map((image) => image.imageId),
-    ).size;
-    const preparedVisionImages: ResolvedAttachmentContextVisionImage[] =
-      preprocessedVision.variants.map((image, index) => ({
+    const directVisionVariants =
+      selectedEphemeralVariants.length > 0
+        ? selectedEphemeralVariants
+        : fallbackVisionVariants;
+    const directVisionImages: ResolvedAttachmentContextVisionImage[] =
+      directVisionVariants.map((image, index) => ({
         documentId: `${image.imageId}:${image.kind}:${index}`,
         mimeType: image.mimeType,
         base64: image.base64Data,
-        label: image.kind,
+        label:
+          "label" in image && typeof image.label === "string"
+            ? image.label
+            : image.kind,
         width: image.width,
         height: image.height,
         transport: "request_ephemeral" as const,
         detail: providerImageDetail,
       }));
+    const preparedVisionImages: ResolvedAttachmentContextVisionImage[] =
+      preprocessedVision.variants.length > 0
+        ? preprocessedVision.variants.map((image, index) => ({
+            documentId: `${image.imageId}:${image.kind}:${index}`,
+            mimeType: image.mimeType,
+            base64: image.base64Data,
+            label: image.kind,
+            width: image.width,
+            height: image.height,
+            transport: "request_ephemeral" as const,
+            detail: providerImageDetail,
+          }))
+        : directVisionImages;
     const ephemeralVisionPromptBlock = buildEphemeralVisionPromptBlock(
-      preprocessedVision.variants,
+      preprocessedVision.variants.length > 0
+        ? preprocessedVision.variants
+        : directVisionVariants,
     );
     const visionPreprocessingPromptBlock =
-      buildVisionPreprocessingPromptBlock(preprocessedVision);
+      preprocessedVision.variants.length > 0
+        ? buildVisionPreprocessingPromptBlock(preprocessedVision)
+        : directVisionImages.length > 0
+          ? "Visual input is available as a verified normalized frame. Use the attached image directly and do not expose internal processing."
+          : buildVisionPreprocessingPromptBlock(preprocessedVision);
     const clientVisionImages: ResolvedAttachmentContextVisionImage[] =
       cloudVisionActive &&
       (workload === "vision_reasoning" || workload === "image_analyze")
         ? selectVisionImages(preparedVisionImages, visionMediaDecision)
         : [];
+    const verifiedPhysicalImageCount = new Set(
+      clientVisionImages.map((image) => image.documentId.split(":", 1)[0]),
+    ).size;
+    const visionQualityScore =
+      preprocessedVision.variants.length > 0
+        ? preprocessedVision.qualityScore
+        : null;
+
+    // Telemetry ranking is a soft optimization. A cold telemetry cache must
+    // never delay the first provider delta on the fast text lane; policy,
+    // circuit and fallback selection remain authoritative below.
+    if (!fastTextTurn) {
+      providerCandidates = await rankInferenceProviderCandidates({
+        app,
+        candidates: providerCandidates,
+        workload,
+        vision: clientVisionImages.length > 0,
+        visionProfile: cloudVisionActive
+          ? initialVisionMediaDecision.profile
+          : undefined,
+        structuredOutputRequired:
+          isDesktopPlanMachineJsonRoute(input.route) ||
+          Boolean(input.responseSchemaOverride),
+      });
+    }
+    const primaryCandidate = providerCandidates[0] ?? null;
+    const servingProvider =
+      primaryCandidate?.provider ??
+      (runtime.ready
+        ? runtime.provider
+        : app.config.ELYAN_SHARED_BRAIN_PROVIDER);
 
     const visionInputGate = evaluateVisionInputGate({
       cloudVisionActive,
@@ -6324,7 +6967,8 @@ export async function generateSharedBrainReply(
       memoryEnabled,
       clarificationDecision,
     });
-    const preAnswerClaimLedger = shouldComputeClaimConfidence(app)
+    const preAnswerClaimLedger =
+      shouldComputeClaimConfidence(app) && !fastTextTurn
       ? buildClaimLedger({
           userId: input.userId,
           route: input.route,
@@ -6357,16 +7001,7 @@ export async function generateSharedBrainReply(
       memoryCount: memory.results.length,
       retrievalCount: retrieval.results.length,
     });
-    const usageBudget = input.internalEvaluation?.skipUsageValidation
-      ? {
-          access: {
-            mode: "paid" as const,
-          },
-          remainingAiCredits: null,
-          grantedAiCredits: null,
-          periodEndsAt: null,
-        }
-      : await getSharedBrainUsageBudget(app.db, input.userId);
+    const usageBudget = await usageBudgetPromise;
     const baseMaxTokens = getMaxTokensForWorkload(workload, planBrainProfile);
     const completeAnswerBudgetHint = shouldUseCompleteMobileReplyBudget(input, {
       webGroundingUsed,
@@ -6399,25 +7034,31 @@ export async function generateSharedBrainReply(
     // Deterministic corpus guidance (design/skills/data language) — RAM-cached
     // + C-BM25 ranked, independent of embedding-based retrieval so it surfaces
     // reliably for "rapor/tablo/pdf yap" style requests.
+    const loadOptionalMemoryContext = !fastTextTurn;
     const [corpusGuidanceBlock, continuityBlock, behaviorLearningBlock] =
       await Promise.all([
         retrievalAuthorized
-          ? buildBrainCorpusGuidanceBlock(
-              knowledgeQuery,
-              brainCorpusDomains,
-            ).catch(() => null)
+          ? !fastTextTurn
+            ? buildBrainCorpusGuidanceBlock(
+                knowledgeQuery,
+                brainCorpusDomains,
+              ).catch(() => null)
+            : Promise.resolve(null)
           : Promise.resolve(null),
-        // Fresh-session continuity hint ("kaldığımız yer"). Only on the very
-        // first turn of a new chat; if the user opens a new session within ~7
-        // days of a meaningful episode, Elyan can naturally reference it.
-        memoryAuthorized
+        // Fresh-session continuity and behavior lessons are useful enrichment,
+        // but neither belongs before the first token of a fast conversational
+        // turn. The compact client/session snapshot remains authoritative for
+        // that lane; deeper workloads still load both blocks.
+        loadOptionalMemoryContext && memoryAuthorized
           ? buildSessionContinuityBlock(app, {
               userId: input.userId,
               conversationLength: boundedConversation.length,
               cognitiveContext: input.understandingContext?.cognitiveContext,
             }).catch(() => null)
           : Promise.resolve(null),
-        memoryAuthorized && app.config.ELYAN_BEHAVIOR_LEARNING_ENABLED === true
+        loadOptionalMemoryContext &&
+        memoryAuthorized &&
+        app.config.ELYAN_BEHAVIOR_LEARNING_ENABLED === true
           ? buildBehaviorLearningPromptBlock(app, {
               userId: input.userId,
               prompt: knowledgeQuery,
@@ -6509,12 +7150,23 @@ export async function generateSharedBrainReply(
         responseBudget: inferenceBudget,
       },
     );
+    // KENDİ SİSTEMİNİ BİL: masaüstü şu an bağlı mı, neler yapabiliyor?
+    // Bu satır olmadan model yapamadığı işte "erişemem" diyor; olduğunda ya
+    // işi yapıyor ya da "masaüstün bağlı değil, uygulamayı aç" diyerek
+    // kullanıcıya YAPILACAK ŞEYİ söylüyor.
+    const desktopRuntimeStateLine = await describeDesktopRuntimeStateForPrompt(
+      app,
+      input,
+    );
+    const effectiveSystemPrompt = desktopRuntimeStateLine
+      ? `${systemPrompt}\n\n${desktopRuntimeStateLine}`
+      : systemPrompt;
     const messages = buildConversation(
       {
         ...input,
         conversation: boundedConversation,
       },
-      systemPrompt,
+      effectiveSystemPrompt,
     );
     const prompt = buildPromptFromConversation(messages);
     void warmOllamaModelIfNeeded(app, runtime, baseModel).catch((error) => {
@@ -6615,7 +7267,10 @@ export async function generateSharedBrainReply(
     });
     const estimatedAiCredits = estimatedBillableTokenUsage.billableTokens;
     if (!input.internalEvaluation?.skipUsageValidation) {
+      const taskQuotaWasValidatedAtChatAdmission =
+        input.taskId != null && input.meteringSurface === "chat";
       if (
+        !taskQuotaWasValidatedAtChatAdmission &&
         "serverBrainAllowed" in usageBudget.access &&
         usageBudget.access.serverBrainAllowed
       ) {
@@ -6641,10 +7296,18 @@ export async function generateSharedBrainReply(
     const turnEnvelopeEnabled =
       !machineJsonRoute &&
       !input.responseSchemaOverride &&
-      (app.config.ELYAN_TURN_ENVELOPE_ENABLED === true ||
-        connectorToolsAdvertised ||
-        isAgentEngineV2Enabled(app, input.userId) ||
-        isAgentEngineShadowEnabled(app));
+      (connectorToolsAdvertised ||
+        // AÇIK yapılandırma hızlı tur kısıtını yener: `ELYAN_TURN_ENVELOPE_ENABLED`
+        // bilinçli olarak açıldıysa zarf protokolü hızlı sohbette de geçerlidir.
+        // Aksi hâlde bayrak açıkken bile mobil sohbet (mobile_chat_fast) zarfı
+        // hiç kullanmıyor, model yine de zarf üretirse ham JSON riski doğuyordu.
+        app.config.ELYAN_TURN_ENVELOPE_ENABLED === true ||
+        (!fastTextTurn &&
+          (isAgentEngineV2Enabled(app, input.userId) ||
+            isAgentEngineShadowEnabled(app))) ||
+        (fastTextTurn &&
+          fastTextToolsExplicitlyRequested &&
+          (input.agentToolCatalog?.length ?? 0) > 0));
     // When registered tools are available, the envelope is an execution
     // protocol rather than an optional presentation format. Falling back to
     // unstructured prose here can expose a perfectly understood tool plan as
@@ -6727,12 +7390,14 @@ export async function generateSharedBrainReply(
       model: string,
       stream: boolean,
     ): SharedBrainRequestAttempt[] => {
-      const path = getChatCompletionPath(provider);
+      const path = getNativeChatPath(provider);
       const body = {
         ...buildRequestBody(
           provider,
           model,
-          messages,
+          // Compound kendi web aramasını koşuyor; kendi sonuçlarının geçerli
+          // kanıt olduğunu istemde söylemezsek bulduğu veriyi reddediyor.
+          withGroqCompoundGuidance(messages, model),
           maxTokens,
           app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
           stream,
@@ -6744,6 +7409,7 @@ export async function generateSharedBrainReply(
           // Makine-JSON rotasında düzyazı bir cevap DEĞİL, kayıp demektir:
           // masaüstü onu ayrıştıramaz ve desen tabanlı bozulmuş moda düşer.
           machineJsonRoute,
+          provider === "gemini",
         ),
         // Model bir Groq Compound modeli DEĞİLse boş nesne (no-op); değilse
         // yapılandırılmış arama ayarlarını (alan/ülke filtresi) gövdeye ekler.
@@ -6775,7 +7441,7 @@ export async function generateSharedBrainReply(
                 ? [{ ...structuredAttempt, forceNonStreaming: true }]
                 : []),
             ];
-      return structuredAttempt.turnEnvelopeMode
+      const nativeAttempts = structuredAttempt.turnEnvelopeMode
         ? // ZARFSIZ DENEME HER ZAMAN SON ÇARE OLARAK DURUR.
           //
           // Canlı arıza (2026-07-30): connector araçları duyurulduğunda
@@ -6795,6 +7461,41 @@ export async function generateSharedBrainReply(
               ? { ...structuredAttempt, forceNonStreaming: true }
               : structuredAttempt,
           ];
+      if (provider !== "gemini") return nativeAttempts;
+
+      // Native Interactions is the quality/latency path. Keep the existing
+      // OpenAI-compatible Gemini endpoint as a provider-local last resort so a
+      // rollout or regional endpoint problem does not force a cross-provider
+      // fallback when Gemini itself is otherwise healthy.
+      const compatibilityPath = getChatCompletionPath(provider);
+      const compatibilityBody = buildRequestBody(
+        provider,
+        model,
+        messages,
+        maxTokens,
+        app.config.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
+        stream,
+        clientVisionImages,
+        reasoningPolicy,
+        reasoningEffort,
+        generationTemperature,
+        input.responseSchemaOverride,
+        machineJsonRoute,
+        false,
+      );
+      const compatibilityAttempt = buildSharedBrainRequestAttempt({
+        provider,
+        path: compatibilityPath,
+        body: compatibilityBody,
+        turnEnvelopeEnabled,
+        proactiveOpsEnabled: app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true,
+      });
+      return [
+        ...nativeAttempts,
+        ...(requiredConnectorReadHint && input.onDelta
+          ? [{ ...compatibilityAttempt, forceNonStreaming: true }]
+          : [compatibilityAttempt]),
+      ];
     };
 
     const geminiFreeDataLineage =
@@ -6983,12 +7684,16 @@ export async function generateSharedBrainReply(
                   startedAt,
                   provider: candidate.provider,
                   model: attemptedModel,
+                  lowLatency: fastTextTurn,
                   onDelta: input.onDelta,
                 });
                 const streamResponse = await postStreamingJson(
                   app,
                   candidate.provider,
-                  joinProviderUrl(candidate.baseUrl, attempt.path),
+                  joinProviderUrl(
+                    providerBaseUrlForPath(candidate, attempt.path),
+                    attempt.path,
+                  ),
                   {
                     ...attempt.body,
                     stream: true,
@@ -7033,6 +7738,7 @@ export async function generateSharedBrainReply(
                       await deltaPublisher.publish(delta, streamedText);
                     }
                   },
+                  input.providerKeySeed ?? `${input.userId}:${input.taskId ?? ""}`,
                 );
 
                 attemptHadDelta = deltaPublisher.firstDeltaMs != null;
@@ -7141,12 +7847,18 @@ export async function generateSharedBrainReply(
                       "hidden",
                       reasoningEffort,
                       generationTemperature,
+                      undefined,
+                      false,
+                      false,
                     );
 
                     const continuationResponse = await postStreamingJson(
                       app,
                       candidate.provider,
-                      joinProviderUrl(candidate.baseUrl, attempt.path),
+                      joinProviderUrl(
+                        providerBaseUrlForPath(candidate, attempt.path),
+                        attempt.path,
+                      ),
                       continuationBody,
                       timeoutMs,
                       null,
@@ -7167,6 +7879,7 @@ export async function generateSharedBrainReply(
                         streamedText += delta;
                         await deltaPublisher.publish(delta, streamedText);
                       },
+                      input.providerKeySeed ?? `${input.userId}:${input.taskId ?? ""}`,
                     );
 
                     if (!continuationResponse.ok) {
@@ -7398,9 +8111,13 @@ export async function generateSharedBrainReply(
                 const candidateResponse = await postJson(
                   app,
                   candidate.provider,
-                  joinProviderUrl(candidate.baseUrl, attempt.path),
+                  joinProviderUrl(
+                    providerBaseUrlForPath(candidate, attempt.path),
+                    attempt.path,
+                  ),
                   attempt.body,
                   timeoutMs,
+                  input.providerKeySeed ?? `${input.userId}:${input.taskId ?? ""}`,
                 );
                 const rawText = await candidateResponse.text();
                 try {
@@ -7579,6 +8296,7 @@ export async function generateSharedBrainReply(
                         startedAt,
                         provider: candidate.provider,
                         model: attemptedModel,
+                        lowLatency: fastTextTurn,
                         onDelta: input.onDelta,
                       });
                       await deltaPublisher.publishReplacement(visibleText);
@@ -7841,7 +8559,7 @@ export async function generateSharedBrainReply(
       throw new AppError(
         503,
         "server_brain_unavailable",
-        "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.",
+        "Bu turda yanıt oluşturulamadı. Tekrar dene.",
         {
           route: input.route ?? "shared_brain",
           workload,
@@ -7894,7 +8612,6 @@ export async function generateSharedBrainReply(
     const secondaryVisionCandidate = providerCandidates.find(
       (candidate) =>
         candidate.hosted &&
-        candidate.provider !== "gemini" &&
         candidate.provider !== successfulProvider,
     );
     const escalationDecision = assessVisionAnswerEscalation({
@@ -7907,10 +8624,7 @@ export async function generateSharedBrainReply(
         estimatedPrimaryCredits: estimatedAiCredits,
         costGuardEnabled,
       }),
-      inputQualityScore:
-        variantsToPreprocess.length > 0
-          ? preprocessedVision.qualityScore
-          : null,
+      inputQualityScore: visionQualityScore,
       responseCoverageScore: assessVisionResponseCoverage({
         text,
         contract: visionResponseContract,
@@ -7962,7 +8676,7 @@ export async function generateSharedBrainReply(
               (sum, message) => sum + estimateTokens(message.content),
               0,
             );
-            const secondaryPath = getChatCompletionPath(
+            const secondaryPath = getNativeChatPath(
               secondaryVisionCandidate.provider,
             );
             const secondaryBody = buildRequestBody(
@@ -7976,13 +8690,23 @@ export async function generateSharedBrainReply(
               "hidden",
               reasoningEffort,
               0.2,
+              undefined,
+              false,
+              secondaryVisionCandidate.provider === "gemini",
             );
             const secondaryResponse = await postJson(
               app,
               secondaryVisionCandidate.provider,
-              joinProviderUrl(secondaryVisionCandidate.baseUrl, secondaryPath),
+              joinProviderUrl(
+                providerBaseUrlForPath(
+                  secondaryVisionCandidate,
+                  secondaryPath,
+                ),
+                secondaryPath,
+              ),
               secondaryBody,
               Math.min(timeoutMs, 30_000),
+              input.providerKeySeed ?? `${input.userId}:${input.taskId ?? ""}`,
             );
             if (secondaryResponse.ok) {
               const secondaryRaw = await secondaryResponse.text();
@@ -8031,9 +8755,22 @@ export async function generateSharedBrainReply(
         }
       }
     }
+    // Zarf ayrıştırma SADECE zarf modunda denenmiyor.
+    //
+    // Zarf modu kapalıyken (ör. hızlı sohbet turu) model yine de zarf JSON'u
+    // üretebiliyor — istem geçmişi, few-shot etkisi ya da bayrak/иş yükü
+    // uyumsuzluğu yüzünden. Eskiden bu durumda hiç ayrıştırma yapılmıyor ve
+    // HAM JSON kullanıcıya cevap olarak gidiyordu
+    // (`{"reply":{"text":"Selam"},"blocks":[...]}`). Metin zarf gibi
+    // görünüyorsa moddan bağımsız ayrıştırıyoruz: başarılıysa `reply.text`
+    // çıkar, başarısızsa davranış eskisi gibi düz metne düşer.
+    const looksLikeTurnEnvelopeText =
+      typeof text === "string" &&
+      text.trimStart().startsWith("{") &&
+      /"reply"\s*:/.test(text);
     const payloadEnvelope = payloadRecord.turnEnvelope
       ? parseTurnEnvelope(payloadRecord.turnEnvelope)
-      : successfulTurnEnvelopeMode
+      : successfulTurnEnvelopeMode || looksLikeTurnEnvelopeText
         ? parseTurnEnvelopeText(text)
         : null;
     const turnEnvelope: TurnEnvelope | null =
@@ -8101,7 +8838,7 @@ export async function generateSharedBrainReply(
               visionEscalationUsed,
               visionEscalationReasons: escalationDecision.reasons,
               visionEscalationCapacitySkipped,
-              visionInputQualityScore: preprocessedVision.qualityScore,
+              visionInputQualityScore: visionQualityScore,
               visionInputAcceptedCount: preprocessedVision.variants.length,
               visionInputRejectedCount: preprocessedVision.rejectedCount,
               visionInputWarnings: preprocessedVision.warnings,
@@ -8345,7 +9082,7 @@ export async function generateSharedBrainReply(
         imageCount: clientVisionImages.length,
         expectedPhysicalImageCount: physicalVisionImageCount,
         verifiedPhysicalImageCount,
-        inputQualityScore: preprocessedVision.qualityScore,
+        inputQualityScore: visionQualityScore,
         preprocessingWarnings: preprocessedVision.warnings,
         criticalConflict: visionCriticalConflict,
       }).text;
@@ -8597,9 +9334,12 @@ export async function generateSharedBrainReply(
       const requestedTools: AgentToolRequest[] = envelopeToolRequests;
       const scopedToolRequests = requestedTools.filter((request) => {
         if (!eligibleAgentToolNames.has(request.tool)) return false;
-        if (connectorOnlyMode && !isConnectorTool(request.tool)) return false;
+        const dynamicMcpRequest = request.tool.startsWith("mcp__");
+        if (connectorOnlyMode && !isConnectorTool(request.tool) && !dynamicMcpRequest) {
+          return false;
+        }
         if (
-          isConnectorTool(request.tool) &&
+          (isConnectorTool(request.tool) || dynamicMcpRequest) &&
           !advertisedConnectorNames.has(request.tool)
         ) {
           return false;
@@ -8616,22 +9356,27 @@ export async function generateSharedBrainReply(
         webGrounding,
       );
       const approvalMode = await getUserApprovalMode(app, input.userId);
+      const requiresToolApproval = (request: AgentToolRequest): boolean => {
+        if (request.tool.startsWith("mcp__")) {
+          // A semantically selected read can run inline. A selected write is
+          // surfaced as an approval request and never sent to the remote MCP
+          // server by this turn.
+          return !(
+            input.mcpToolSelection?.tool === request.tool &&
+            input.mcpToolSelection.operation === "read"
+          );
+        }
+        return decideAgentToolApproval({
+          tool: request.tool,
+          mode: approvalMode,
+        }).requiresApproval;
+      };
       // Both agent engines use the same per-user approval decision. Immutable
       // side effects/non-idempotent actions are staged; mode (c) can only
       // release explicitly-classified idempotent writes.
-      const approvalRequiredRequests = safeToolRequests.filter(
-        (request) =>
-          decideAgentToolApproval({
-            tool: request.tool,
-            mode: approvalMode,
-          }).requiresApproval,
-      );
+      const approvalRequiredRequests = safeToolRequests.filter(requiresToolApproval);
       const inlineToolRequests = safeToolRequests.filter(
-        (request) =>
-          !decideAgentToolApproval({
-            tool: request.tool,
-            mode: approvalMode,
-          }).requiresApproval,
+        (request) => !requiresToolApproval(request),
       );
       if (
         approvalRequiredRequests.length > 0 &&
@@ -8666,6 +9411,12 @@ export async function generateSharedBrainReply(
               ? { remainingApprovals: stagedWrites.slice(1) }
               : {}),
           };
+        }
+        const mcpApprovalRequests = approvalRequiredRequests
+          .filter((request) => request.tool.startsWith("mcp__"))
+          .map((request) => ({ tool: request.tool, args: request.args }));
+        if (mcpApprovalRequests.length > 0) {
+          result.metadata.mcpApprovalRequired = mcpApprovalRequests;
         }
       }
       const toolPlan =
@@ -9117,7 +9868,7 @@ export async function generateSharedBrainReply(
           imageCount: clientVisionImages.length,
           expectedPhysicalImageCount: physicalVisionImageCount,
           verifiedPhysicalImageCount,
-          inputQualityScore: preprocessedVision.qualityScore,
+          inputQualityScore: visionQualityScore,
           preprocessingWarnings: preprocessedVision.warnings,
           criticalConflict: finalizedCriticalConflict,
         })
@@ -9180,7 +9931,7 @@ export async function generateSharedBrainReply(
       answerFlags: finalizedVisionGate?.flags ?? [],
       expectedPhysicalImageCount: physicalVisionImageCount,
       verifiedPhysicalImageCount,
-      qualityScore: preprocessedVision.qualityScore,
+      qualityScore: visionQualityScore ?? 0.5,
       summary: result.text,
     });
     const finalizedSessionVisionEvidence =
@@ -9194,8 +9945,8 @@ export async function generateSharedBrainReply(
             cloudUsed: true,
             confidence: Math.min(
               visionEscalationUsed ? 0.82 : 0.72,
-              variantsToPreprocess.length > 0
-                ? 0.4 + preprocessedVision.qualityScore * 0.5
+              variantsToPreprocess.length > 0 && visionQualityScore != null
+                ? 0.4 + visionQualityScore * 0.5
                 : 0.68,
             ),
           })
@@ -9431,7 +10182,7 @@ export async function generateSharedBrainReply(
 async function classifySkillRouteWithModel(
   app: FastifyInstance,
   input: SharedBrainInferenceInput & {
-    attachmentContext: ResolvedAttachmentContext;
+    attachmentContext?: ResolvedAttachmentContext | null;
     skills: Awaited<ReturnType<typeof listActiveSkillSummaries>>;
   },
 ) {
@@ -9442,18 +10193,20 @@ async function classifySkillRouteWithModel(
       userId: input.userId,
       taskId: input.taskId,
       prompt: [
-        "Classify whether one document skill is needed. Return strict JSON only.",
+        "Semantically classify whether one Elyan skill is needed. Return strict JSON only.",
+        "Do not match keyword lists or phrases. Choose from the skill purpose, required input, produced output, user intent, attachment facts, and conversation meaning.",
         "Allowed skill ids:",
         JSON.stringify(
           skills.map((skill) => ({
             id: skill.id,
             summary: skill.summary,
-            triggers: skill.triggers,
+            requiresAttachment: skill.requiresAttachment,
+            produces: skill.produces,
           })),
         ),
         `User prompt: ${input.prompt}`,
         `Attachment documents: ${JSON.stringify(
-          input.attachmentContext.documents.map((document) => ({
+          (input.attachmentContext?.documents ?? []).map((document) => ({
             documentId: document.documentId,
             title: document.title,
             mimeType: document.mimeType,
@@ -10862,9 +11615,25 @@ export async function generateGovernedSharedBrainReply(
   // the catalog-rich prompt into a user-facing research/document skill changes
   // its workload and output schema, then returns prose instead of plan JSON.
   // Planned `run_skill` steps remain available in the desktop capability plan.
-  const skillReply = isDesktopPlanMachineJsonRoute(input.route)
-    ? null
-    : await tryGenerateSkillReply(app, input, routeDecision, attachmentContext);
+  const desiredOutputKinds =
+    input.understandingContext?.understandingEnvelope?.desired_outputs.map(
+      (output) => output.kind,
+    ) ?? [];
+  const richOutputRequested = desiredOutputKinds.some(
+    (kind) => !["chat_reply", "task_result", "action"].includes(kind),
+  );
+  const fastPlainTurn =
+    (input.workload ?? routeDecision?.selectedWorkload) === "mobile_chat_fast" ||
+    (input.workload ?? routeDecision?.selectedWorkload) === "fast_route";
+  const skillRoutingNeeded =
+    readSkillHint(input.requestMetadata) != null ||
+    attachmentContext?.used === true ||
+    richOutputRequested ||
+    !fastPlainTurn;
+  const skillReply =
+    isDesktopPlanMachineJsonRoute(input.route) || !skillRoutingNeeded
+      ? null
+      : await tryGenerateSkillReply(app, input, routeDecision, attachmentContext);
   if (skillReply) {
     skillReply.metadata = applyClaimConfidenceMetadata(app, {
       userId: input.userId,

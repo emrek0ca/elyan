@@ -294,8 +294,10 @@ test("extractSharedBrainConversation keeps only valid conversation items", () =>
 });
 
 test("getSharedBrainFallbackMessage preserves explicit error text and default fallback", () => {
-  const fallback =
-    "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.";
+  // Metin kısaltıldı: eski hâli uzun ve teknikti ("yanıt katmanı"),
+  // kullanıcıya iç mimariyi anlatıyordu. Testin amacı metnin KENDİSİ değil,
+  // açık hata metninin korunup jenerik hataların güvenli metne düşmesi.
+  const fallback = "Bu turda yanıt oluşturulamadı. Tekrar dene.";
   assert.equal(
     getSharedBrainFallbackMessage(new Error("  Shared brain failed  ")),
     "Shared brain failed",
@@ -335,11 +337,10 @@ test("resolveSafeChatContinuityReply keeps public chat alive after provider exha
     failureClass: "invalid_output",
   });
 
-  assert.match(
-    reply ?? "",
-    /model yanıtı tamamlanamadı|arka planda yeniden deniyorum/u,
-  );
-  assert.doesNotMatch(reply ?? "", /aynı mesajı|tekrar gönder|yanıt servisi/iu);
+  // Amaç: sohbet ölmesin, kullanıcı ne olduğunu anlasın ve iç detay sızmasın.
+  // Metin sadeleşti; kalıp yerine bu üç koşulu doğruluyoruz.
+  assert.match(reply ?? "", /tamamlanamadı|oluşturulamadı/u);
+  assert.doesNotMatch(reply ?? "", /yanıt servisi|provider|endpoint|stack/iu);
 });
 
 test("resolveSafeChatContinuityReply never bypasses tools, private context, approvals, or policy", () => {

@@ -49,9 +49,11 @@ export function buildHostedImageProviderRequest(input: {
     headers: {
       "x-goog-api-key": input.config.apiKey,
       "content-type": "application/json",
+      "Api-Revision": "2026-05-20",
     },
     body: {
       model: input.config.model,
+      store: false,
       input: sourceImages.length > 0
         ? [
             { type: "text", text: textPrompt },
@@ -62,12 +64,27 @@ export function buildHostedImageProviderRequest(input: {
             })),
           ]
         : [{ type: "text", text: textPrompt }],
+      response_format: {
+        type: "image",
+        // Gemini görsel uçları YALNIZ image/jpeg kabul ediyor. "image/png"
+        // göndermek her modelde 400 üretiyordu:
+        //   "The value 'image/png' is not supported for
+        //    'response_format.mime_type'. Supported values: 'image/jpeg'."
+        // Dört modelin tamamı bu yüzden düşüyor, sonuç null dönüyor ve
+        // 400 kota hatası olmadığı için hiçbir blokaj sebebi yazılmıyordu —
+        // kullanıcı jenerik "üretemedim" mesajı alıyordu.
+        mime_type: "image/jpeg",
+        ...(input.aspectRatio ? { aspect_ratio: input.aspectRatio } : {}),
+        ...(input.config.imageSize
+          ? { image_size: input.config.imageSize }
+          : {}),
+      },
       ...(premiumEditing
         ? { generation_config: { thinking_level: "high" } }
         : {}),
     },
     timeoutMs: 150_000,
-    defaultMimeType: "image/png",
+    defaultMimeType: "image/jpeg",
   };
 }
 

@@ -14,6 +14,7 @@ import {
   serviceUnavailable,
 } from "../../lib/errors.js";
 import type { EphemeralVisionCarrier } from "../brain/ephemeral-vision.js";
+import { MAX_EPHEMERAL_VISION_INPUTS } from "../brain/ephemeral-vision.js";
 import type { HostedImageSource } from "../brain/image-generation.js";
 import { reserveMediaNormalizationAdmission } from "./media-admission.js";
 
@@ -597,14 +598,23 @@ export async function resolveMediaInputSources(
     : [];
   const sources: HostedImageSource[] = [];
   let totalBytes = 0;
-  for (const item of refs.slice(0, 4)) {
+  for (const item of refs.slice(0, MAX_EPHEMERAL_VISION_INPUTS)) {
     const record =
       item && typeof item === "object" && !Array.isArray(item)
         ? (item as Record<string, unknown>)
         : {};
     const inputRef = typeof record.inputRef === "string" ? record.inputRef : "";
     if (!inputRef) continue;
-    const resolved = await resolveMediaInput(app, inputRef, userId);
+    let resolved: Awaited<ReturnType<typeof resolveMediaInput>>;
+    try {
+      resolved = await resolveMediaInput(app, inputRef, userId);
+    } catch (error) {
+      // A request-scoped token can expire while a queued task is starting.
+      // Let vision validation or the image-edit source gate handle the
+      // missing input instead of turning the whole task into a server error.
+      if (error instanceof AppError && error.statusCode === 404) continue;
+      throw error;
+    }
     totalBytes += resolved.body.byteLength;
     if (totalBytes > MEDIA_INPUT_MAX_TOTAL_BYTES) {
       throw badRequest("Combined image inputs exceed the 12 MB request limit");
@@ -639,6 +649,7 @@ async function materializeMediaInputVisionCarrier(
   const { default: sharp } = await import("sharp");
   const images: Array<{
     imageId: string;
+    label: string;
     kind: "full_frame";
     mimeType: "image/webp";
     base64Data: string;
@@ -651,7 +662,7 @@ async function materializeMediaInputVisionCarrier(
   }> = [];
   let totalBytes = 0;
 
-  for (const ref of carrier.inputRefs.slice(0, 4)) {
+  for (const ref of carrier.inputRefs.slice(0, MAX_EPHEMERAL_VISION_INPUTS)) {
     let resolved: Awaited<ReturnType<typeof resolveMediaInput>>;
     try {
       resolved = await resolveMediaInput(app, ref.inputRef, userId);
@@ -698,6 +709,7 @@ async function materializeMediaInputVisionCarrier(
     }
     images.push({
       imageId: resolved.descriptor.id,
+      label: resolved.descriptor.name,
       kind: "full_frame",
       mimeType: "image/webp",
       base64Data: output.data.toString("base64"),

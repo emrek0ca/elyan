@@ -88,8 +88,13 @@ import {
   buildVisualIntentContract,
   isNegatedVisualActionRequest,
   isVisualImageRequested,
+  latestImageArtifactFromMetadata,
 } from "../brain/visual-intent-contract.js";
-import { sanitizeFinalAssistantResponse } from "../brain/response-policy.js";
+import { resolveVisualIntentContract } from "../brain/visual-intent-semantic.js";
+import {
+  isGenericAssistantFallbackReply,
+  sanitizeFinalAssistantResponse,
+} from "../brain/response-policy.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import {
   executeAgentTool,
@@ -107,6 +112,17 @@ import {
   resolveMediaInputVisionCarrier,
 } from "./media-inputs.js";
 import { validateExecutionPlanWithGeminiFree } from "../brain/gemini-execution-validator.js";
+import { detectFabricatedActionClaim } from "../brain/action-claim-gate.js";
+import {
+  deriveChartBlock,
+  deriveTableBlock,
+  type VerifiedNumericPoint,
+} from "../brain/deterministic-chart.js";
+import {
+  chartIntentFromEvidence,
+  resolveChartIntent,
+  type ChartIntent,
+} from "../brain/chart-intent-semantic.js";
 import { normalizeFreshDataEnvelope } from "../brain/fresh-data-policy.js";
 import {
   cancelAgentRunForTask,
@@ -152,12 +168,15 @@ import {
   enrichTaskTraceWithAgentPlan,
 } from "../chat/task-trace.js";
 import {
+  chatMessageStatusRank,
   chatStreamEventStatusRank,
   isAssistantMessageTerminallyFenced,
   isTerminalChatStreamEvent,
   markAssistantMessageTerminal,
+  releaseAssistantMessageTerminal,
 } from "../chat/stream-authority.js";
 import {
+  enrichChatMetadataForRequest,
   persistRollingSummaryToSession,
   listChatSessionMessages,
 } from "../chat/service.js";
@@ -181,12 +200,12 @@ import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import {
   createUpgradeOrByokRequiredError,
   getUserUsageAccessTruth,
+  type UsageAccessTruth,
 } from "../billing/service.js";
 import {
   assertAttachmentQuotaAllowedFromUsage,
   assertTrialTaskQuotaAllowedFromUsage,
   getTrialQuotaUsage,
-  resolveUsageIdentityContext,
 } from "../quota/service.js";
 import { activeTaskStatuses, resequenceDeviceQueue } from "./queue.js";
 import {
@@ -411,7 +430,19 @@ export function resolveNonEchoAssistantText(input: {
     return recovery;
   }
 
-  return "İsteğini aldım; eldeki bağlamla devam ediyorum.";
+  // An empty or prompt-echoing provider result is not a valid assistant
+  // answer. Callers must either supply a real recovery answer or fail/retry;
+  // never turn a missing generation into a fake successful completion.
+  return "";
+}
+
+function hasRenderableAssistantBlocks(blocks: unknown): boolean {
+  return normalizeAssistantMessageBlocks({ blocks }).some(
+    (block) =>
+      block.type !== "text" &&
+      (block as { visibility?: unknown }).visibility !==
+        "assistant_internal_by_default",
+  );
 }
 
 function conversationTextFromChatMessage(message: {
@@ -426,6 +457,144 @@ function conversationTextFromChatMessage(message: {
     }
   }
   return typeof message.content === "string" ? message.content.trim() : "";
+}
+
+function extractCompactConversation(
+  metadata: Record<string, unknown>,
+): Array<{ role: "user" | "assistant"; content: string }> | undefined {
+  const compactContext = readRecord(metadata.compactContext);
+  const recentMessages = compactContext?.recentMessages;
+  if (!Array.isArray(recentMessages)) return undefined;
+  const conversation = recentMessages
+    .map((item) => {
+      const record = readRecord(item);
+      const role = record?.role;
+      const content =
+        typeof record?.content === "string" ? record.content.trim() : "";
+      return (role === "user" || role === "assistant") && content
+        ? { role, content }
+        : null;
+    })
+    .filter(
+      (item): item is { role: "user" | "assistant"; content: string } =>
+        item != null,
+    )
+    .slice(-16);
+  return conversation.length > 0 ? conversation : undefined;
+}
+
+/**
+ * Deterministik grafik türetmesi için sohbet metinleri — EN YENİ önce.
+ *
+ * "Bir polinom yaz" → "grafiğini çiz" akışında çizilecek ifade istekte
+ * değil, bir önceki asistan mesajındadır. Bu yüzden ters sırada taranır ve
+ * yalnız son birkaç tur bakılır (daha eskisi başka bir konu olabilir).
+ */
+function conversationTextsForDerivation(
+  payload: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+): string[] {
+  const conversation =
+    extractSharedBrainConversation(payload) ??
+    extractCompactConversation(metadata) ??
+    [];
+  return conversation
+    .slice(-6)
+    .reverse()
+    .map((message) => String(message.content ?? "").trim())
+    .filter(Boolean);
+}
+
+/**
+ * Türetme bağlamı — VERİTABANI son sözü söyler.
+ *
+ * Görev gövdesindeki sohbet anlık görüntüsü BOŞ olabiliyor: istemci
+ * `chatContextHydration.conversationSnapshotProvided` bayrağını gönderip
+ * içeriği göndermediğinde sunucu geçmişi ayrıca yüklemiyor ve
+ * `brainContext.conversation` ile `compactContext.recentMessages` sıfır
+ * kalıyor. Canlı vaka: "Bir polinom yaz" → "Grafiğini çiz" turunda önceki
+ * asistan mesajı (`f(x)=2x^3-5x^2+3x-7`) görev gövdesinde hiç yoktu; ifade
+ * bulunamayınca grafik türetilemiyor ve tur özür cümlesine düşüyordu.
+ *
+ * Oturum mesajları veritabanında HER ZAMAN duruyor. Gövde boşsa oradan
+ * okuyoruz; bu, tek kaynağa bağımlılığı kaldırır.
+ */
+async function resolveDerivationContextTexts(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    chatSessionId?: string | null;
+    payload: Record<string, unknown>;
+    metadata: Record<string, unknown>;
+  },
+): Promise<string[]> {
+  const fromPayload = conversationTextsForDerivation(input.payload, input.metadata);
+  if (fromPayload.length > 0 || !input.chatSessionId) {
+    return fromPayload;
+  }
+  try {
+    const page = await listChatSessionMessages(app, {
+      userId: input.userId,
+      sessionId: input.chatSessionId,
+      limit: 8,
+    });
+    return page.messages
+      .slice(-6)
+      .reverse()
+      .map((message) =>
+        conversationTextFromChatMessage({
+          role: message.role === "user" ? "user" : "assistant",
+          content: message.content,
+          blocks: message.blocks,
+        }),
+      )
+      .filter(Boolean);
+  } catch (error) {
+    app.log.debug?.(
+      { error: error instanceof Error ? error.message : "derivation_context_failed" },
+      "derivation context unavailable; continuing without conversation",
+    );
+    return [];
+  }
+}
+
+/**
+ * `authoritativeArtifactData` (araç sonucundan türetilmiş, kaynak-bağlı veri)
+ * → doğrulanmış sayısal seri. Bu veri modelin ürettiği bir şey değil; tool
+ * çıktısının kendisidir, bu yüzden grafiğe doğrudan bağlanabilir (A4).
+ */
+function verifiedNumericPoints(
+  source: unknown,
+): VerifiedNumericPoint[] | undefined {
+  const authoritative = readRecord(source);
+  if (!authoritative) return undefined;
+  const rows = Array.isArray(authoritative.data)
+    ? authoritative.data
+    : Array.isArray(authoritative.rows)
+      ? authoritative.rows
+      : [];
+  const points = rows.flatMap((row) => {
+    const record = readRecord(row);
+    if (!record) return [];
+    const value = record.value;
+    const label = typeof record.label === "string" ? record.label.trim() : "";
+    if (typeof value !== "number" || !Number.isFinite(value) || !label) {
+      return [];
+    }
+    return [
+      {
+        label,
+        value,
+        ...(typeof record.unit === "string" && record.unit.trim()
+          ? { unit: record.unit.trim() }
+          : {}),
+        ...(typeof record.source === "string" && record.source.trim()
+          ? { source: record.source.trim() }
+          : {}),
+      },
+    ];
+  });
+  return points.length >= 2 ? points.slice(0, 240) : undefined;
 }
 
 type RuntimeConnectionSnapshot = {
@@ -456,10 +625,23 @@ function hostedImageSources(
   return result;
 }
 
+/**
+ * Görsel referanslarını yalnız YETKİLİ taşıyıcı eşliğinde saklar.
+ *
+ * TUZAK (canlıda tam olarak bu yaşandı): istemci `metadata.mediaInputRefs`'i
+ * doğrudan yollayıp gövdedeki v2 taşıyıcıyı göndermezse referanslar burada
+ * SESSİZCE siliniyordu. `cloudVisionOptIn` bayrağı metadata'da hayatta
+ * kaldığı için hiçbir hata görünmüyor, `isCloudVisionRequested` sürekli
+ * false dönüyor ve model görseli hiç görmüyordu — kullanıcıya "göremiyorum"
+ * olarak yansıyan şey buydu. Silme artık iz bırakıyor.
+ */
 function bindAuthorizedMediaInputRefs(
   metadata: Record<string, unknown>,
   carrier: EphemeralVisionCarrier | undefined,
+  log?: FastifyInstance["log"],
 ): void {
+  const hadRefs =
+    Array.isArray(metadata.mediaInputRefs) && metadata.mediaInputRefs.length > 0;
   if (
     carrier?.version === 2 &&
     carrier.privacy.userAuthorizedCloud === true &&
@@ -483,6 +665,18 @@ function bindAuthorizedMediaInputRefs(
       localSensitivity: carrier.privacy.localSensitivity,
     };
     return;
+  }
+  if (hadRefs) {
+    log?.warn(
+      {
+        carrierVersion: carrier?.version ?? null,
+        userAuthorizedCloud:
+          carrier?.version === 2 ? carrier.privacy.userAuthorizedCloud : null,
+        metadataStripped:
+          carrier?.version === 2 ? carrier.privacy.metadataStripped : null,
+      },
+      "media input refs dropped: no authorized ephemeral vision carrier",
+    );
   }
   delete metadata.mediaInputRefs;
   delete metadata.mediaInputPrivacy;
@@ -709,24 +903,41 @@ function buildChatStreamEnvelope(input: {
   payload?: Record<string, unknown>;
 }) {
   const timestamp = input.timestamp ?? new Date().toISOString();
-  // statusRank: consumer tarafındaki terminal fence'in anahtarı. Aynı
-  // assistantMessageId için completed (rank 90) görüldükten sonra daha düşük
-  // rank'li her event (delta/heartbeat/ACK snapshot) yok sayılmalıdır; seq ve
-  // timestamp kaynaklar arası karşılaştırılamaz, rank karşılaştırılır.
-  const statusRank = chatStreamEventStatusRank(input.event);
+  // Event sırası ile mesaj lifecycle durumu farklı eksenlerdir. Özellikle
+  // waiting_approval (status rank 50), sonradan gelen message.delta (event
+  // rank 30) akışını durdurmamalıdır.
+  const eventRank = chatStreamEventStatusRank(input.event);
   const terminal = isTerminalChatStreamEvent(input.event);
+  const assistantMessage = input.payload?.assistantMessage;
+  const assistantStatus =
+    assistantMessage &&
+    typeof assistantMessage === "object" &&
+    !Array.isArray(assistantMessage) &&
+    typeof (assistantMessage as Record<string, unknown>).status === "string"
+      ? String((assistantMessage as Record<string, unknown>).status)
+      : typeof input.payload?.messageStatus === "string"
+        ? input.payload.messageStatus
+        : undefined;
+  const messageStatusRank = assistantStatus
+    ? chatMessageStatusRank(assistantStatus)
+    : undefined;
   return {
     event: input.event,
     taskId: input.taskId,
     sessionId: input.sessionId,
     messageId: input.messageId,
     seq: input.seq,
-    statusRank,
+    // statusRank is retained as the legacy event-axis field.
+    statusRank: eventRank,
+    eventRank,
+    ...(messageStatusRank == null ? {} : { messageStatusRank }),
     terminal,
     timestamp,
     ...(input.payload ?? {}),
     payload: {
-      statusRank,
+      statusRank: eventRank,
+      eventRank,
+      ...(messageStatusRank == null ? {} : { messageStatusRank }),
       terminal,
       ...(input.payload ?? {}),
     },
@@ -798,28 +1009,39 @@ async function publishPersistedChatStreamEvent(
     payload?: Record<string, unknown>;
   },
 ) {
-  if (isTerminalChatStreamEvent(input.event)) {
-    markAssistantMessageTerminal(input.messageId);
+  const isTerminal = isTerminalChatStreamEvent(input.event);
+  const terminalClaimed = isTerminal
+    ? markAssistantMessageTerminal(input.messageId)
+    : false;
+  if (isTerminal && !terminalClaimed) {
+    return;
   }
-  await app.services.eventBus.publishVolatile({
-    topic: input.event,
-    userId: input.userId,
-    deviceId: input.deviceId,
-    taskId: input.taskId,
-    payload: buildChatStreamEnvelope({
-      event: input.event,
+  try {
+    await app.services.eventBus.publish({
+      topic: input.event,
+      userId: input.userId,
+      deviceId: input.deviceId,
       taskId: input.taskId,
-      sessionId: input.sessionId,
-      messageId: input.messageId,
-      seq: input.seq,
-      payload: {
+      payload: buildChatStreamEnvelope({
+        event: input.event,
+        taskId: input.taskId,
         sessionId: input.sessionId,
-        assistantMessageId: input.messageId,
-        presentation: "chat",
-        ...(input.payload ?? {}),
-      },
-    }),
-  });
+        messageId: input.messageId,
+        seq: input.seq,
+        payload: {
+          sessionId: input.sessionId,
+          assistantMessageId: input.messageId,
+          presentation: "chat",
+          ...(input.payload ?? {}),
+        },
+      }),
+    });
+  } catch (error) {
+    if (terminalClaimed) {
+      releaseAssistantMessageTerminal(input.messageId);
+    }
+    throw error;
+  }
 }
 
 export type ToolFlowTraceSummary = {
@@ -1324,6 +1546,17 @@ function shouldAcceptStructuredBlock(input: {
   const selectedWorkload = String(input.selectedWorkload ?? "")
     .trim()
     .toLowerCase();
+  // SUNUCU TÜRETMESİ NİYET FİLTRESİNİN ÜSTÜNDEDİR.
+  //
+  // Bu blok modelin serbest çıktısı değil; sunucunun SEMANTİK bir niyet
+  // kararından sonra deterministik olarak ürettiği veridir. Aşağıdaki
+  // kapılar hâlâ kelime desenine bakıyor; onlara sormak, az önce "bu turda
+  // grafik isteniyor" diye verilmiş semantik kararı bir kelime listesiyle
+  // iptal etmek olurdu — ve türetilen grafik tam burada sessizce silinirdi.
+  const derivedBy = readRecord(input.block.renderHints)?.derivedBy;
+  if (typeof derivedBy === "string" && derivedBy.startsWith("server_")) {
+    return true;
+  }
   if (type === "table") {
     return shouldPromoteMarkdownTableToWidget({
       prompt: input.prompt,
@@ -1450,6 +1683,19 @@ export function resolveCompletionAssistantBlocks(input: {
   assistantBlocks?: unknown[];
   prompt?: string | null;
   selectedWorkload?: string | null;
+  /**
+   * Sohbet bağlamı, EN YENİ mesaj başta. "Bir polinom yaz" → "grafiğini çiz"
+   * akışında ifade istekte değil, önceki asistan mesajındadır.
+   */
+  contextTexts?: Array<string | null | undefined>;
+  /** Web grounding / araç katmanından gelen doğrulanmış sayısal seri. */
+  numericPoints?: VerifiedNumericPoint[];
+  /**
+   * SEMANTİK grafik niyeti (`resolveChartIntent`). Verildiğinde karar
+   * BUDUR — kelime deseni değil. Verilmediğinde kanıta düşülür: bağlamda
+   * gerçekten çizilebilir bir ifade ya da sayısal seri var mı?
+   */
+  chartIntent?: ChartIntent;
 }): { blocks: unknown[]; text: string } {
   const assistantBlocks = filterAssistantBlocksByIntent({
     blocks: Array.isArray(input.assistantBlocks)
@@ -1539,6 +1785,60 @@ export function resolveCompletionAssistantBlocks(input: {
         .map((part) => part.trim())
         .filter(Boolean)
         .join("\n\n");
+    }
+  }
+
+  // DETERMİNİSTİK GRAFİK/TABLO (A1/A4).
+  //
+  // Model yapısal çıktı üretemediğinde tur `continuity fallback`'e düşüyor ve
+  // kullanıcı grafik yerine özür görüyordu. Oysa grafiğin verisi sunucuda
+  // zaten var: ya bağlamdaki matematiksel ifade, ya cevabın kendi markdown
+  // tablosu, ya da web grounding'in doğrulanmış sayısal serisi. Model
+  // emisyonu BİRİNCİL, bu türetme İKİNCİL — yalnız blok gerçekten yoksa
+  // devreye girer.
+  const hasChartLikeBlock = assistantBlocks.some((block) => {
+    const type = String(readRecord(block)?.type ?? "");
+    return type === "chart" || type === "math_surface_3d";
+  });
+  // Niyet SEMANTİK gelir; gelmediyse kelimeye değil KANITA bakılır
+  // (bağlamda çizilebilir ifade / doğrulanmış sayısal seri var mı?).
+  const chartIntent =
+    input.chartIntent ??
+    chartIntentFromEvidence({
+      prompt: input.prompt ?? "",
+      contextTexts: input.contextTexts,
+      numericPointCount: input.numericPoints?.length ?? 0,
+    });
+  if (!hasChartLikeBlock && chartIntent.wantsChart) {
+    const derivedChart = deriveChartBlock({
+      prompt: input.prompt ?? "",
+      responseText: text,
+      contextTexts: input.contextTexts,
+      numericPoints: input.numericPoints,
+      preferredChartType: chartIntent.family === "surface" ? "surface3d" : null,
+    });
+    if (derivedChart) {
+      assistantBlocks.push(derivedChart);
+    }
+  }
+  const hasTableBlockNow = assistantBlocks.some(
+    (block) => String(readRecord(block)?.type ?? "") === "table",
+  );
+  if (
+    !hasTableBlockNow &&
+    (input.numericPoints?.length ?? 0) >= 2 &&
+    shouldPromoteMarkdownTableToWidget({
+      prompt: input.prompt,
+      selectedWorkload: input.selectedWorkload,
+    })
+  ) {
+    const derivedTable = deriveTableBlock({
+      prompt: input.prompt ?? "",
+      responseText: text,
+      numericPoints: input.numericPoints,
+    });
+    if (derivedTable) {
+      assistantBlocks.push(derivedTable);
     }
   }
 
@@ -2245,6 +2545,40 @@ async function storeTaskJsonBlob(
   });
 }
 
+function canKeepChatTaskPayloadInline(
+  payload: Record<string, unknown>,
+  ephemeralVision?: EphemeralVisionCarrier,
+): boolean {
+  const metadata = getPayloadMetadata(payload);
+  if (metadata.channel !== "chat") {
+    return false;
+  }
+  if (countDistinctEphemeralImages(ephemeralVision) > 0) {
+    return false;
+  }
+  if (
+    Array.isArray(metadata.mediaInputRefs) &&
+    metadata.mediaInputRefs.length > 0
+  ) {
+    return false;
+  }
+  if (
+    extractAttachmentMetadataCarrier(metadata) != null ||
+    extractClientAttachments(metadata).length > 0
+  ) {
+    return false;
+  }
+
+  try {
+    // The inline task payload is already the worker's source of truth. Keep
+    // small text-chat payloads there and reserve object storage for rich or
+    // private media payloads that actually benefit from a blob reference.
+    return JSON.stringify(payload).length <= 64_000;
+  } catch {
+    return false;
+  }
+}
+
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -2258,13 +2592,33 @@ function resolveImageGenerationFallbackText(
     typeof metadata.imageGenerationBlockedReason === "string"
       ? metadata.imageGenerationBlockedReason
       : "";
-  if (reason === "image_generation_limit_reached") {
-    return "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin.";
+  // Her blokaj sebebinin KENDİ mesajı olmalı. Eskiden yalnız iki sebep
+  // eşleniyordu; `rate_limited`, `daily_budget_exhausted`, `4k_budget_exhausted`
+  // ve `provider_quota` aynı "biraz sonra tekrar dene" metnine düşüyordu.
+  // Kullanıcı ne olduğunu anlamıyor, ne yapacağını bilmiyor ve çoğu durumda
+  // "sonra tekrar dene" YANLIŞ bir öneri oluyordu.
+  switch (reason) {
+    case "image_generation_limit_reached":
+      return "Bu ayki görsel üretim hakkın doldu. Plan limitin yenilendiğinde tekrar görsel üretebilirsin.";
+    case "image_edit_source_missing":
+      return "Düzenlenecek son görseli bu sohbet içinde bulamadım. Görseli tekrar ekleyip ne değiştireceğini yazabilirsin.";
+    case "image_generation_rate_limited":
+      return "Arka arkaya çok fazla görsel istedin. Bir dakika bekleyip tekrar dene.";
+    case "image_generation_daily_budget_exhausted":
+    case "image_generation_4k_budget_exhausted":
+      return "Bugünkü görsel üretim kapasitesi doldu. Yarın tekrar deneyebilirsin.";
+    case "image_generation_budget_store_unavailable":
+      // Yapılandırma eksikliği; "sonra tekrar dene" yanlış öneri olurdu.
+      return "Görsel üretimi bu sunucuda şu an devre dışı. Ekibe ilettim.";
+    case "image_generation_provider_quota":
+      return "Görsel sağlayıcısı şu an yanıt vermiyor. Birkaç dakika içinde tekrar dene.";
+    case "image_generation_provider_unconfigured":
+      // "Sonra tekrar dene" DEMİYORUZ: bu yapılandırma eksikliği, geçici bir
+      // arıza değil. Tekrar denemek hiçbir zaman çalışmaz.
+      return "Görsel üretimi bu sunucuda henüz etkin değil. Ekibe ilettim; etkinleştirildiğinde görsel üretebileceğim.";
+    default:
+      return "Görseli şu anda üretemedim. Aynı isteği tekrar gönderebilirsin; sorun sürerse bana yazdığın açıklamayı biraz sadeleştirmeyi dene.";
   }
-  if (reason === "image_edit_source_missing") {
-    return "Düzenlenecek son görseli bu sohbet içinde bulamadım. Görseli tekrar ekleyip ne değiştireceğini yazabilirsin.";
-  }
-  return "Görsel üretim şu anda tamamlanamadı. Lütfen biraz sonra tekrar dene.";
 }
 
 function readRenderRecipeFromTask(
@@ -4904,6 +5258,30 @@ async function completeServerBrainTask(
         }
       : basePayloadMetadata;
   const prompt = getTaskPrompt(payload);
+  const derivationContextTexts = await resolveDerivationContextTexts(app, {
+    userId: input.userId,
+    chatSessionId: input.chatSessionId ?? extractChatStreamingMetadata(task)?.sessionId ?? null,
+    payload,
+    metadata: payloadMetadata,
+  });
+  const derivationNumericPoints =
+    verifiedNumericPoints(input.authoritativeArtifactData) ??
+    verifiedNumericPoints(payloadMetadata.authoritativeArtifactData);
+  // Grafik niyeti SEMANTİK çözülür (ucuz yapılandırılmış çağrı); çağrı
+  // düşerse kelimeye değil kanıta düşer. Karar tamamlanma yolunun tek
+  // sahibidir; aşağıdaki blok çözümü artık kelime desenine sormaz.
+  const chartIntent = await resolveChartIntent(app, {
+    userId: input.userId,
+    prompt,
+    contextTexts: derivationContextTexts,
+    numericPointCount: derivationNumericPoints?.length ?? 0,
+  }).catch(() =>
+    chartIntentFromEvidence({
+      prompt,
+      contextTexts: derivationContextTexts,
+      numericPointCount: derivationNumericPoints?.length ?? 0,
+    }),
+  );
   const resolved = resolveCompletionAssistantBlocks({
     responseText: input.responseText,
     assistantBlocks: input.assistantBlocks,
@@ -4912,6 +5290,9 @@ async function completeServerBrainTask(
       typeof payloadMetadata.selectedWorkload === "string"
         ? payloadMetadata.selectedWorkload
         : null,
+    contextTexts: derivationContextTexts,
+    numericPoints: derivationNumericPoints,
+    chartIntent,
   });
   const tablePolicy = shouldPromoteMarkdownTableToWidget({
     prompt,
@@ -4948,6 +5329,13 @@ async function completeServerBrainTask(
     prompt,
     text: visibleResponseText,
     workload: input.workload,
+    // KRİTİK: bu çağrı `hasRenderableOutput`'u HİÇ geçmiyordu. Model boş metin
+    // ürettiğinde burası anında "yanıt oluşturamadım" cümlesini yazıyor, metin
+    // artık dolu olduğu için ikinci sanitize (aşağıda, blokları bilen çağrı)
+    // onu olduğu gibi geçiriyordu. Sonuç: sunucu grafiği başarıyla türetmiş
+    // olsa bile kullanıcı grafik yerine özür görüyordu ("polinom yaz →
+    // grafiğini çiz" turu tam olarak buradan düşüyordu).
+    hasRenderableOutput: resolvedAssistantBlocks.length > 0,
     allowVerificationLanguage:
       input.webGroundingUsed === true || (input.webSourceCount ?? 0) > 0,
     freshData: normalizedFreshData
@@ -5089,11 +5477,41 @@ async function completeServerBrainTask(
       : input.sourceImages && input.sourceImages.length > 0
         ? input.sourceImages
         : [];
-  let visualIntent = buildVisualIntentContract({
+  // RC-3 — Görsel niyet HER TUR yeniden ve SEMANTİK çözülür; regex sözlüğü
+  // (buildVisualIntentContract) "tren" gibi listede olmayan konuları göremiyor
+  // ve önceki turun bağlamı ilgisiz turları ele geçiriyordu. Semantik resolver
+  // (resolveVisualIntentContract) anlamı modele bırakır ve başarısızlıkta zaten
+  // deterministik çıkarıcıya düşer. Maliyet için: semantik çözümü YALNIZCA
+  // görsel bağlam varken (bu tur bir kaynak görsel yüklendi VEYA oturumda
+  // önceki bir görsel artefakt var) yaparız — bu yapısal bir kontroldür,
+  // prompt üzerinde kelime araması DEĞİL. Böylece saf sohbet turları ("bugün
+  // nasılsın") fazladan model çağrısı üretmez.
+  const hasVisualContext =
+    explicitSourceImages.length > 0 ||
+    Boolean(latestImageArtifactFromMetadata(payloadMetadata));
+  // "çiz / grafik / göster" gibi fiiller HEM resim HEM grafik için kullanılıyor;
+  // kelime deseni bunları ayıramaz ("bana bir kedi çiz" = resim, "bunun
+  // grafiğini çiz" = fonksiyon grafiği). Deterministik yol bir görsel isteği
+  // SANIYORSA ya da oturumda görsel bağlam varsa kararı SEMANTİK modele bırak —
+  // model anlamı çözer, gerekirse notAnImageRequest ile görsel-üretimi bastırır.
+  const deterministicIntent = buildVisualIntentContract({
     prompt,
     metadata: payloadMetadata,
     sourceImageCount: explicitSourceImages.length,
   });
+  const deterministicWantsImage =
+    isVisualImageRequested(deterministicIntent, prompt) ||
+    isHostedImageGenerationRequest(prompt) ||
+    isHostedImageEditRequest(prompt, explicitSourceImages.length);
+  let visualIntent =
+    hasVisualContext || deterministicWantsImage
+      ? await resolveVisualIntentContract(app, {
+          userId: input.userId,
+          prompt,
+          metadata: payloadMetadata,
+          sourceImageCount: explicitSourceImages.length,
+        })
+      : deterministicIntent;
   const lastVisualArtifactSource =
     explicitSourceImages.length === 0 &&
     (visualIntent.intent === "image_continue" ||
@@ -5119,23 +5537,46 @@ async function completeServerBrainTask(
           ? lastVisualArtifactSource.artifact.sourceSessionId
           : null,
     };
-    visualIntent = buildVisualIntentContract({
+    // Kaynak görsel çözüldü (oturumda önceki görsel var) → burada da semantik
+    // çöz; deterministik'e düşmek RC-3'ün "aynı treni gece vakti yap"
+    // vakasını yeniden regex'e mahkûm ederdi.
+    visualIntent = await resolveVisualIntentContract(app, {
+      userId: input.userId,
       prompt,
       metadata: payloadMetadata,
       sourceImageCount: effectiveSourceImages.length,
     });
   }
+  // RC-3 / semantik: Var olmayan bir görseli DÜZENLEYEMEZ ya da DEVAM
+  // ettiremezsin. Görsel-niyet çıkarıcısı "bunun/bunu/bu/şu" gibi zamirleri
+  // (CONTINUATION_PATTERNS) görsel-devam sanıyor; "Bunun çözümünü yap şimdi"
+  // gibi bir cümle ortada HİÇ görsel yokken görsel-düzenleme yoluna düşüp
+  // "Düzenlenecek son görseli bu sohbet içinde bulamadım" hatası veriyordu —
+  // oysa kullanıcı bir önceki turdaki polinomu kastediyor. Düzenlenecek/devam
+  // edilecek gerçek bir kaynak (bu turda yüklenen ya da oturumdaki görsel) yoksa
+  // bu bir görsel isteği DEĞİLDİR; tur normal sohbete düşer ve içerik çözülür.
+  const visualEditOrContinue =
+    visualIntent.intent === "image_edit" ||
+    visualIntent.intent === "image_continue";
+  const suppressSourcelessEdit =
+    visualEditOrContinue && effectiveSourceImages.length === 0;
+  // Semantik model "bu görsel değil, bir grafik/plot isteği" dediyse görsel
+  // üretimi tamamen bastır; chart/fonksiyon yolu turu üretir.
   const imageGenerationRequested =
     artifactPipeline.kind !== "evidence_required" &&
     artifactPipeline.kind !== "validation_failed" &&
     !hasVisualDataBlock &&
+    !suppressSourcelessEdit &&
+    visualIntent.notAnImageRequest !== true &&
     (isVisualImageRequested(visualIntent, prompt) ||
       isHostedImageGenerationRequest(prompt) ||
       isHostedImageEditRequest(prompt, effectiveSourceImages.length));
   const generatedImageArtifact =
     artifactPipeline.kind === "evidence_required" ||
     artifactPipeline.kind === "validation_failed" ||
-    hasVisualDataBlock
+    hasVisualDataBlock ||
+    suppressSourcelessEdit ||
+    visualIntent.notAnImageRequest === true
       ? null
       : await maybeGenerateHostedImageArtifact(app, {
           prompt,
@@ -5362,6 +5803,39 @@ async function completeServerBrainTask(
       : {}),
     ...(renderRecipe ? { renderRecipe } : {}),
   };
+
+  // RC-2 — eylem-taahhüdü kapısı. Sunucu beyni turunda hiçbir araç
+  // yürütülmemiş VE hiçbir artefakt üretilmemişken model dış-etkili bir işi
+  // (dosya oluşturma, ekran inceleme, uygulama kontrolü, mesaj gönderme,
+  // görsel düzenleme) YAPMIŞ gibi anlatıyorsa bu bir uydurmadır. Bu tur
+  // `completed` YAZILAMAZ: throw ile mevcut failure yolu devreye girer,
+  // kullanıcıya uydurma yerine insan-etiketli bir yanıt döner. Kanıt yoksa
+  // completed bir iddia değil, kanıt olmalıdır.
+  const actionClaimDecision = await detectFabricatedActionClaim(app, {
+    userId: input.userId,
+    route: input.route,
+    responseText: visibleResponseText,
+    executedToolCount: input.toolFlow?.count ?? 0,
+    hasArtifactEvidence:
+      Boolean(generatedImageArtifact) ||
+      artifactPipeline.kind === "rendered" ||
+      hasVisualDataBlock,
+    fallbackUsed: input.fallbackUsed ?? false,
+  });
+  if (actionClaimDecision.fabricated) {
+    throw new AppError(
+      502,
+      "fabricated_action_claim",
+      "Bu turda gerçekleştirilmemiş bir işlem yapılmış gibi anlatıldı; yanıt yayınlanmadı.",
+      {
+        transient: false,
+        retrySuggested: false,
+        failureClass: "invalid_output",
+        actionSummary: actionClaimDecision.actionSummary,
+      },
+    );
+  }
+
   const resultBlob = await storeTaskJsonBlob(app, {
     taskId: task.id,
     userId: input.userId,
@@ -5554,8 +6028,21 @@ async function completeServerBrainTask(
         }
       : null,
   });
-  if (finalVisibleResponseText !== visibleResponseText) {
-    visibleResponseText = finalVisibleResponseText;
+  // SON EMNİYET KEMERİ: "yanıt oluşturamadım" cümlesi boru hattının DAHA
+  // ERKEN bir adımında (inference katmanı) da yazılmış olabilir; oradan
+  // gelirse yukarıdaki `hasRenderableOutput` bayrağı onu geri alamaz, çünkü
+  // metin artık "dolu" görünür. Çizilebilir bir çıktı varken bu cümle asla
+  // kalmamalı — kullanıcı hem grafiği hem özrü aynı ekranda görmemeli.
+  const hasRenderableSurface =
+    resolvedAssistantBlocks.length > 0 ||
+    structuredOutputArtifacts.length > 0 ||
+    Boolean(renderRecipe);
+  const repairedVisibleResponseText =
+    hasRenderableSurface && isGenericAssistantFallbackReply(finalVisibleResponseText)
+      ? ""
+      : finalVisibleResponseText;
+  if (repairedVisibleResponseText !== visibleResponseText) {
+    visibleResponseText = repairedVisibleResponseText;
     result.text = visibleResponseText;
     result.responseBytes = Buffer.byteLength(
       visibleResponseText || JSON.stringify(resolvedAssistantBlocks ?? []),
@@ -5814,9 +6301,11 @@ async function markServerBrainTaskRunning(
   input: {
     taskId: string;
     userId: string;
+    task?: typeof tasks.$inferSelect;
+    deferLifecycle?: boolean;
   },
 ) {
-  const task = await getTaskById(app, input.taskId);
+  const task = input.task ?? (await getTaskById(app, input.taskId));
   if (!task || task.userId !== input.userId) {
     throw notFound("Task not found");
   }
@@ -5865,25 +6354,38 @@ async function markServerBrainTaskRunning(
 
   const updatedTask = rows[0];
 
-  await insertTaskEvent(app, {
-    taskId: updatedTask.id,
-    userId: updatedTask.userId,
-    status: "running",
-    message: "running",
-    payload: {
-      route: "shared_brain",
-      presentation: "chat",
-    },
-  });
+  const publishRunningLifecycle = async () => {
+    await insertTaskEvent(app, {
+      taskId: updatedTask.id,
+      userId: updatedTask.userId,
+      status: "running",
+      message: "running",
+      payload: {
+        route: "shared_brain",
+        presentation: "chat",
+      },
+    });
+    await Promise.all([
+      publishTaskEvent(app, updatedTask, "task.updated", {
+        task: shapeTaskFeedItem(updatedTask),
+      }),
+      syncChatTaskLifecycle(app, {
+        originalTask: task,
+        updatedTask,
+      }),
+    ]);
+  };
 
-  await publishTaskEvent(app, updatedTask, "task.updated", {
-    task: shapeTaskFeedItem(updatedTask),
-  });
-
-  await syncChatTaskLifecycle(app, {
-    originalTask: task,
-    updatedTask,
-  });
+  if (input.deferLifecycle) {
+    void publishRunningLifecycle().catch((error) => {
+      app.log.warn(
+        { error, taskId: updatedTask.id },
+        "shared brain running lifecycle deferred",
+      );
+    });
+  } else {
+    await publishRunningLifecycle();
+  }
 
   return updatedTask;
 }
@@ -6016,6 +6518,7 @@ type SharedBrainChatTaskInput = {
   canonicalTitle: string;
   understanding: Awaited<ReturnType<typeof buildTaskUnderstanding>>;
   planCode?: string | null;
+  usageAccess?: UsageAccessTruth;
   brainProfile?: unknown;
   ephemeralVision?: EphemeralVisionCarrier;
   providerStage?: ChatGenerationProviderStage;
@@ -6069,79 +6572,166 @@ async function processSharedBrainChatTask(
     const runningTask = await markServerBrainTaskRunning(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
+      task: input.currentTask,
+      deferLifecycle: true,
     });
-    await assertSharedBrainExecutionActive(input);
+    // The lease check is independent from payload/context preparation. Start
+    // it now, but await it at the model boundary so a Redis round-trip cannot
+    // sit serially in front of the first-token path.
+    const executionActivePromise = assertSharedBrainExecutionActive(input);
+    void executionActivePromise.catch(() => undefined);
     if (!resumedQueueAttempt) {
-      await recordTaskLearningFromCreation(app, {
-        userId: input.userId,
-        accountId: input.userId,
-        taskId: input.currentTask.id,
-        title: input.canonicalTitle,
-        message: input.prompt,
-        routeContext: "tasks.create",
-        source:
-          input.currentTask.payload &&
-          typeof input.currentTask.payload === "object" &&
-          !Array.isArray(input.currentTask.payload) &&
-          typeof (input.currentTask.payload as Record<string, unknown>)
-            .source === "string"
+      // Learning/telemetry is durable enrichment, not a prerequisite for the
+      // first visible token. Keep it on the same event loop turn, but never
+      // make provider latency wait for two additional database writes.
+      void Promise.all([
+        recordTaskLearningFromCreation(app, {
+          userId: input.userId,
+          accountId: input.userId,
+          taskId: input.currentTask.id,
+          title: input.canonicalTitle,
+          message: input.prompt,
+          routeContext: "tasks.create",
+          source:
+            input.currentTask.payload &&
+            typeof input.currentTask.payload === "object" &&
+            !Array.isArray(input.currentTask.payload) &&
+            typeof (input.currentTask.payload as Record<string, unknown>)
+              .source === "string"
             ? ((input.currentTask.payload as Record<string, unknown>)
                 .source as string)
             : undefined,
-        deviceId: input.currentTask.targetDeviceId,
-        metadata:
-          input.currentTask.payload &&
-          typeof input.currentTask.payload === "object" &&
-          !Array.isArray(input.currentTask.payload)
-            ? getPayloadMetadata(
-                input.currentTask.payload as Record<string, unknown>,
-              )
-            : {},
-        intent: input.understanding.intent,
-        requestId: input.requestId,
-      });
-      await recordBridgeLearningSignals(app, {
-        userId: input.userId,
-        accountId: input.userId,
-        taskId: input.currentTask.id,
-        target: "server_brain",
-        outcome: "created",
-        readiness: "ready",
-        routingMode: "server_brain_first",
-        requestId: input.requestId,
-      });
+          deviceId: input.currentTask.targetDeviceId,
+          metadata:
+            input.currentTask.payload &&
+            typeof input.currentTask.payload === "object" &&
+            !Array.isArray(input.currentTask.payload)
+              ? getPayloadMetadata(
+                  input.currentTask.payload as Record<string, unknown>,
+                )
+              : {},
+          intent: input.understanding.intent,
+          requestId: input.requestId,
+        }),
+        recordBridgeLearningSignals(app, {
+          userId: input.userId,
+          accountId: input.userId,
+          taskId: input.currentTask.id,
+          target: "server_brain",
+          outcome: "created",
+          readiness: "ready",
+          routingMode: "server_brain_first",
+          requestId: input.requestId,
+        }),
+      ]).catch(() => undefined);
     }
     const chatStreaming = extractChatStreamingMetadata(runningTask);
-    const sessionVisualMemory = chatStreaming?.sessionId
-      ? await readSessionVisualArtifactMemory(app, {
-          userId: input.userId,
-          sessionId: chatStreaming.sessionId,
-        }).catch(() => ({
-          sessionArtifacts: [],
-          lastVisualArtifact: null,
-        }))
-      : { sessionArtifacts: [], lastVisualArtifact: null };
-    const sessionArtifacts = sessionVisualMemory.sessionArtifacts;
     const routeDecision = extractRouteDecision(
       runningTask.payload &&
         typeof runningTask.payload === "object" &&
         !Array.isArray(runningTask.payload)
-        ? (runningTask.payload as Record<string, unknown>)
-        : {},
+      ? (runningTask.payload as Record<string, unknown>)
+      : {},
     );
     const runningPayload =
       runningTask.payload &&
       typeof runningTask.payload === "object" &&
       !Array.isArray(runningTask.payload)
-        ? (runningTask.payload as Record<string, unknown>)
-        : {};
-    try {
-      hydratedEphemeralVision = await resolveMediaInputVisionCarrier(
-        app,
-        input.userId,
-        input.ephemeralVision,
+      ? (runningTask.payload as Record<string, unknown>)
+      : {};
+    const payloadMetadata = getPayloadMetadata(runningPayload);
+    const deferredChatContext = readRecord(
+      payloadMetadata.chatContextHydration,
+    )?.deferred === true;
+    const compactContext = readRecord(payloadMetadata.compactContext);
+    const mobileContextCapabilities = readRecord(
+      compactContext?.mobileContextCapabilities,
+    );
+    const metadataAttachments = extractClientAttachments(payloadMetadata);
+    const routeWorkload = String(
+      routeDecision?.selectedWorkload ?? payloadMetadata.selectedWorkload ?? "",
+    ).trim();
+    // The mobile snapshot already contains the turn's compact state. A fresh
+    // world-signal read is only required when the typed understanding says
+    // that live context is relevant; otherwise it is an unnecessary DB read
+    // on every ordinary fast chat turn.
+    const contextPackets = Array.isArray(
+      input.understanding.context.contextPackets,
+    )
+      ? input.understanding.context.contextPackets
+      : [];
+    const turnUsesMobileContext =
+      input.understanding.context.healthContextUsed === true ||
+      contextPackets.some(
+        (packet) =>
+          ["health_context", "location_context", "calendar_context"].includes(
+            packet.kind,
+          ) && packet.mentionPolicy !== "silent",
       );
-    } catch (error) {
+    const fastPlainChatTask =
+      (routeWorkload === "mobile_chat_fast" || routeWorkload === "fast_route") &&
+      countDistinctEphemeralImages(input.ephemeralVision) === 0 &&
+      metadataAttachments.length === 0 &&
+      routeDecision?.privacyClass !== "side_effect" &&
+      routeDecision?.requiresApproval !== true &&
+      !turnUsesMobileContext;
+    const deferredContextNeedsHydration =
+      deferredChatContext &&
+      mobileContextCapabilities != null &&
+      Object.keys(mobileContextCapabilities).length > 0 &&
+      !fastPlainChatTask;
+    const requestMetadataPromise =
+      deferredContextNeedsHydration && chatStreaming?.sessionId
+        ? enrichChatMetadataForRequest(app, {
+            userId: input.userId,
+            sessionId: chatStreaming.sessionId,
+            targetDeviceId: runningTask.targetDeviceId ?? undefined,
+            metadata: payloadMetadata,
+          }).catch(() => payloadMetadata)
+        : Promise.resolve(payloadMetadata);
+
+    const visualIntentHint = buildVisualIntentContract({
+      prompt: input.prompt,
+      metadata: payloadMetadata,
+      sourceImageCount: hostedImageSources(input.ephemeralVision).length,
+    });
+    const needsVisualHistory =
+      countDistinctEphemeralImages(input.ephemeralVision) > 0 ||
+      routeWorkload === "image_analyze" ||
+      routeWorkload === "vision_reasoning" ||
+      metadataAttachments.some((attachment) =>
+        String(
+          (attachment as { mimeType?: unknown }).mimeType ?? "",
+        )
+          .toLowerCase()
+          .startsWith("image/"),
+      ) ||
+      visualIntentHint.intent === "image_edit" ||
+      visualIntentHint.intent === "image_continue" ||
+      isHostedImageEditIntent(input.prompt) ||
+      isVisualImageRequested(visualIntentHint, input.prompt);
+
+    // Plain text turns do not need a session-artifact lookup. Keeping this
+    // query out of the hot path prevents one DB read per message at scale;
+    // visual continuations and image workloads retain the authoritative lookup.
+    const sessionVisualMemoryPromise =
+      needsVisualHistory && chatStreaming?.sessionId
+        ? readSessionVisualArtifactMemory(app, {
+            userId: input.userId,
+            sessionId: chatStreaming.sessionId,
+          }).catch(() => ({
+            sessionArtifacts: [],
+            lastVisualArtifact: null,
+          }))
+        : Promise.resolve({
+            sessionArtifacts: [],
+            lastVisualArtifact: null,
+          });
+    const hydratedEphemeralVisionPromise = resolveMediaInputVisionCarrier(
+      app,
+      input.userId,
+      input.ephemeralVision,
+    ).catch((error) => {
       if (error instanceof AppError && error.statusCode >= 500) throw error;
       throw new AppError(
         410,
@@ -6153,24 +6743,43 @@ async function processSharedBrainChatTask(
           failureClass: "invalid_input",
         },
       );
-    }
-    const attachmentContext = await resolveTaskAttachmentContext(
-      app,
-      runningPayload,
-      input.prompt,
-      hydratedEphemeralVision,
-    );
+    });
+    const [sessionVisualMemory, resolvedEphemeralVision] = await Promise.all([
+      sessionVisualMemoryPromise,
+      hydratedEphemeralVisionPromise,
+    ]);
+    // Ordinary text turns already carry the compact client snapshot. Do not
+    // make their first token wait for an authoritative context refresh.
+    const requestMetadata = deferredContextNeedsHydration
+      ? await requestMetadataPromise
+      : payloadMetadata;
+    const sessionArtifacts = sessionVisualMemory.sessionArtifacts;
+    hydratedEphemeralVision = resolvedEphemeralVision;
 
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
-    const clientAttachments = extractClientAttachments(
-      getPayloadMetadata(runningPayload),
-    );
-    const clientDocCtx =
-      clientAttachments.length > 0
-        ? await buildDocumentContextBlock(app, clientAttachments).catch(
-            () => null,
+    const clientAttachments = metadataAttachments;
+    const brainContextAttachmentCandidates =
+      extractAttachmentCandidatesFromBrainContext(
+        readRecord(runningPayload.brainContext),
+      );
+    const hasAttachmentContextInput =
+      countDistinctEphemeralImages(hydratedEphemeralVision) > 0 ||
+      clientAttachments.length > 0 ||
+      extractAttachmentMetadataCarrier(payloadMetadata) != null ||
+      brainContextAttachmentCandidates.length > 0;
+    const [attachmentContext, clientDocCtx] = await Promise.all([
+      hasAttachmentContextInput
+        ? resolveTaskAttachmentContext(
+            app,
+            runningPayload,
+            input.prompt,
+            hydratedEphemeralVision,
           )
-        : null;
+        : Promise.resolve(null),
+      clientAttachments.length > 0
+        ? buildDocumentContextBlock(app, clientAttachments).catch(() => null)
+        : Promise.resolve(null),
+    ]);
 
     // Mobil metadata.selectedWorkload düz olarak gönderiyorsa routeDecision yokken de oku
     const metadataSelectedWorkload = (() => {
@@ -6198,19 +6807,22 @@ async function processSharedBrainChatTask(
         Boolean(attachmentContext?.visionBlocks?.length),
       envelope: input.understanding.envelope,
     });
+    const exposeLiveTaskTrace =
+      resolveTaskRouteNeedsDesktop(effectiveRouteDecision) ||
+      selectedWorkload === "desktop_handoff";
     /* İstemciden gelen yapılandırılmış ek dosya verilerini çıkar */
     // Prettier-ignore -- a source-level regression contract verifies this fast-path seam.
     const sourceImages = hostedImageSources(hydratedEphemeralVision);
     const visualIntentMetadata =
       sessionArtifacts.length > 0 || sessionVisualMemory.lastVisualArtifact
         ? {
-            ...getPayloadMetadata(runningPayload),
+            ...requestMetadata,
             ...(sessionArtifacts.length > 0 ? { sessionArtifacts } : {}),
             ...(sessionVisualMemory.lastVisualArtifact
               ? { lastVisualArtifact: sessionVisualMemory.lastVisualArtifact }
               : {}),
           }
-        : getPayloadMetadata(runningPayload);
+        : requestMetadata;
     const visualIntent = buildVisualIntentContract({
       prompt: input.prompt,
       metadata: visualIntentMetadata,
@@ -6234,7 +6846,7 @@ async function processSharedBrainChatTask(
       imageEditIntent;
 
     if (imageGenerationRequested) {
-      await assertSharedBrainExecutionActive(input);
+      await executionActivePromise;
       const startedAtMs = Date.now();
       let imageStreamSeq = 0;
       let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -6384,7 +6996,10 @@ async function processSharedBrainChatTask(
           content: visibleText,
           blocks: imageResultBlocks,
         });
-        const finalizedRows = await app.db
+        // Task lifecycle sync may have won the row CAS before this block. The
+        // terminal SSE event is still required; row state and stream delivery
+        // are separate concerns.
+        await app.db
           .update(chatMessages)
           .set({
             status: "completed",
@@ -6410,12 +7025,21 @@ async function processSharedBrainChatTask(
             ),
           )
           .returning({ id: chatMessages.id });
-        if (finalizedRows.length === 0) {
-          return;
-        }
         // Fence'i publish'ten önce kur: DB'de final yazıldı; bu andan itibaren
         // uçuştaki hiçbir volatile event bu mesajı temsil edemez.
-        markAssistantMessageTerminal(chatStreaming.assistantMessageId);
+        await publishPersistedChatStreamEvent(app, {
+          userId: input.userId,
+          deviceId: completedTask.targetDeviceId,
+          taskId: completedTask.id,
+          sessionId: chatStreaming.sessionId,
+          messageId: chatStreaming.assistantMessageId,
+          event: "usage.final",
+          seq: ++imageStreamSeq,
+          payload: {
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            streaming: { firstDeltaMs: null },
+          },
+        });
         await publishPersistedChatStreamEvent(app, {
           userId: input.userId,
           deviceId: completedTask.targetDeviceId,
@@ -6451,6 +7075,7 @@ async function processSharedBrainChatTask(
       }
       return;
     }
+    await executionActivePromise;
     const ackText = buildSharedBrainAckText(selectedWorkload);
     const ackMetadata =
       ackText.trim().length > 0
@@ -6463,11 +7088,16 @@ async function processSharedBrainChatTask(
             },
           }
         : {};
-    const ackTaskTrace = buildTaskTraceBlock({
-      task: runningTask,
-      assistantContent: ackText,
-    });
+    const ackTaskTrace = exposeLiveTaskTrace
+      ? buildTaskTraceBlock({
+          task: runningTask,
+          assistantContent: ackText,
+        })
+      : null;
     let streamSeq = 0;
+    let streamingPreviewPublished = false;
+    let lastStreamingSnapshotAt = 0;
+    const STREAMING_SNAPSHOT_INTERVAL_MS = 900;
 
     if (chatStreaming && !resumedQueueAttempt) {
       const now = new Date().toISOString();
@@ -6476,7 +7106,7 @@ async function processSharedBrainChatTask(
       });
       const ackBlocks = composeAssistantMessageBlocks({
         content: visibleAckText,
-        blocks: [ackTaskTrace],
+        blocks: ackTaskTrace ? [ackTaskTrace] : [],
         streaming: true,
       });
       if (visibleAckText) {
@@ -6507,6 +7137,9 @@ async function processSharedBrainChatTask(
             },
           },
         });
+        if (ackBlocks.length > 0) {
+          streamingPreviewPublished = true;
+        }
       }
     }
 
@@ -6526,10 +7159,23 @@ async function processSharedBrainChatTask(
             visibleTextPolicy.allowPublicProviderReferences,
         });
 
-    // Session varsa önceki mesajları DB'den yükle — inference'ı bloke etmemek için 1.5s timeout
+    // Compact snapshot yoksa geçmişi kısa bir bütçeyle tamamla; provider
+    // isteğini uzun bir DB beklemesine bağlama.
     const payloadConversation = extractSharedBrainConversation(runningPayload);
-    let conversationHistory = payloadConversation;
-    if (!payloadConversation?.length && chatStreaming?.sessionId) {
+    let conversationHistory =
+      payloadConversation ?? extractCompactConversation(payloadMetadata);
+    // An explicitly supplied empty snapshot is authoritative for a new chat.
+    // Falling back to another REST/DB read here added up to the history timeout
+    // before the first provider request, even though createChatMessage had just
+    // loaded the same session context.
+    const conversationSnapshotProvided =
+      readRecord(payloadMetadata.chatContextHydration)
+        ?.conversationSnapshotProvided === true;
+    if (
+      conversationHistory === undefined &&
+      !conversationSnapshotProvided &&
+      chatStreaming?.sessionId
+    ) {
       const sessionIdForHistory = chatStreaming.sessionId;
       const historyPromise = listChatSessionMessages(app, {
         userId: input.userId,
@@ -6559,7 +7205,7 @@ async function processSharedBrainChatTask(
         )
         .catch(() => null);
       const timeoutPromise = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), 1_500),
+        setTimeout(() => resolve(null), 120),
       );
       const result = await Promise.race([historyPromise, timeoutPromise]);
       if (result && result.length > 0) {
@@ -6630,6 +7276,7 @@ async function processSharedBrainChatTask(
       workload: selectedWorkload,
       meteringSurface: "chat",
       planCode: input.planCode,
+      usageAccess: input.usageAccess,
       understandingContext: input.understanding.context,
       brainProfile: input.brainProfile,
       ...(input.providerStage
@@ -6696,12 +7343,35 @@ async function processSharedBrainChatTask(
             if (contentChanged) {
               lastVisibleStreamingContent = visibleContent;
             }
-            const now = new Date().toISOString();
-            const streamingBlocks = composeAssistantMessageBlocks({
-              content: visibleContent,
-              blocks: [ackTaskTrace],
-              streaming: true,
-            });
+            const nowMs = Date.now();
+            const now = new Date(nowMs).toISOString();
+            if (!streamingPreviewPublished && ackTaskTrace) {
+              streamingPreviewPublished = true;
+              const previewBlocks = composeAssistantMessageBlocks({
+                content: "",
+                blocks: [ackTaskTrace],
+                streaming: true,
+              });
+              void publishVolatileChatStreamEvent(app, {
+                userId: input.userId,
+                deviceId: runningTask.targetDeviceId,
+                taskId: runningTask.id,
+                sessionId: chatStreaming.sessionId,
+                messageId: chatStreaming.assistantMessageId,
+                event: "block.preview",
+                seq: ++streamSeq,
+                payload: {
+                  blocks: previewBlocks,
+                  streaming: { firstDeltaMs: delta.firstDeltaMs },
+                },
+              }).catch(() => undefined);
+            }
+            const shouldPublishSnapshot =
+              visibleDelta.length === 0 ||
+              nowMs - lastStreamingSnapshotAt >= STREAMING_SNAPSHOT_INTERVAL_MS;
+            if (shouldPublishSnapshot) {
+              lastStreamingSnapshotAt = nowMs;
+            }
             await publishVolatileChatStreamEvent(app, {
               userId: input.userId,
               deviceId: runningTask.targetDeviceId,
@@ -6712,23 +7382,19 @@ async function processSharedBrainChatTask(
               seq: ++streamSeq,
               payload: {
                 delta: visibleDelta,
-                ...(streamingBlocks.length > 0
-                  ? { blocks: streamingBlocks }
-                  : {}),
+                ...(shouldPublishSnapshot ? { content: visibleContent } : {}),
                 assistantMessage: shapeAssistantMessagePayload({
                   id: chatStreaming.assistantMessageId,
                   role: "assistant",
                   status: "running",
-                  content: visibleContent,
-                  ...(streamingBlocks.length > 0
-                    ? { blocks: streamingBlocks }
-                    : {}),
                   taskId: runningTask.id,
                   createdAt: runningTask.createdAt.toISOString(),
                   updatedAt: now,
+                  ...(shouldPublishSnapshot ? { content: visibleContent } : {}),
                 }),
                 streaming: {
                   firstDeltaMs: delta.firstDeltaMs,
+                  ...(shouldPublishSnapshot ? { snapshot: true } : {}),
                 },
               },
             });
@@ -6755,16 +7421,48 @@ async function processSharedBrainChatTask(
       );
       return;
     }
+    const completionMetadata = readServerBrainCompletionMetadata(
+      inference.metadata,
+    );
+    const assistantResponseText = resolveNonEchoAssistantText({
+      prompt: input.prompt,
+      responseText: inference.text,
+      policy: visibleTextPolicy,
+    });
+    // "Bu kez düzgün bir yanıt oluşturamadım" bir CEVAP DEĞİLDİR.
+    //
+    // `sanitizeFinalAssistantResponse` içerik boş kalınca bu cümleyi üretiyor;
+    // cümle boş-olmayan bir string olduğu için aşağıdaki kontrol "cevap var"
+    // sanıyor, sağlayıcı zinciri HİÇ yeniden denemiyor ve çıkmaz cümle nihai
+    // cevap olarak kaydediliyordu (canlı: "Masaüstüne deneme adında klasör
+    // oluştur" turu). Kullanıcı için bu, hiç cevap almamakla aynı — ama sistem
+    // başarılı sanıyor. Cümleyi BOŞ kabul edip yeniden denemeyi tetikliyoruz:
+    // sıradaki model gerçek bir cevap üretsin.
+    const responseIsDeadEndFallback = isGenericAssistantFallbackReply(
+      assistantResponseText,
+    );
+    if (
+      (!assistantResponseText || responseIsDeadEndFallback) &&
+      !hasRenderableAssistantBlocks(completionMetadata.assistantBlocks)
+    ) {
+      const retryable = input.providerStage !== "fallback";
+      throw new AppError(
+        502,
+        "provider_empty_output",
+        "Bu turda yanıt oluşturulamadı. Tekrar dene.",
+        {
+          transient: retryable,
+          retrySuggested: retryable,
+          failureClass: retryable ? "unavailable" : "invalid_output",
+        },
+      );
+    }
     const completedTask = await completeServerBrainTask(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
       chatSessionId: chatStreaming?.sessionId ?? null,
       sessionArtifacts,
-      responseText: resolveNonEchoAssistantText({
-        prompt: input.prompt,
-        responseText: inference.text,
-        policy: visibleTextPolicy,
-      }),
+      responseText: assistantResponseText,
       provider: inference.provider,
       model: inference.model,
       route: inference.metadata.route as string,
@@ -6773,7 +7471,7 @@ async function processSharedBrainChatTask(
       promptTokens: inference.promptTokens,
       completionTokens: inference.completionTokens,
       totalTokens: inference.totalTokens,
-      ...readServerBrainCompletionMetadata(inference.metadata),
+      ...completionMetadata,
     });
     if (!completedTask.completionTransitionOwned) {
       return;
@@ -6793,11 +7491,7 @@ async function processSharedBrainChatTask(
       userId: input.userId,
       taskId: completedTask.id,
       userMessage: input.prompt,
-      assistantReply: resolveNonEchoAssistantText({
-        prompt: input.prompt,
-        responseText: inference.text,
-        policy: visibleTextPolicy,
-      }),
+      assistantReply: assistantResponseText,
       intent: input.understanding.intent.primaryIntent,
       requestId: input.requestId,
       source:
@@ -6815,11 +7509,7 @@ async function processSharedBrainChatTask(
         userId: input.userId,
         sessionId: chatStreaming.sessionId,
         userMessage: input.prompt,
-        assistantReply: resolveNonEchoAssistantText({
-          prompt: input.prompt,
-          responseText: inference.text,
-          policy: visibleTextPolicy,
-        }),
+        assistantReply: assistantResponseText,
       }).catch(() => undefined);
     }
     if (chatStreaming) {
@@ -6834,10 +7524,12 @@ async function processSharedBrainChatTask(
         completedResultRecord.text.trim()
           ? completedResultRecord.text.trim()
           : inference.text;
-      const taskTrace = buildTaskTraceBlock({
-        task: completedTask,
-        assistantContent: completedResultText,
-      });
+      const taskTrace = exposeLiveTaskTrace
+        ? buildTaskTraceBlock({
+            task: completedTask,
+            assistantContent: completedResultText,
+          })
+        : null;
       const completedResultBlocks = Array.isArray(
         completedResultRecord?.assistantBlocks,
       )
@@ -6848,20 +7540,36 @@ async function processSharedBrainChatTask(
         assistantBlocks: completedResultBlocks,
         prompt: input.prompt,
         selectedWorkload,
+        contextTexts: (conversationHistory ?? [])
+          .slice(-6)
+          .reverse()
+          .map((message) => String(message.content ?? "").trim())
+          .filter(Boolean),
+        numericPoints: verifiedNumericPoints(
+          inference.metadata.authoritativeArtifactData,
+        ),
       });
       const inferenceBlocks = inferenceResolved.blocks;
       const goalProgressBlocks = inferenceBlocks.filter(
         (block) => readRecord(block)?.type === "goal_progress",
       );
       const visibleInferenceBlocks = inferenceBlocks.filter(
-        (block) => readRecord(block)?.type !== "goal_progress",
+        (block) => {
+          const type = readRecord(block)?.type;
+          return (
+            type !== "goal_progress" &&
+            (exposeLiveTaskTrace || type !== "task_trace")
+          );
+        },
       );
-      const unifiedTaskTrace = enrichTaskTraceWithAgentPlan({
-        trace: taskTrace,
-        agentPlan: inference.metadata.agentPlan,
-        toolFlow: completionMetadata.toolFlow,
-        approval: completionMetadata.connectorWriteApproval,
-      });
+      const unifiedTaskTrace = taskTrace
+        ? enrichTaskTraceWithAgentPlan({
+            trace: taskTrace,
+            agentPlan: inference.metadata.agentPlan,
+            toolFlow: completionMetadata.toolFlow,
+            approval: completionMetadata.connectorWriteApproval,
+          })
+        : null;
       // Use the cleaned text everywhere so the inline prose doesn't repeat a
       // table/code/document that a widget block is already rendering.
       // TEK KAPI: yetenek etiketi ("Klasör ağacı", "Belge okuma") cevap olarak
@@ -6872,7 +7580,10 @@ async function processSharedBrainChatTask(
       );
       const finalBlocks = composeAssistantMessageBlocks({
         content: visibleText,
-        blocks: [unifiedTaskTrace, ...visibleInferenceBlocks],
+        blocks: [
+          ...(unifiedTaskTrace ? [unifiedTaskTrace] : []),
+          ...visibleInferenceBlocks,
+        ],
       });
       const revision = buildAssistantRevisionMetadata({
         finalContent: visibleText,
@@ -6886,7 +7597,10 @@ async function processSharedBrainChatTask(
       // Persist final blocks + cleaned content to the chat_messages row so a
       // later GET /messages (user leaves and reopens) returns the same
       // widget-only view, not the duplicated markdown.
-      const finalizedRows = await app.db
+      // Task lifecycle sync may have won the row CAS before this block. The
+      // terminal SSE event is still required; row state and stream delivery
+      // are separate concerns.
+      await app.db
         .update(chatMessages)
         .set({
           status: "completed",
@@ -6912,12 +7626,25 @@ async function processSharedBrainChatTask(
           ),
         )
         .returning({ id: chatMessages.id });
-      if (finalizedRows.length === 0) {
-        return;
-      }
       // Fence'i publish'ten önce kur: DB'de final yazıldı; bu andan itibaren
       // uçuştaki hiçbir volatile event bu mesajı temsil edemez.
-      markAssistantMessageTerminal(chatStreaming.assistantMessageId);
+      await publishPersistedChatStreamEvent(app, {
+        userId: input.userId,
+        deviceId: completedTask.targetDeviceId,
+        taskId: completedTask.id,
+        sessionId: chatStreaming.sessionId,
+        messageId: chatStreaming.assistantMessageId,
+        event: "usage.final",
+        seq: ++streamSeq,
+        payload: {
+          usage: {
+            inputTokens: inference.promptTokens,
+            outputTokens: inference.completionTokens,
+            totalTokens: inference.totalTokens,
+          },
+          streaming: { firstDeltaMs: inference.metadata.firstDeltaMs },
+        },
+      });
       await publishPersistedChatStreamEvent(app, {
         userId: input.userId,
         deviceId: completedTask.targetDeviceId,
@@ -7166,26 +7893,59 @@ async function completeSafeChatContinuityFallback(
       metadata.selectedWorkload ??
       "mobile_chat_fast",
   );
-  const responseText = resolveSafeChatContinuityReply({
-    prompt: getTaskPrompt(payload),
-    channel: metadata.channel,
-    route: routeDecision?.route,
-    mode: routeDecision?.mode,
-    privacyClass: routeDecision?.privacyClass,
-    requiresApproval: routeDecision?.requiresApproval,
-    intent: routeDecision?.intent,
-    requiredRuntime: routeDecision?.requiredRuntime,
-    shouldAskClarification: routeDecision?.shouldAskClarification,
-    failClosedReason: routeDecision?.failClosedReason,
-    workload,
-    taskRoute: routeDecision?.taskRoute,
-    routeCapabilities: routeDecision?.capabilities,
-    requestedCapabilities: task.requestedCapabilities,
+  const prompt = getTaskPrompt(payload);
+
+  // Sağlayıcı tükendiğinde bile grafiğin verisi sunucuda olabilir: bağlamdaki
+  // ifade ya da doğrulanmış sayısal seri. Böyle bir turda kullanıcıya özür
+  // yerine GERÇEK grafiği veriyoruz — blokları `completeServerBrainTask`
+  // içindeki deterministik türetme üretir, buradaki tek iş görünür metni
+  // özürden gerçek cevaba çevirmek.
+  // Sağlayıcı zaten tükendi; burada bir model çağrısı daha yapmak yanlış
+  // olur. Kanıt tabanı kelimesizdir: bağlamda çizilebilir bir ifade ya da
+  // doğrulanmış sayısal seri varsa grafik gerçekten üretilebilir demektir.
+  const fallbackContextTexts = await resolveDerivationContextTexts(app, {
+    userId: input.userId,
+    chatSessionId: extractChatStreamingMetadata(task)?.sessionId ?? null,
+    payload,
     metadata,
-    understandingEnvelope: understanding?.envelope,
-    errorCode,
-    failureClass: details?.failureClass,
   });
+  const fallbackNumericPoints = verifiedNumericPoints(
+    metadata.authoritativeArtifactData,
+  );
+  const derivableChart =
+    chartIntentFromEvidence({
+      prompt,
+      contextTexts: fallbackContextTexts,
+      numericPointCount: fallbackNumericPoints?.length ?? 0,
+    }).wantsChart &&
+    deriveChartBlock({
+      prompt,
+      contextTexts: fallbackContextTexts,
+      numericPoints: fallbackNumericPoints,
+    }) != null;
+
+  const responseText = derivableChart
+    ? "Grafiği çizdim."
+    : resolveSafeChatContinuityReply({
+        prompt,
+        channel: metadata.channel,
+        route: routeDecision?.route,
+        mode: routeDecision?.mode,
+        privacyClass: routeDecision?.privacyClass,
+        requiresApproval: routeDecision?.requiresApproval,
+        intent: routeDecision?.intent,
+        requiredRuntime: routeDecision?.requiredRuntime,
+        shouldAskClarification: routeDecision?.shouldAskClarification,
+        failClosedReason: routeDecision?.failClosedReason,
+        workload,
+        taskRoute: routeDecision?.taskRoute,
+        routeCapabilities: routeDecision?.capabilities,
+        requestedCapabilities: task.requestedCapabilities,
+        metadata,
+        understandingEnvelope: understanding?.envelope,
+        errorCode,
+        failureClass: details?.failureClass,
+      });
   if (!responseText || extractChatStreamingMetadata(task) == null) {
     return false;
   }
@@ -7207,13 +7967,18 @@ async function completeSafeChatContinuityFallback(
     completionTokens: 0,
     totalTokens: 0,
     fallbackUsed: true,
-    fallbackState: "continuity_response",
+    // Deterministik grafik gerçek bir cevaptır; "degraded/clarification"
+    // etiketlemek hem telemetriyi hem de istemcinin uyarı yüzeylerini
+    // yanıltırdı.
+    fallbackState: derivableChart
+      ? "deterministic_widget"
+      : "continuity_response",
     responseBytes: Buffer.byteLength(responseText, "utf8"),
-    validationStatus: "degraded_continuity",
+    validationStatus: derivableChart ? "passed" : "degraded_continuity",
     qualityPolicyApplied: true,
-    evidenceSufficiency: "insufficient",
-    clarificationRequested: true,
-    dataQualityWarnings: ["provider_continuity_fallback"],
+    evidenceSufficiency: derivableChart ? "sufficient" : "insufficient",
+    clarificationRequested: !derivableChart,
+    dataQualityWarnings: derivableChart ? [] : ["provider_continuity_fallback"],
   });
   if (completedTask.status === "completed") {
     await syncChatTaskLifecycle(app, {
@@ -7357,9 +8122,10 @@ export async function getQueuedSharedBrainChatTask(
   const metadata = getPayloadMetadata(payload);
   const routeDecision = extractRouteDecision(payload);
   const persistedUnderstanding = readPersistedTaskUnderstanding(payload);
-  const understanding =
-    persistedUnderstanding ??
-    (await buildTaskUnderstanding(app, {
+  const chatGeneration = readRecord(metadata.chatGeneration);
+  const isDurableChatGeneration = chatGeneration?.queued === true;
+  const emptyQueuedUnderstanding = () =>
+    emptyUnderstanding({
       userId: row.userId,
       accountId: row.userId,
       taskId: row.id,
@@ -7369,25 +8135,28 @@ export async function getQueuedSharedBrainChatTask(
       source: typeof payload.source === "string" ? payload.source : undefined,
       deviceId: row.targetDeviceId,
       metadata,
-    }).catch(() =>
-      emptyUnderstanding({
-        userId: row.userId,
-        accountId: row.userId,
-        taskId: row.id,
-        title: row.title,
-        message: prompt,
-        routeContext: "tasks.chat_queue",
-        source: typeof payload.source === "string" ? payload.source : undefined,
-        deviceId: row.targetDeviceId,
-        metadata,
-      }),
-    ));
+    });
+  const understanding =
+    persistedUnderstanding ??
+    (isDurableChatGeneration
+      ? emptyQueuedUnderstanding()
+      : await buildTaskUnderstanding(app, {
+          userId: row.userId,
+          accountId: row.userId,
+          taskId: row.id,
+          title: row.title,
+          message: prompt,
+          routeContext: "tasks.chat_queue",
+          source:
+            typeof payload.source === "string" ? payload.source : undefined,
+          deviceId: row.targetDeviceId,
+          metadata,
+        }).catch(() => emptyQueuedUnderstanding()));
   const workload = resolveSharedBrainWorkloadForUnderstanding({
     routeDecision,
     prompt,
     envelope: understanding.envelope,
   });
-  const chatGeneration = readRecord(metadata.chatGeneration);
   const requestId =
     typeof chatGeneration?.requestId === "string" &&
     chatGeneration.requestId.trim()
@@ -7410,10 +8179,12 @@ export async function processQueuedSharedBrainChatTask(
     taskId: string;
     userId: string;
     providerStage: ChatGenerationProviderStage;
+    snapshot?: QueuedSharedBrainChatTaskSnapshot;
+    usageAccess?: UsageAccessTruth;
     shouldAbort?: () => boolean | Promise<boolean>;
   },
 ) {
-  const snapshot = await getQueuedSharedBrainChatTask(app, input);
+  const snapshot = input.snapshot ?? (await getQueuedSharedBrainChatTask(app, input));
   if (!snapshot) {
     return { processed: false, reason: "terminal_or_missing" as const };
   }
@@ -7431,7 +8202,8 @@ export async function processQueuedSharedBrainChatTask(
     }
     return { processed: false, reason: "terminal_or_missing" as const };
   }
-  const usageAccess = await getUserUsageAccessTruth(app.db, input.userId);
+  const usageAccess =
+    input.usageAccess ?? (await getUserUsageAccessTruth(app.db, input.userId));
   const queuedPayload = readRecord(snapshot.task.payload) ?? {};
   const queuedVision = restoreQueuedEphemeralVisionCarrier(
     getPayloadMetadata(queuedPayload),
@@ -7444,6 +8216,7 @@ export async function processQueuedSharedBrainChatTask(
     canonicalTitle: snapshot.task.title,
     understanding: snapshot.understanding,
     planCode: usageAccess.planCode,
+    usageAccess,
     brainProfile: usageAccess.brainProfile,
     ephemeralVision: queuedVision,
     providerStage: input.providerStage,
@@ -7659,15 +8432,26 @@ export async function createTask(
     requestId: string;
     idempotencyKey?: string;
     ephemeralVision?: EphemeralVisionCarrier;
+    /** Chat already resolved access before creating its session/message rows. */
+    usageAccess?: UsageAccessTruth;
+    /**
+     * Chat has already resolved the semantic route and admission policy. Keep
+     * the durable task write authoritative, but do not repeat route/intervention
+     * discovery on the HTTP acceptance path.
+     */
+    preResolvedChatFast?: boolean;
     onTaskReady?: TaskReadyCallback;
   },
 ) {
   const prompt = getTaskPrompt(input.payload);
   const payloadMetadata = getPayloadMetadata(input.payload);
-  bindAuthorizedMediaInputRefs(payloadMetadata, input.ephemeralVision);
+  bindAuthorizedMediaInputRefs(payloadMetadata, input.ephemeralVision, app.log);
+  const usageAccessPromise = input.usageAccess
+    ? Promise.resolve(input.usageAccess)
+    : getUserUsageAccessTruth(app.db, input.userId);
   const [usageAccess, remoteMcpResolution, interventionContext] =
     await Promise.all([
-      getUserUsageAccessTruth(app.db, input.userId),
+      usageAccessPromise,
       input.requestedCapabilitiesResolved
         ? Promise.resolve({
             requestedCapabilities: input.requestedCapabilities,
@@ -7680,10 +8464,12 @@ export async function createTask(
             prompt,
             requestedCapabilities: input.requestedCapabilities,
           }),
-      resolveTaskInterventionContext(app, {
-        userId: input.userId,
-        metadata: payloadMetadata,
-      }),
+      input.preResolvedChatFast
+        ? Promise.resolve(null)
+        : resolveTaskInterventionContext(app, {
+            userId: input.userId,
+            metadata: payloadMetadata,
+          }),
     ]);
   const planningPrompt = interventionContext
     ? [
@@ -7800,7 +8586,7 @@ export async function createTask(
       input.userId,
       input.ephemeralVision,
     );
-    bindAuthorizedMediaInputRefs(payloadMetadata, input.ephemeralVision);
+    bindAuthorizedMediaInputRefs(payloadMetadata, input.ephemeralVision, app.log);
     chatDispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
       isSharedBrain,
       useFastSharedBrainFlow,
@@ -7820,11 +8606,17 @@ export async function createTask(
         requestedCapabilities: routeCapabilities,
       })
     : undefined;
-  const existingTask = await getExistingTaskForIdempotency(app.db, {
-    userId: input.userId,
-    idempotencyKey: input.idempotencyKey,
-    fingerprint: idempotencyFingerprint,
-  });
+  // The fast chat path checks idempotency again inside the authoritative
+  // transaction below. Avoid a duplicate preflight SELECT on every message;
+  // the transaction still resolves concurrent retries without weakening the
+  // race fence.
+  const existingTask = useFastSharedBrainFlow
+    ? null
+    : await getExistingTaskForIdempotency(app.db, {
+        userId: input.userId,
+        idempotencyKey: input.idempotencyKey,
+        fingerprint: idempotencyFingerprint,
+      });
 
   if (existingTask) {
     const requeued =
@@ -7837,6 +8629,7 @@ export async function createTask(
         ? await enqueueSharedBrainChatTask(app, {
             taskId: existingTask.id,
             userId: input.userId,
+            workload: routeDecision?.selectedWorkload,
           })
         : false;
     clearEphemeralVisionCarrier(input.ephemeralVision);
@@ -7891,7 +8684,7 @@ export async function createTask(
           (payloadMetadata.chat as Record<string, unknown>).sessionId ?? "",
         ).trim()
       : "";
-  const carriedAssistantText = activeChatSessionId
+  const carriedAssistantText = isDesktopRoute && activeChatSessionId
     ? await getLastAssistantMessageText(app, {
         userId: input.userId,
         sessionId: activeChatSessionId,
@@ -7919,7 +8712,7 @@ export async function createTask(
       ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
     },
   };
-  const understanding = useDirectDesktopFastPath
+  const understanding = useFastSharedBrainFlow || useDirectDesktopFastPath
     ? emptyUnderstanding(understandingInput)
     : await buildTaskUnderstanding(app, understandingInput).catch(() =>
         emptyUnderstanding(understandingInput),
@@ -8209,14 +9002,19 @@ export async function createTask(
     };
   }
 
-  await reconcileStaleRuntimeTasks(app, {
-    userId: input.userId,
-    targetDeviceId,
-  });
+  if (!useFastSharedBrainFlow) {
+    await reconcileStaleRuntimeTasks(app, {
+      userId: input.userId,
+      targetDeviceId,
+    });
+  }
 
   const taskAttachmentUsage = summarizeTaskAttachmentUsage(
     getPayloadMetadata(enrichedPayload),
   );
+  const keepChatTaskPayloadInline =
+    useFastSharedBrainFlow &&
+    canKeepChatTaskPayloadInline(enrichedPayload, input.ephemeralVision);
 
   let reservedChatTaskId: string | null = null;
   const taskResult = await app.db
@@ -8244,35 +9042,45 @@ export async function createTask(
         throw createUpgradeOrByokRequiredError(usageAccess);
       }
 
+      // One quota snapshot is authoritative for this transaction. Reusing it
+      // for attachment checks and the usage ledger avoids reopening the user
+      // identity tables on the latency-sensitive chat acceptance path.
+      const taskQuota = await getTrialQuotaUsage(tx, input.userId);
       if (
         taskAttachmentUsage.documentUploads > 0 ||
         taskAttachmentUsage.imageUploads > 0
       ) {
-        const trialQuota = await getTrialQuotaUsage(tx, input.userId);
-        assertAttachmentQuotaAllowedFromUsage(trialQuota, {
+        assertAttachmentQuotaAllowedFromUsage(taskQuota, {
           requiredDocumentUploads: taskAttachmentUsage.documentUploads,
           requiredImageUploads: taskAttachmentUsage.imageUploads,
         });
       }
 
-      const taskQuota = await getTrialQuotaUsage(tx, input.userId);
       assertTrialTaskQuotaAllowedFromUsage(taskQuota);
 
       const chatQueueAdmissionRequired =
         sharedBrainRoute && useDurableChatQueue;
 
-      const activeCounts = await tx
-        .select({
-          count: sql<number>`count(*)`,
-        })
-        .from(tasks)
-        .where(
-          and(
-            eq(tasks.targetDeviceId, targetDeviceId),
-            inArray(tasks.status, activeTaskStatuses),
-          ),
-        );
-      const activeTargetTaskCount = Number(activeCounts[0]?.count ?? 0);
+      // Shared-brain ordering is owned by BullMQ. The device backlog query is
+      // only meaningful for desktop routing; skipping it removes one indexed
+      // task count query from every ordinary chat turn.
+      const activeTargetTaskCount = isDesktopRoute
+        ? Number(
+            (
+              await tx
+                .select({
+                  count: sql<number>`count(*)`,
+                })
+                .from(tasks)
+                .where(
+                  and(
+                    eq(tasks.targetDeviceId, targetDeviceId),
+                    inArray(tasks.status, activeTaskStatuses),
+                  ),
+                )
+            )[0]?.count ?? 0,
+          )
+        : 0;
       if (
         isDesktopRoute &&
         activeTargetTaskCount >=
@@ -8350,13 +9158,15 @@ export async function createTask(
       }
 
       const queuePosition = activeTargetTaskCount + 1;
-      const payloadBlob = await storeTaskJsonBlob(app, {
-        taskId: createdTaskId,
-        userId: input.userId,
-        slot: "payload",
-        scope: "task_payload",
-        value: enrichedPayload,
-      });
+      const payloadBlob = keepChatTaskPayloadInline
+        ? null
+        : await storeTaskJsonBlob(app, {
+            taskId: createdTaskId,
+            userId: input.userId,
+            slot: "payload",
+            scope: "task_payload",
+            value: enrichedPayload,
+          });
       const rows = await tx
         .insert(tasks)
         .values({
@@ -8383,21 +9193,18 @@ export async function createTask(
       }
 
       if (sharedBrainRoute && usageAccess.serverBrainAllowed) {
-        const usageIdentity = await resolveUsageIdentityContext(tx, {
-          userId: input.userId,
-        });
         await recordUsageLedgerEntry(tx, {
           userId: input.userId,
-          identityId: usageIdentity.identityId,
+          identityId: taskQuota.identityId,
           taskId: insertedTask.id,
           metric: BILLING_USAGE_METRICS.subscriptionTask,
           quantity: 1,
           documentUnits: taskAttachmentUsage.documentUploads,
           imageUnits: taskAttachmentUsage.imageUploads,
-          qualityProfile: usageIdentity.qualityProfile,
+          qualityProfile: taskQuota.qualityProfile,
           planSnapshot: {
-            planCode: usageIdentity.planCode,
-            qualityProfile: usageIdentity.qualityProfile,
+            planCode: taskQuota.planCode,
+            qualityProfile: taskQuota.qualityProfile,
             route: routeDecision.route,
             usageSurface: "task_create",
           },
@@ -8430,6 +9237,7 @@ export async function createTask(
         ? await enqueueSharedBrainChatTask(app, {
             taskId: taskResult.task.id,
             userId: input.userId,
+            workload: routeDecision?.selectedWorkload,
           })
         : false;
     clearEphemeralVisionCarrier(input.ephemeralVision);
@@ -8460,7 +9268,9 @@ export async function createTask(
     if (!useDurableChatQueue) {
       await resequenceDeviceQueue(app, targetDeviceId);
     }
-    currentTask = (await getTaskById(app, task.id)) ?? task;
+    currentTask = useFastSharedBrainFlow
+      ? task
+      : ((await getTaskById(app, task.id)) ?? task);
     await notifyTaskReady(input.onTaskReady, {
       rawTask: currentTask,
       reused: false,
@@ -8474,45 +9284,45 @@ export async function createTask(
   if (isSharedBrain && useFastSharedBrainFlow) {
     let dispatchedTask = currentTask;
     if (useDurableChatQueue) {
-      try {
-        const enqueued = await enqueueSharedBrainChatTask(app, {
-          taskId: currentTask.id,
-          userId: input.userId,
-        });
-        if (!enqueued) {
-          throw new Error("chat_queue_unavailable");
-        }
-        dispatchedTask =
-          (await markQueuedSharedBrainChatPhase(app, {
+      // The task row is already durable and the queue recovery sweep can
+      // re-enqueue it after a process restart. Do not hold the chat response
+      // on a Redis round-trip or retry backoff; publish the job immediately
+      // and finalize the persisted task asynchronously if enqueue fails.
+      void (async () => {
+        try {
+          const enqueued = await enqueueSharedBrainChatTask(app, {
             taskId: currentTask.id,
             userId: input.userId,
-            phase: "queued",
-            message: "Yanıt hazırlanıyor.",
-          })) ?? currentTask;
-        clearEphemeralVisionCarrier(input.ephemeralVision);
-      } catch {
-        const queueError = new AppError(
-          503,
-          "chat_queue_unavailable",
-          "Yanıt sıraya alınamadı. Lütfen biraz sonra yeniden dene.",
-          {
-            transient: true,
-            retrySuggested: true,
-            failureClass: "queue_unavailable",
-          },
-        );
-        await finalizeSharedBrainChatFailure(
-          app,
-          {
-            currentTask,
+            workload: routeDecision?.selectedWorkload,
+          });
+          if (!enqueued) {
+            throw createChatQueueUnavailableError();
+          }
+        } catch (error) {
+          await failQueuedSharedBrainChatTask(app, {
+            taskId: currentTask.id,
             userId: input.userId,
-            requestId: input.requestId,
-          },
-          queueError,
-        );
-        clearEphemeralVisionCarrier(input.ephemeralVision);
-        throw queueError;
-      }
+            error,
+          }).catch((finalizeError) => {
+            app.log.error?.(
+              {
+                taskId: currentTask.id,
+                error:
+                  finalizeError instanceof Error
+                    ? finalizeError.message
+                    : "chat_queue_failure_finalize_failed",
+              },
+              "chat queue failure finalization failed",
+            );
+          });
+        }
+      })();
+      // The insert already persists the task as `queued`, and the chat row
+      // was published as `running`. Do not write a second queued snapshot:
+      // it adds a DB/event round trip and briefly replaces the mobile loading
+      // state with transient progress text.
+      dispatchedTask = currentTask;
+      clearEphemeralVisionCarrier(input.ephemeralVision);
     } else {
       void processSharedBrainChatTask(app, {
         currentTask,
@@ -8522,16 +9332,31 @@ export async function createTask(
         canonicalTitle,
         understanding,
         planCode: usageAccess.planCode,
+        usageAccess,
         brainProfile: usageAccess.brainProfile,
         ephemeralVision: input.ephemeralVision,
       });
     }
-    await logRouteDecision(app, {
-      taskId: dispatchedTask.id,
-      routeDecision,
-      requestedTargetDeviceId: routeSelectedTargetDeviceId,
-      origin: routeOrigin,
-    });
+    if (input.preResolvedChatFast) {
+      void logRouteDecision(app, {
+        taskId: dispatchedTask.id,
+        routeDecision,
+        requestedTargetDeviceId: routeSelectedTargetDeviceId,
+        origin: routeOrigin,
+      }).catch((error) => {
+        app.log.warn(
+          { error, taskId: dispatchedTask.id },
+          "chat route telemetry deferred",
+        );
+      });
+    } else {
+      await logRouteDecision(app, {
+        taskId: dispatchedTask.id,
+        routeDecision,
+        requestedTargetDeviceId: routeSelectedTargetDeviceId,
+        origin: routeOrigin,
+      });
+    }
 
     return {
       task: shapeTaskFeedItem(dispatchedTask, { selectedDesktopOnline }),
@@ -9143,6 +9968,7 @@ export async function getTaskArtifactRawContent(
   taskId: string,
   artifactId: string,
   token: string | null | undefined,
+  variant: "thumbnail" | "original" = "original",
 ) {
   const verified = verifyArtifactRawContentToken(
     app,
@@ -9171,11 +9997,37 @@ export async function getTaskArtifactRawContent(
   if (!body) {
     throw notFound("Artifact content not found");
   }
-  return {
-    body: Buffer.from(body),
-    contentType: artifact.contentType || "application/octet-stream",
-    fileName: artifact.name || artifact.id,
-  };
+  const originalBody = Buffer.from(body);
+  const originalContentType = artifact.contentType || "application/octet-stream";
+  if (variant !== "thumbnail" || !originalContentType.toLowerCase().startsWith("image/")) {
+    return {
+      body: originalBody,
+      contentType: originalContentType,
+      fileName: artifact.name || artifact.id,
+    };
+  }
+
+  // Thumbnail üretimi isteğe bağlıdır; sharp yüklenemese veya kaynak görsel
+  // bozuk olsa bile orijinal artifact akışı bozulmaz.
+  try {
+    const { default: sharp } = await import("sharp");
+    const thumbnail = await sharp(originalBody, { failOn: "none" })
+      .rotate()
+      .resize({ width: 480, height: 480, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 78, progressive: true })
+      .toBuffer();
+    return {
+      body: thumbnail,
+      contentType: "image/jpeg",
+      fileName: `${artifact.name || artifact.id}.jpg`,
+    };
+  } catch {
+    return {
+      body: originalBody,
+      contentType: originalContentType,
+      fileName: artifact.name || artifact.id,
+    };
+  }
 }
 
 export async function cancelTask(

@@ -601,7 +601,17 @@ function chartSpecDataFromBlock(block: ElyanAssistantChartBlock): Pick<
   ChartSpec,
   "data" | "xKey" | "yKey" | "series"
 > | null {
-  if (block.series && block.series.length > 0) {
+  // `series`/`labels`/`values` EKRAN serisidir — 240 noktaya seyreltilir.
+  // `data` tam çözünürlüğü taşır. Artefakt (XLSX/PDF/render) tam veriyi
+  // almalı, önizleme serisini değil; bu yüzden `data` daha uzunsa o kazanır.
+  const fullResolutionRecords = Array.isArray(block.data) ? block.data : [];
+  const displayPointCount =
+    block.series?.[0]?.labels?.length ?? block.labels?.length ?? 0;
+  const preferFullResolution =
+    fullResolutionRecords.length > displayPointCount &&
+    fullResolutionRecords.length > 0;
+
+  if (!preferFullResolution && block.series && block.series.length > 0) {
     const normalizedSeries = block.series.map((series, index) => {
       const labels = Array.isArray(series.labels) ? series.labels : [];
       const values = Array.isArray(series.values) ? series.values : [];
@@ -645,7 +655,11 @@ function chartSpecDataFromBlock(block: ElyanAssistantChartBlock): Pick<
   }
   const directLabels = Array.isArray(block.labels) ? block.labels : [];
   const directValues = Array.isArray(block.values) ? block.values : [];
-  if (directLabels.length > 0 && directLabels.length === directValues.length) {
+  if (
+    !preferFullResolution &&
+    directLabels.length > 0 &&
+    directLabels.length === directValues.length
+  ) {
     return {
       xKey: "label",
       yKey: "value",

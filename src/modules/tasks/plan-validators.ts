@@ -1,5 +1,8 @@
 import path from "node:path";
-import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
+import {
+  DESKTOP_CAPABILITY_MANIFEST,
+  type DesktopCapabilityManifestEntry,
+} from "./desktop-capability-manifest.js";
 import { DESKTOP_SKILL_MANIFEST } from "./desktop-skill-manifest.js";
 import type {
   DesktopWorkOrder,
@@ -64,8 +67,24 @@ export function buildAllowedCapabilities(
   const allowPrivateRead = authorization
     ? authorization.allowPrivateRead === true
     : true;
-  return DESKTOP_CAPABILITY_MANIFEST.filter((entry) => {
-    if (!required.has(entry.name)) return false;
+  // `requiredCapabilities` bir İPUCUDUR, beyaz liste DEĞİL.
+  //
+  // Eskiden planlayıcı YALNIZ bu listedeki yetenekleri kullanabiliyordu. O
+  // liste yukarıdaki sezgisel katmanın TAHMİNİ; tahmin yanlışsa görev komple
+  // çöküyordu. Canlı kanıt (2026-08-08): "Chrome'u kapat" turunda sezgi
+  // "Chrome" kelimesini görüp tarayıcı işi sandı ve
+  // `["browser_control","browser_session.goto"]` üretti. Uygulama kapatmak
+  // `close_app` ister; o listede olmadığı için planlayıcı geçerli TEK bir adım
+  // bile üretemedi, plan `null` döndü ve kullanıcı "güvenilir yürütme planı
+  // hazırlanamadı" cevabını aldı.
+  //
+  // Sistem önce tahmin edip sonra kendini o tahminin içine kilitlememeli:
+  // planlayıcı, cihazın güvenli yetenek manifestinden DOĞRU aracı seçebilmeli.
+  // Güvenlik daralmaz — yasaklı liste, gözetimsiz çalışma zarfı ve gizlilik
+  // kapısı aynen uygulanır; ayrıca her adım masaüstünde kendi izin kapısından
+  // ayrıca geçer.
+  const preferred = required;
+  const allowed = DESKTOP_CAPABILITY_MANIFEST.filter((entry) => {
     if (forbidden.has(entry.name)) return false;
     if (autonomyAllowed && !autonomyAllowed.has(entry.name)) return false;
     if (
@@ -77,6 +96,12 @@ export function buildAllowedCapabilities(
     }
     return true;
   }).map((entry) => entry.name);
+  // İpucu olarak verilenler başa alınır: planlayıcı önce en olası araçları
+  // görür, ama gerektiğinde doğru olanı seçmekte serbesttir.
+  return [
+    ...allowed.filter((name) => preferred.has(name)),
+    ...allowed.filter((name) => !preferred.has(name)),
+  ];
 }
 
 function hasConcreteArgument(
@@ -133,6 +158,49 @@ function validateGroundedPaths(
   }
 }
 
+function enumValuesFor(
+  manifest: DesktopCapabilityManifestEntry,
+  argument: string,
+): string[] | null {
+  const properties = asRecord(manifest.inputContract.properties);
+  const schema = properties ? asRecord(properties[argument]) : null;
+  const values = schema?.enum;
+  if (!Array.isArray(values) || values.length === 0) return null;
+  return values.map((value) => String(value));
+}
+
+/**
+ * Kapalı değer kümesi olan argümanlarda uydurulmuş değeri reddeder.
+ *
+ * Canlıda planlayıcı `browser_control{action:"close_tab"}` üretmişti: böyle
+ * bir eylem yok, iş "Geçersiz tarayıcı eylemi." ile ölüyordu. Geçerli
+ * değerler yalnız argüman açıklamasının düzyazısında sayıldığı için hiçbir
+ * katman bunu yakalayamıyordu.
+ *
+ * Hata metni geçerli listeyi TAŞIR — replan bunu okuyup kendini düzeltebilsin
+ * diye. Reddetmek tek başına yetmez; modele neyin mümkün olduğunu söylemek
+ * gerekir.
+ */
+function validateEnumArguments(
+  step: DesktopWorkOrderStep,
+  manifest: DesktopCapabilityManifestEntry,
+  issues: string[],
+): void {
+  for (const [argument, rawValue] of Object.entries(step.args ?? {})) {
+    if (typeof rawValue !== "string") continue;
+    const value = rawValue.trim();
+    if (!value) continue;
+    const allowed = enumValuesFor(manifest, argument);
+    if (!allowed) continue;
+    if (allowed.some((candidate) => candidate.toLowerCase() === value.toLowerCase())) {
+      continue;
+    }
+    issues.push(
+      `${step.id}: ${step.capability} args.${argument}="${value}" is not a valid value; use one of: ${allowed.join(", ")}`,
+    );
+  }
+}
+
 export function validateMaterializedPlanContracts(
   steps: DesktopWorkOrderStep[],
 ): string[] {
@@ -165,6 +233,7 @@ export function validateMaterializedPlanContracts(
         );
       }
     }
+    validateEnumArguments(step, manifest, issues);
     validateGroundedPaths(step.args, `${step.id}: args`, issues);
     if (step.capability === "run_skill") {
       const skillId =

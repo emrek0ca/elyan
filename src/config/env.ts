@@ -86,6 +86,25 @@ const envSchema = z.object({
     .int()
     .positive()
     .default(48),
+  // Kaç ters vekil katmanına güvenileceği. `trustProxy: true` İNTERNETTEN
+  // gelen `X-Forwarded-For` başlığını olduğu gibi kabul eder; hız sınırı
+  // IP'ye bakarken bu, başlığı uydurarak sınırı tamamen atlatmak demektir.
+  // Varsayılan 1 = yalnız kutunun üstündeki nginx/caddy.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(4).default(1),
+  // Pahalı rotalar (LLM çıkarımı, konuşma, görsel üretimi) için ayrı ve çok
+  // daha sıkı dakikalık tavan. Global 600/dk bu rotalarda hem sağlayıcı
+  // bütçesini hem sunucuyu tek kullanıcıyla tüketmeye yetiyordu.
+  // 60/dk = sürekli 1 istek/sn. Hiçbir insan kullanımı buna yaklaşmaz, ama
+  // otomatik kötüye kullanımı ve kaçak maliyeti durdurur. Daha düşük bir
+  // tavan (20) normal test/geliştirme akışını bile kesiyordu.
+  RATE_LIMIT_EXPENSIVE_PER_MINUTE: z.coerce.number().int().positive().default(60),
+  RATE_LIMIT_AUTH_PER_MINUTE: z.coerce.number().int().positive().default(30),
+  // Olay döngüsü gecikmesi bu eşiği aşarsa yeni istekler 503 + Retry-After
+  // ile geri çevrilir. Yük altında yavaşça çökmek yerine hızlıca reddetmek,
+  // sunucunun ayakta kalmasının tek yolu.
+  LOAD_SHED_EVENT_LOOP_LAG_MS: z.coerce.number().int().positive().default(900),
+  LOAD_SHED_HEAP_USED_RATIO: z.coerce.number().min(0.5).max(0.99).default(0.92),
+  LOAD_SHED_ENABLED: booleanFlag(true),
   SSE_MAX_STREAMS_PER_USER: z.coerce.number().int().positive().default(4),
   SSE_REPLAY_LIMIT: z.coerce.number().int().positive().max(2_000).default(500),
   SSE_HEARTBEAT_MS: z.coerce.number().int().positive().default(15_000),
@@ -261,9 +280,12 @@ const envSchema = z.object({
   GROQ_REASONING_MODEL: z.string().default("openai/gpt-oss-120b"),
   GROQ_FAST_MODEL: z.string().default("openai/gpt-oss-20b"),
   GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
+  // Yönlendirme/niyet iş yükleri: KATI JSON üretmeli, bu yüzden bilinçli
+  // olarak reasoning-DIŞI bir model (gizli düşünme turu JSON'u boş bırakıyor).
+  GROQ_ROUTING_MODEL: z.string().default("llama-3.1-8b-instant"),
   GROQ_VISION_MODEL: z
     .string()
-    .default("meta-llama/llama-4-scout-17b-16e-instruct"),
+    .default("qwen/qwen3.6-27b"),
   GROQ_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
   // Groq Compound: yerleşik ajan sistemi (web arama + kod yürütme). OpenAI
   // uyumlu /chat/completions üzerinden `groq/compound` (derin) ve
@@ -275,8 +297,12 @@ const envSchema = z.object({
   GROQ_COMPOUND_DEEP_ENABLED: booleanFlag(true),
   GROQ_COMPOUND_MODEL: z.string().default("groq/compound"),
   GROQ_COMPOUND_MINI_MODEL: z.string().default("groq/compound-mini"),
-  // Arama davranışı ince ayarı (opsiyonel). Virgülle ayrılmış alan adı listeleri
-  // ve ISO-3166 ülke ipucu compound_custom.search_settings'e taşınır.
+  // Arama davranışı ince ayarı (opsiyonel). Virgülle ayrılmış alan adı
+  // listeleri ve ülke ipucu isteğin KÖKÜNDEKİ `search_settings`'e taşınır.
+  //
+  // ÜLKE ISO KODU DEĞİL, ADIDIR: compound'un arama katmanı (Tavily) `tr`
+  // değerini reddediyor, `turkey` bekliyor. Yanlış değer her compound
+  // çağrısını 400 ile düşürür.
   GROQ_COMPOUND_SEARCH_COUNTRY: z.string().optional(),
   GROQ_COMPOUND_INCLUDE_DOMAINS: z.string().optional(),
   GROQ_COMPOUND_EXCLUDE_DOMAINS: z.string().optional(),
@@ -289,13 +315,13 @@ const envSchema = z.object({
     .string()
     .url()
     .default("https://generativelanguage.googleapis.com/v1beta"),
-  GEMINI_TEXT_MODEL: z.string().default("gemini-3.5-flash"),
-  GEMINI_FAST_MODEL: z.string().default("gemini-3.1-flash-lite"),
-  GEMINI_REASONING_MODEL: z.string().default("gemini-3.5-flash"),
-  GEMINI_VISION_MODEL: z.string().default("gemini-3.5-flash"),
+  GEMINI_TEXT_MODEL: z.string().default("gemini-3.6-flash"),
+  GEMINI_FAST_MODEL: z.string().default("gemini-3.5-flash-lite"),
+  GEMINI_REASONING_MODEL: z.string().default("gemini-3.6-flash"),
+  GEMINI_VISION_MODEL: z.string().default("gemini-3.6-flash"),
   GEMINI_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
-  GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image-preview"),
-  GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image-preview"),
+  GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image"),
+  GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image"),
   GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("1K"),
   GEMINI_IMAGE_PRO_ENABLED: booleanFlag(false),
   GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: z.coerce
@@ -321,7 +347,9 @@ const envSchema = z.object({
   GEMINI_FREE_DATA_USAGE_ATTESTED: booleanFlag(false),
   GEMINI_PAID_FALLBACK_ENABLED: booleanFlag(false),
   GEMINI_PAID_DATA_PROCESSING_ATTESTED: booleanFlag(false),
-  GEMINI_FREE_MODEL_ALLOWLIST: z.string().default("gemini-3.1-flash-lite"),
+  GEMINI_FREE_MODEL_ALLOWLIST: z
+    .string()
+    .default("gemini-3.5-flash-lite,gemini-3.1-flash-lite"),
   GEMINI_FREE_DAILY_REQUEST_LIMIT: z.coerce
     .number()
     .int()
@@ -475,30 +503,19 @@ const envSchema = z.object({
    * a regression cannot be attributed.
    */
   ELYAN_CORE_TOOLS_ENABLED: booleanFlag(true),
-  /**
-   * Semantic rescue for tool selection (`selectSemanticCoreToolHint`).
-   *
-   * Off by default because it puts an embedding round-trip on turns the
-   * deterministic scorer declined — measured: `inference.test.ts` went from ~5 s
-   * to over 280 s with it always on. The candidate cache makes the steady state
-   * cheap (~3 ms), but that has only been measured on a warm local worker, not
-   * under production concurrency. Ship the flag off, measure, then enable.
-   */
-  ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED: booleanFlag(false),
+  /** Semantic tool/connector routing from the shared understanding worker. */
+  ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED: booleanFlag(true),
   // Enables server-side connector tools (Gmail/Calendar/Drive read) through the
   // agent loop, restricted to connector tool_requests only. Independent of the
   // full agent loop so connectors can ship without turning on write/goal tools.
   ELYAN_CONNECTOR_TOOLS_ENABLED: booleanFlag(true),
-  // Routes MCP probing/tool calls through the official @modelcontextprotocol/sdk
-  // streamable-HTTP transport (+ OAuth discovery/DCR helpers). Default off until
-  // validated against live servers; the hand-written probe stays the fallback.
-  ELYAN_MCP_SDK_ENABLED: booleanFlag(false),
-  // Uzak MCP sunucularının TÜM araç kataloğunu paylaşılan beyne ilan eder ve
-  // çağrıları sunucu tarafında çalıştırır (mobil dahil her istemci kazanır).
-  // Araçlar okuma/yazma diye AYRILMAZ ve onay kapısına uğramaz — açmadan önce
-  // bağlı MCP sunucularının yazma araçlarını gözden geçir.
-  // `ELYAN_MCP_SDK_ENABLED` olmadan etkisizdir: çağrı yolu SDK istemcisidir.
-  ELYAN_MCP_DYNAMIC_TOOLS_ENABLED: booleanFlag(false),
+  // Official MCP SDK transport plus RFC 9728/RFC 7591 OAuth discovery. The
+  // runtime is optional per connection and fails closed when a server is absent.
+  ELYAN_MCP_SDK_ENABLED: booleanFlag(true),
+  // Uzak MCP sunucularının canlı araç kataloğunu paylaşılan beyne ilan eder ve
+  // çağrıları sunucu tarafında çalıştırır. Okuma araçları doğrudan; yazma ve
+  // belirsiz yan etkiler mevcut onay politikasıyla korunur.
+  ELYAN_MCP_DYNAMIC_TOOLS_ENABLED: booleanFlag(true),
   // Emits source-typed connector block envelopes. Set false to suppress the
   // block surface while retaining safe prose connector replies and tool access.
   ELYAN_SOURCE_TYPED_CONNECTOR_BLOCKS_ENABLED: booleanFlag(true),
@@ -699,6 +716,7 @@ export type AppEnv = ParsedEnv & {
   GROQ_REASONING_MODEL: string;
   GROQ_FAST_MODEL: string;
   GROQ_FALLBACK_MODEL: string;
+  GROQ_ROUTING_MODEL: string;
   GROQ_VISION_MODEL: string;
   GROQ_VISION_SENSITIVE_DATA_ATTESTED?: boolean;
   GROQ_COMPOUND_ENABLED?: boolean;
@@ -748,6 +766,12 @@ export type AppEnv = ParsedEnv & {
   BLOB_STORAGE_SIGNED_URL_TTL_SECONDS: number;
   BLOB_HMAC_SECRET: string;
   RATE_LIMIT_REDIS_ENABLED: boolean;
+  TRUST_PROXY_HOPS: number;
+  RATE_LIMIT_EXPENSIVE_PER_MINUTE: number;
+  RATE_LIMIT_AUTH_PER_MINUTE: number;
+  LOAD_SHED_EVENT_LOOP_LAG_MS: number;
+  LOAD_SHED_HEAP_USED_RATIO: number;
+  LOAD_SHED_ENABLED: boolean;
   REALTIME_REDIS_FANOUT_ENABLED: boolean;
   REALTIME_REDIS_CHANNEL_PREFIX: string;
   REALTIME_EVENT_RETENTION_HOURS: number;
@@ -945,6 +969,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_REASONING_MODEL: parsed.GROQ_REASONING_MODEL,
     GROQ_FAST_MODEL: parsed.GROQ_FAST_MODEL,
     GROQ_FALLBACK_MODEL: parsed.GROQ_FALLBACK_MODEL,
+    GROQ_ROUTING_MODEL: parsed.GROQ_ROUTING_MODEL,
     GROQ_VISION_MODEL: parsed.GROQ_VISION_MODEL,
     GROQ_VISION_SENSITIVE_DATA_ATTESTED:
       parsed.GROQ_VISION_SENSITIVE_DATA_ATTESTED,

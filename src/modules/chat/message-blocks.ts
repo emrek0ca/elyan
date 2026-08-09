@@ -1,5 +1,17 @@
 import { createHash } from "node:crypto";
 import {
+  isSampleableExpression,
+  sampleFunctionChart,
+  sampleSurfaceGrid,
+} from "../brain/function-sampler.js";
+import {
+  defaultChartInteractions,
+  downsampleSeries,
+  normalizeChartData,
+  normalizeSurfacePoints,
+  type NormalizedChartSeries,
+} from "./chart-data.js";
+import {
   elyanAssistantArtifactBlockSchema,
   elyanAssistantBlockSchema,
   elyanAssistantConnectorResultBlockSchema,
@@ -1271,6 +1283,9 @@ export function buildAssistantChartBlock(
     fixed?: unknown;
     xLabel?: string | null;
     yLabel?: string | null;
+    unit?: string | null;
+    theme?: string | null;
+    interactions?: unknown;
     renderer?: string | null;
     seriesName?: string | null;
     title?: string | null;
@@ -1279,57 +1294,132 @@ export function buildAssistantChartBlock(
   options: AssistantBlockCommon = {},
 ): ElyanAssistantChartBlock | null {
   const chartType = normalizeChartType(input.chartType);
-  const labels = normalizeStringList(input.labels, {
-    min: 1,
-    max: 240,
-    itemMaxLength: 120,
-  });
-  const values = Array.isArray(input.values)
-    ? input.values
-        .map((value) => (typeof value === "number" && Number.isFinite(value) ? value : null))
-        .filter((value): value is number => value != null)
-        .slice(0, labels.length)
-    : [];
-  const points = Array.isArray(input.points) ? input.points.slice(0, 1_500) : undefined;
-  const data = Array.isArray(input.data) ? input.data.slice(0, 1_500) : undefined;
-  const series = normalizeChartSeries(input.series);
-  const expression = normalizeTextValue(input.expression, 2_000);
-  const hasDirectData =
-    values.length > 0 || (points?.length ?? 0) > 0 || (data?.length ?? 0) > 0 || (series?.length ?? 0) > 0 || Boolean(expression);
-  if (!chartType || !hasDirectData) {
+  if (!chartType) {
     return null;
   }
-  const trimmedLabels = labels.slice(0, values.length);
-  const trimmedValues = values.slice(0, trimmedLabels.length);
-  const fallbackSeries =
-    trimmedLabels.length > 0 && trimmedValues.length > 0
-      ? [
-          {
-            name: normalizeTextValue(input.seriesName, 80) ?? "Veri",
-            labels: trimmedLabels,
-            values: trimmedValues,
-          },
-        ]
+  const expression = normalizeTextValue(input.expression, 2_000);
+  const isSurface = chartType === "surface3d" || chartType === "mesh";
+
+  // 1) HER giriş biçimi (labels+values · points · data · series) tek sayısal
+  //    gösterime iner. Formül string'i, "yaklaşık 2450" gibi metin ya da
+  //    aritmetik ifade y değeri OLAMAZ — o nokta burada düşer.
+  let series: NormalizedChartSeries[] | null = normalizeChartData({
+    labels: input.labels,
+    values: input.values,
+    points: input.points,
+    data: input.data,
+    series: input.series,
+    seriesName: input.seriesName,
+  });
+
+  // 2) Yüzey: `points:[{x,y,z}]` zaten örneklenmiş olabilir; değilse ifadeyi
+  //    sunucuda ızgara üzerinde örnekliyoruz. İstemcinin ifade
+  //    değerlendirmesi gerekmesin.
+  let surfacePoints = isSurface
+    ? (normalizeSurfacePoints(input.points) ?? normalizeSurfacePoints(input.data))
+    : null;
+  if (isSurface && !surfacePoints && expression) {
+    const sampled = sampleSurfaceGrid(expression, input.range);
+    if (sampled) {
+      surfacePoints = sampled.points;
+    }
+  }
+
+  // 3) Fonksiyon grafiği: model yalnız `expression` (+ `range`) gönderdiyse
+  //    sayısal veri yoktur; sunucuda örnekleyerek gerçek (labels, values) üret
+  //    ki grafik her istemcide çizilebilsin ve "veri taşımayan grafik"
+  //    düşülmesin.
+  if (!series && !isSurface && expression) {
+    const sampled = sampleFunctionChart(expression, input.range);
+    if (sampled) {
+      series = [
+        {
+          name: normalizeTextValue(input.seriesName, 80) ?? "f(x)",
+          labels: sampled.labels,
+          values: sampled.values,
+        },
+      ];
+    }
+  }
+
+  // Sayısal veriye indirgenemeyen chart bloğu ÇİZİLEMEZ; yayınlanmaz.
+  if (!series && !surfacePoints) {
+    return null;
+  }
+
+  const fullSeries = (series ?? [])
+    .filter((entry) => entry.values.length > 0)
+    .slice(0, 8);
+  // Ekranda çizilen seri 240 noktaya seyreltilir (telefon ekranında zaten
+  // piksel başına birden çok nokta düşer, şema sınırı da 240). Tam çözünürlük
+  // `data` içinde kalır: artefakt/dışa aktarma boru hattı XLSX/PDF üretirken
+  // veriyi kaybetmemeli.
+  const boundedSeries = fullSeries.map((entry) => downsampleSeries(entry));
+  const primary = boundedSeries[0];
+  const fullPrimary = fullSeries[0];
+  const fullResolutionData =
+    fullPrimary && primary && fullPrimary.values.length > primary.values.length
+      ? fullPrimary.labels.map((label, index) => ({
+          label,
+          value: fullPrimary.values[index],
+        }))
       : undefined;
+  const variables = normalizeStringList(input.variables, {
+    max: 12,
+    itemMaxLength: 24,
+  });
+  const themeRaw = normalizeTextValue(input.theme, 40)?.toLowerCase();
+  const theme = (["system", "presentation", "report", "minimal"] as const).includes(
+    themeRaw as "system",
+  )
+    ? (themeRaw as "system" | "presentation" | "report" | "minimal")
+    : "minimal";
+  // Etkileşim listesi sözleşmenin görünür yüzeyi: istemci bunu okuyup
+  // tooltip/zoom/tür-değişimi yüzeylerini açıyor. Model bildirmediyse tür
+  // için anlamlı varsayılan HER ZAMAN taşınır (eskiden hiç gönderilmiyordu ve
+  // mobil etkileşimleri hiç açmıyordu).
+  const declaredInteractions = Array.isArray(input.interactions)
+    ? (input.interactions
+        .map((value) => String(value ?? "").trim().toLowerCase())
+        .filter((value) =>
+          [
+            "tooltip",
+            "trackball",
+            "zoom",
+            "pan",
+            "type_switch",
+            "fullscreen",
+            "share",
+          ].includes(value),
+        ) as ElyanAssistantChartBlock["interactions"])
+    : undefined;
+  const interactions =
+    declaredInteractions && declaredInteractions.length > 0
+      ? declaredInteractions
+      : (defaultChartInteractions(chartType) as NonNullable<
+          ElyanAssistantChartBlock["interactions"]
+        >);
+
   return {
     type: "chart",
     chartType,
-    ...(trimmedLabels.length > 0 ? { labels: trimmedLabels } : {}),
-    ...(trimmedValues.length > 0 ? { values: trimmedValues } : {}),
-    ...(points && points.length > 0 ? { points } : {}),
-    ...(data && data.length > 0 ? { data } : {}),
-    ...(series && series.length > 0 ? { series } : fallbackSeries ? { series: fallbackSeries } : {}),
+    ...(primary && primary.labels.length > 0 ? { labels: primary.labels } : {}),
+    ...(primary && primary.values.length > 0 ? { values: primary.values } : {}),
+    ...(surfacePoints ? { points: surfacePoints } : {}),
+    ...(fullResolutionData ? { data: fullResolutionData } : {}),
+    ...(boundedSeries.length > 0 ? { series: boundedSeries } : {}),
     ...(expression ? { expression } : {}),
-    ...(normalizeStringList(input.variables, { max: 12, itemMaxLength: 24 }).length > 0
-      ? { variables: normalizeStringList(input.variables, { max: 12, itemMaxLength: 24 }) }
-      : {}),
+    ...(variables.length > 0 ? { variables } : {}),
     ...(input.range && typeof input.range === "object" && !Array.isArray(input.range) ? { range: input.range as Record<string, unknown> } : {}),
     ...(input.fixed && typeof input.fixed === "object" && !Array.isArray(input.fixed) ? { fixed: input.fixed as Record<string, number> } : {}),
     ...(normalizeTextValue(input.xLabel, 120) ? { xLabel: normalizeTextValue(input.xLabel, 120)! } : {}),
     ...(normalizeTextValue(input.yLabel, 120) ? { yLabel: normalizeTextValue(input.yLabel, 120)! } : {}),
+    ...(normalizeTextValue(input.unit, 40) ? { unit: normalizeTextValue(input.unit, 40)! } : {}),
     ...(normalizeTextValue(input.renderer, 40) ? { renderer: normalizeTextValue(input.renderer, 40)! } : {}),
     ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
     ...(normalizeTextValue(input.caption, 240) ? { caption: normalizeTextValue(input.caption, 240)! } : {}),
+    interactions,
+    theme,
     ...withAssistantBlockDefaults("chart", {}, {
       priority: options.priority ?? 2,
       renderHints: {
@@ -1354,40 +1444,12 @@ function normalizeChartType(value: unknown): ElyanAssistantChartBlock["chartType
   if (["scatter", "scatterplot", "scatter_plot"].includes(normalized)) return "scatter";
   if (["geometry", "plot", "geometric", "geometry_plot"].includes(normalized)) return "geometry";
   if (["function", "function_plot", "curve", "math_function"].includes(normalized)) return "function";
-  if (["surface", "surface3d", "3d", "3d_plot"].includes(normalized)) return "surface3d";
-  if (["mesh", "mesh3d"].includes(normalized)) return "mesh";
-  if (["heatmap", "heat_map"].includes(normalized)) return "heatmap";
+  if (["surface", "surface3d", "3d", "3d_plot", "math_surface_3d", "surface_plot"].includes(normalized)) {
+    return "surface3d";
+  }
+  if (["mesh", "mesh3d", "wireframe"].includes(normalized)) return "mesh";
+  if (["heatmap", "heat_map", "matrix", "density"].includes(normalized)) return "heatmap";
   return null;
-}
-
-function normalizeChartSeries(value: unknown): ElyanAssistantChartBlock["series"] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const series = value
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-    .map((item) => {
-      const labels = normalizeStringList(item.labels ?? item.categories ?? item.x, {
-        max: 240,
-        itemMaxLength: 120,
-      });
-      const rawValues = Array.isArray(item.values ?? item.y) ? (item.values ?? item.y) as unknown[] : [];
-      const values = rawValues
-        .map((entry) => (typeof entry === "number" && Number.isFinite(entry) ? entry : null))
-        .filter((entry): entry is number => entry != null)
-        .slice(0, labels.length > 0 ? labels.length : 240);
-      const points = Array.isArray(item.points) ? item.points.slice(0, 1_500) : undefined;
-      const data = Array.isArray(item.data) ? item.data.slice(0, 1_500) : undefined;
-      if (labels.length === 0 && values.length === 0 && !points && !data) return null;
-      return {
-        ...(normalizeTextValue(item.name, 120) ? { name: normalizeTextValue(item.name, 120)! } : {}),
-        ...(labels.length > 0 ? { labels } : {}),
-        ...(values.length > 0 ? { values } : {}),
-        ...(points && points.length > 0 ? { points: points as Record<string, unknown>[] } : {}),
-        ...(data && data.length > 0 ? { data } : {}),
-      };
-    })
-    .filter((item): item is NonNullable<ElyanAssistantChartBlock["series"]>[number] => item != null)
-    .slice(0, 8);
-  return series.length > 0 ? series : undefined;
 }
 
 export function buildAssistantMathBlock(
@@ -1471,8 +1533,11 @@ export function buildAssistantMathSurface3DBlock(
     }
     return [start, end];
   };
-  const xRange = normalizeAxis(rawRange?.x);
-  const yRange = normalizeAxis(rawRange?.y);
+  // Aralık İSTEMCİ tarafında örneklemenin ön koşulu. Model göndermediğinde
+  // eskiden alan hiç taşınmıyordu ve istemcinin örnekleyecek bir aralığı
+  // olmadığı için yüzey sessizce boş kalıyordu; makul bir varsayılan taşınır.
+  const xRange = normalizeAxis(rawRange?.x) ?? ([-5, 5] as [number, number]);
+  const yRange = normalizeAxis(rawRange?.y) ?? ([-5, 5] as [number, number]);
   const resolution =
     typeof input.resolution === "number" &&
     Number.isInteger(input.resolution) &&
@@ -1492,7 +1557,7 @@ export function buildAssistantMathSurface3DBlock(
     input.error && typeof input.error === "object" && !Array.isArray(input.error)
       ? (input.error as Record<string, unknown>)
       : null;
-  const error =
+  const declaredError =
     rawError &&
     typeof rawError.code === "string" &&
     typeof rawError.message === "string"
@@ -1501,11 +1566,22 @@ export function buildAssistantMathSurface3DBlock(
           message: rawError.message,
         }
       : undefined;
+  // İstemci yüzeyi z=f(x,y) ifadesini kendi örnekliyor. İfade güvenli
+  // değerlendiriciyle derlenmiyorsa istemcide BOŞ bir yüzey çıkardı; bunun
+  // yerine nedeni bloğa yazıyoruz ki kullanıcı sessiz bir boşluk görmesin.
+  const error =
+    declaredError ??
+    (isSampleableExpression(expression, ["x", "y"])
+      ? undefined
+      : {
+          code: "expression_not_sampleable",
+          message: "Bu ifade yüzey olarak örneklenemedi.",
+        });
   return {
     type: "math_surface_3d",
     expression,
     ...(normalizeTextValue(input.title, 120) ? { title: normalizeTextValue(input.title, 120)! } : {}),
-    ...(normalizedVariables ? { variables: normalizedVariables } : {}),
+    variables: normalizedVariables ?? (["x", "y"] as ["x", "y"]),
     ...(xRange && yRange ? { range: { x: xRange, y: yRange } } : {}),
     ...(resolution ? { resolution } : {}),
     ...(normalizeTextValue(input.zLabel, 120) ? { zLabel: normalizeTextValue(input.zLabel, 120)! } : {}),
@@ -2472,6 +2548,9 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
           : typeof record.y_label === "string"
             ? record.y_label
             : undefined,
+        unit: typeof record.unit === "string" ? record.unit : undefined,
+        theme: typeof record.theme === "string" ? record.theme : undefined,
+        interactions: record.interactions,
         renderer: typeof record.renderer === "string" ? record.renderer : undefined,
         title: typeof record.title === "string" ? record.title : undefined,
         caption: typeof record.caption === "string" ? record.caption : undefined,

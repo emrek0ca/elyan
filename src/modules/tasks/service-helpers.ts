@@ -1226,7 +1226,7 @@ export function extractSharedBrainConversation(
 
 export function getSharedBrainFallbackMessage(
   error: unknown,
-  fallback = "Yanıt katmanı bu tur tamamlayamadı. İsteğini aldım; güvenli olduğunda kısa, eldeki bağlamla devam ediyorum.",
+  fallback = "Bu turda yanıt oluşturulamadı. Tekrar dene.",
 ) {
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();
@@ -1386,8 +1386,8 @@ export function resolveSafeChatContinuityReply(input: {
       prompt,
     );
   return asksQuestion
-    ? "Kısa cevap vereyim: Bu tur model yanıtı tamamlanamadı, ama isteğin düz sohbet kapsamında. Daha net bir cevap için işlemi arka planda yeniden deniyorum."
-    : "İsteğini aldım. Yanıt katmanı bu tur tamamlanamadı; güvenli olduğunda kısa cevapla devam ediyorum.";
+    ? "Bu turda yanıt tamamlanamadı. Lütfen yeniden dene."
+    : "Bu turda yanıt oluşturulamadı. Tekrar dene.";
 }
 
 function looksLikeUnsafeBackendError(message: string) {

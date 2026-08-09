@@ -2,6 +2,7 @@ import { and, desc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   chatSessions,
+  chatMessages,
   devices,
   learningEvents,
   tasks,
@@ -31,6 +32,9 @@ import { getWorldSignalTtlHours } from "../../core/understanding/context-packets
 
 const MAX_WORLD_SIGNAL_PAYLOAD_BYTES = 24 * 1024;
 const MAX_WORLD_SIGNAL_FUTURE_SKEW_MS = 5 * 60_000;
+const FRESH_WORLD_SIGNAL_CACHE_TTL_MS = 1_500;
+const FRESH_WORLD_SIGNAL_CACHE_MAX_ENTRIES = 2_048;
+const MOBILE_HISTORY_FEED_LIMIT = 20;
 const BLOCKED_SECRET_KEYS = new Set([
   "accesstoken",
   "authorization",
@@ -66,6 +70,22 @@ const BLOCKED_CALENDAR_KEYS = new Set([
   "notes",
   "title",
 ]);
+/**
+ * Ham sağlık ÖLÇÜMLERİ. Sınır şudur: bir anahtar ölçülmüş bir büyüklüğü
+ * taşıyorsa (nabız, mesafe, ham örnek, jenerik "steps"/"sleepHours") engellidir;
+ * türetilmiş nitel etiket ise serbesttir ve `SAFE_HEALTH_FACT_LABELS` üzerinden
+ * bağlam paketine girer.
+ *
+ * `workouttype` BU LİSTEDE DEĞİL — ve olmamalı. Bir kategori etiketidir
+ * ("running", "yoga"), ölçüm değil; `sleepQuality` veya `activityBand` ile aynı
+ * ailededir. Listede olduğu sürece iki katman birbiriyle çelişiyordu:
+ * `context-packets.ts` onu iki ayrı yerde açıkça bekliyor
+ * (`SAFE_HEALTH_FACT_LABELS` ve `buildHealthFactsSummary` sıralaması), burası
+ * ise görür görmez 422 `raw_health_blocked` atıp SİNYALİN TAMAMINI
+ * reddediyordu. Sonuç: bugün antrenman kaydı olan her kullanıcıda sağlık
+ * bağlamı komple düşüyordu. Ham antrenman büyüklüğü olan `workoutdistance`
+ * engelli kalmaya devam ediyor.
+ */
 const BLOCKED_HEALTH_KEYS = new Set([
   "activeenergyburnedkcal",
   "caloriesburned",
@@ -81,8 +101,35 @@ const BLOCKED_HEALTH_KEYS = new Set([
   "stepcount",
   "steps",
   "workoutdistance",
-  "workouttype",
 ]);
+
+type FreshWorldSignal = {
+  signalId: string;
+  source: string;
+  kind: string;
+  summary: string;
+  confidence: number;
+  facts: Record<string, unknown>;
+  privacy: Record<string, unknown>;
+  renderHints: Record<string, unknown>;
+  visibility: string;
+  createdAt: Date;
+};
+
+type FreshWorldSignalCacheEntry = {
+  userId: string;
+  expiresAt: number;
+  value: FreshWorldSignal[];
+};
+
+const freshWorldSignalCache = new WeakMap<
+  FastifyInstance,
+  Map<string, FreshWorldSignalCacheEntry>
+>();
+const freshWorldSignalInFlight = new WeakMap<
+  FastifyInstance,
+  Map<string, Promise<FreshWorldSignal[]>>
+>();
 const BLOCKED_BINARY_KEYS = new Set([
   "arraybuffer",
   "audio",
@@ -128,6 +175,89 @@ const BLOCKED_DEBUG_KEYS = new Set([
   "stacktrace",
   "trace",
 ]);
+
+function compactMobileHistoryText(value: unknown, fallback: string): string {
+  const text = typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : "";
+  return (text || fallback).slice(0, 320);
+}
+
+function mobileHistoryPreview(metadata: unknown, title: string): string {
+  const record = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+  const chatHistory = record.chatHistory && typeof record.chatHistory === "object" && !Array.isArray(record.chatHistory)
+    ? record.chatHistory as Record<string, unknown>
+    : {};
+  return compactMobileHistoryText(
+    chatHistory.preview ?? record.preview ?? record.lastMessagePreview ?? record.summary,
+    title || "Yeni sohbet",
+  );
+}
+
+async function getMobileHistoryFeed(app: FastifyInstance, userId: string) {
+  const hasVisibleMessages = sql`exists (
+    select 1
+    from ${chatMessages}
+    where ${chatMessages.sessionId} = ${chatSessions.id}
+      and ${chatMessages.userId} = ${userId}
+  )`;
+  const sortTimestamp = sql<Date>`coalesce(${chatSessions.lastMessageAt}, ${chatSessions.updatedAt})`;
+  const rows = await app.db
+    .select({
+      id: chatSessions.id,
+      title: chatSessions.title,
+      metadata: chatSessions.metadata,
+      status: chatSessions.status,
+      updatedAt: chatSessions.updatedAt,
+      lastMessageAt: chatSessions.lastMessageAt,
+    })
+    .from(chatSessions)
+    .where(and(
+      eq(chatSessions.userId, userId),
+      eq(chatSessions.status, "active"),
+      hasVisibleMessages,
+    ))
+    .orderBy(desc(sortTimestamp), desc(chatSessions.id))
+    .limit(MOBILE_HISTORY_FEED_LIMIT + 1);
+
+  const hasMore = rows.length > MOBILE_HISTORY_FEED_LIMIT;
+  const pageRows = rows.slice(0, MOBILE_HISTORY_FEED_LIMIT);
+  const historyFeed = pageRows.map((row) => {
+    const preview = mobileHistoryPreview(row.metadata, row.title);
+    const timestamp = row.lastMessageAt ?? row.updatedAt;
+    const revision = `${timestamp.toISOString()}:${row.id}`;
+    const normalizedTitle = row.title.replace(/\s+/gu, " ").trim();
+    return {
+      id: row.id,
+      title: normalizedTitle && normalizedTitle.toLowerCase() !== "yeni sohbet"
+        ? normalizedTitle.slice(0, 200)
+        : preview,
+      preview,
+      status: row.status,
+      updatedAt: row.updatedAt,
+      lastMessageAt: row.lastMessageAt,
+      revision,
+    };
+  });
+  const last = pageRows[pageRows.length - 1];
+  const revision = historyFeed
+    .map((row) => row.revision)
+    .join("|") || "empty";
+
+  return {
+    historyFeed,
+    historyMeta: {
+      nextCursor: hasMore && last
+        ? Buffer.from(JSON.stringify({
+            timestamp: (last.lastMessageAt ?? last.updatedAt).toISOString(),
+            id: last.id,
+          }), "utf8").toString("base64url")
+        : null,
+      hasMore,
+      revision,
+    },
+  };
+}
 const BLOCKED_KEY_FRAGMENT_PATTERNS = [
   /(?:^|raw)(?:image|audio|video|file|binary|bytes|payload|sample|content)/u,
   /(?:image|audio|video|file|binary|bytes|payload|sample|content)(?:raw|base64|bytes|blob|data)$/u,
@@ -338,7 +468,7 @@ export function buildWorldSignalLogContext(input: {
 
 export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
   pruneStaleDevices(app, userId).catch(() => undefined);
-  const [userRows, devices, pendingCounts, billing, brain] = await Promise.all([
+  const [userRows, devices, pendingCounts, billing, brain, history] = await Promise.all([
     app.db
       .select({
         id: users.id,
@@ -360,6 +490,7 @@ export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
       .where(eq(tasks.userId, userId)),
     getBillingSummary(app, userId),
     getBrainProfile(app, userId),
+    getMobileHistoryFeed(app, userId),
   ]);
 
   return {
@@ -385,16 +516,20 @@ export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
       manageSubscriptionHint: billing.usage.manageSubscriptionHint,
       creditStatus: billing.usage.creditStatus,
       tokenStatus: billing.usage.tokenStatus,
-      trialOffer: billing.subscription.trialOffer,
     }),
     usage: shapePublicUsageSnapshot({
       usage: billing.usage,
       subscription: billing.subscription,
     }),
+    realtime: {
+      path: "/v1/realtime/stream",
+      sseEnabled: true,
+    },
     brain: shapeMobileBootstrapBrain(brain),
     devices,
     recentTasks: [],
-    historyFeed: [],
+    historyFeed: history.historyFeed,
+    historyMeta: history.historyMeta,
     summary: {
       pendingApprovals: Number(pendingCounts[0]?.pendingApprovals ?? 0),
       activeTasks: Number(pendingCounts[0]?.activeTasks ?? 0),
@@ -616,6 +751,7 @@ export async function ingestWorldSignals(
   }
 
   if (insertedSignalIds.size > 0) {
+    clearFreshWorldSignalCacheForUser(app, input.userId);
     const cacheStore = app.services?.reliability?.store;
     await Promise.all([
       cacheStore?.del(`understanding:world:${input.userId}`),
@@ -651,7 +787,36 @@ export async function ingestWorldSignals(
   };
 }
 
-export async function listFreshWorldSignals(
+function freshWorldSignalCacheKey(input: {
+  userId: string;
+  deviceId?: string;
+  sessionId?: string | null;
+  includeUnscopedSession?: boolean;
+  limit?: number;
+  maxAgeHours?: number;
+}) {
+  return JSON.stringify([
+    input.userId,
+    input.deviceId ?? null,
+    input.sessionId ?? null,
+    input.includeUnscopedSession === true,
+    input.limit ?? 20,
+    input.maxAgeHours ?? 24,
+  ]);
+}
+
+function clearFreshWorldSignalCacheForUser(
+  app: FastifyInstance,
+  userId: string,
+) {
+  const cache = freshWorldSignalCache.get(app);
+  if (!cache) return;
+  for (const [key, entry] of cache) {
+    if (entry.userId === userId) cache.delete(key);
+  }
+}
+
+async function listFreshWorldSignalsFromDatabase(
   app: FastifyInstance,
   input: {
     userId: string;
@@ -721,4 +886,54 @@ export async function listFreshWorldSignals(
       visibility: row.visibility,
       createdAt: row.createdAt,
     }));
+}
+
+export async function listFreshWorldSignals(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    deviceId?: string;
+    sessionId?: string | null;
+    includeUnscopedSession?: boolean;
+    limit?: number;
+    maxAgeHours?: number;
+  },
+): Promise<FreshWorldSignal[]> {
+  const key = freshWorldSignalCacheKey(input);
+  const now = Date.now();
+  const cache =
+    freshWorldSignalCache.get(app) ??
+    new Map<string, FreshWorldSignalCacheEntry>();
+  freshWorldSignalCache.set(app, cache);
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  if (cached) cache.delete(key);
+
+  const inFlight =
+    freshWorldSignalInFlight.get(app) ??
+    new Map<string, Promise<FreshWorldSignal[]>>();
+  freshWorldSignalInFlight.set(app, inFlight);
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const query = listFreshWorldSignalsFromDatabase(app, input)
+    .then((value) => {
+      if (cache.size >= FRESH_WORLD_SIGNAL_CACHE_MAX_ENTRIES) {
+        const oldestKey = cache.keys().next().value;
+        if (typeof oldestKey === "string") cache.delete(oldestKey);
+      }
+      cache.set(key, {
+        userId: input.userId,
+        expiresAt: Date.now() + FRESH_WORLD_SIGNAL_CACHE_TTL_MS,
+        value,
+      });
+      return value;
+    })
+    .finally(() => {
+      inFlight.delete(key);
+    });
+  inFlight.set(key, query);
+  return query;
 }

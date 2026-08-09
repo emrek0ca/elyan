@@ -239,6 +239,53 @@ test("decideCommandRoute keeps greetings on the fast shared-brain path", async (
   assert.equal(decision.selectedWorkload, "mobile_chat_fast");
 });
 
+// RC-6 — Bir cihazın SEÇİLİ olması, turu masaüstü görevine çevirmez. Cihaz
+// görevi turun NİYETİNDEN doğmalı, seçili cihazın varlığından değil. Üretim
+// vakası: "sadece tek cümleyle söyle: bugün nasılsın" bile seçili cihazla
+// tasks satırı açıyordu.
+test("decideCommandRoute keeps a conversational turn on the shared brain even with a ready selected desktop", async () => {
+  const app = createDesktopReadyApp();
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Selam, nasılsın?",
+    source: "mobile",
+    selectedDeviceId: "desktop-1",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.mode, "chat");
+  assert.notEqual(decision.taskRoute?.needsDesktop, true);
+});
+
+test("decideCommandRoute does not turn an imperative-looking chat sentence into a desktop task", async () => {
+  const app = createDesktopReadyApp();
+  // Rota modeli semantik olarak "bu sohbet" diyor; seçili cihazın varlığı bunu
+  // ezmemelidir (karar semantik, kural tabanlı değil).
+  (app.services as Record<string, unknown>).commandRouteModel = {
+    decide: async () => ({
+      target: "server_brain",
+      operationalRoute: "server_brain",
+      executionPlan: ["server_brain"],
+      reason: "The user is just chatting, not asking for real execution.",
+      needsDesktop: false,
+      needsPrivateDesktopData: false,
+      needsUserApproval: false,
+      requiredCapabilities: [],
+      semanticDesktopContract: null,
+    }),
+  };
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "sadece tek cümleyle söyle: bugün nasılsın?",
+    source: "mobile",
+    selectedDeviceId: "desktop-1",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.notEqual(decision.taskRoute?.needsDesktop, true);
+});
+
 test("decideCommandRoute selects document_generate for report/document creation prompts", async () => {
   const app = createApp([]);
   for (const message of [
@@ -1602,6 +1649,7 @@ test("model route cache is isolated between chat sessions", async () => {
     userId: "session-isolated-route-user",
     message: "Onu düzelt",
     source: "mobile" as const,
+    metadata: { desktopDispatch: true },
   };
 
   await decideCommandRoute(app as never, {
@@ -1879,4 +1927,201 @@ test("decideCommandRoute keeps confident simple questions on the fast profile", 
 
   assert.equal(decision.intent, "normal_chat");
   assert.equal(decision.selectedWorkload, "mobile_chat_fast");
+});
+
+test("decideCommandRoute skips the network route model for semantic server-only chat", async () => {
+  const app = createApp([]);
+  let routeModelCalls = 0;
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => {
+        routeModelCalls += 1;
+        throw new Error("server-only chat must not consult the route model");
+      },
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Atatürk kimdir?",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(routeModelCalls, 0);
+});
+
+// Canlı arıza (2026-08-07): "Chromeu kapat" — apaçık masaüstü komutu —
+// sınıflandırıcının "bilmiyorum" kovasına (chat/0.55) düşüyor, mobil
+// selectedDeviceId göndermiyor ve regex çiti bu yazımı tanımıyordu; semantik
+// router hiç çağrılmadan tur sohbete gidiyordu. Kullanıcının CANLI masaüstü
+// çalışma zamanı varken belirsiz tur mutlaka modele sorulmalı.
+test("decideCommandRoute consults the route model for an ambiguous turn when a live desktop runtime exists", async () => {
+  const app = createApp([]);
+  let consulted = 0;
+  Object.assign(app.services, {
+    realtimeHub: {
+      isRuntimeConnected: () => true,
+      hasConnectedRuntimeForUser: () => true,
+    },
+    commandRouteModel: {
+      decide: async () => {
+        consulted += 1;
+        return {
+          target: "server_brain",
+          operationalRoute: "server_brain",
+          executionPlan: ["server_brain"],
+          reason: "test",
+          needsDesktop: false,
+          needsPrivateDesktopData: false,
+          needsUserApproval: false,
+          requiredCapabilities: [],
+          semanticDesktopContract: null,
+        };
+      },
+    },
+  });
+
+  await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Chromeu kapat",
+    source: "mobile",
+  });
+
+  assert.equal(consulted, 1);
+});
+
+test("decideCommandRoute still skips the route model when no desktop runtime is live", async () => {
+  const app = createApp([]);
+  let consulted = 0;
+  Object.assign(app.services, {
+    realtimeHub: {
+      isRuntimeConnected: () => false,
+      hasConnectedRuntimeForUser: () => false,
+    },
+    commandRouteModel: {
+      decide: async () => {
+        consulted += 1;
+        throw new Error("must not consult without a live desktop");
+      },
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Atatürk kimdir?",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(consulted, 0);
+});
+
+// Canlı arıza (2026-08-08): "Masaüstünde Emre adında klasör oluştur" turu
+// `intent: computer, requiresLocalRuntime: true` olarak DOĞRU sınıflandı ama
+// rota modeli "server_brain" dedi ve sınıflandırıcının kararı nihai kararda
+// kullanılmadığı için tur sohbete düştü ("dosya sistemine erişemiyorum").
+// Masaüstü GERÇEKTEN bağlıyken modelin yanlış sohbet kararı bağlayıcı olmamalı.
+test("decideCommandRoute overrides a wrong server-brain verdict when the classifier needs local runtime and a desktop is live", async () => {
+  const app = createDesktopReadyApp(["make_directory", "file_write"]);
+  Object.assign(app.services, {
+    realtimeHub: {
+      isRuntimeConnected: () => true,
+      hasConnectedRuntimeForUser: () => true,
+    },
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain",
+        operationalRoute: "server_brain",
+        executionPlan: ["server_brain"],
+        reason: "model wrongly classified an explicit local action as chat",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDesktopContract: null,
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Masaüstünde Emre adında klasör oluştur",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
+});
+
+test("decideCommandRoute keeps a plain chat turn on the server brain even with a live desktop", async () => {
+  const app = createApp([]);
+  Object.assign(app.services, {
+    realtimeHub: {
+      isRuntimeConnected: () => true,
+      hasConnectedRuntimeForUser: () => true,
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Atatürk kimdir?",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "server_brain");
+});
+
+// Canlı üretim ölçümü (2026-08-08, gerçek kodla backend container'ında):
+//   CLS        intent=computer, requiresLocalRuntime=true  (tur doğru anlaşıldı)
+//   DEV        masaüstü online=true, canReceiveTasks=true  (cihaz hazır)
+//   ROUTEMODEL false                                       (semantik router YOK)
+// Rota modeli üretimde yapılandırılmadığı için masaüstüne giden tek yol regex
+// çitiydi ve o da bu cümleyi tanımıyordu → görev sohbete düştü. Router karar
+// üretemediğinde sınıflandırıcının verdisi + hazır cihaz yeterli olmalı.
+test("decideCommandRoute routes to desktop when the route model cannot decide but the classifier needs local runtime", async () => {
+  // Üretimdeki gerçek durum: `commandRouteModel` servisi HİÇ yok.
+  const app = createDesktopReadyApp();
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Masaüstünde Cabir adında klasör oluştur",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
+});
+
+// Üretimde gözlenen tam senaryo (2026-08-08): `commandRouteModel` servisi yok
+// ama kod doğrudan LLM'e soruyor ve LLM açık bir masaüstü komutunu
+// "server_brain" olarak döndürüyor (fallbackAllowed=false, yani "karar
+// veremedim" bile demiyor). Sınıflandırıcı requiresLocalRuntime=true diyorken
+// ve cihaz hazırken modelin bu kararı bağlayıcı olmamalı.
+test("decideCommandRoute overrides an explicit server_brain model verdict for a ready desktop when the classifier needs local runtime", async () => {
+  const app = createDesktopReadyApp();
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain",
+        operationalRoute: "server_brain",
+        executionPlan: ["server_brain"],
+        reason: "model wrongly treated a local action as chat",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDesktopContract: null,
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Masaüstünde Cabir adında klasör oluştur",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
 });

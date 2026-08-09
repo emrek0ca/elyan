@@ -29,6 +29,7 @@ export function createDeltaPublisherCore(input: {
   startedAt: number;
   provider: SharedBrainProvider;
   model: string;
+  lowLatency?: boolean;
   onDelta?: (delta: SharedBrainInferenceDelta) => void | Promise<void>;
   computeVisibleText: (full: string) => string;
   looksLikeReasoningDumpOpening: (text: string) => boolean;
@@ -41,8 +42,11 @@ export function createDeltaPublisherCore(input: {
   let lastFlushAt = input.startedAt;
   let emittedFirstChunk = false;
 
-  const DUMP_GATE_MIN_CHARS = 24;
-  const DUMP_GATE_RELEASE_CHARS = 64;
+  // Keep the first-window guard for reasoning dumps, but do not make a fast
+  // conversational turn wait for a full sentence before showing its first
+  // visible token. The provider stream is already sanitized below.
+  const DUMP_GATE_MIN_CHARS = input.lowLatency ? 8 : 24;
+  const DUMP_GATE_RELEASE_CHARS = input.lowLatency ? 24 : 64;
   let holdingFirstWindow = true;
   let suppressedAsReasoningDump = false;
 

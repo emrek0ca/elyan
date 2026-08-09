@@ -19,8 +19,6 @@ import {
  * so the "connected but dead" honesty contract (real initialize + tools/list
  * handshake) is preserved while the transport is delegated to the SDK.
  *
- * The default path stays the hand-written probe until the flag is validated
- * against live servers; no production behaviour changes while the flag is off.
  */
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -151,7 +149,30 @@ export async function probeMcpServerViaSdk(input: {
         serializedInputSchema.length <= MAX_RECORDED_TOOL_SCHEMA_LENGTH
           ? (tool.inputSchema as Record<string, unknown>)
           : null;
-      return { name, description, inputSchemaDigest, inputSchema };
+      const annotations = tool.annotations;
+      return {
+        name,
+        description,
+        inputSchemaDigest,
+        inputSchema,
+        annotations:
+          annotations && typeof annotations === "object"
+            ? {
+                ...(typeof annotations.readOnlyHint === "boolean"
+                  ? { readOnlyHint: annotations.readOnlyHint }
+                  : {}),
+                ...(typeof annotations.destructiveHint === "boolean"
+                  ? { destructiveHint: annotations.destructiveHint }
+                  : {}),
+                ...(typeof annotations.idempotentHint === "boolean"
+                  ? { idempotentHint: annotations.idempotentHint }
+                  : {}),
+                ...(typeof annotations.openWorldHint === "boolean"
+                  ? { openWorldHint: annotations.openWorldHint }
+                  : {}),
+              }
+            : null,
+      };
     })
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
 
@@ -182,13 +203,13 @@ export type McpSdkToolCallResult = {
   ok: boolean;
   isError: boolean;
   content: unknown;
+  structuredContent?: unknown;
   errorCode: McpProbeErrorCode | null;
 };
 
 /**
- * Execute a single MCP tool via the official SDK. Kept flag-gated alongside the
- * probe; the production tool loop continues to use its existing connector path
- * until this transport is validated end to end.
+ * Execute a single MCP tool via the official SDK. The caller enforces the live
+ * user catalog and approval decision before reaching this transport.
  */
 export async function callMcpToolViaSdk(input: {
   url: string;
@@ -203,7 +224,13 @@ export async function callMcpToolViaSdk(input: {
   try {
     transport = newTransport(input.url, input.accessToken);
   } catch (error) {
-    return { ok: false, isError: true, content: null, errorCode: classifySdkError(error) };
+    return {
+      ok: false,
+      isError: true,
+      content: null,
+      structuredContent: null,
+      errorCode: classifySdkError(error),
+    };
   }
   try {
     await client.connect(transport, { timeout: timeoutMs });
@@ -217,10 +244,17 @@ export async function callMcpToolViaSdk(input: {
       ok: result.isError !== true,
       isError: result.isError === true,
       content: result.content ?? null,
+      structuredContent: result.structuredContent ?? null,
       errorCode: null,
     };
   } catch (error) {
     await safeClose(client);
-    return { ok: false, isError: true, content: null, errorCode: classifySdkError(error) };
+    return {
+      ok: false,
+      isError: true,
+      content: null,
+      structuredContent: null,
+      errorCode: classifySdkError(error),
+    };
   }
 }

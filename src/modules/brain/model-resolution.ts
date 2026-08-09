@@ -233,17 +233,37 @@ function getResolvedArtifactModel(selection: SharedBrainSelection): string | nul
   );
 }
 
+function createHostedFastTurnSelection(): SharedBrainSelection {
+  return {
+    readyModels: [],
+    activeSharedModel: null,
+    rollbackSharedModel: null,
+    activeUserModel: null,
+    warmupJob: null,
+    baseModel: "llama3.2",
+    activeAdapter: "base",
+    trainingPlan: null,
+  };
+}
+
 export async function resolveSharedBrainModel(
   app: FastifyInstance,
   input: {
     userId: string;
     workload?: SharedBrainWorkload;
-    selection?: SharedBrainSelection;
+    selection?: SharedBrainSelection | null;
     runtime?: SharedBrainRuntimeSnapshot;
   },
 ): Promise<SharedBrainModelResolution> {
   const workload = input.workload ?? "mobile_chat_fast";
-  const selection = input.selection ?? (await resolveSharedBrainSelection(app, input.userId));
+  // A null selection is an explicit fast-path signal: configured hosted chat
+  // models do not use per-user artifact selection, so avoid two database
+  // reads before the first provider request. Undefined keeps the existing
+  // selection behavior for local and artifact-backed workloads.
+  const selection =
+    input.selection === null
+      ? createHostedFastTurnSelection()
+      : input.selection ?? (await resolveSharedBrainSelection(app, input.userId));
   const runtime = input.runtime ?? (await selectSharedBrainRuntime(app));
   const groqPrimaryConfigured = hasGroqPrimaryConfigured(app);
   if (groqPrimaryConfigured) {

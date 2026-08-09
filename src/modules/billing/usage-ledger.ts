@@ -4,6 +4,11 @@ import { subscriptions, usageRecords } from "../../db/schema.js";
 import { conflict } from "../../lib/errors.js";
 import { getCreditWindowSummary } from "./credit-ledger.js";
 import {
+  readSubscriptionRow,
+  type BillingReadDb,
+  type SubscriptionRow,
+} from "./subscription-repository.js";
+import {
   getBillingPlan,
   normalizeBillingPlanCode,
   type BillingPlanCode,
@@ -31,14 +36,12 @@ export function buildScopedAiCreditUsageMetric(
     : BILLING_USAGE_METRICS.subscriptionAiCredit;
 }
 
-type SubscriptionRow = typeof subscriptions.$inferSelect;
 
 type UsageWindow = {
   startAt: Date;
   endAt: Date;
 };
 
-type BillingReadDb = Pick<FastifyInstance["db"], "select">;
 type BillingWriteDb = Pick<FastifyInstance["db"], "insert">;
 
 export type BillingUsageSummary = {
@@ -87,11 +90,6 @@ function startOfCurrentUtcDay(): Date {
 
 function addUtcDays(startAt: Date, days: number): Date {
   return new Date(startAt.getTime() + days * 24 * 60 * 60 * 1000);
-}
-
-async function getSubscriptionRow(db: BillingReadDb, userId: string): Promise<SubscriptionRow | null> {
-  const rows = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
-  return rows[0] ?? null;
 }
 
 function getUsageWindow(subscription: SubscriptionRow | null): UsageWindow {
@@ -153,7 +151,7 @@ async function countUsageMetricInWindow(
 }
 
 export async function getBillingUsageSummary(db: BillingReadDb, userId: string): Promise<BillingUsageSummary> {
-  const subscription = await getSubscriptionRow(db, userId);
+  const subscription = await readSubscriptionRow(db, userId);
   const plan = getBillingPlan(subscription?.planCode);
   const planCode = normalizeBillingPlanCode(subscription?.planCode ?? plan.code);
   const window = getUsageWindow(subscription);

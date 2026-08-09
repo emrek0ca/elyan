@@ -4,6 +4,63 @@ import { AppError } from "../lib/errors.js";
 import { serializeZodError } from "../lib/http.js";
 import { sanitizePublicErrorDetails } from "../lib/public-error-details.js";
 
+/**
+ * Makine kodu mu, insana yazılmış cümle mi?
+ *
+ * `snake_case`, boşluksuz, tek parça bir dize kullanıcıya gösterilmek üzere
+ * yazılmamıştır. Kod tabanında onlarca yerde `conflict("apple_product_mismatch")`
+ * gibi çağrılar var: `AppError.message` doğrudan istemciye yayınlandığı için
+ * kullanıcı ekranda ham kodu görüyordu (canlı örnek: abonelik ekranında
+ * "apple_subscription_owned_by_another_user" yazan bir uyarı kutusu).
+ *
+ * Her çağrı yerini tek tek düzeltmek hem büyük hem de yarın eklenecek yeni
+ * bir `throw` için işe yaramaz. Kural TEK SINIRDA duruyor: makine kodu gibi
+ * görünen bir mesaj kullanıcıya çıkmaz.
+ */
+function looksLikeMachineCode(message: string): boolean {
+  const compact = message.trim();
+  if (!compact || compact.length > 80 || /\s/.test(compact)) {
+    return false;
+  }
+  return /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(compact);
+}
+
+/**
+ * Kullanıcıya gösterilebilir karşılıklar. Listede olmayan kod, güvenli genel
+ * mesaja düşer — ham kod HİÇBİR koşulda sızmaz. Makine kodu kaybolmaz:
+ * `details.reason` içinde taşınır (telemetri ve istemci mantığı için).
+ */
+const USER_FACING_ERROR_MESSAGES: Record<string, string> = {
+  apple_subscription_owned_by_another_user:
+    "Bu App Store aboneliği başka bir Elyan hesabına bağlı. Aboneliği aldığın hesapla giriş yap ya da destek ekibine yaz.",
+  store_transaction_owned_by_another_user:
+    "Bu satın alma başka bir Elyan hesabına bağlı. Satın almayı yaptığın hesapla giriş yap.",
+  active_apple_subscription_provider_locked:
+    "Hesabında etkin bir App Store aboneliği var. Ödeme yöntemini değiştirmek için önce mevcut aboneliği App Store üzerinden iptal et.",
+  apple_plan_product_mismatch:
+    "Seçilen plan ile App Store ürünü eşleşmiyor. Uygulamayı güncelleyip tekrar dene.",
+  apple_product_mismatch:
+    "Seçilen plan ile App Store ürünü eşleşmiyor. Uygulamayı güncelleyip tekrar dene.",
+  checkout_initialization_in_progress:
+    "Ödeme başlatma işlemin sürüyor. Birkaç saniye sonra tekrar dene.",
+};
+
+function toUserFacingMessage(message: string): {
+  message: string;
+  reason?: string;
+} {
+  if (!looksLikeMachineCode(message)) {
+    return { message };
+  }
+  const code = message.trim();
+  return {
+    message:
+      USER_FACING_ERROR_MESSAGES[code] ??
+      "İşlem tamamlanamadı. Biraz sonra tekrar dener misin?",
+    reason: code,
+  };
+}
+
 function readRetryAfterSeconds(details: unknown): number | null {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return null;
@@ -39,18 +96,27 @@ export const errorHandlerPlugin = fp(async (app) => {
         app.log.warn({ err: { code: error.code, message: error.message, details: error.details }, requestId: request.id, url: request.url }, "409 app error");
       }
       const publicDetails = sanitizePublicErrorDetails(error.details);
+      // Ham makine kodu kullanıcıya ÇIKMAZ; koda karşılık gelen insan cümlesi
+      // gider ve kodun kendisi `details.reason`'da korunur.
+      const userFacing = toUserFacingMessage(error.message);
+      const detailsObject =
+        typeof publicDetails === "object" && publicDetails && !Array.isArray(publicDetails)
+          ? (publicDetails as Record<string, unknown>)
+          : null;
+      const mergedDetails =
+        retryAfterSeconds == null && userFacing.reason == null
+          ? publicDetails
+          : {
+              ...(detailsObject ?? {}),
+              ...(userFacing.reason ? { reason: userFacing.reason } : {}),
+              ...(retryAfterSeconds != null
+                ? { retryAfterMs: retryAfterSeconds * 1000 }
+                : {}),
+            };
       reply.status(error.statusCode).send({
         error: error.code,
-        message: error.message,
-        details:
-          retryAfterSeconds == null
-            ? publicDetails
-            : {
-                ...(typeof publicDetails === "object" && publicDetails && !Array.isArray(publicDetails)
-                  ? publicDetails
-                  : {}),
-                retryAfterMs: retryAfterSeconds * 1000,
-              },
+        message: userFacing.message,
+        details: mergedDetails,
         requestId: request.id,
       });
       return;

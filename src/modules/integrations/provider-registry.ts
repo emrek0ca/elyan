@@ -635,6 +635,11 @@ export function isIntegrationMcpAppConfigured(
   env: AppEnv,
   entry: IntegrationMcpAppCatalogEntry,
 ): boolean {
+  // MCP-native apps use RFC 9728 discovery + RFC 7591 dynamic client
+  // registration. They do not need provider-specific client credentials.
+  if (entry.authStrategy === "mcp_oauth") {
+    return Boolean(entry.serverUrl && env.ELYAN_MCP_SDK_ENABLED === true);
+  }
   if (entry.oauthClientIdEnvKey || entry.oauthClientSecretEnvKey) {
     const clientId = entry.oauthClientIdEnvKey
       ? env[entry.oauthClientIdEnvKey]
