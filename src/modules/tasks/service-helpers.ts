@@ -827,6 +827,7 @@ function sanitizeBoundedPublicJson(
               .toLowerCase();
             return ![
               "task_trace",
+              "dispatch_widget",
               "security_decision",
               "reasoning_trace",
               "tool_trace",

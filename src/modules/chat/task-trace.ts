@@ -11,6 +11,7 @@ import {
   getPayloadMetadata,
 } from "../tasks/service-helpers.js";
 import { buildRouteTransparencyReason } from "./route-transparency.js";
+import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
 
 type TaskTraceSource = {
   id: string;
@@ -1120,8 +1121,8 @@ export function buildTaskTraceBlock(input: {
       : undefined;
 
   const fallback: ElyanTaskTraceBlock = {
-    type: "task_trace",
-    stableBlockId: `task_trace_${input.task.id}`,
+    type: "dispatch_widget",
+    stableBlockId: `dispatch_widget_${input.task.id}`,
     taskId: input.task.id,
     status: traceStatus,
     title:
@@ -1216,7 +1217,7 @@ export function advanceTaskTraceApproval(input: {
   const nextTool = readString(input.nextApproval ?? null, "tool");
   return input.blocks.map((value) => {
     const block = readRecord(value);
-    if (block?.type !== "task_trace" || !Array.isArray(block.steps)) return value;
+    if (!isDispatchWidgetType(block?.type) || !Array.isArray(block?.steps)) return value;
     const steps = block.steps.map((value) => {
       const step = readRecord(value);
       const approval = readRecord(step?.approval);

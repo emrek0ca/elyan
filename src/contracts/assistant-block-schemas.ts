@@ -65,7 +65,24 @@ export const elyanLegacyAssistantBlockTypeValues = [
  * widgets. `tool_call` surfaces the agent's tool activity (which tool, how
  * long, what it found) as a first-class, user-visible block.
  */
-export const elyanCanonicalBlockTypeValues = ["tool_call"] as const;
+export const elyanCanonicalBlockTypeValues = ["tool_call", "dispatch_widget"] as const;
+
+/**
+ * Legacy type names that map onto a canonical type on read. `task_trace`
+ * became `dispatch_widget`: the block only ships when a dispatch is live, and
+ * the widget renders the whole run, not just a trace.
+ */
+export const elyanAssistantBlockTypeAliases: Record<string, ElyanAssistantBlockTypeValue> = {
+  task_trace: "dispatch_widget",
+};
+
+export function canonicalAssistantBlockType(type: string): string {
+  return elyanAssistantBlockTypeAliases[type] ?? type;
+}
+
+export function isDispatchWidgetType(type: unknown): boolean {
+  return type === "dispatch_widget" || type === "task_trace";
+}
 
 /** Complete canonical type inventory used by new envelopes. */
 export const elyanAssistantBlockTypeValues = [
@@ -682,6 +699,7 @@ export const elyanAssistantBlockDataSchemaByType = {
   status: statusDataSchema,
   security_decision: securityDecisionDataSchema,
   task_trace: taskTraceDataSchema,
+  dispatch_widget: taskTraceDataSchema,
   attachment_context: infoCardDataSchema,
   context_signal: infoCardDataSchema,
   web_search: webSearchDataSchema,

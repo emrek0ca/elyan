@@ -192,8 +192,9 @@ function sampleBlockForType(type: string): Record<string, unknown> {
         ],
       };
     case "task_trace":
+    case "dispatch_widget":
       return {
-        type: "task_trace",
+        type: "dispatch_widget",
         title: "Görev izleme",
         status: "running",
         steps: [

@@ -278,6 +278,7 @@ import {
 } from "../artifacts/service.js";
 import { artifactSpecToRenderRecipeBlocks } from "../artifacts/render-recipe-adapter.js";
 import type { ArtifactOutput } from "../artifacts/types.js";
+import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
 export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 
 type ShapedTaskFeedItem = ReturnType<typeof shapeTaskFeedItem>;
@@ -7558,7 +7559,7 @@ async function processSharedBrainChatTask(
           const type = readRecord(block)?.type;
           return (
             type !== "goal_progress" &&
-            (exposeLiveTaskTrace || type !== "task_trace")
+            (exposeLiveTaskTrace || !isDispatchWidgetType(type))
           );
         },
       );

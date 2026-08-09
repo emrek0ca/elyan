@@ -454,9 +454,9 @@ test("composeAssistantMessageBlocks preserves task trace blocks before the text 
   });
 
   assert.equal(blocks.length, 2);
-  assert.equal(blocks[0]?.type, "task_trace");
+  assert.equal(blocks[0]?.type, "dispatch_widget");
   assert.equal(
-    blocks[0]?.type === "task_trace" ? blocks[0].routeReason : undefined,
+    blocks[0]?.type === "dispatch_widget" ? blocks[0].routeReason : undefined,
     "Elyan bunu sohbet olarak işledi çünkü istek masaüstü erişimi gerektirmiyor.",
   );
   assert.equal(blocks[1]?.type, "text");
@@ -483,9 +483,9 @@ test("composeAssistantMessageBlocks drops protected task route rationale", () =>
     ],
   });
 
-  assert.equal(blocks[0]?.type, "task_trace");
+  assert.equal(blocks[0]?.type, "dispatch_widget");
   assert.equal(
-    blocks[0]?.type === "task_trace" ? blocks[0].routeReason : undefined,
+    blocks[0]?.type === "dispatch_widget" ? blocks[0].routeReason : undefined,
     undefined,
   );
   assert.doesNotMatch(JSON.stringify(blocks), /openai|gpt|internal routing/i);
@@ -513,7 +513,7 @@ test("shapeAssistantMessagePayload exposes safe task progress but removes securi
     },
   }) as { blocks?: Array<{ type: string }> };
   assert.equal(payload.blocks?.length, 2);
-  assert.equal(payload.blocks?.[0]?.type, "task_trace");
+  assert.equal(payload.blocks?.[0]?.type, "dispatch_widget");
   assert.equal(payload.blocks?.[1]?.type, "text");
   assert.equal(payload.blocks?.some((block) => block.type === "security_decision"), false);
 });

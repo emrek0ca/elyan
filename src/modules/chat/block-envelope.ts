@@ -3,6 +3,7 @@ import {
   elyanAssistantBlockSourceValues,
   elyanSourceWidgetBlockTypeValues,
 } from "../../contracts/assistant-block-schemas.js";
+import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
 
 export const ELYAN_ASSISTANT_BLOCK_VERSION = 1 as const;
 
@@ -143,7 +144,7 @@ function inferSource(
     type === "capability_unavailable" ||
     type === "desktop_suggestion" ||
     type === "status" ||
-    type === "task_trace" ||
+    isDispatchWidgetType(type) ||
     type === "terminal"
   ) {
     return "runtime";

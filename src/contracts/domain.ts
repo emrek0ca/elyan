@@ -420,7 +420,7 @@ export const elyanTaskTraceStepSchema = z.object({
   durationMs: z.number().finite().nonnegative().optional(),
 });
 export const elyanTaskTraceBlockSchema = z.object({
-  type: z.literal("task_trace"),
+  type: z.union([z.literal("dispatch_widget"), z.literal("task_trace")]),
   stableBlockId: z.string().min(1).max(255).optional(),
   visibility: elyanAssistantBlockVisibilitySchema.optional(),
   confidence: z.number().min(0).max(1).optional(),

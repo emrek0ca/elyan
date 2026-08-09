@@ -25,6 +25,7 @@ import {
   chatStreamEventStatusRank,
   isTerminalChatMessageStatus,
 } from "./stream-authority.js";
+import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
 
 type ChatMetadata = {
   sessionId?: string;
@@ -453,7 +454,7 @@ function extractResultAssistantBlocks(
   task: typeof tasks.$inferSelect,
 ): AssistantMessageBlock[] {
   return normalizeResultAssistantBlocks(task).filter(
-    (block) => block.type !== "text" && block.type !== "task_trace",
+    (block) => block.type !== "text" && !isDispatchWidgetType(block.type),
   );
 }
 
@@ -481,7 +482,7 @@ function extractConnectorTaskTraceBlock(
   }
   return (
     normalizeResultAssistantBlocks(task).find(
-      (block) => block.type === "task_trace",
+      (block) => isDispatchWidgetType(block.type),
     ) ?? null
   );
 }

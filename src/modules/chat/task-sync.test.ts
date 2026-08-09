@@ -291,7 +291,7 @@ test("syncChatTaskLifecycle publishes running assistant snapshots for chat tasks
   const runningBlocks = runningPayload?.assistantMessage?.blocks as
     | Array<Record<string, unknown>>
     | undefined;
-  const taskTrace = runningBlocks?.find((block) => block.type === "task_trace");
+  const taskTrace = runningBlocks?.find((block) => block.type === "dispatch_widget");
   assert.ok(taskTrace);
   assert.equal(taskTrace.activeStepId, "write");
   const runningSteps = taskTrace.steps as
@@ -599,7 +599,7 @@ test("syncChatTaskLifecycle publishes completed assistant blocks with the task s
     | Array<Record<string, unknown>>
     | undefined;
   assert.equal(completedBlocks?.length, 2);
-  assert.equal(completedBlocks?.some((block) => block.type === "task_trace"), true);
+  assert.equal(completedBlocks?.some((block) => block.type === "dispatch_widget"), true);
   assert.equal(
     completedBlocks?.find((block) => block.type === "text")?.markdown,
     "Merhaba, nasıl yardımcı olabilirim?",
@@ -820,7 +820,7 @@ test("syncChatTaskLifecycle emits phased v1.1 summary blocks when enabled", asyn
       }
     | undefined;
   const blocks = payload?.assistantMessage?.blocks ?? [];
-  assert.equal(blocks.some((block) => block.type === "task_trace"), true);
+  assert.equal(blocks.some((block) => block.type === "dispatch_widget"), true);
   assert.equal(blocks.some((block) => block.type === "summary"), true);
   assert.equal(blocks.some((block) => block.type === "text"), true);
 });
@@ -923,7 +923,7 @@ test("syncChatTaskLifecycle preserves typed result blocks even when v1.1 chrome 
   const blocks = payload?.assistantMessage?.blocks ?? [];
   assert.equal(blocks[0]?.type, "document_block");
   assert.equal(blocks.length, 3);
-  assert.equal(blocks.some((block) => block.type === "task_trace"), true);
+  assert.equal(blocks.some((block) => block.type === "dispatch_widget"), true);
   assert.equal(blocks.some((block) => block.type === "text"), true);
 });
 
@@ -1035,7 +1035,7 @@ test("syncChatTaskLifecycle carries generated image artifact blocks to chat surf
   assert.equal(blocks[0]?.contentFamily, "image");
   assert.equal(blocks[0]?.url, "https://api.elyan.dev/v1/artifacts/artifact-1/content?token=signed");
   assert.equal(blocks.length, 3);
-  assert.equal(blocks.some((block) => block.type === "task_trace"), true);
+  assert.equal(blocks.some((block) => block.type === "dispatch_widget"), true);
   assert.equal(blocks.some((block) => block.type === "text"), true);
 });
 

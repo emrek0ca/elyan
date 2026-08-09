@@ -2162,6 +2162,150 @@
       "title": "DesktopSuggestionBlock",
       "type": "object"
     },
+    "DispatchWidgetBlock": {
+      "additionalProperties": {},
+      "properties": {
+        "blockId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "cacheDigest": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "data": {
+          "additionalProperties": {},
+          "properties": {
+            "activeStepId": {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            "phase": {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "running",
+                "completed",
+                "failed",
+                "waiting_approval"
+              ],
+              "type": "string"
+            },
+            "steps": {
+              "items": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "summary": {
+              "maxLength": 180,
+              "minLength": 1,
+              "type": "string"
+            },
+            "taskId": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "taskId",
+            "status",
+            "title",
+            "steps"
+          ],
+          "title": "DispatchWidgetBlockData",
+          "type": "object"
+        },
+        "isRenderable": {
+          "type": "boolean"
+        },
+        "priority": {
+          "maximum": 3,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "renderHints": {
+          "additionalProperties": {},
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "source": {
+          "enum": [
+            "elyan",
+            "runtime",
+            "web",
+            "document",
+            "user_attachment",
+            "legacy",
+            "gmail",
+            "calendar",
+            "drive",
+            "notion",
+            "github",
+            "slack",
+            "linear",
+            "connector",
+            "mcp"
+          ],
+          "type": "string"
+        },
+        "stableBlockId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "const": "dispatch_widget",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "visibility": {
+          "enum": [
+            "user_visible",
+            "assistant_internal_by_default"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "version",
+        "blockId",
+        "source",
+        "visibility",
+        "renderHints",
+        "data"
+      ],
+      "title": "DispatchWidgetBlock",
+      "type": "object"
+    },
     "DocumentBlockBlock": {
       "additionalProperties": {},
       "properties": {
@@ -8001,6 +8145,9 @@
       "$ref": "#/$defs/ToolCallBlock"
     },
     {
+      "$ref": "#/$defs/DispatchWidgetBlock"
+    },
+    {
       "$ref": "#/$defs/LegacyTopLevelBlock"
     }
   ],
@@ -8049,7 +8196,8 @@
     "notion_page",
     "github_activity",
     "slack_messages",
-    "tool_call"
+    "tool_call",
+    "dispatch_widget"
   ],
   "x-elyan-definition-by-type": {
     "actionable": "ActionableBlock",
@@ -8066,6 +8214,7 @@
     "connector_result": "ConnectorResultBlock",
     "context_signal": "ContextSignalBlock",
     "desktop_suggestion": "DesktopSuggestionBlock",
+    "dispatch_widget": "DispatchWidgetBlock",
     "document_block": "DocumentBlockBlock",
     "document_block_skeleton": "DocumentBlockSkeletonBlock",
     "drive_files": "DriveFilesBlock",
@@ -8098,7 +8247,7 @@
     "web_search": "WebSearchBlock"
   },
   "x-elyan-envelope-version": 1,
-  "x-elyan-schema-digest": "506c3b8108be084ab936459138fffe97bc258425dfbd0411496dad8b9cab419d",
+  "x-elyan-schema-digest": "112bc8557edfbffa6eac92faa563a6481b70f3c3f3e08fa28300938301270ffa",
   "x-elyan-source-widget-types": [
     "mail_list",
     "mail_detail",

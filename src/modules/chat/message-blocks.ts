@@ -49,6 +49,7 @@ import type {
   ElyanAssistantWebSearchBlock,
   ElyanTaskTraceBlock,
 } from "../../contracts/domain.js";
+import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
 
 export type AssistantTextMessageBlock = ElyanAssistantTextBlock;
 export type AssistantMessageBlock = ElyanAssistantBlock;
@@ -1961,7 +1962,7 @@ export function buildAssistantConnectorResultBlock(
 }
 
 function isTaskTraceBlock(block: AssistantMessageBlock): block is ElyanTaskTraceBlock {
-  return block.type === "task_trace";
+  return isDispatchWidgetType(block.type);
 }
 
 function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBlock | null {
@@ -2067,7 +2068,7 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
     .toLowerCase();
 
   const candidate = {
-    type: "task_trace",
+    type: "dispatch_widget",
     taskId,
     status: status as ElyanTaskTraceBlock["status"],
     title,
@@ -2101,7 +2102,7 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
       ? { stopReason: normalizeTextValue(value.stopReason, 160)! }
       : {}),
     steps,
-    ...withAssistantBlockDefaults("task_trace", {}, {
+    ...withAssistantBlockDefaults("dispatch_widget", {}, {
       stableBlockId:
         normalizeBlockStableId(value.blockId) ??
         normalizeBlockStableId(value.stableBlockId),
@@ -2335,7 +2336,7 @@ function parseAssistantBlock(value: unknown): AssistantMessageBlock | null {
     return enveloped as AssistantMessageBlock;
   }
   const record = hydrateLegacyAssistantBlockInput(rawRecord);
-  if (type === "task_trace") {
+  if (isDispatchWidgetType(type)) {
     return parseTaskTraceBlock(record);
   }
   if (type === "summary") {
