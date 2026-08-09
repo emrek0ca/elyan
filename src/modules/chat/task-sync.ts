@@ -350,12 +350,10 @@ function buildDesktopExecutionTranscript(
   const safeFinal = sanitizeAssistantVisibleText(finalText)
     .replace(/\s+/g, " ")
     .trim();
-  const parts: string[] = [];
   if (safeFinal) {
-    parts.push(safeFinal.length <= 500 ? safeFinal : `${safeFinal.slice(0, 499).trimEnd()}…`);
+    return safeFinal.length <= 500 ? safeFinal : `${safeFinal.slice(0, 499).trimEnd()}…`;
   }
-  parts.push("Adımlar:", ...stepLines);
-  return parts.join("\n");
+  return ["Adımlar:", ...stepLines].join("\n");
 }
 
 function hasDesktopExecutionTrace(task: typeof tasks.$inferSelect): boolean {
