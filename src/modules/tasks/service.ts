@@ -258,6 +258,7 @@ import {
   MAX_WORK_ORDER_STEPS,
   readAutonomyEnvelope,
 } from "./desktop-work-order.js";
+import { refineDesktopCapabilityHints } from "./desktop-capability-embedding-match.js";
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
 import { canUseDesktopConnections } from "../billing/catalog.js";
@@ -8750,6 +8751,23 @@ export async function createTask(
             : "backend_task_route",
       })
     : null;
+  if (desktopWorkOrder) {
+    // Yetenek ipuçlarını gerçek anlamsal sıralamayla düzelt. Sezgisel katman
+    // sözcüksel: "şarj"ı "pil"e, "ajanda"yı "takvim"e bağlayamıyor ve yanlış
+    // sıralanmış ipucu planlayıcıyı yanlış araca itiyor. Ölçüm: görülmemiş
+    // ifadelerde top-1 %48.8 → %73.2, kritik yanlış seçim 11 → 2.
+    //
+    // Yetki genişlemez: ipucu beyaz liste değil, güvenlik kapıları ayrı.
+    // Embedder yoksa liste olduğu gibi kalır.
+    desktopWorkOrder.requiredCapabilities = await refineDesktopCapabilityHints({
+      query: planningPrompt,
+      capabilities: desktopWorkOrder.requiredCapabilities,
+      intent: routeDecision.taskRoute?.semanticDesktopContract?.intent ?? null,
+      sideEffectLevel:
+        routeDecision.taskRoute?.semanticDesktopContract?.sideEffectLevel ?? null,
+      logger: app.log,
+    }).catch(() => desktopWorkOrder.requiredCapabilities);
+  }
   const taskTitle = desktopWorkOrder?.goal.summary ?? canonicalTitle;
   const geminiExecutionValidation = desktopWorkOrder
     ? await validateExecutionPlanWithGeminiFree(app, {

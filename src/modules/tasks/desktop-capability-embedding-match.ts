@@ -43,9 +43,24 @@ const QUERY_TIMEOUT_MS = 2_500;
 //
 // Bu yüzden iki skor da adaylar içinde min-max normalize edilir; ancak o
 // zaman ağırlıklar söyledikleri şeyi yapar.
-const EMBEDDING_WEIGHT = 0.82;
-const LEXICAL_WEIGHT = 0.18;
-const NEGATIVE_PENALTY = 0.45;
+//
+// Ağırlık ve ceza TAHMİNLE değil, yönlendirme korpusuna karşı süpürülerek
+// seçildi (0.30–0.90 × ceza 0–8). Seçilen nokta: tutulan kümede %73.2,
+// ana korpusta %97.0, kritik ihlal 4. Daha yüksek anlamsal ağırlık tutulan
+// kümeyi düşürüyor (e5 "aç/kapat" kutupluluğunu bulanıklaştırıyor), daha
+// düşüğü ise eşanlamlı köprüsünü kaybediyor.
+const EMBEDDING_WEIGHT = 0.7;
+const LEXICAL_WEIGHT = 1 - EMBEDDING_WEIGHT;
+
+// Karşı-örnek cezası, karşı-örnek ile YALNIZ kullanıcı-dili örnekleri
+// arasındaki marj üzerinden hesaplanır. Uzun kimlik metnini (açıklama+usage)
+// dahil etmek cezayı tümüyle etkisiz bırakıyordu: e5 uzun alan-içi metne her
+// sorguda yüksek benzerlik verdiği için karşı-örnek asla öne geçemiyordu.
+// Marj küçük bir sayı olduğundan katsayı büyük; süpürmede 8 en iyi çıktı.
+const NEGATIVE_MARGIN_WEIGHT = 8;
+// Kimlik metni zayıflatılır: kısa kullanıcı cümleleri kısa karşı-örneklerle
+// aynı ölçekte yarışsın diye.
+const IDENTITY_DAMPENING = 0.85;
 
 function normalizeScores(values: number[]): number[] {
   let min = Number.POSITIVE_INFINITY;
@@ -199,20 +214,24 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
   if (!queryVector) return lexical.slice(0, input.limit ?? 8);
 
   const semantic = vectors.map((candidate) => {
-    let positive = 0;
-    for (const vector of candidate.positives) {
+    // positives[0] kimlik metni, kalanı kullanıcı-dili örnekleri.
+    const identity = candidate.positives.length > 0 ? dot(queryVector, candidate.positives[0]) : 0;
+    let utterance = 0;
+    for (const vector of candidate.positives.slice(1)) {
       const score = dot(queryVector, vector);
-      if (score > positive) positive = score;
+      if (score > utterance) utterance = score;
     }
+    const positive = Math.max(identity * IDENTITY_DAMPENING, utterance);
     let negative = 0;
     for (const vector of candidate.negatives) {
       const score = dot(queryVector, vector);
       if (score > negative) negative = score;
     }
-    // Karşı-örnek cezası ham kosinüs farkı üzerinden: "git nedir" sorgusu
-    // git_status'un olumlu örneklerine de benzer, ama karşı-örneğine DAHA
-    // ÇOK benzer. Ceza yalnız bu fark pozitifken uygulanır.
-    return { candidate, positive, penalty: Math.max(0, negative - positive) };
+    // Ceza yalnız karşı-örnek gerçekten öndeyken devreye girer: "git nedir"
+    // sorgusu git_status'un olumlu örneklerine de benzer, ama karşı-örneğine
+    // DAHA ÇOK benzer. Karşılaştırma kullanıcı-dili örnekleriyle yapılır.
+    const reference = candidate.positives.length > 1 ? utterance : positive;
+    return { candidate, positive, margin: Math.max(0, negative - reference) };
   });
 
   const normalizedSemantic = normalizeScores(semantic.map((item) => item.positive));
@@ -224,7 +243,7 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
     const combined =
       EMBEDDING_WEIGHT * normalizedSemantic[index] +
       LEXICAL_WEIGHT * normalizedLexical[index] -
-      NEGATIVE_PENALTY * item.penalty;
+      NEGATIVE_MARGIN_WEIGHT * item.margin;
     return {
       capability: item.candidate.capability,
       score: Number(Math.max(0, combined).toFixed(4)),
@@ -238,4 +257,61 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
       left.capability.localeCompare(right.capability),
   );
   return blended.slice(0, input.limit ?? 8);
+}
+
+/** Anlamsal sıralamanın ipucu listesine yansıması için gereken güven eşiği. */
+const HINT_CONFIDENCE = 0.55;
+
+/**
+ * Planlayıcıya giden yetenek İPUCU listesini anlamsal sıralamayla düzeltir.
+ *
+ * `requiredCapabilities` bir beyaz liste değil, tercih sırasıdır (güvenlik
+ * kapıları — yasaklı liste, otonomi zarfı, gizlilik ve masaüstü onayı —
+ * ayrıca ve değişmeden uygulanır). Bu yüzden burada hem yeniden sıralamak
+ * hem eksik olan doğru adayı eklemek güvenlidir.
+ *
+ * Neden gerekli: sezgisel katman "Chrome'u kapat" turunda "Chrome" kelimesini
+ * görüp tarayıcı işi sanmış ve close_app'i hiç önermemişti. Planlayıcı yine
+ * de manifestten seçebiliyor, ama yanlış sıralanmış bir ipucu onu yanlış
+ * yöne itiyor.
+ *
+ * Embedder yoksa liste OLDUĞU GİBİ döner — yönlendirme asla durmaz.
+ */
+export async function refineDesktopCapabilityHints(input: {
+  query: string;
+  capabilities: string[];
+  intent?: string | null;
+  sideEffectLevel?: DesktopCapabilitySideEffectClass | null;
+  logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
+}): Promise<string[]> {
+  const current = input.capabilities
+    .map((capability) => String(capability ?? "").trim())
+    .filter(Boolean);
+  if (!isDesktopCapabilityVectorCacheReady() && !(await warmDesktopCapabilityVectors(input.logger))) {
+    return current;
+  }
+  const ranked = await matchDesktopCapabilitiesWithEmbeddings({
+    query: input.query,
+    intent: input.intent,
+    sideEffectLevel: input.sideEffectLevel,
+    limit: 6,
+    logger: input.logger,
+  });
+  if (ranked.length === 0) return current;
+
+  const existing = new Set(current);
+  const rankOf = new Map(ranked.map((match, index) => [match.capability, index]));
+  const reordered = [...current].sort((left, right) => {
+    const leftRank = rankOf.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = rankOf.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftRank - rightRank;
+  });
+
+  // Yeterince güvenli bir eşleşme listede hiç yoksa başa eklenir. Yetki
+  // genişlemez: manifest zaten izinli, kapılar ayrı çalışıyor.
+  const best = ranked[0];
+  if (best && best.score >= HINT_CONFIDENCE && !existing.has(best.capability)) {
+    return [best.capability, ...reordered].slice(0, 16);
+  }
+  return reordered;
 }

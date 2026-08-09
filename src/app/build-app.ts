@@ -51,6 +51,7 @@ import { adminRoutes } from "../modules/admin/routes.js";
 import { trainPanelRoutes } from "../modules/admin/train-panel.js";
 import { webRoutes } from "../modules/web/routes.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
+import { warmDesktopCapabilityVectors } from "../modules/tasks/desktop-capability-embedding-match.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
 import { startInProcessMemoryWorker } from "../modules/brain/worker.js";
@@ -517,6 +518,13 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(trainPanelRoutes);
 
   reportDisabledCapabilities(app);
+
+  // Yetenek vektörlerini arka planda ısıt. İlk masaüstü görevi ~2.4 sn'lik
+  // model ısınmasını beklemesin; hazır olana kadar yönlendirme sözcüksel
+  // skorla çalışmayı sürdürür, ısınma bitince tam anlamsal skora geçer.
+  // Bilinçli olarak `await` edilmiyor: açılışı bloklamaz ve başarısız olursa
+  // sunucu yine ayağa kalkar.
+  void warmDesktopCapabilityVectors(app.log).catch(() => null);
 
   return app;
 }

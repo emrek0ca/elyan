@@ -37,161 +37,6 @@ const EMBEDDING_BUCKETS = 16_384;
 const ontologyCache = new Map<string, DesktopCapabilityOntologyEntry[]>();
 const embeddingCache = new Map<string, SparseEmbedding>();
 
-const CURATED_ALIASES: Record<string, string[]> = {
-  analyze_screen: [
-    "ekranda ne var",
-    "ekrani oku",
-    "aktif pencereyi analiz et",
-    "visible error",
-    "screen analysis",
-  ],
-  browser_control: [
-    "chrome ac",
-    "tarayicida ac",
-    "tarayicidan bak",
-    "siteye gir",
-    "linki ac",
-    "webde bul",
-    "internet ara",
-    "google'da ara",
-    "open website",
-    "open url",
-    "search web",
-  ],
-  "browser_agent.run": [
-    "tarayicida adim adim yap",
-    "form doldur",
-    "sayfayi gez ve tamamla",
-    "browser automation",
-  ],
-  directory_tree: [
-    "klasor agaci",
-    "klasorleri listele",
-    "dosya yapisini goster",
-  ],
-  document_read: [
-    "belge oku",
-    "pdf oku",
-    "docx oku",
-    "dosyayi ozetle",
-    "document parse",
-  ],
-  document_write: [
-    "belge yaz",
-    "docx olustur",
-    "pdf hazirla",
-    "pdf rapor hazirla",
-    "masaustune pdf rapor kaydet",
-    "rapor kaydet",
-    "document export",
-  ],
-  file_read: [
-    "dosya oku",
-    "yerel dosyayi ac",
-    "file read",
-    "filesystem read",
-  ],
-  file_search: [
-    "dosya ara",
-    "klasorde bul",
-    "find local file",
-    "recent file search",
-  ],
-  file_write: [
-    "dosyaya yaz",
-    "file write",
-    "kaydet",
-    "write local file",
-  ],
-  file_move: [
-    "dosya tasi",
-    "dosyayi yeniden adlandir",
-    "move file",
-    "rename file",
-  ],
-  image_generate: [
-    "gorsel uret",
-    "resim ciz",
-    "image generate",
-    "draw picture",
-  ],
-  image_edit: [
-    "gorseli duzenle",
-    "resme ekle",
-    "image edit",
-    "modify image",
-  ],
-  open_app: [
-    "uygulama ac",
-    "chrome'u ac",
-    "finder ac",
-    "open app",
-  ],
-  close_app: [
-    "uygulama kapat",
-    "chrome'u kapat",
-    "close app",
-  ],
-  "desktop_operator.observe_screen": [
-    "ekrani gozlemle",
-    "screenshot al",
-    "screen observe",
-  ],
-  "desktop_operator.run": [
-    "masaustunde isi yap",
-    "tikla yaz kaydir",
-    "bilgisayarda uygula",
-    "desktop task",
-    "computer control",
-  ],
-  presentation_write: [
-    "sunum hazirla",
-    "slayt olustur",
-    "pptx yap",
-    "presentation create",
-  ],
-  spreadsheet_write: [
-    "excel hazirla",
-    "tablo olustur",
-    "xlsx yap",
-    "spreadsheet create",
-  ],
-  shell_run: [
-    "terminal komutu calistir",
-    "shell run",
-    "script calistir",
-  ],
-  web_research: [
-    "web arastir",
-    "kaynak topla",
-    "internet kaynaklari",
-    "public research",
-  ],
-};
-
-const CURATED_NEGATIVES: Record<string, string[]> = {
-  browser_control: [
-    "sadece web arastirmasi raporu yaz",
-    "tarayici hakkinda bilgi ver",
-  ],
-  document_write: [
-    "belge nasil yazilir anlat",
-    "pdf nedir acikla",
-  ],
-  file_write: [
-    "dosyaya yazmadan oner",
-    "kaydetme sadece anlat",
-  ],
-  "desktop_operator.run": [
-    "masaustu uygulamalari hakkinda tavsiye ver",
-    "bilgisayarda yapmadan planla",
-  ],
-  web_research: [
-    "tarayicida siteyi ac",
-    "yerel dosyada ara",
-  ],
-};
-
 function normalizeText(value: string): string {
   return value
     .toLocaleLowerCase("tr-TR")
@@ -324,16 +169,16 @@ export function getDesktopCapabilityOntology(): DesktopCapabilityOntologyEntry[]
   const cached = ontologyCache.get("v1");
   if (cached) return cached;
   const entries = DESKTOP_CAPABILITY_MANIFEST.map((entry) => {
-    // `utterances` masaüstü kaynağından (capability_phrasebook) gelir ve her
-    // yetenek için tanımlıdır. CURATED_ALIASES yalnız ~20 yeteneği kapsayan,
-    // backend'de elle tutulan kalıntı listedir; kaynak sözlük onu kapsadıkça
-    // devre dışı kalır — iki liste tutmak sürüklenme üretir.
+    // Takma adlar ve karşı-örnekler TEK kaynaktan gelir: masaüstündeki
+    // capability_phrasebook, manifest üzerinden. Burada eskiden ~20 yeteneği
+    // kapsayan elle tutulan bir kopya vardı (CURATED_ALIASES/NEGATIVES); iki
+    // liste kaçınılmaz olarak sürükleniyordu. İçeriği kaynağa taşındı ve
+    // kopya silindi.
     const aliases = [
       entry.name,
       entry.displayName,
       ...runtimeNamesFor(entry.name),
       ...entry.utterances,
-      ...(entry.utterances.length > 0 ? [] : (CURATED_ALIASES[entry.name] ?? [])),
       ...entry.skillAffinity,
     ];
     // verificationPlan / liveNarration bilinçli olarak dışarıda: 81 girdinin
@@ -345,11 +190,7 @@ export function getDesktopCapabilityOntology(): DesktopCapabilityOntologyEntry[]
       ...entry.whenToUse,
       ...examplesFromFewShots(entry.fewShots),
     ];
-    const negativeExamples = [
-      ...entry.whenNotToUse,
-      ...entry.notFor,
-      ...(entry.notFor.length > 0 ? [] : (CURATED_NEGATIVES[entry.name] ?? [])),
-    ];
+    const negativeExamples = [...entry.whenNotToUse, ...entry.notFor];
     return {
       canonicalId: entry.name,
       aliases: [...new Set(aliases.map(normalizeText).filter(Boolean))],

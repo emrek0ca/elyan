@@ -272,7 +272,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "ekranda ne var",
       "ekrandaki hatayı oku ve ne olduğunu söyle",
-      "şu an ne görüyorsun ekranda"
+      "şu an ne görüyorsun ekranda",
+      "ekranı oku",
+      "aktif pencereyi analiz et",
+      "visible error on screen"
     ],
     "notFor": [
       "ekranı kapat",
@@ -333,9 +336,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "fewShots": [],
     "utterances": [
-      "siteye gir ve formu doldur",
+      "şu sitede formu doldurup gönder",
       "şu sayfada adım adım işlemi tamamla",
-      "tarayıcıda gerekli adımları kendin yap"
+      "tarayıcıda gerekli adımları kendin yap",
+      "tarayıcıda adım adım yap",
+      "form doldur",
+      "sayfayı gez ve tamamla",
+      "browser automation"
     ],
     "notFor": [],
     "privacyClass": "permission_gated",
@@ -433,7 +440,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "tarayıcıda bu adrese git",
       "chrome'da şu sayfayı aç",
       "safaride şunu açar mısın",
-      "open this website"
+      "open this website",
+      "tarayıcıda aç",
+      "tarayıcıdan bak"
     ],
     "notFor": [
       "chrome'u kapat",
@@ -1235,7 +1244,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Spotify'ı kapat",
       "açık olan Word'ü kapat",
       "şu uygulamadan çık",
-      "quit the app"
+      "quit the app",
+      "uygulama kapat",
+      "close app"
     ],
     "notFor": [
       "bilgisayarı kapat",
@@ -1755,7 +1766,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "fewShots": [],
     "utterances": [
       "ekran görüntüsü al",
-      "ekranı gözlemle"
+      "ekranı gözlemle",
+      "screenshot al"
     ],
     "notFor": [],
     "privacyClass": "local_private_screen",
@@ -1848,7 +1860,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "şu uygulamada ayarlara gir ve bildirimleri kapat",
       "bilgisayarda bu işi adım adım yap",
-      "uygulamada gerekli tıklamaları yaparak tamamla"
+      "uygulamada gerekli tıklamaları yaparak tamamla",
+      "masaüstünde işi yap",
+      "tıkla yaz kaydır",
+      "bilgisayarda uygula",
+      "computer control"
     ],
     "notFor": [
       "masaüstü uygulamaları hakkında tavsiye ver",
@@ -2155,7 +2171,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "proje klasörünün yapısını göster",
       "indirilenler klasöründe ne var",
-      "bu dizindeki dosyaları listele"
+      "bu dizindeki dosyaları listele",
+      "klasör ağacı",
+      "klasörleri listele",
+      "dosya yapısını göster"
     ],
     "notFor": [
       "yeni klasör oluştur",
@@ -2230,7 +2249,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "şu pdf'i özetle",
       "raporun içindekileri oku bana anlat",
-      "bu docx'te ne yazıyor"
+      "bu docx'te ne yazıyor",
+      "belge oku",
+      "pdf oku",
+      "docx oku",
+      "dosyayı özetle"
     ],
     "notFor": [
       "pdf raporu oluştur",
@@ -2353,7 +2376,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "masaüstüne pdf rapor hazırla",
       "bunu word belgesi yap",
-      "bir rapor dosyası oluştur ve kaydet"
+      "bir rapor dosyası oluştur ve kaydet",
+      "belge yaz",
+      "docx oluştur",
+      "pdf hazırla",
+      "rapor kaydet"
     ],
     "notFor": [
       "pdf nedir açıkla",
@@ -2595,7 +2622,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "bu dosyayı masaüstüne taşı",
       "dosyanın adını rapor_final yap",
-      "şunu arşiv klasörüne al"
+      "şunu arşiv klasörüne al",
+      "dosya taşı",
+      "dosyayı yeniden adlandır",
+      "rename file"
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
@@ -2735,7 +2765,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "package.json'u oku",
       "şu dosyanın içeriğini göster",
-      "koddaki bu dosyayı aç bakalım"
+      "koddaki bu dosyayı aç bakalım",
+      "dosya oku",
+      "yerel dosyayı aç",
+      "file read"
     ],
     "notFor": [
       "dosyayı bul nerede",
@@ -2821,7 +2854,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "projede TODO geçen yerleri bul",
       "son indirdiğim dosyayı bul",
       "bu metnin geçtiği dosyaları ara",
-      "dosyalarımın içinde arama yap"
+      "dosyalarımın içinde arama yap",
+      "dosya ara",
+      "klasörde bul",
+      "find local file"
     ],
     "notFor": [
       "internette ara",
@@ -2894,7 +2930,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "notes.txt diye bir dosya oluştur içine merhaba yaz",
       "şunu bir metin dosyasına kaydet",
-      "yeni bir kod dosyası yaz"
+      "yeni bir kod dosyası yaz",
+      "dosyaya yaz",
+      "write local file"
     ],
     "notFor": [
       "pdf rapor hazırla",
@@ -3495,7 +3533,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "bu görseldeki arka planı değiştir",
       "resme şunu ekle",
-      "az önceki görseli düzelt"
+      "az önceki görseli düzelt",
+      "görseli düzenle",
+      "resme ekle",
+      "modify image"
     ],
     "notFor": [],
     "privacyClass": "external_model_optional",
@@ -3682,7 +3723,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "bana bir kedi resmi çiz",
       "şöyle bir görsel üret",
-      "hayali bir manzara tasarla"
+      "hayali bir manzara tasarla",
+      "resim çiz",
+      "draw a picture"
     ],
     "notFor": [
       "verinin grafiğini çiz",
@@ -4158,7 +4201,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Spotify uygulamasını başlat",
       "Notlar'ı aç",
       "hesap makinesini açsana",
-      "open the Notes app"
+      "open the Notes app",
+      "uygulama aç",
+      "finder aç",
+      "open app"
     ],
     "notFor": [
       "yeni bir klasör aç",
@@ -4332,7 +4378,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "sunum hazırla 10 slayt olsun",
       "bunu powerpoint'e dök",
-      "slaytlara böl"
+      "slaytlara böl",
+      "sunum hazırla",
+      "slayt oluştur",
+      "pptx yap"
     ],
     "notFor": [],
     "privacyClass": "local_private_write",
@@ -4992,7 +5041,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "fewShots": [],
     "utterances": [
       "npm install çalıştır",
-      "şu komutu terminalde koştur"
+      "şu komutu terminalde koştur",
+      "terminal komutu çalıştır",
+      "script çalıştır"
     ],
     "notFor": [
       "terminal nedir",
@@ -5399,7 +5450,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "excel tablosu oluştur",
       "xlsx olarak kaydet",
-      "bu verileri bir çalışma kitabına yaz"
+      "bu verileri bir çalışma kitabına yaz",
+      "excel hazırla",
+      "tablo oluştur",
+      "xlsx yap"
     ],
     "notFor": [
       "verinin grafiğini çiz",
@@ -5676,7 +5730,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "bu konuyu internetten araştır ve kaynak ver",
       "kuantum bilgisayarlar hakkında kaynak topla",
       "güncel bilgileri webden derle",
-      "research this topic with sources"
+      "research this topic with sources",
+      "web araştır",
+      "internet kaynakları",
+      "public research"
     ],
     "notFor": [
       "tarayıcıda siteyi aç",
