@@ -13,6 +13,10 @@ import {
   DESKTOP_CAPABILITY_MANIFEST,
   type DesktopCapabilityManifestEntry,
 } from "./desktop-capability-manifest.js";
+import {
+  renderPlanExemplars,
+  selectPlanExemplars,
+} from "./plan-exemplars.js";
 import { DESKTOP_SKILL_MANIFEST } from "./desktop-skill-manifest.js";
 import {
   MAX_WORK_ORDER_STEPS,
@@ -986,6 +990,10 @@ function renderWorkOrderContextPack(workOrder: DesktopWorkOrder): string {
 export function buildPlanningPrompt(
   workOrder: DesktopWorkOrder,
   allowed: string[],
+  // Kullanıcının KENDİ geçmişindeki başarılı planlardan seçilmiş örnekler.
+  // Çağıran tarafından hazır metin olarak verilir (toplama async'tir).
+  // Boşsa istem hiç değişmez.
+  exemplars = "",
 ): string {
   // Task titles are presentation labels and may collapse the actual request to
   // "Desktop cowork task". Planning must be anchored to the latest canonical
@@ -1023,6 +1031,7 @@ export function buildPlanningPrompt(
     "SKILL CATALOG (prepared local workflows; execute them ONLY through capability run_skill with args.skillId and args.payload):",
     catalogs.skillCatalog,
     "",
+    ...(exemplars ? [exemplars, ""] : []),
     "PLAN MODE DECISION:",
     `- Existing backend work type hint: ${String(workOrder.workType ?? "unknown")}. Use it as a hint, but override it when the goal clearly requires another mode.`,
     "- DATA WORKFLOW: use this when the task is mainly research, private file/text reading, analysis, math, optimization, or artifact creation. Typical chain: gather/read/research -> analyze/model/calculate -> write/export/report/verify.",
@@ -2004,7 +2013,19 @@ export async function maybeMaterializeDesktopPlan(
       return false;
     }
     try {
-      const prompt = buildPlanningPrompt(workOrder, allowed);
+      // Kullanıcının KENDİ geçmişindeki başarılı planlardan örnekler. Sistem
+      // her başarılı görevde etiketli veri üretiyor; bunu kullanmamak onu
+      // çöpe atmak olurdu. Hata ya da embedder yokluğu planlamayı etkilemez.
+      //
+      // Gizlilik: seçim yalnız task.userId kapsamında yapılır — modülde
+      // kullanıcılar arası havuz diye bir şey yok.
+      const exemplars = renderPlanExemplars(
+        await selectPlanExemplars(app, {
+          userId: task.userId,
+          query: readPlanningGatePrompt(workOrder),
+        }).catch(() => []),
+      );
+      const prompt = buildPlanningPrompt(workOrder, allowed, exemplars);
       const gatePrompt = readPlanningSecurityPrompt(workOrder);
       const knowledgeQuery = readPlanningGatePrompt(workOrder);
 
