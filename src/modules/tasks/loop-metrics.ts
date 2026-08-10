@@ -201,19 +201,80 @@ export function assignLoopCredit(input: {
   return null;
 }
 
-/** Runtime sonucundan adım raporlarını güvenli biçimde çıkarır. */
+/**
+ * Runtime sonucundan adım raporlarını çıkarır.
+ *
+ * Kaynak sırası canlı veriden belirlendi (task 0a0dcc27, "Chrome u kapat"):
+ * runtime sonucunda `steps` diye bir alan YOK. Yürütmenin otoritesi
+ * `toolEvents`; dispatch widget'ı yalnız çok adımlı işlerde üretiliyor ve
+ * süre/deneme gibi zengin alanları o taşıyor.
+ *
+ * İlk sürüm yalnız `steps`/`taskTrace`e bakıyordu ve her görevde boş dönüyordu:
+ * `plannedStepCount: 0`, `terminationReason: "no_plan"`. Yani döngü ölçümü
+ * sessizce hiçbir şey ölçmüyordu.
+ */
 export function readLoopSteps(result: unknown): LoopStepReport[] {
   const record = readRecord(result);
-  const direct = record?.steps;
-  if (Array.isArray(direct)) {
-    return direct.filter((step): step is LoopStepReport => readRecord(step) !== null);
-  }
-  const trace = readRecord(record?.taskTrace) ?? readRecord(record?.dispatchWidget);
+  if (!record) return [];
+
+  // 1) Widget varsa onu tercih et: attemptCount/durationMs oradadır.
+  const trace =
+    readRecord(record.dispatchWidget) ??
+    readRecord(record.taskTrace) ??
+    readRecord(record.taskTraceBlock);
   const traceSteps = trace?.steps;
-  if (Array.isArray(traceSteps)) {
+  if (Array.isArray(traceSteps) && traceSteps.length > 0) {
     return traceSteps.filter(
       (step): step is LoopStepReport => readRecord(step) !== null,
     );
+  }
+
+  // 2) Blokların içine gömülü widget (sonuç bloğu olarak taşınabiliyor).
+  const blocks = record.blocks;
+  if (Array.isArray(blocks)) {
+    for (const block of blocks) {
+      const blockRecord = readRecord(block);
+      const type = text(blockRecord?.type).toLowerCase();
+      if (type !== "dispatch_widget" && type !== "task_trace") continue;
+      const steps = blockRecord?.steps;
+      if (Array.isArray(steps) && steps.length > 0) {
+        return steps.filter(
+          (step): step is LoopStepReport => readRecord(step) !== null,
+        );
+      }
+    }
+  }
+
+  // 3) Yürütmenin asıl kaydı. Widget üretilmeyen tek adımlı işlerde TEK
+  //    kaynak budur; alan adları farklı olduğu için eşleniyor.
+  const toolEvents = record.toolEvents;
+  if (Array.isArray(toolEvents)) {
+    return toolEvents
+      .map((event) => readRecord(event))
+      .filter((event): event is Record<string, unknown> => event !== null)
+      .map((event) => {
+        const failed = event.ok === false || text(event.errorCode).length > 0;
+        return {
+          capability: event.tool,
+          tool: event.tool,
+          status: failed ? "failed" : "completed",
+          // `verified` alanı doğrulamanın GEÇTİĞİNİ söyler; onu sözleşmedeki
+          // adlandırmaya çeviriyoruz ki metrikler tek dili konuşsun.
+          verificationStatus: failed
+            ? "failed"
+            : event.verified === true
+              ? "passed"
+              : "pending",
+          attemptCount: event.attemptCount,
+          durationMs: event.durationMs,
+        } satisfies LoopStepReport;
+      });
+  }
+
+  // 4) Eski/düz biçim.
+  const direct = record.steps;
+  if (Array.isArray(direct)) {
+    return direct.filter((step): step is LoopStepReport => readRecord(step) !== null);
   }
   return [];
 }
