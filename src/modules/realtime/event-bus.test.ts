@@ -231,3 +231,44 @@ test("EventBus does not snapshot non-chat volatile topics", async () => {
   });
   assert.deepEqual(bus.recentVolatileSnapshots("user:user-1"), []);
 });
+
+test("device status survives the connect race that chat deltas do not", async () => {
+  // Canlı şikâyet: masaüstü eşleştirildikten sonra mobil uzun süre
+  // "çevrimdışı" gösteriyordu. Sebep, olayın o saniyede dinlemeyen istemci
+  // için kalıcı olarak kaybolmasıydı — cihaz durumu snapshot listesinde
+  // değildi. Durum bir AKIŞ değil, DURUM: sonradan bağlanan da öğrenmeli.
+  const bus = new EventBus();
+  await bus.publishVolatile({
+    topic: "device.status_changed",
+    userId: "user-late",
+    deviceId: "desktop-1",
+    payload: { deviceId: "desktop-1", isOnline: true, reason: "runtime_connected" },
+  });
+
+  const snapshots = bus.recentVolatileSnapshots("user:user-late");
+  assert.equal(snapshots.length, 1);
+  assert.equal(snapshots[0]?.topic, "device.status_changed");
+  assert.equal((snapshots[0]?.payload as { isOnline?: boolean }).isOnline, true);
+});
+
+test("state snapshots outlive the short streaming window", async () => {
+  // Akış deltası 45 sn sonra bayat sayılır; cihaz durumu sayılmaz — masaüstü
+  // on dakika önce bağlanmış olabilir ve o bilgi hâlâ doğrudur.
+  const bus = new EventBus();
+  await bus.publishVolatile({
+    topic: "message.delta",
+    userId: "user-ttl",
+    payload: { text: "yazıyor" },
+  });
+  await bus.publishVolatile({
+    topic: "device.status_changed",
+    userId: "user-ttl",
+    deviceId: "desktop-1",
+    payload: { deviceId: "desktop-1", isOnline: true },
+  });
+
+  const topics = bus
+    .recentVolatileSnapshots("user:user-ttl")
+    .map((event) => event.topic);
+  assert.deepEqual(topics.sort(), ["device.status_changed", "message.delta"]);
+});

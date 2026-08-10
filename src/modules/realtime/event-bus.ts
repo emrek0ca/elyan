@@ -58,8 +58,24 @@ const VOLATILE_SNAPSHOT_TOPICS = new Set([
   "message.completed",
   "message.error",
   "usage.final",
+  // Cihaz durumu bir AKIŞ olayı değil, bir DURUM. Listede olmadığı için
+  // masaüstü bağlandığı an yayınlanan olay, o saniyede dinlemeyen istemci
+  // için kalıcı olarak kayboluyordu: kullanıcı eşleştirmeyi bitiriyor, olay
+  // uçuyor, mobil elle yenilenene kadar "çevrimdışı" gösteriyordu.
+  "device.status_changed",
 ]);
 const VOLATILE_SNAPSHOT_TTL_MS = 45_000;
+// Durum olayları akış olaylarından çok daha uzun yaşamalı: masaüstü on dakika
+// önce bağlanmış olabilir ve o bilgi hâlâ doğrudur. Akış deltalarında uzun TTL
+// bayat içerik gösterirdi; durumda tersi geçerli.
+const VOLATILE_STATE_SNAPSHOT_TTL_MS = 15 * 60_000;
+const VOLATILE_STATE_SNAPSHOT_TOPICS = new Set(["device.status_changed"]);
+
+function volatileSnapshotTtlFor(topic: string): number {
+  return VOLATILE_STATE_SNAPSHOT_TOPICS.has(topic)
+    ? VOLATILE_STATE_SNAPSHOT_TTL_MS
+    : VOLATILE_SNAPSHOT_TTL_MS;
+}
 const VOLATILE_SNAPSHOT_SWEEP_EVERY = 500;
 const VOLATILE_SNAPSHOT_MAX_CHANNELS = 20_000;
 
@@ -114,7 +130,7 @@ export class EventBus {
   private sweepVolatileSnapshots(now: number): void {
     for (const [channel, byTopic] of this.volatileSnapshots) {
       for (const [topic, entry] of byTopic) {
-        if (now - entry.at > VOLATILE_SNAPSHOT_TTL_MS) {
+        if (now - entry.at > volatileSnapshotTtlFor(topic)) {
           byTopic.delete(topic);
         }
       }
@@ -131,15 +147,22 @@ export class EventBus {
    */
   public recentVolatileSnapshots(
     channel: string,
-    maxAgeMs: number = VOLATILE_SNAPSHOT_TTL_MS,
+    // Verilmezse her topic KENDİ TTL'iyle süzülür. Tek bir üst sınır
+    // kullanmak, uzun ömürlü durum olaylarını akış deltalarının kısa
+    // penceresine hapsediyordu.
+    maxAgeMs?: number,
   ): DomainEvent[] {
     const byTopic = this.volatileSnapshots.get(channel);
     if (!byTopic) {
       return [];
     }
     const now = Date.now();
-    return [...byTopic.values()]
-      .filter((entry) => now - entry.at <= maxAgeMs)
+    return [...byTopic.entries()]
+      .filter(
+        ([topic, entry]) =>
+          now - entry.at <= (maxAgeMs ?? volatileSnapshotTtlFor(topic)),
+      )
+      .map(([, entry]) => entry)
       .sort((a, b) => a.at - b.at)
       .map((entry) => entry.event);
   }
