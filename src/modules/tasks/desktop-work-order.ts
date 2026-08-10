@@ -1013,8 +1013,28 @@ function inferExpectedOutputs(
   const explicitArtifactCreation =
     /\b(pdf|docx|xlsx|pptx|csv|svg|dosya|belge|rapor|sunum|slayt|presentation)\b/i.test(normalized) &&
     unicodeWordPattern(String.raw`\b(oluştur|olustur|hazırla|hazirla|dönüştür|donustur|export|dışa aktar|disa aktar|kaydet|yap)\b`, "i").test(normalized);
-  if (typedArtifactRequested || semanticArtifactRequested || explicitArtifactCreation) {
+  // Bir TAHMİN, zorunlu çıktı beyanı üretemez.
+  //
+  // `typedArtifactRequested` kullanıcının beyan ettiği çıktıdan,
+  // `explicitArtifactCreation` cümlenin kendisinden gelir — ikisi de isteğe
+  // dayanır ve zorunluluk yazabilir. `semanticArtifactRequested` ise yalnız
+  // router'ın YETENEK TAHMİNİNE bakar.
+  //
+  // Canlı kanıt (replay: klasor-olustur): "Masaüstünde Cabir adında klasör
+  // oluştur" turunda tahmine `document_write` karışmış, o da "artifact
+  // zorunlu" beyanı üretmişti. Doğru plan (`make_directory`) doğrulayıcıda
+  // "required artifact has no artifact-producing capability" ile reddediliyor;
+  // daha kötüsü, planlayıcı bu sözleşmeyi tatmin etmek için istenmemiş bir
+  // belge üretmeye itiliyordu. Klasör dosya üretmez.
+  //
+  // Tahminden gelen sinyal korunuyor ama ZORUNLU değil: planlayıcı artefaktın
+  // muhtemel olduğunu görür, doğrulayıcı onu şart koşmaz.
+  const artifactGroundedInRequest =
+    typedArtifactRequested || explicitArtifactCreation;
+  if (artifactGroundedInRequest) {
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
+  } else if (semanticArtifactRequested) {
+    addOutput({ kind: "artifact", format: "artifact_reference", required: false });
   }
   if (
     semanticArtifactRequested ||

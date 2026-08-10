@@ -258,6 +258,13 @@ import {
   MAX_WORK_ORDER_STEPS,
   readAutonomyEnvelope,
 } from "./desktop-work-order.js";
+import { verifyTaskGoal } from "./goal-verification.js";
+import {
+  assignLoopCredit,
+  deriveLoopMetrics,
+  deriveTerminationReason,
+  readLoopSteps,
+} from "./loop-metrics.js";
 import { refineDesktopCapabilityHints } from "./desktop-capability-embedding-match.js";
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
@@ -3149,6 +3156,121 @@ async function recordQuantumLearningSignal(
       signal: "quantum_task_result",
       route: "desktop_runtime",
       benchmarkStatus: signal.benchmarkStatus,
+    },
+  });
+}
+
+/**
+ * Görevin HEDEFİ tutturup tutturmadığını kaydeder.
+ *
+ * `status="completed"` yalnızca "adımlar hatasız koştu" demek. Bu kayıt onun
+ * yanına gerçek etiketi koyar: kullanıcının beyan edilen başarı ölçütleri
+ * karşılandı mı? Sistemdeki her öğrenme mekanizması (plan örnek havuzu,
+ * başarısızlık analitiği, sürekli öğrenme) bugüne kadar gürültülü etikete
+ * bakıyordu.
+ *
+ * Görevin DURUMUNU değiştirmez — bilinçli. Yanlış çalışan bir doğrulayıcının
+ * çalışan akışları bozmasını istemiyoruz; önce yargının kendi güvenilirliği
+ * ölçülsün.
+ */
+async function recordTaskGoalVerification(
+  app: FastifyInstance,
+  input: {
+    task: typeof tasks.$inferSelect;
+    payload: Record<string, unknown>;
+    result?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const workOrder = readRecord(input.payload.desktopWorkOrder);
+  const semanticGoal = readRecord(workOrder?.semanticGoal);
+  if (!semanticGoal) return;
+
+  const successCriteria = Array.isArray(semanticGoal.successCriteria)
+    ? semanticGoal.successCriteria.map((item) => String(item ?? ""))
+    : [];
+  const expectedOutputs = Array.isArray(workOrder?.expectedOutputs)
+    ? workOrder!.expectedOutputs
+    : [];
+  const artifactRequired = expectedOutputs.some((output) => {
+    const record = readRecord(output);
+    return record?.required === true && record?.kind === "artifact";
+  });
+  const artifacts = Array.isArray(input.result?.artifacts)
+    ? input.result!.artifacts
+    : [];
+  const steps = Array.isArray(readRecord(input.payload.planPreview)?.steps)
+    ? (readRecord(input.payload.planPreview)!.steps as unknown[])
+    : [];
+
+  const loopSteps = readLoopSteps(input.result);
+  const execution = readRecord(workOrder?.execution);
+  const metrics = deriveLoopMetrics({
+    steps: loopSteps,
+    maxSteps:
+      typeof execution?.maxSteps === "number" ? execution.maxSteps : undefined,
+  });
+  const credit = assignLoopCredit({
+    steps: loopSteps,
+    routerHints: Array.isArray(workOrder?.requiredCapabilities)
+      ? workOrder!.requiredCapabilities.map((item) => String(item ?? ""))
+      : [],
+  });
+
+  const verdict = await verifyTaskGoal(app, {
+    userId: input.task.userId,
+    objective: String(semanticGoal.objective ?? input.task.title ?? ""),
+    evidence: {
+      successCriteria,
+      resultText: String(input.result?.summary ?? input.task.summary ?? ""),
+      artifactRequired,
+      artifactProduced: artifacts.length > 0,
+      executedStepCount:
+        metrics.executedStepCount > 0 ? metrics.executedStepCount : steps.length,
+    },
+  }).catch(() => null);
+  if (!verdict) return;
+
+  await app.db.insert(learningEvents).values({
+    userId: input.task.userId,
+    accountId: input.task.userId,
+    taskId: input.task.id,
+    type: "workflow",
+    key: "goal_verification",
+    value: verdict.verdict,
+    // `unknown` bir ölçüm değil, ölçememe. Güveni sıfırlıyoruz ki aşağı akış
+    // onu başarı sanmasın.
+    confidence:
+      verdict.verdict === "unknown"
+        ? 0
+        : Math.round(Math.max(0, Math.min(1, verdict.confidence)) * 100),
+    scope: "user",
+    source: "runtime",
+    privacyLevel: "safe",
+    metadata: {
+      signal: "task_goal_verification",
+      verdict: verdict.verdict,
+      reason: verdict.reason,
+      unmetCriteria: verdict.unmetCriteria.slice(0, 6),
+      criteriaCount: successCriteria.length,
+      artifactRequired,
+      artifactProduced: artifacts.length > 0,
+      stepCount: steps.length,
+      // Döngü ölçümü: veri zaten runtime'dan geliyordu, toplanmıyordu.
+      loop: {
+        ...metrics,
+        // Bitiş nedeni hedef yargısını da bilmeli; yargı bu noktada hazır.
+        terminationReason: deriveTerminationReason({
+          plannedStepCount: metrics.plannedStepCount,
+          executedStepCount: metrics.executedStepCount,
+          failedStepCount: metrics.failedStepCount,
+          maxSteps:
+            typeof execution?.maxSteps === "number"
+              ? execution.maxSteps
+              : undefined,
+          goalVerdict: verdict.verdict,
+        }),
+      },
+      ...(credit ? { credit } : {}),
     },
   });
 }
@@ -11721,6 +11843,12 @@ export async function updateTaskFromRuntime(
         task: ownedTask,
         result: runtimeResult,
       });
+      // Gerçek etiket: adımlar koştu mu değil, HEDEF tuttu mu.
+      void recordTaskGoalVerification(app, {
+        task: ownedTask,
+        payload,
+        result: runtimeResult,
+      }).catch(() => undefined);
     } else if (input.status === "failed") {
       const failureSignature = deriveTaskFailureSignature({
         error: input.error,
