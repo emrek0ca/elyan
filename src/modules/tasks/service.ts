@@ -265,6 +265,10 @@ import {
   deriveTerminationReason,
   readLoopSteps,
 } from "./loop-metrics.js";
+import {
+  bucketCount,
+  composeSituationValue,
+} from "../../core/understanding/learning-signal-quality.js";
 import { refineDesktopCapabilityHints } from "./desktop-capability-embedding-match.js";
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
@@ -3230,13 +3234,27 @@ async function recordTaskGoalVerification(
   }).catch(() => null);
   if (!verdict) return;
 
+  const capabilityChain = loopSteps
+    .map((step) => String(step.capability ?? step.tool ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(">");
+
   await app.db.insert(learningEvents).values({
     userId: input.task.userId,
     accountId: input.task.userId,
     taskId: input.task.id,
     type: "workflow",
     key: "goal_verification",
-    value: verdict.verdict,
+    // Yalnız verdict yazmak bu sinyali sonsuza dek 4 satıra çökertirdi:
+    // yinelenme kimliği (type, key, value, source) — metadata DAHİL DEĞİL.
+    // Gerekçe ve yetenek zinciri değere girmezse ilk yazımdan sonrası
+    // "duplicate" diye atılırdı.
+    value: composeSituationValue([
+      verdict.verdict,
+      verdict.reason,
+      capabilityChain,
+    ]),
     // `unknown` bir ölçüm değil, ölçememe. Güveni sıfırlıyoruz ki aşağı akış
     // onu başarı sanmasın.
     confidence:
@@ -3270,6 +3288,33 @@ async function recordTaskGoalVerification(
           goalVerdict: verdict.verdict,
         }),
       },
+      ...(credit ? { credit } : {}),
+    },
+  });
+
+  // Döngünün kendi dersi ayrı bir sinyal: "bu zincir şu nedenle şu kadar
+  // adımda bitti". Hedef yargısından farklı bir şey öğretir — biri sonucu,
+  // diğeri yolu anlatır.
+  await app.db.insert(learningEvents).values({
+    userId: input.task.userId,
+    accountId: input.task.userId,
+    taskId: input.task.id,
+    type: "workflow",
+    key: "loop_outcome",
+    value: composeSituationValue([
+      metrics.terminationReason,
+      credit?.origin ?? "no_failure",
+      credit?.capability ?? capabilityChain,
+      bucketCount(metrics.executedStepCount),
+      metrics.retryCount > 0 ? `retry_${bucketCount(metrics.retryCount)}` : "",
+    ]),
+    confidence: 80,
+    scope: "user",
+    source: "runtime",
+    privacyLevel: "safe",
+    metadata: {
+      signal: "task_loop_outcome",
+      ...metrics,
       ...(credit ? { credit } : {}),
     },
   });

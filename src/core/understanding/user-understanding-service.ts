@@ -3,6 +3,10 @@ import { and, eq, inArray } from "drizzle-orm";
 import { normalizePersonalName } from "./identity-name.js";
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
+import {
+  composeSituationValue,
+  markTelemetryOnly,
+} from "./learning-signal-quality.js";
 import { maybeQueueMemoryExtractionJob } from "../../modules/brain/memory.js";
 import { cognitiveMemoryRepository } from "../../modules/brain/cognitive-memory-repository.js";
 import { isCognitiveFoundationEnabled } from "../../modules/brain/cognitive-foundation-policy.js";
@@ -973,7 +977,10 @@ export async function recordTaskLearningFromCompletion(
     title: input.title,
     message: input.message,
   });
-  const terminalSignal: LearningSignal = {
+  // `task_completed` anahtarına `value: "completed"` yazmak sıfır bilgidir —
+  // anahtar zaten söylüyor. Canlıda 1.642 satır / 1 farklı değer üretmişti.
+  // Telemetri olarak kalıyor, eğitim korpusuna girmiyor.
+  const terminalSignal: LearningSignal = markTelemetryOnly({
     type: "workflow",
     key: input.status === "completed" ? "task_completed" : "task_not_completed",
     value: input.status,
@@ -981,8 +988,8 @@ export async function recordTaskLearningFromCompletion(
     scope: "user",
     source: "runtime",
     ttlDays: 30,
-  };
-  const completionStateSignal: LearningSignal = {
+  });
+  const completionStateSignal: LearningSignal = markTelemetryOnly({
     type: "workflow",
     key: "task_completion_state",
     value: input.status,
@@ -990,7 +997,7 @@ export async function recordTaskLearningFromCompletion(
     scope: "user",
     source: "runtime",
     ttlDays: 30,
-  };
+  });
 
   return persistLearningSignals(app, {
     userId: input.userId,
@@ -1027,7 +1034,10 @@ export async function recordTaskFailureLearning(
   const signal: LearningSignal = {
     type: "workflow",
     key: "task_failure",
-    value: errorCode,
+    // Yalnız errorCode yazmak, farklı araç/zincirlerdeki aynı kodu tek satıra
+    // çökertiyordu: "hangi iş nerede patlıyor" bilgisi metadata'da kalıp
+    // yinelenen sayılıyordu. Değer artık durumu taşıyor.
+    value: composeSituationValue([errorCode, failedTool, capabilities.join(">")]),
     confidence: 0.7,
     scope: "account",
     source: "runtime",
@@ -1178,8 +1188,12 @@ export async function recordBridgeLearningSignals(
     requestId?: string;
   },
 ): Promise<number> {
+  // Aşağıdaki dördü SAYAÇ: değerleri 2-3 elemanlı sabit kümeler ve anahtarın
+  // zaten ima ettiği şeyi tekrarlıyorlar. Bağlam ve göstergeler için
+  // yazılmaya devam ediyor ama eğitim korpusuna girmiyorlar — orada 2-3
+  // satıra çöküp yalnız yer kaplıyorlardı (ölçüm: %91,6 yinelenme).
   const signals: LearningSignal[] = [
-    {
+    markTelemetryOnly({
       type: "routing",
       key: "task_target",
       value: input.target,
@@ -1187,8 +1201,8 @@ export async function recordBridgeLearningSignals(
       scope: "user",
       source: "runtime",
       ttlDays: 30,
-    },
-    {
+    }),
+    markTelemetryOnly({
       type: "bridge",
       key: "routing_outcome",
       value: input.outcome,
@@ -1196,8 +1210,8 @@ export async function recordBridgeLearningSignals(
       scope: "user",
       source: "runtime",
       ttlDays: 30,
-    },
-    {
+    }),
+    markTelemetryOnly({
       type: "bridge",
       key: "bridge_readiness",
       value: input.readiness,
@@ -1205,25 +1219,29 @@ export async function recordBridgeLearningSignals(
       scope: "user",
       source: "system",
       ttlDays: 30,
-    },
+    }),
   ];
 
   if (input.routingMode) {
-    signals.push({
-      type: "routing",
-      key: "routing_mode",
-      value: input.routingMode,
-      confidence: 0.74,
-      scope: "user",
-      source: "runtime",
-      ttlDays: 30,
-    });
+    signals.push(
+      markTelemetryOnly({
+        type: "routing",
+        key: "routing_mode",
+        value: input.routingMode,
+        confidence: 0.74,
+        scope: "user",
+        source: "runtime",
+        ttlDays: 30,
+      }),
+    );
   }
 
+  // Bu BİLEŞİK: hedef + sonuç + yönlendirme kipi birlikte gerçek bir durumu
+  // tanımlıyor ("desktop_runtime|failed|task"), dolayısıyla öğreticidir.
   signals.push({
     type: "workflow",
     key: "task_handoff_state",
-    value: `${input.target}:${input.outcome}`,
+    value: composeSituationValue([input.target, input.outcome, input.routingMode]),
     confidence: 0.79,
     scope: "user",
     source: "runtime",
