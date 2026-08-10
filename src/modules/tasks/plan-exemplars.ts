@@ -30,6 +30,8 @@ import {
 
 const CANDIDATE_LIMIT = 60;
 const EXEMPLAR_LIMIT = 3;
+/** Başarısız örnek sayısı bilinçli olarak az: uyarı, gürültü değil. */
+const FAILURE_EXEMPLAR_LIMIT = 2;
 const MIN_SIMILARITY = 0.82;
 const EXEMPLAR_CACHE_SCOPE = "desktop_plan_exemplars_v1";
 const EMBED_TIMEOUT_MS = 3_000;
@@ -38,6 +40,16 @@ export type PlanExemplar = {
   prompt: string;
   capabilities: string[];
   similarity: number;
+  /**
+   * Bu örnek başarılı bir çözüm mü, yoksa kaçınılması gereken bir deneme mi.
+   *
+   * Yalnız başarıları göstermek öğrenmenin yarısı: "bu ifade daha önce şu
+   * zincirle denendi ve patladı" en az başarı kadar öğreticidir ve modeli
+   * aynı çukura ikinci kez düşmekten alıkoyar.
+   */
+  outcome: "succeeded" | "failed";
+  /** Başarısız örneklerde kısa neden. */
+  failureReason?: string;
 };
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -76,17 +88,25 @@ function readPrompt(payload: unknown): string {
  * `payloadBlobId` taşıyan (yani gövdesi blob'a taşınmış) kayıtlar atlanır:
  * örnek toplamak için blob okumak istek yolunu yavaşlatır ve kazanç küçüktür.
  */
+type Candidate = {
+  prompt: string;
+  capabilities: string[];
+  outcome: "succeeded" | "failed";
+  failureReason?: string;
+};
+
 async function collectCandidates(
   app: FastifyInstance,
   userId: string,
-): Promise<Array<{ prompt: string; capabilities: string[] }>> {
+  status: "completed" | "failed",
+): Promise<Candidate[]> {
   const rows = await app.db
-    .select({ payload: tasks.payload })
+    .select({ payload: tasks.payload, error: tasks.error })
     .from(tasks)
     .where(
       and(
         eq(tasks.userId, userId),
-        eq(tasks.status, "completed"),
+        eq(tasks.status, status),
         isNotNull(tasks.completedAt),
       ),
     )
@@ -94,7 +114,7 @@ async function collectCandidates(
     .limit(CANDIDATE_LIMIT);
 
   const seen = new Set<string>();
-  const candidates: Array<{ prompt: string; capabilities: string[] }> = [];
+  const candidates: Candidate[] = [];
   for (const row of rows) {
     const prompt = readPrompt(row.payload);
     const capabilities = readCapabilitySequence(row.payload);
@@ -102,7 +122,14 @@ async function collectCandidates(
     const key = `${prompt}::${capabilities.join(">")}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    candidates.push({ prompt, capabilities });
+    candidates.push({
+      prompt,
+      capabilities,
+      outcome: status === "completed" ? "succeeded" : "failed",
+      ...(status === "failed" && typeof row.error === "string" && row.error.trim()
+        ? { failureReason: row.error.trim().slice(0, 120) }
+        : {}),
+    });
   }
   return candidates;
 }
@@ -130,7 +157,11 @@ export async function selectPlanExemplars(
   // dönüş bir optimizasyon değil, sözleşmenin kendisidir.
   if (!userId || !query) return [];
 
-  const candidates = await collectCandidates(app, userId).catch(() => []);
+  const [succeeded, failed] = await Promise.all([
+    collectCandidates(app, userId, "completed").catch(() => []),
+    collectCandidates(app, userId, "failed").catch(() => []),
+  ]);
+  const candidates = [...succeeded, ...failed];
   if (candidates.length === 0) return [];
 
   const [queryVector, candidateVectors] = await Promise.all([
@@ -144,30 +175,63 @@ export async function selectPlanExemplars(
   ]);
   if (!queryVector || !candidateVectors) return [];
 
-  const scored = candidates.map((candidate, index) => ({
+  const scored: PlanExemplar[] = candidates.map((candidate, index) => ({
     prompt: candidate.prompt,
     capabilities: candidate.capabilities,
+    outcome: candidate.outcome,
+    ...(candidate.failureReason ? { failureReason: candidate.failureReason } : {}),
     similarity: Number(dot(queryVector, candidateVectors[index]).toFixed(4)),
   }));
 
-  return scored
+  const relevant = scored
     .filter((item) => item.similarity >= MIN_SIMILARITY)
     // Aynı isteğin birebir tekrarı örnek olarak işe yaramaz; kendi kendini
     // kopyalamak planlayıcıya yeni bilgi vermez.
     .filter((item) => item.prompt.toLocaleLowerCase("tr-TR") !== query.toLocaleLowerCase("tr-TR"))
-    .sort((left, right) => right.similarity - left.similarity)
+    .sort((left, right) => right.similarity - left.similarity);
+
+  // Başarı ve başarısızlık ayrı kotalarda: başarısızlıklar sayıca baskın
+  // olduğunda (kötü bir gün) istemi ele geçirip modeli felç etmesin.
+  const successes = relevant
+    .filter((item) => item.outcome === "succeeded")
     .slice(0, input.limit ?? EXEMPLAR_LIMIT);
+  const failures = relevant
+    .filter((item) => item.outcome === "failed")
+    .slice(0, FAILURE_EXEMPLAR_LIMIT);
+  return [...successes, ...failures];
 }
 
 /** Planlama istemine girecek metni üretir; örnek yoksa boş string. */
 export function renderPlanExemplars(exemplars: PlanExemplar[]): string {
   if (exemplars.length === 0) return "";
-  const lines = exemplars.map(
-    (exemplar) => `- "${exemplar.prompt}" → ${exemplar.capabilities.join(" → ")}`,
-  );
-  return [
-    "PREVIOUSLY SUCCESSFUL PLANS FOR THIS SAME USER (their own history; similar requests and the capability chain that actually worked).",
-    "Treat these as evidence of what this user means by such wording, not as a template to copy blindly:",
-    ...lines,
-  ].join("\n");
+  const successes = exemplars.filter((item) => item.outcome === "succeeded");
+  const failures = exemplars.filter((item) => item.outcome === "failed");
+  const sections: string[] = [];
+
+  if (successes.length > 0) {
+    sections.push(
+      [
+        "PREVIOUSLY SUCCESSFUL PLANS FOR THIS SAME USER (their own history; similar requests and the capability chain that actually worked).",
+        "Treat these as evidence of what this user means by such wording, not as a template to copy blindly:",
+        ...successes.map(
+          (item) => `- "${item.prompt}" → ${item.capabilities.join(" → ")}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
+  if (failures.length > 0) {
+    sections.push(
+      [
+        "PREVIOUSLY FAILED ATTEMPTS FOR THIS SAME USER on similar requests. These chains did NOT work.",
+        "Do not repeat them blindly; if you choose a similar chain, fix what made it fail:",
+        ...failures.map(
+          (item) =>
+            `- "${item.prompt}" → ${item.capabilities.join(" → ")}${item.failureReason ? ` (failed: ${item.failureReason})` : ""}`,
+        ),
+      ].join("\n"),
+    );
+  }
+
+  return sections.join("\n\n");
 }

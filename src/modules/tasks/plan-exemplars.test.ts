@@ -79,11 +79,17 @@ test("plan exemplars ignore history rows without a usable prompt or plan", async
 
 test("plan exemplars render as evidence, not as a template to copy", () => {
   const exemplars: PlanExemplar[] = [
-    { prompt: "Chrome'u kapat", capabilities: ["close_app"], similarity: 0.94 },
+    {
+      prompt: "Chrome'u kapat",
+      capabilities: ["close_app"],
+      similarity: 0.94,
+      outcome: "succeeded",
+    },
     {
       prompt: "masaüstüne rapor hazırla",
       capabilities: ["web_research", "document_write"],
       similarity: 0.88,
+      outcome: "succeeded",
     },
   ];
   const rendered = renderPlanExemplars(exemplars);
@@ -96,4 +102,47 @@ test("plan exemplars render as evidence, not as a template to copy", () => {
 test("plan exemplars render to nothing when the user has no history", () => {
   // Boş metin, planlama istemini hiç değiştirmemeli.
   assert.equal(renderPlanExemplars([]), "");
+});
+
+test("failed attempts are shown as warnings, clearly separated from successes", () => {
+  // Yalnız başarıları göstermek öğrenmenin yarısı. Ama başarısızlık örneği
+  // başarıyla aynı bölümde görünürse model onu taklit edilecek bir çözüm
+  // sanabilir — ayrım metnin kendisinde net olmalı.
+  const rendered = renderPlanExemplars([
+    {
+      prompt: "Chrome'u kapat",
+      capabilities: ["close_app"],
+      similarity: 0.94,
+      outcome: "succeeded",
+    },
+    {
+      prompt: "chrome sekmesini kapat",
+      capabilities: ["browser_control"],
+      similarity: 0.9,
+      outcome: "failed",
+      failureReason: "Geçersiz tarayıcı eylemi.",
+    },
+  ]);
+  assert.match(rendered, /PREVIOUSLY SUCCESSFUL PLANS/u);
+  assert.match(rendered, /PREVIOUSLY FAILED ATTEMPTS/u);
+  assert.match(rendered, /These chains did NOT work/u);
+  assert.match(rendered, /failed: Geçersiz tarayıcı eylemi\./u);
+  // Başarı bölümü önce gelmeli: örnek önce ne YAPILACAĞINI öğretir.
+  assert.ok(
+    rendered.indexOf("PREVIOUSLY SUCCESSFUL") <
+      rendered.indexOf("PREVIOUSLY FAILED"),
+  );
+});
+
+test("a history of only failures still renders without a misleading success header", () => {
+  const rendered = renderPlanExemplars([
+    {
+      prompt: "sekmeyi kapat",
+      capabilities: ["browser_control"],
+      similarity: 0.9,
+      outcome: "failed",
+    },
+  ]);
+  assert.doesNotMatch(rendered, /PREVIOUSLY SUCCESSFUL/u);
+  assert.match(rendered, /PREVIOUSLY FAILED ATTEMPTS/u);
 });
