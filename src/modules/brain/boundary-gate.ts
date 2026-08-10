@@ -350,8 +350,22 @@ export function resolveSecurityDecisionGate(prompt: string): BrainBoundaryGateRe
     );
   }
 
+  // Platform ADI tek başına GÖNDERME NİYETİ değildir.
+  //
+  // Kural eskiden `slack|whatsapp|telegram` alternatiflerini çıplak
+  // taşıyordu: kelimenin geçmesi yeterliydi, fiile hiç bakılmıyordu. Canlı
+  // arıza (task 0178075b): "Tarayıcıdan whatsapp aç sonra da YouTube a gir"
+  // isteği "Dışarı mesaj veya yayın gönderemem." ile karşılandı — oysa
+  // istek bir sekme açmaktı, hiçbir şey gönderilmiyordu.
+  //
+  // Kalan alternatiflerin hepsi FİİL taşıyor ("mesaj gönder", "whatsapp'tan
+  // yaz", "send message"). Gerçek gönderim niyeti bunlarla ve
+  // EXTERNAL_PUBLISH_ACTION_PATTERN ile yakalanıyor. Güvenlik ayrıca
+  // daralmıyor: dışa dönük yetenekler (email_send, send_whatsapp_message)
+  // manifestte onay gerektiriyor ve masaüstünde kendi onay kapısından
+  // geçiyor — bu kapı yalnız sohbet cevabını şekillendiren bir katman.
   if (
-    /(^|[^\p{L}])(send email|send message|post to|slack|whatsapp|telegram|email gönder\p{L}*|e-posta olarak gönder\p{L}*|e posta olarak gönder\p{L}*|mail gönder\p{L}*|mesaj gönder\p{L}*|sms gönder\p{L}*|slack'e yaz\p{L}*|whatsapp'tan yaz\p{L}*)([^\p{L}]|$)/iu.test(securityHaystack) ||
+    /(^|[^\p{L}])(send email|send message|post to|email gönder\p{L}*|e-posta olarak gönder\p{L}*|e posta olarak gönder\p{L}*|mail gönder\p{L}*|mesaj gönder\p{L}*|sms gönder\p{L}*|slack'e yaz\p{L}*|slack'ten yaz\p{L}*|whatsapp'tan yaz\p{L}*|whatsapp'tan gönder\p{L}*|telegram'dan yaz\p{L}*)([^\p{L}]|$)/iu.test(securityHaystack) ||
     EXTERNAL_PUBLISH_ACTION_PATTERN.test(securityHaystack)
   ) {
     return buildSecurityGateResult(

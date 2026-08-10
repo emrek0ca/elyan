@@ -4,6 +4,7 @@ import {
   buildElyanVoiceProfilePromptBlock,
   classifyElyanTurnIntent,
   responsePolicyForPrompt,
+  isMachineOutputWorkload,
   sanitizeFinalAssistantResponse,
 } from "./response-policy.js";
 
@@ -168,4 +169,18 @@ test("sanitizeFinalAssistantResponse skips sentence trimming for tool-grounded a
     toolGrounded: true,
   });
   assert.match(sanitized, /kargo bildirimi/u);
+});
+
+test("machine-facing workloads are identified so chat rules never touch them", () => {
+  // Planlama turu bir CEVAP üretmez, JSON üretir. Kullanıcıya dönük hiçbir
+  // kural (persona, ton, güvenlik kapısı, netleştirme sorusu) oraya
+  // uygulanamaz — uygulandığında makine tarafı ayrıştıramaz ve iş SESSİZCE
+  // ölür. Canlı arıza: planlama çağrısında güvenlik kapısı tetiklenince plan
+  // yerine sohbet cümlesi döndü ve görev "plan hazırlanamadı" ile bitti.
+  for (const workload of ["planning", "fast_route", "intent", "desktop_handoff"]) {
+    assert.equal(isMachineOutputWorkload(workload), true, workload);
+  }
+  for (const workload of ["mobile_chat_fast", "chat", "", undefined, null]) {
+    assert.equal(isMachineOutputWorkload(workload), false, String(workload));
+  }
 });

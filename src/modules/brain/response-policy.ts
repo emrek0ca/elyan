@@ -385,12 +385,26 @@ function guardUnsupportedCurrentClaims(input: {
  * `planning` zaten muaftı; aynı muafiyet tüm makine-çıktılı yollara verilir —
  * böylece karar ANLAMDAN gelir, komut başına kural yazmaya gerek kalmaz.
  */
-const MACHINE_OUTPUT_WORKLOADS = new Set([
+/**
+ * Çıktısı MAKİNEYE giden workload'lar.
+ *
+ * Bu turlarda üretilen metin kullanıcıya gösterilmez; bir JSON planı, bir
+ * rota kararı ya da bir sınıflandırma olarak ayrıştırılır. Dolayısıyla
+ * kullanıcıya dönük hiçbir kural (persona, ton, güvenlik kapısı, netleştirme
+ * sorusu) bu turlara uygulanamaz — uygulandığında makine tarafı ayrıştıramaz
+ * ve iş sessizce ölür.
+ */
+export const MACHINE_OUTPUT_WORKLOADS = new Set([
   "planning",
   "fast_route",
   "intent",
   "desktop_handoff",
 ]);
+
+/** Bu turun çıktısı makineye mi gidiyor? */
+export function isMachineOutputWorkload(workload: unknown): boolean {
+  return MACHINE_OUTPUT_WORKLOADS.has(String(workload ?? ""));
+}
 
 export function sanitizeFinalAssistantResponse(input: {
   prompt: string;

@@ -369,6 +369,7 @@ import {
 import {
   buildElyanVoiceProfilePromptBlock,
   sanitizeFinalAssistantResponse,
+  isMachineOutputWorkload,
 } from "./response-policy.js";
 import { buildBehaviorLearningPromptBlock } from "./behavior-learning.js";
 import {
@@ -11322,8 +11323,24 @@ export async function generateGovernedSharedBrainReply(
   const gatePrompt = input.gatePromptOverride?.trim() || input.prompt;
   const gateInput =
     gatePrompt === input.prompt ? input : { ...input, prompt: gatePrompt };
-  const gate =
-    resolveElyanIdentityGate(gatePrompt) ??
+  // Sohbet kapıları MAKİNEYE giden turlarda çalışmaz.
+  //
+  // Canlı arıza (task 0178075b, "Tarayıcıdan whatsapp aç sonra da YouTube a
+  // gir"): planlama çağrısında `security.external_send_request` kapısı
+  // tetiklendi ve plan yerine 109 karakterlik bir sohbet cümlesi döndü
+  // ("Dışarı mesaj veya yayın gönderemem..."). Planlayıcı o metinden JSON
+  // çıkaramayınca plan `null` oldu ve kullanıcı "güvenilir yürütme planı
+  // hazırlanamadı" gördü. Aynı istekte `clarification_on_ambiguity` kapısı da
+  // tetikleniyordu.
+  //
+  // Bu kapılar KULLANICIYA verilecek cevabı şekillendirmek için var. Planlama
+  // turu bir cevap üretmez; JSON üretir. Buraya bir sohbet cümlesi koymak,
+  // makine sözleşmesini insan diliyle doldurmak demek — sonuç her zaman
+  // sessiz ölüm. Güvenlik daralmaz: planın kendisi doğrulayıcıdan, her adım
+  // masaüstünde kendi izin/onay kapısından geçer.
+  const gate = isMachineOutputWorkload(input.workload)
+    ? null
+    : resolveElyanIdentityGate(gatePrompt) ??
     resolveSecurityDecisionGate(gatePrompt) ??
     resolvePromptSecurityGate(gatePrompt) ??
     resolveCurrentUserIdentityGate(gateInput) ??

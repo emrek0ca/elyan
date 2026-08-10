@@ -96,6 +96,32 @@ const CASES: ReplayCase[] = [
     note: "canlı arıza 2026-08-10 14:46",
   },
   {
+    name: "cok-adimli-tarayici-isi",
+    utterance: "Tarayıcıdan whatsapp aç sonra da YouTube a gir",
+    // Canlıda (task 0178075b) planlama çağrısında SOHBET güvenlik kapısı
+    // tetiklendi ("whatsapp" kelimesi gönderim sanıldı), plan yerine düz
+    // metin döndü ve görev "plan hazırlanamadı" ile öldü.
+    routerCapabilities: ["play_media", "browser_control"],
+    plan: [
+      {
+        id: "s1",
+        capability: "browser_control",
+        args: { action: "open_url", url: "https://web.whatsapp.com" },
+        dependsOn: [],
+        description: "WhatsApp Web'i aç",
+      },
+      {
+        id: "s2",
+        capability: "browser_control",
+        args: { action: "open_url", url: "https://youtube.com" },
+        dependsOn: ["s1"],
+        description: "YouTube'a git",
+      },
+    ],
+    expect: "accepted",
+    note: "canlı arıza 2026-08-10 18:11",
+  },
+  {
     name: "olmayan-yetenek-reddedilir",
     utterance: "Bilgisayarı kapat",
     routerCapabilities: ["close_app"],

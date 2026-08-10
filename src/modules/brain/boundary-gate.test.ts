@@ -285,3 +285,33 @@ test("prompt security gate blocks obfuscated prompt jailbreak attempts", () => {
     );
   }
 });
+
+test("naming a platform is not the same as asking to send on it", () => {
+  // Canlı arıza (task 0178075b): "Tarayıcıdan whatsapp aç sonra da YouTube a
+  // gir" isteği "Dışarı mesaj veya yayın gönderemem." ile karşılandı ve
+  // masaüstü görevi hiç planlanamadı. Kural platform ADINI çıplak taşıyordu;
+  // kelimenin geçmesi yeterliydi, fiile bakılmıyordu.
+  for (const prompt of [
+    "Tarayıcıdan whatsapp aç sonra da YouTube a gir",
+    "whatsapp'ı aç",
+    "telegram sitesini aç",
+    "slack uygulamasını kapat",
+  ]) {
+    assert.equal(resolveSecurityDecisionGate(prompt), null, prompt);
+  }
+});
+
+test("a real send intent is still refused", () => {
+  // Gevşetme fazla ileri gitmemeli: gerçek gönderim niyeti FİİLLE geliyor.
+  for (const prompt of [
+    "Ahmet'e whatsapp'tan yaz geç kalacağım",
+    "mesaj gönder Ayşe'ye",
+    "send message to the team",
+    "slack'e yaz toplantı ertelendi",
+    "mail gönder müşteriye",
+  ]) {
+    const gate = resolveSecurityDecisionGate(prompt);
+    assert.ok(gate, `engellenmeliydi: ${prompt}`);
+    assert.equal(gate?.answerSource, "backend_gate");
+  }
+});
