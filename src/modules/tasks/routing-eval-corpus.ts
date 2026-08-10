@@ -117,6 +117,20 @@ export const ROUTING_EVAL_CORPUS: RoutingEvalCase[] = [
     alsoAcceptable: ["close_app"],
     group: "close_vs_browser",
   },
+  {
+    utterance: "Terminali kapat",
+    expected: "close_app",
+    mustNotMatch: ["desktop_operator.run", "shell_session_close"],
+    group: "close_vs_browser",
+    note: "Canlı arıza 2026-08-10 14:46 — desktop_operator.run istenmişti.",
+  },
+  {
+    utterance: "açtığın kabuk oturumunu sonlandır",
+    expected: "shell_session_close",
+    mustNotMatch: ["close_app"],
+    group: "close_vs_browser",
+    note: "Kardeş ayrımı: uygulama değil, Elyan'ın kendi oturumu.",
+  },
 
   // ── Tarayıcı: açma vs arama vs araştırma ──────────────────────────────
   {

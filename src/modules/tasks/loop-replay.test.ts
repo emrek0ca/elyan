@@ -78,6 +78,24 @@ const CASES: ReplayCase[] = [
     note: "enum kapısı — 'Geçersiz tarayıcı eylemi.' arızasının kaynağı",
   },
   {
+    name: "terminali-kapat-ekran-otomasyonu-degil",
+    utterance: "Terminali kapat",
+    // Canlıda router bunu ekran işi sanıp desktop_operator.run istemiş;
+    // masaüstü de o yeteneği bulamayıp "uygulamanız güncel değil" demişti.
+    routerCapabilities: ["desktop_operator.run"],
+    plan: [
+      {
+        id: "s1",
+        capability: "close_app",
+        args: { app_name: "Terminal" },
+        dependsOn: [],
+        description: "Terminal'i kapat",
+      },
+    ],
+    expect: "accepted",
+    note: "canlı arıza 2026-08-10 14:46",
+  },
+  {
     name: "olmayan-yetenek-reddedilir",
     utterance: "Bilgisayarı kapat",
     routerCapabilities: ["close_app"],

@@ -269,7 +269,10 @@ import {
   bucketCount,
   composeSituationValue,
 } from "../../core/understanding/learning-signal-quality.js";
-import { refineDesktopCapabilityHints } from "./desktop-capability-embedding-match.js";
+import {
+  evaluateDesktopFastPath,
+  refineDesktopCapabilityHints,
+} from "./desktop-capability-embedding-match.js";
 import { enqueueTaskDispatch } from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
 import { canUseDesktopConnections } from "../billing/catalog.js";
@@ -8838,10 +8841,31 @@ export async function createTask(
     brainProfile: usageAccess.brainProfile,
     isDesktopRoute,
   });
-  const useDirectDesktopFastPath = isDeterministicDesktopFastWorkOrder(
-    routeDecision,
-    planningPrompt,
-  );
+  // Ağır anlama hattını (ölçüm: ~2.5 sn) ne zaman atlayacağımıza ANLAMSAL
+  // karar veriyoruz.
+  //
+  // Eski kapı bir REGEX'ti: fiil listesi ("aç|kapat|başlat|durdur…") + uygulama
+  // adı yakalama. Türkçe eklerde kırılıyordu — "Terminali kapat" isteğinden
+  // uygulama adını "Terminali" diye çıkarıyordu. Kelime deseni bu işi
+  // yapamaz; hangi ifadelerin geleceğini önceden bilemeyiz.
+  //
+  // Yeni ölçüt: istek YETENEK UZAYINDA tek ve net mi? Aynı e5 eşleştiricisinin
+  // top-1 ile top-2 arasındaki ayrışması bunu doğrudan söylüyor. Takip
+  // isteklerinde ("bunu pdf yap") ayrışma zaten küçük çıkıyor ve o istekler
+  // kendiliğinden ağır yolda kalıyor — ki bağlama en çok onların ihtiyacı var.
+  //
+  // Deterministik ayrıştırıcı KALDIRILMADI: iş emrini doğrudan kurabildiği
+  // vakalarda hâlâ o kazanıyor. Semantik kapı yalnızca onun göremediği
+  // ifadelerde devreye giriyor.
+  const semanticFastPath = isDesktopRoute
+    ? await evaluateDesktopFastPath({
+        query: planningPrompt,
+        logger: app.log,
+      }).catch(() => null)
+    : null;
+  const useDirectDesktopFastPath =
+    isDeterministicDesktopFastWorkOrder(routeDecision, planningPrompt) ||
+    semanticFastPath?.fastPath === true;
   // SÜREKLİLİK KAYNAĞI: "bunu belge yap" derken belgelenecek içerik önceki
   // asistan cevabıdır. O cevap ne mobilde ne masaüstünde durur — burada durur.
   // `conversation_state.lastAssistantSummary` şemada vardı ve contextPack ile

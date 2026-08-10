@@ -554,7 +554,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "tarayıcı oturumunu sonlandır",
       "otomasyon oturumunu kapat"
     ],
-    "notFor": [],
+    "notFor": [
+      "Terminal uygulamasını kapat",
+      "uygulamayı kapat",
+      "chrome'u kapat"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -1244,9 +1248,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Spotify'ı kapat",
       "açık olan Word'ü kapat",
       "şu uygulamadan çık",
+      "Terminali kapat",
+      "Finder'ı kapat",
       "quit the app",
-      "uygulama kapat",
-      "close app"
+      "uygulama kapat"
     ],
     "notFor": [
       "bilgisayarı kapat",
@@ -5099,10 +5104,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "fewShots": [],
     "utterances": [
-      "terminal oturumunu kapat",
-      "kabuğu sonlandır"
+      "açtığın kabuk oturumunu sonlandır",
+      "çalışan komut oturumunu bitir"
     ],
-    "notFor": [],
+    "notFor": [
+      "Terminal uygulamasını kapat",
+      "terminali kapat"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },

@@ -263,6 +263,104 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
 const HINT_CONFIDENCE = 0.55;
 
 /**
+ * Hızlı yol için gereken AYRIŞMA (top-1 ile top-2 arasındaki fark).
+ *
+ * Mutlak skora bakmıyoruz, çünkü ölçmüyor: skorlar adaylar içinde min-max
+ * normalize edildiği için top-1 yapısı gereği hep yüksek çıkıyor (ölçümde
+ * 0.70–1.00 arası, eşik ne olursa olsun aynı kümeyi seçiyor). Bilgi taşıyan
+ * şey FARK.
+ *
+ * Ölçülen ayrışma (canlı eşleştirici):
+ *   "Terminali kapat"      0.270   tek ve net
+ *   "şu csv'yi analiz et"  0.523   tek ve net
+ *   "bunu pdf yap"         0.054   takip isteği — bağlam ŞART
+ *   "Atatürk kimdir"       0.011   eylem bile değil
+ *   "naber"                0.008   sohbet
+ *
+ * 0.2 eşiği bu ayrımı temiz yapıyor: korpusta hızlı yola giren 124 istekten
+ * 4'ünde top-1 hatalı (%3) ve o hata bile yürütmeyi değiştirmiyor — yalnız
+ * planlayıcıya daha zayıf bir ipucu gider, seçim yine tam manifestten yapılır.
+ */
+const FAST_PATH_MARGIN = 0.2;
+
+/**
+ * Hızlı yola ASLA girmeyen yetenekler.
+ *
+ * Bunlar tek adımlık iş değil, çok adımlı yürütme kabuğu: hedefi kendileri
+ * yorumlar, ekranı gözler, sırayla karar verir. Böyle bir istek tam da
+ * bağlam anlamaya en çok ihtiyaç duyan istektir; orada 2.5 saniyeyi kesmek
+ * tasarruf değil, körleştirmedir.
+ */
+const ORCHESTRATION_CAPABILITIES = new Set([
+  "desktop_operator.run",
+  "browser_agent.run",
+  "run_skill",
+  "mcp_call_tool",
+]);
+
+export type FastPathDecision = {
+  fastPath: boolean;
+  capability: string | null;
+  score: number;
+  margin: number;
+  reason:
+    | "confident_single_capability"
+    | "ambiguous_margin"
+    | "orchestration_capability"
+    | "semantics_unavailable";
+};
+
+/**
+ * "Bu istek tek ve net bir yetenekle karşılanabilir mi?"
+ *
+ * Ağır anlama hattı (ölçüm: ~2.5 sn) + hafıza araması (~1.3 sn) her masaüstü
+ * görevinde koşuyordu. "Terminali kapat" gibi tek eylemlik bir komut için bu
+ * bütçe boşa gidiyor ve kullanıcı gecikmeyi hissediyor.
+ *
+ * Eski kapı bir REGEX'ti: fiil listesi ("aç|kapat|başlat…") ve uygulama adı
+ * yakalama. Türkçe eklerde kırılıyordu — "Terminali kapat" isteğinden
+ * uygulama adını "Terminali" diye çıkarıyordu. Buradaki karar tamamen
+ * anlamsal: aynı e5 tabanlı eşleştirici, kelime listesi yok.
+ *
+ * Embedder erişilemezse `fastPath: false` döner — yani ŞÜPHEDE AĞIR YOL.
+ * Hızlı yolu yanlışlıkla açmak, bir turu yavaşlatmaktan pahalıdır.
+ */
+export async function evaluateDesktopFastPath(input: {
+  query: string;
+  logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
+}): Promise<FastPathDecision> {
+  const empty: FastPathDecision = {
+    fastPath: false,
+    capability: null,
+    score: 0,
+    margin: 0,
+    reason: "semantics_unavailable",
+  };
+  if (!String(input.query ?? "").trim()) return empty;
+  if (!isDesktopCapabilityVectorCacheReady() && !(await warmDesktopCapabilityVectors(input.logger))) {
+    return empty;
+  }
+
+  const ranked = await matchDesktopCapabilitiesWithEmbeddings({
+    query: input.query,
+    limit: 2,
+    logger: input.logger,
+  });
+  const best = ranked[0];
+  if (!best) return empty;
+  const margin = best.score - (ranked[1]?.score ?? 0);
+  const base = { capability: best.capability, score: best.score, margin };
+
+  if (ORCHESTRATION_CAPABILITIES.has(best.capability)) {
+    return { ...base, fastPath: false, reason: "orchestration_capability" };
+  }
+  if (margin < FAST_PATH_MARGIN) {
+    return { ...base, fastPath: false, reason: "ambiguous_margin" };
+  }
+  return { ...base, fastPath: true, reason: "confident_single_capability" };
+}
+
+/**
  * Planlayıcıya giden yetenek İPUCU listesini anlamsal sıralamayla düzeltir.
  *
  * `requiredCapabilities` bir beyaz liste değil, tercih sırasıdır (güvenlik
