@@ -902,11 +902,18 @@ test("work-order validation rejects partial plans, cycles, and private-to-web fl
     [order.planPreview.steps[0]!],
     order,
   );
-  assert.match(
-    partialIssues.join("\n"),
-    /semantic work order requires capability document_write/,
-  );
+  // Eksik plan (araştırdı ama hiç yazmadı) YİNE reddediliyor — ama artık
+  // router'ın tahmin ettiği yetenek KİMLİĞİ üzerinden değil, kullanıcının
+  // BEYAN ETTİĞİ çıktı üzerinden. Kimlik dayatması "Chrome u kapat" turunda
+  // doğru planı da çöpe atıyordu (task 6a7ef5fb): router isteği app_control
+  // sanıp desktop_operator.run'ı şart koşmuş, planlayıcı doğru şekilde
+  // close_app planlamış, plan bu yüzden geçersiz sayılmıştı.
   assert.match(partialIssues.join("\n"), /artifact-producing capability/);
+  assert.doesNotMatch(
+    partialIssues.join("\n"),
+    /semantic work order requires capability/,
+    "yetenek kimliği dayatması geri gelmiş",
+  );
 
   const cycleIssues = validateMaterializedPlanContracts([
     {
@@ -1253,4 +1260,72 @@ test("plan contract validation accepts declared enum values case-insensitively",
     ]),
     [],
   );
+});
+
+test("a correct plan survives a wrong router capability guess", () => {
+  // Canlı arıza (2026-08-10, task 6a7ef5fb): "Chrome u kapat".
+  // Router isteği app_control sandı, o da desktop_operator.run'a eşlendi ve
+  // iş emrine ŞART olarak yazıldı. Planlayıcı doğru aracı seçti (close_app),
+  // ama doğrulayıcı "iş emri desktop_operator_run istiyordu" deyip planı
+  // çöpe attı; kullanıcı üst üste "güvenilir yürütme planı hazırlanamadı"
+  // gördü. Tahmin, doğru planı geçersiz kılamaz.
+  const order = workOrder("Chrome u kapat", ["desktop_operator.run"]);
+  // Uygulama kapatmak dosya üretmez; iş emri de artifact beyan etmez.
+  order.expectedOutputs = [
+    { kind: "system_state", format: "app_closed", required: true },
+  ];
+  order.semanticGoal = {
+    contract: "elyan.semantic_task_contract.v1",
+    objective: "Chrome uygulamasını kapat",
+    constraints: [],
+    successCriteria: ["Uygulama kapatılır."],
+    requiredCapabilities: ["desktop_operator.run"],
+    forbiddenCapabilities: [],
+    ambiguityPolicy: "safe_assumption",
+    risk: { localPrivate: false, sideEffect: true, irreversible: false },
+  };
+
+  const issues = validateMaterializedPlanAgainstWorkOrder(
+    [
+      {
+        id: "s1",
+        capability: "close_app",
+        args: { app_name: "Google Chrome" },
+        dependsOn: [],
+        description: "Chrome'u kapat",
+      },
+    ],
+    order,
+  );
+  assert.deepEqual(issues, []);
+});
+
+test("capability gates match across dotted and underscored spellings", () => {
+  // Manifest noktalı, router zinciri yer yer alt çizgili yazıyor. Yasaklı
+  // liste bunu görmezse yasaklı bir yetenek diğer yazımla kapıdan geçerdi.
+  const order = workOrder("Ekranda işi yap", ["desktop_operator.run"]);
+  order.semanticGoal = {
+    contract: "elyan.semantic_task_contract.v1",
+    objective: "Ekran otomasyonu",
+    constraints: [],
+    successCriteria: ["İş tamamlanır."],
+    requiredCapabilities: [],
+    forbiddenCapabilities: ["desktop_operator_run"],
+    ambiguityPolicy: "safe_assumption",
+    risk: { localPrivate: false, sideEffect: true, irreversible: false },
+  };
+
+  const issues = validateMaterializedPlanAgainstWorkOrder(
+    [
+      {
+        id: "s1",
+        capability: "desktop_operator.run",
+        args: { goal: "tıkla" },
+        dependsOn: [],
+        description: "Ekranda uygula",
+      },
+    ],
+    order,
+  );
+  assert.match(issues.join("\n"), /forbidden by the semantic goal/u);
 });

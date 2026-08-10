@@ -399,6 +399,19 @@ function publicQueryContainsPrivateMaterial(
   return false;
 }
 
+/**
+ * Yetenek adını yazım farklarından bağımsız tek anahtara indirger.
+ *
+ * Manifest noktalı yazımı kullanır (`desktop_operator.run`); router zinciri
+ * ve bazı istemci yolları alt çizgili yazımı üretiyor
+ * (`desktop_operator_run`). Küme karşılaştırmaları bunu görmediği sürece
+ * hem meşru adımlar reddedilir hem de yasaklı bir yetenek diğer yazımla
+ * kapıdan geçebilir.
+ */
+function capabilityKey(value: string): string {
+  return value.trim().toLocaleLowerCase("en-US").replaceAll(".", "_");
+}
+
 export function validateMaterializedPlanAgainstWorkOrder(
   steps: DesktopWorkOrderStep[],
   workOrder: DesktopWorkOrder,
@@ -410,18 +423,26 @@ export function validateMaterializedPlanAgainstWorkOrder(
     workOrder.semanticGoal?.forbiddenCapabilities ?? [],
   );
   const autonomyAllowed = workOrder.autonomy
-    ? new Set(workOrder.autonomy.allowedCapabilities)
+    ? new Set(workOrder.autonomy.allowedCapabilities.map(capabilityKey))
     : null;
+  const allowedKeys = new Set([...allowed].map(capabilityKey));
+  const forbiddenKeys = new Set([...forbidden].map(capabilityKey));
   for (const capability of effectiveCapabilities) {
-    if (!allowed.has(capability)) {
+    // Aynı yetenek iki yazımla dolaşıyor: manifest `desktop_operator.run`,
+    // router zinciri yer yer `desktop_operator_run`. Karşılaştırma bunu
+    // görmediği için hem yetkili bir adım "kapsam dışı" sayılabiliyor hem de
+    // YASAKLI bir yetenek alt çizgili yazımla kapıdan geçebiliyordu — ikincisi
+    // sessiz bir güvenlik boşluğu.
+    const key = capabilityKey(capability);
+    if (!allowedKeys.has(key)) {
       issues.push(
         `capability ${capability} is outside the semantic authorization scope`,
       );
     }
-    if (forbidden.has(capability)) {
+    if (forbiddenKeys.has(key)) {
       issues.push(`capability ${capability} is forbidden by the semantic goal`);
     }
-    if (autonomyAllowed && !autonomyAllowed.has(capability)) {
+    if (autonomyAllowed && !autonomyAllowed.has(key)) {
       issues.push(
         `capability ${capability} exceeds the unattended autonomy ceiling`,
       );
@@ -445,18 +466,28 @@ export function validateMaterializedPlanAgainstWorkOrder(
       }
     }
   }
+  // `semanticGoal.requiredCapabilities` BİR TAHMİNDİR, plan şartı DEĞİL.
+  //
+  // Eskiden buradaki döngü, planın bu listedeki her yeteneği birebir
+  // içermesini şart koşuyordu. Canlı kanıt (2026-08-10, task 6a7ef5fb):
+  // "Chrome u kapat" turunda router isteği `app_control` sanmış, o da
+  // `desktop_operator.run`a eşlenmiş. Planlayıcı DOĞRU planı kurdu
+  // (`close_app`), ama bu kontrol "iş emri desktop_operator_run istiyordu"
+  // deyip planı komple çöpe attı; kullanıcı iki kez üst üste "Görevin
+  // güvenilir yürütme planı hazırlanamadı" gördü.
+  //
+  // Bu, `buildAllowedCapabilities` içinde zaten çözülmüş olan hatanın
+  // ikinci kopyasıydı: sistem önce tahmin ediyor, sonra kendini o tahminin
+  // içine kilitliyor. Tahmin yanlışsa doğru plan bile geçemiyor.
+  //
+  // Teslimat garantisi KAYBOLMUYOR; daha sağlam bir yerde duruyor: aşağıdaki
+  // `expectedOutputs` kontrolü, kullanıcının BEYAN EDİLEN çıktısına bakar
+  // (artifact isteyen bir görev artifact üreten bir adım olmadan geçemez).
+  // O kontrol tahmine değil isteğe dayanır. Güvenlik de daralmaz: yasaklı
+  // liste, otonomi tavanı, kaynak kapsamı ve gizlilik yukarıda aynen
+  // uygulanıyor, ayrıca her adım masaüstünde kendi izin kapısından geçiyor.
   const hasSemanticContract =
     workOrder.semanticGoal?.contract === "elyan.semantic_task_contract.v1";
-  if (hasSemanticContract) {
-    for (const requiredCapability of workOrder.semanticGoal!
-      .requiredCapabilities) {
-      if (!effectiveCapabilities.has(requiredCapability)) {
-        issues.push(
-          `semantic work order requires capability ${requiredCapability}`,
-        );
-      }
-    }
-  }
   const requiresArtifact = workOrder.expectedOutputs.some(
     (output) => output.required && output.kind === "artifact",
   );
