@@ -17,6 +17,7 @@ import {
   validateMaterializedPlanContracts,
 } from "./materialize-plan.js";
 import type { DesktopWorkOrder } from "./desktop-work-order.js";
+import { buildDesktopWorkOrder } from "./desktop-work-order.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 
 function workOrder(
@@ -801,6 +802,85 @@ test("work-order resource scope rejects model-selected paths outside authorized 
   ];
   assert.match(
     validateMaterializedPlanAgainstWorkOrder(selectedPaths, order).join("\n"),
+    /outside the authorized WorkOrder resource scope/u,
+  );
+});
+
+test("gerçek work order builder'ının ürettiği kapsam, masaüstüne kaydetme planını geçirir", () => {
+  // CANLI ARIZA (2026-08-12, görev 886d53f1): "…masaüstüme kaydet" isteği
+  // "Görevin güvenilir yürütme planı hazırlanamadı" ile düştü. Sunucu logu:
+  //   validationIssues: ["step3: path is outside the authorized WorkOrder
+  //                       resource scope", "step4: …"]
+  //
+  // Üstteki kapsam testi hatayı YAKALAMADI çünkü `writeRoots`'u elle
+  // ["~/Desktop"] veriyor — yani gerçek builder hiç devreye girmiyor. Hata tam
+  // olarak builder ile doğrulayıcı arasındaki dikişte yaşıyordu: kapsam plan
+  // henüz yokken donduruluyor ve anlama zarfı gelmezse ["workspace"]'e
+  // düşüyordu. Bu test o dikişi baştan sona koşar.
+  const order = buildDesktopWorkOrder({
+    message:
+      "Türkiye'de elektrikli araç satışlarının son durumunu araştır. Bulduklarını 2 sayfalık bir Word belgesi yap, içine satış rakamlarının grafiğini de koy ve masaüstüme kaydet.",
+    title: "Elektrikli araç raporu",
+    routeDecision: {
+      route: "desktop_runtime",
+      mode: "executable_task",
+      capabilities: ["web_research", "document_write"],
+      privacyClass: "local_private",
+      requiresApproval: false,
+      reason: "Dispatch",
+      intent: "desktop_cowork",
+      confidence: 0.9,
+      requiredRuntime: "desktop",
+      privacyLevel: "high",
+      shouldAskClarification: false,
+      failClosedReason: "desktop_runtime_selected_target",
+      selectedWorkload: "desktop_handoff",
+      taskRoute: {
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "Dispatch",
+        needsDesktop: true,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      },
+    },
+    requestedCapabilities: [],
+    // Arızanın belirleyici koşulu: zarf YOK (kayıtta envelope_keys=null).
+  });
+
+  const steps: DesktopWorkOrder["planPreview"]["steps"] = [
+    {
+      id: "write",
+      capability: "document_write",
+      args: {
+        title: "Elektrikli Araç Satışları",
+        prompt: "Araştırma bulgularını iki sayfalık rapora dönüştür",
+        outputPath: "~/Desktop/elektrikli-arac-satislari.docx",
+      },
+      dependsOn: [],
+      description: "Raporu masaüstüne yaz",
+    },
+  ];
+
+  assert.deepEqual(
+    validateMaterializedPlanAgainstWorkOrder(steps, order),
+    [],
+    "kullanıcının istediği masaüstü çıktısı kendi kapsamı tarafından reddedilmemeli",
+  );
+
+  // Kapsam GENİŞLETİLDİ, KALDIRILMADI: sistem yolları hâlâ reddedilir.
+  const systemPath = structuredClone(steps);
+  systemPath[0]!.args.outputPath = "/etc/cron.d/elyan";
+  assert.match(
+    validateMaterializedPlanAgainstWorkOrder(systemPath, order).join("\n"),
+    /outside the authorized WorkOrder resource scope/u,
+  );
+  const traversal = structuredClone(steps);
+  traversal[0]!.args.outputPath = "~/Desktop/../.ssh/authorized_keys";
+  assert.match(
+    validateMaterializedPlanAgainstWorkOrder(traversal, order).join("\n"),
     /outside the authorized WorkOrder resource scope/u,
   );
 });
