@@ -75,6 +75,13 @@ export const runtimeTaskAckBodySchema = runtimeTaskAckFieldsSchema;
 export const runtimeTaskUpdateBodySchema = z
   .object({
     status: taskStatusSchema,
+    /**
+     * Masaüstünün bu durumu ÜRETTİĞİ an (ISO). Yalnız ölçüm içindir; hiçbir
+     * karar buna bakmaz ve `compact_status_payload` bunu imzaya katmaz, yani
+     * dedupe davranışı değişmez. Olmadan "masaüstünde adım bitti → telefonda
+     * piksel değişti" yolunun hangi bacağının yavaş olduğu tahmin ediliyordu.
+     */
+    emittedAt: z.string().datetime().optional(),
     message: z.string().max(500).optional(),
     summary: z.string().optional(),
     error: z.string().optional(),

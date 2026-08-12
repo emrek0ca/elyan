@@ -11637,8 +11637,10 @@ export async function updateTaskFromRuntime(
     result?: Record<string, unknown>;
     operator?: Record<string, unknown>;
     artifacts: ArtifactInput[];
+    emittedAt?: string;
   },
 ) {
+  const handlerStartedAt = Date.now();
   if (input.approvalRequest?.kind === "connector_write") {
     throw new AppError(
       400,
@@ -11952,6 +11954,26 @@ export async function updateTaskFromRuntime(
     updatedTask,
     message: input.message,
   });
+
+  // ÖLÇÜM: "masaüstünde adım bitti → telefonda piksel değişti" yolunun ilk iki
+  // bacağı. `transportMs` masaüstünden buraya geçen süre (ağ + kuyruk),
+  // `handlerMs` bu isteğin işlenme süresi. Üçüncü bacağı (yayın → mobil)
+  // istemci kendi tarafında olayın `createdAt`ine bakarak ölçer. Hiçbir karar
+  // bu değerlere bakmaz; yalnız log.
+  const emittedAtMs = input.emittedAt ? Date.parse(input.emittedAt) : Number.NaN;
+  app.log.info(
+    {
+      event: "runtime_status_latency",
+      taskId: updatedTask.id,
+      status: input.status,
+      transportMs: Number.isFinite(emittedAtMs)
+        ? Math.max(0, handlerStartedAt - emittedAtMs)
+        : null,
+      handlerMs: Date.now() - handlerStartedAt,
+      artifactCount: shapedArtifacts.length,
+    },
+    "runtime status latency",
+  );
 
   return {
     task: updatedTask,
