@@ -53,7 +53,14 @@ ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && bash scripts/bootstrap-v1-social-aut
 echo "==> Health poll"
 HEALTH_OK=0
 for attempt in {1..30}; do
-  if curl -fsS https://api.elyan.dev/healthz | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d); if(j.status==='ok' && j.agent?.chatReady===true && j.agent?.redisReady===true && j.agent?.queueHealthy===true && j.agent?.trainingWorkerReady===true && j.agent?.mlWorkerMode==='runner') process.exit(0); process.exit(1);})"; then
+  # Kapı, `/healthz`'in GERÇEKTEN yayınladığı alanlara bakar. Eskiden
+  # `agent.chatReady` gibi iç gözlem alanları aranıyordu; `shapePublicHealthPayload`
+  # (src/modules/health/routes.ts) bunları 24 Haziran'dan beri dışarı vermiyor,
+  # yani kapı hiçbir koşulda geçemiyordu: her deploy "Health failed" diyor,
+  # benchmark adımı hiç çalışmıyor ve gerçek bir arıza ile bu sahte düşüş
+  # ayırt edilemiyordu. `/healthz` sağlıksızken zaten 503 döner ve `curl -fsS`
+  # orada düşer; buradaki kontrol onun üstüne anlamlı alanları doğrular.
+  if curl -fsS https://api.elyan.dev/healthz | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);const surfaces=Array.isArray(j.coreSurfaces)?j.coreSurfaces:[];const required=['chat','brain','tasks','runtime','realtime','auth'];const ok=j.ok===true&&j.status==='ok'&&j.mobile?.statusSummary==='ready'&&j.mobile?.safeForExternalClients===true&&j.realtime?.sseEnabled===true&&j.network?.externalClientsCanReachAdvertisedBaseUrl===true&&required.every((s)=>surfaces.includes(s));if(ok)process.exit(0);console.error('health gate mismatch: '+JSON.stringify({ok:j.ok,status:j.status,mobile:j.mobile,sse:j.realtime?.sseEnabled,reachable:j.network?.externalClientsCanReachAdvertisedBaseUrl,missing:required.filter((s)=>!surfaces.includes(s))}));process.exit(1);}catch(e){console.error('health payload unreadable: '+e.message);process.exit(1);}})"; then
     echo "Health OK"
     HEALTH_OK=1
     break
