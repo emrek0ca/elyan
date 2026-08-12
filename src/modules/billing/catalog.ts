@@ -84,9 +84,9 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
     visible: true,
     providerProducts: {},
     features: [
-      "No desktop connection",
-      "5-hour and weekly usage windows",
-      "Best for trying Elyan mobile chat",
+      "Masaüstü bağlantısı yok",
+      "5 saatlik ve haftalık kullanım penceresi",
+      "Elyan'ı mobil sohbetle denemek için",
     ],
   },
   solo: {
@@ -130,9 +130,9 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
       },
     },
     features: [
-      "1 desktop connection",
-      "Expanded 5-hour and weekly usage",
-      "Best for light daily use",
+      "1 masaüstü bağlantısı",
+      "Genişletilmiş 5 saatlik ve haftalık kullanım",
+      "Günlük hafif kullanım için",
     ],
   },
   pro: {
@@ -177,9 +177,9 @@ const BILLING_PLAN_CATALOG: Record<BillingPlanCode, BillingPlan> = {
       },
     },
     features: [
-      "2 desktops",
-      "Highest 5-hour and weekly usage",
-      "Priority queue and richer history",
+      "2 masaüstü bağlantısı",
+      "En yüksek 5 saatlik ve haftalık kullanım",
+      "Öncelikli kuyruk ve daha geniş geçmiş",
     ],
   },
 };
