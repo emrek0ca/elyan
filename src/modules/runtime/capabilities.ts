@@ -321,6 +321,42 @@ export function summarizeRuntimeCapabilityReadiness(
   };
 }
 
+export function unrunnableRuntimeCapabilityIds(
+  capabilityStates: unknown,
+): { capability: string; errorCode: string }[] {
+  // Cihazın KOŞAMAYACAĞI yetenekler. `ready: false` DEĞİL, `available: false`
+  // ölçütü kullanılır ve bu ayrım kritik:
+  //
+  //   browser_agent.run   ready=false available=FALSE  no_decision_provider
+  //   local_files.index   ready=false available=true   permission_required
+  //   desktop_operator.run ready=false available=true  (kod yok)
+  //
+  // İkinci ve üçüncüsü ÇALIŞIR — yalnızca izin/onay bekliyorlar. Onları
+  // katalogdan atmak, kullanıcıya izin sorusu hiç sorulmadan ekran operatörünü
+  // ve yerel dosya indekslemeyi kaybettirirdi. Yalnız `available: false` olan,
+  // yani yapısal olarak işlevsiz olan yetenek çıkarılır.
+  //
+  // `summarizeRuntimeCapabilityReadiness` ile bilinçli olarak AYRI: o özet
+  // adları `normalizeCapabilityName` ile kabaca sınıflara indiriyor
+  // (`browser_agent.run` → `browser.agent.run`). Planlayıcı kataloğu ise
+  // masaüstünün KENDİ yetenek adlarıyla anahtarlı, bu yüzden burada ham kimlik
+  // korunur; normalize adla eşleştirmek hiçbir şeyi filtrelemez ve düzeltmeyi
+  // sessizce etkisiz bırakır.
+  const states = readCapabilityStateRecord(capabilityStates);
+  const blocked: { capability: string; errorCode: string }[] = [];
+  for (const [rawName, state] of Object.entries(states)) {
+    const capability = String(rawName ?? "").trim();
+    if (!capability) continue;
+    if (!state || typeof state !== "object" || Array.isArray(state)) continue;
+    if ((state as Record<string, unknown>).available !== false) continue;
+    blocked.push({
+      capability,
+      errorCode: stateErrorCode(state) || stateBlockedReason(state) || "not_available",
+    });
+  }
+  return blocked.slice(0, 128);
+}
+
 export function preflightRequestedRuntimeCapabilities(input: {
   availableCapabilities: unknown;
   capabilityStates: unknown;

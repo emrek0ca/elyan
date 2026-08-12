@@ -8,6 +8,7 @@ import {
   missingRuntimeCapabilities,
   normalizeRuntimeCapabilities,
   supportsRequestedCapabilities,
+  unrunnableRuntimeCapabilityIds,
 } from "../runtime/capabilities.js";
 import {
   DESKTOP_CAPABILITY_MANIFEST,
@@ -1781,6 +1782,62 @@ export async function materializeDesktopPlanRevision(
  * (başlangıç planı korunur). İdempotent: zaten materyalize edilmiş görevleri
  * (lease-retry) yeniden planlamaz.
  */
+function capabilityMatchKey(value: string): string {
+  return String(value ?? "").trim().toLowerCase().replace(/[.\s]+/g, "_");
+}
+
+export async function withoutUnreadyDeviceCapabilities(
+  app: FastifyInstance,
+  task: TaskRow,
+  allowed: string[],
+): Promise<string[]> {
+  // CANLI ARIZA (2026-08-12, görev 8899d79b): planlayıcı dört adımlı planın ilk
+  // adımı olarak `browser_agent.run` seçti. O yetenek hedef cihazda yapısal
+  // olarak ölüydü (karar verecek yerel model kurulu değil). Adım ilk turda
+  // düştü, güvenilir sunucu planında semantik replan kapalı olduğu için hiçbir
+  // onarım dalı uymadı ve GÖREVİN TAMAMI iptal edildi — kalan üç adım
+  // (belgeyi yaz, grafiği koy, masaüstüne kaydet) çalışabilecekken.
+  //
+  // Kök neden: cihaz hazırlığını bildiren kanal (runtime `capabilityStates`)
+  // yıllardır DOLU akıyor ama planlayıcı onu HİÇ okumuyordu. Plan üretildikten
+  // SONRA yapılan ilan kontrolü (aşağıda) yalnızca "cihaz bu yeteneği ilan etti
+  // mi" sorusunu soruyor; "koşabilir mi" sorusunu sormuyor.
+  //
+  // Cihaz bilgisi yoksa ya da filtre listeyi tamamen boşaltacaksa hiçbir şey
+  // yapılmaz: eksik telemetri yüzünden planlamayı imkânsız hâle getirmek,
+  // düşebilecek bir adımı denemekten daha kötüdür.
+  if (allowed.length === 0) return allowed;
+  let states: unknown = null;
+  try {
+    const target = await getUserDevice(app, task.userId, task.targetDeviceId);
+    states = target?.runtime.capabilityStates ?? null;
+  } catch {
+    return allowed;
+  }
+  const unready = unrunnableRuntimeCapabilityIds(states);
+  if (unready.length === 0) return allowed;
+  const blocked = new Map(
+    unready.map((entry) => [capabilityMatchKey(entry.capability), entry.errorCode]),
+  );
+  const kept = allowed.filter(
+    (capability) => !blocked.has(capabilityMatchKey(capability)),
+  );
+  if (kept.length === 0 || kept.length === allowed.length) return allowed;
+  app.log.info(
+    {
+      taskId: task.id,
+      removed: allowed
+        .filter((capability) => blocked.has(capabilityMatchKey(capability)))
+        .map((capability) => ({
+          capability,
+          errorCode: blocked.get(capabilityMatchKey(capability)) ?? "not_ready",
+        })),
+    },
+    "planning catalog excluded capabilities the target device cannot run",
+  );
+  return kept;
+}
+
 export async function maybeMaterializeDesktopPlan(
   app: FastifyInstance,
   task: TaskRow,
@@ -1794,7 +1851,11 @@ export async function maybeMaterializeDesktopPlan(
     if (!workOrder) return false;
     const planPreview = asRecord(workOrder.planPreview);
     if (!planPreview) return false;
-    const allowed = buildAllowedCapabilities(workOrder);
+    const allowed = await withoutUnreadyDeviceCapabilities(
+      app,
+      task,
+      buildAllowedCapabilities(workOrder),
+    );
     let existingPlanBindingStale = false;
     // İdempotent retry: existing server plan is already a successful
     // materialization only when its complete compiled contract still validates.

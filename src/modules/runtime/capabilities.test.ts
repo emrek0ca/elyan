@@ -5,6 +5,7 @@ import {
   normalizeRuntimeCapabilities,
   preflightRequestedRuntimeCapabilities,
   summarizeRuntimeCapabilities,
+  unrunnableRuntimeCapabilityIds,
 } from "./capabilities.js";
 
 test("runtime capability summary classifies professional desktop tools", () => {
@@ -109,4 +110,41 @@ test("runtime capability preflight blocks online capabilities with missing permi
     preflight.blockedCapabilities[0]?.reason,
     "permission_unavailable",
   );
+});
+
+test("koşamayan yetenek ayıklanır, izin bekleyen yetenek KORUNUR", () => {
+  // CANLI ARIZA (2026-08-12, görev 8899d79b): planlayıcı `browser_agent.run`
+  // seçti, o yetenek hedef cihazda yapısal olarak ölüydü ve dört adımlı görevin
+  // tamamı ilk adımda iptal edildi. Cihaz durumu şunu bildiriyordu:
+  //
+  //   browser_agent.run    ready=false available=FALSE  no_decision_provider
+  //   local_files.index    ready=false available=true   permission_required
+  //   desktop_operator.run ready=false available=true   (kod yok)
+  //
+  // İkinci ve üçüncüsü ÇALIŞIR, yalnız izin/onay bekler. `ready`'ye göre
+  // ayıklamak onları da katalogdan atıp kullanıcıya izin sorusu hiç sorulmadan
+  // ekran operatörünü kaybettirirdi — ölçtüm, tam bu iki tanesi.
+  const blocked = unrunnableRuntimeCapabilityIds({
+    "browser_agent.run": {
+      ready: false,
+      available: false,
+      errorCode: "no_decision_provider",
+    },
+    "local_files.index": { ready: false, available: true, errorCode: "permission_required" },
+    "desktop_operator.run": { ready: false, available: true, errorCode: "" },
+    web_research: { ready: true, available: true, errorCode: "" },
+  });
+
+  assert.deepEqual(blocked, [
+    { capability: "browser_agent.run", errorCode: "no_decision_provider" },
+  ]);
+});
+
+test("yetenek durumu hiç gelmezse hiçbir şey ayıklanmaz", () => {
+  // Eksik telemetri yüzünden planlamayı imkânsız hâle getirmek, düşebilecek bir
+  // adımı denemekten daha kötü.
+  assert.deepEqual(unrunnableRuntimeCapabilityIds(null), []);
+  assert.deepEqual(unrunnableRuntimeCapabilityIds({}), []);
+  assert.deepEqual(unrunnableRuntimeCapabilityIds("bozuk"), []);
+  assert.deepEqual(unrunnableRuntimeCapabilityIds({ web_research: { ready: true } }), []);
 });
