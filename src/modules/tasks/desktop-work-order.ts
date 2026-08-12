@@ -1872,6 +1872,26 @@ export function buildDesktopWorkOrder(input: {
           (value === "~/Desktop" || value.startsWith("~/Desktop/")),
       ),
     );
+  // YAZMA KAPSAMI PLANDAN ÖNCE DONDURULUYOR.
+  //
+  // Kapsam, iş emri kurulurken belirleniyor; gerçek planı model SONRA üretiyor
+  // ve plan bu kapsama karşı yargılanıyor. `~/Desktop` kapsama yalnız
+  // `desired_outputs[].target === "desktop"` gelirse ya da başlangıç
+  // adımlarında zaten bir `~/Desktop` yolu varsa giriyordu.
+  //
+  // Anlama zarfı sıklıkla HİÇ GELMİYOR (canlı vaka 2026-08-12: envelope_keys
+  // null, desired_outputs null). O zaman kapsam ["workspace"]'e donuyor,
+  // kullanıcı "masaüstüme kaydet" dediği için model doğru şekilde
+  // `~/Desktop/...` planlıyor ve doğrulayıcı "path is outside the authorized
+  // WorkOrder resource scope" ile TÜM görevi reddediyor. Yani en sık istenen
+  // şey yapısal olarak imkânsızdı.
+  //
+  // Çözüm kelime deseni DEĞİL: kullanıcının kendi çıktı klasörleri zaten
+  // meşru yazma hedefleri. Bu bir masaüstü ajanı; kullanıcı onu kendi
+  // makinesinde çalıştırıyor ve her yazma adımı ayrıca masaüstündeki
+  // izin/onay kapısından geçiyor. Kapsamın işi rastgele SİSTEM yollarını
+  // engellemek; kullanıcının Masaüstü/Belgeler/İndirilenler klasörünü değil.
+  const defaultWriteRoots = ["workspace", "~/Desktop", "~/Documents", "~/Downloads"];
   const resourceScope = {
     contract: "elyan.resource_scope.v1" as const,
     readRoots: [
@@ -1879,7 +1899,8 @@ export function buildDesktopWorkOrder(input: {
     ],
     writeRoots: [
       ...new Set([
-        desktopOutputRequested ? "~/Desktop" : "workspace",
+        ...(desktopOutputRequested ? ["~/Desktop"] : []),
+        ...defaultWriteRoots,
         ...stepWriteRoots,
       ]),
     ],

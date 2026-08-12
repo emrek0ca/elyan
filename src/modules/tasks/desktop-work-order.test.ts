@@ -825,7 +825,9 @@ test("semantic document intent reconciles a stale chat output contract", () => {
   assert.deepEqual(workOrder.resourceScope, {
     contract: "elyan.resource_scope.v1",
     readRoots: ["workspace"],
-    writeRoots: ["~/Desktop"],
+    // Kullanıcının kendi çıktı klasörleri her zaman yazılabilir kapsamda;
+    // `~/Desktop` istendiği için başta.
+    writeRoots: ["~/Desktop", "workspace", "~/Documents", "~/Downloads"],
   });
   assert.match(
     String(workOrder.planPreview.steps[0]?.args.outputPath ?? ""),
@@ -878,4 +880,35 @@ test("semantic document intent reconciles a stale chat output contract", () => {
     String(pdfWorkOrder.planPreview.steps[0]?.args.outputPath ?? ""),
     /\.pdf$/u,
   );
+});
+
+test("anlama zarfı hiç gelmese bile kullanıcının çıktı klasörleri yazılabilir kalır", () => {
+  // Canlı arıza (2026-08-12): "…2 sayfalık Word belgesi yap, masaüstüme
+  // kaydet" görevi "Görevin güvenilir yürütme planı hazırlanamadı" ile düştü.
+  // Sunucu logu:
+  //   validationIssues: ["step3: path is outside the authorized WorkOrder
+  //                       resource scope", "step4: …"]
+  // Görev kaydında envelope_keys=null, desired_outputs=null ve
+  // resourceScope.writeRoots=["workspace"].
+  //
+  // Yazma kapsamı plan HENÜZ YOKKEN donduruluyor; `~/Desktop` kapsama yalnız
+  // zarf `target:"desktop"` derse giriyordu. Zarf gelmediğinde kullanıcının
+  // açıkça istediği yere yazmak yapısal olarak imkânsızdı — model doğru planı
+  // üretiyor, doğrulayıcı tüm görevi reddediyordu.
+  const workOrder = buildDesktopWorkOrder({
+    message:
+      "Türkiye'de elektrikli araç satışlarını araştır, 2 sayfalık Word belgesi yap, masaüstüme kaydet",
+    title: "Elektrikli araç raporu",
+    routeDecision: routeDecision({ capabilities: ["document_write"] }),
+    requestedCapabilities: [],
+    // ZARF YOK — arızanın koşulu bu.
+  });
+
+  const writeRoots = workOrder.resourceScope?.writeRoots ?? [];
+  for (const root of ["~/Desktop", "~/Documents", "~/Downloads", "workspace"]) {
+    assert.ok(
+      writeRoots.includes(root),
+      `${root} yazılabilir kapsamda olmalı — kullanıcının kendi çıktı klasörü`,
+    );
+  }
 });
