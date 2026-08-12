@@ -2123,6 +2123,63 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "skillAffinity": []
   },
   {
+    "name": "desktop_os.volume",
+    "displayName": "Ses kontrolü",
+    "description": "Sistem ses seviyesini okur, ayarlar veya sessize alır.",
+    "usage": "Kullanıcı sesi kapat/aç, kıs/yükselt ya da ses seviyesini sorduğunda. Medya oynatmak için play_media.",
+    "requiredArgs": [],
+    "requiresApproval": false,
+    "whenToUse": [
+      "Kullanıcı sesi kapat/aç, kıs/yükselt ya da ses seviyesini sorduğunda. Medya oynatmak için play_media."
+    ],
+    "whenNotToUse": [
+      "Do not use when this capability does not directly advance the requested outcome."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "action": {
+          "type": "STRING",
+          "description": "get | set | mute | unmute | toggle"
+        },
+        "level": {
+          "type": "NUMBER",
+          "description": "0-100 arası ses seviyesi (yalnız action=set)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "desktop_os.volume",
+      "requiresOk": true
+    },
+    "artifactContract": {},
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [],
+    "utterances": [
+      "bilgisayarın sesini kapat",
+      "sesi aç",
+      "sesi kıs",
+      "ses seviyesini yüzde otuz yap",
+      "sessize al"
+    ],
+    "notFor": [],
+    "privacyClass": "local_runtime",
+    "skillAffinity": []
+  },
+  {
     "name": "directory_tree",
     "displayName": "Klasör ağacı",
     "description": "Klasör/proje yapısını güvenli, sınırlı ağaç olarak listeler.",
