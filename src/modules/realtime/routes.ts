@@ -41,6 +41,36 @@ import {
 } from "./log.js";
 import { sanitizePublicTaskEventPayload } from "../tasks/service-helpers.js";
 
+/**
+ * Reddedilen soket çerçevesinin KİMLİĞİ.
+ *
+ * Doğrulama değil: şema zaten reddetti. Buradaki tek iş, runtime'ın hangi
+ * güncellemenin düştüğünü anlayıp yeniden deneyebilmesi için tip ve görev
+ * kimliğini ham gövdeden kurtarmak. Hiçbir koşulda fırlatmaz — hata yolunda
+ * çağrılıyor, orada patlamak asıl hatayı yutar.
+ */
+function runtimeFrameCorrelation(
+  raw: RawData,
+): { frameType?: string; taskId?: string } {
+  try {
+    const value: unknown = JSON.parse(raw.toString());
+    if (typeof value !== "object" || value === null) {
+      return {};
+    }
+    const record = value as Record<string, unknown>;
+    const frameType =
+      typeof record.type === "string" ? record.type.slice(0, 40) : undefined;
+    const taskId =
+      typeof record.taskId === "string" ? record.taskId.slice(0, 64) : undefined;
+    return {
+      ...(frameType ? { frameType } : {}),
+      ...(taskId ? { taskId } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 const realtimeStreamQuerySchema = z
   .object({
     taskId: z.string().uuid().optional(),
@@ -886,10 +916,20 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
                 ? error.message
                 : "Unknown runtime socket error";
 
+          // KORELASYON. Hata çerçevesi eskiden yalnız bir metin taşıyordu:
+          // runtime hangi güncellemenin reddedildiğini bilemiyor, dolayısıyla
+          // yeniden deneyemiyordu. Soket TEK taşıma yolu olduğu için bu, sessiz
+          // kayıp demekti — masaüstü işi bitirir, telefonda görev "çalışıyor"da
+          // donar. Ölçüldü: 2026-08-13, görev cc5fed45.
+          //
+          // Şema reddinde `parsed` yok, o yüzden korelasyon HAM gövdeden
+          // okunuyor. Doğrulama değil, yalnız kimlik: hangi tip, hangi görev.
           socket.send(
             JSON.stringify({
               type: "error",
               message,
+              code: error instanceof ZodError ? "invalid_payload" : "rejected",
+              ...runtimeFrameCorrelation(raw),
             }),
           );
         }
