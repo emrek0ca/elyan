@@ -11638,6 +11638,15 @@ export async function updateTaskFromRuntime(
     operator?: Record<string, unknown>;
     artifacts: ArtifactInput[];
     emittedAt?: string;
+    /**
+     * Canlı adım ilerlemesi (yalnız durum). Görev SATIRINDA saklanmaz: anlık bir
+     * ilerleme sinyali, kalıcı durum değil. Mobil widget bunu id ile mesaj
+     * bloğundaki adımlara eşliyor; gelmediğinde davranış eskisiyle aynıdır.
+     */
+    progress?: {
+      activeStepId?: string;
+      steps: { id: string; status: string }[];
+    };
   },
 ) {
   const handlerStartedAt = Date.now();
@@ -11940,6 +11949,12 @@ export async function updateTaskFromRuntime(
   await publishTaskEvent(app, updatedTask, "task.updated", {
     task: shapeTaskFeedItem(updatedTask),
     artifactCount: shapedArtifacts.length,
+    // Canlı adım ilerlemesi olduğu gibi iletilir. `shapeTaskFeedItem` görev
+    // SATIRINI biçimlendiriyor; ilerleme satırda durmuyor, masaüstünün o anki
+    // raporunda geliyor. Bu yüzden ayrı bir alan olarak taşınır — mobil
+    // `task`/`payload`/kök sarmallarının hepsini deniyor, yani buradan
+    // okunabilir.
+    ...(input.progress ? { progress: input.progress } : {}),
   });
 
   if (shapedArtifacts.length > 0) {
