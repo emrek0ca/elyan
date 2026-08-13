@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  hasLiveRuntimeConnection,
   isUndefinedColumnError,
   mobileRegistrationAuditMetadata,
   shapeUserDevice,
@@ -159,4 +160,82 @@ test("mobile registration audit metadata never includes the push token", () => {
   assert.equal(metadata.pushConfigured, true);
   assert.equal(metadata.pushProvider, "apns");
   assert.equal("pushToken" in metadata, false);
+});
+
+function fakeAppWithConnection(row: unknown) {
+  const chain = {
+    from: () => chain,
+    where: () => chain,
+    orderBy: () => chain,
+    limit: async () => (row === null ? [] : [row]),
+  };
+  return { db: { select: () => chain } } as unknown as Parameters<
+    typeof hasLiveRuntimeConnection
+  >[0];
+}
+
+test("eşleştirme canlılığı soketten okunur, lastSeenAt damgasından değil", async () => {
+  // CANLI ARIZA (2026-08-13): kullanıcı masaüstünde `unpair` yaptı, `pair` ile
+  // yeni kod aldı, mobilde kodu girince "Desktop runtime is already paired with
+  // another user" gördü. O anda ölçüm:
+  //
+  //   devices.last_seen_at = 08:13:49  (taze → çakışma "canlı" sandı)
+  //   runtime_connections  = offline, son heartbeat 04:26, disconnected_at dolu
+  //
+  // Yani hiç bağlantısı olmayan makine "başka kullanıcıya bağlı" sayılıyordu ve
+  // kullanıcı kendi bilgisayarını geri alamıyordu.
+  assert.equal(
+    await hasLiveRuntimeConnection(
+      fakeAppWithConnection({
+        status: "offline",
+        lastHeartbeatAt: new Date(),
+        disconnectedAt: null,
+      }),
+      "device-1",
+    ),
+    false,
+    "offline kayıt canlı sayılmamalı",
+  );
+
+  assert.equal(
+    await hasLiveRuntimeConnection(
+      fakeAppWithConnection({
+        status: "online",
+        lastHeartbeatAt: new Date(),
+        disconnectedAt: new Date(),
+      }),
+      "device-1",
+    ),
+    false,
+    "kopmuş kayıt canlı sayılmamalı",
+  );
+
+  assert.equal(
+    await hasLiveRuntimeConnection(
+      fakeAppWithConnection({
+        status: "online",
+        lastHeartbeatAt: new Date(Date.now() - 6 * 60_000),
+        disconnectedAt: null,
+      }),
+      "device-1",
+    ),
+    false,
+    "bayat heartbeat canlı sayılmamalı",
+  );
+
+  // KORUMA ZAYIFLAMAZ: başka kullanıcının O AN bağlı masaüstü devralınamaz.
+  assert.equal(
+    await hasLiveRuntimeConnection(
+      fakeAppWithConnection({
+        status: "online",
+        lastHeartbeatAt: new Date(),
+        disconnectedAt: null,
+      }),
+      "device-1",
+    ),
+    true,
+  );
+
+  assert.equal(await hasLiveRuntimeConnection(fakeAppWithConnection(null), "device-1"), false);
+  assert.equal(await hasLiveRuntimeConnection(fakeAppWithConnection(null), ""), false);
 });

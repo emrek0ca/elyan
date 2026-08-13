@@ -14,6 +14,47 @@ import {
 } from "../runtime/capabilities.js";
 
 export const RUNTIME_CONNECTION_STALE_AFTER_MS = 300_000; // 5 minutes — relay sends heartbeats every 2-5s so this is very forgiving
+
+/**
+ * Bu cihazın GERÇEKTEN canlı bir runtime bağlantısı var mı?
+ *
+ * `devices.lastSeenAt` bu soruyu cevaplamaz: o damga canlı bir soket olmadan da
+ * tazelenebiliyor. Canlı arıza (2026-08-13): kullanıcı masaüstünde `unpair`
+ * yaptı, `pair` ile yeni kod aldı ve mobilde kodu girince "Desktop runtime is
+ * already paired with another user" gördü. Ölçüm o anda şunu söylüyordu:
+ *
+ *   devices.last_seen_at = 08:13:49  (taze → çakışma kontrolü "canlı" sandı)
+ *   runtime_connections  = offline, son heartbeat 04:26, disconnected_at dolu
+ *
+ * Yani makinenin hiç bağlantısı yokken kendi bilgisayarını geri alamıyordu ve
+ * bekleme dışında çıkış yolu yoktu: her `pair` denemesi damgayı yeniden
+ * tazeliyordu.
+ *
+ * Otoriter sinyal soketin kendisi. Bu yardımcı KORUMAYI ZAYIFLATMAZ: başka bir
+ * kullanıcının o an bağlı masaüstünün `online` ve taze heartbeat'li bir kaydı
+ * olur, dolayısıyla devralınamaz.
+ */
+export async function hasLiveRuntimeConnection(
+  app: FastifyInstance,
+  deviceId: string,
+): Promise<boolean> {
+  if (!deviceId) return false;
+  const rows = await app.db
+    .select({
+      status: runtimeConnections.status,
+      lastHeartbeatAt: runtimeConnections.lastHeartbeatAt,
+      disconnectedAt: runtimeConnections.disconnectedAt,
+    })
+    .from(runtimeConnections)
+    .where(eq(runtimeConnections.deviceId, deviceId))
+    .orderBy(desc(runtimeConnections.connectedAt))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return false;
+  if (row.status === "offline" || row.disconnectedAt) return false;
+  const heartbeat = row.lastHeartbeatAt?.getTime() ?? 0;
+  return Date.now() - heartbeat <= RUNTIME_CONNECTION_STALE_AFTER_MS;
+}
 const SHARED_BRAIN_TARGET_CACHE_TTL_MS = 2_000;
 
 type DeviceRow = {

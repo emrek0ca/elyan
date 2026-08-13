@@ -5,7 +5,7 @@ import { devices, pairSessions, tasks } from "../../db/schema.js";
 import { createOpaqueCode, createPairingCode, deriveRuntimeDeviceSecret, hashSecret, verifySecret } from "../../lib/auth-crypto.js";
 import { AppError, conflict, notFound } from "../../lib/errors.js";
 import { assertDesktopPairingAllowed } from "../billing/service.js";
-import { RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
+import { hasLiveRuntimeConnection } from "../devices/service.js";
 import { invalidateBrainProfileCache } from "../brain/profile-cache.js";
 import { getSharedBrainTargetDeviceId } from "../devices/service.js";
 import { activeTaskStatuses, resequenceDeviceQueue } from "../tasks/queue.js";
@@ -283,11 +283,17 @@ async function upsertDesktopPairingDevice(
   const conflictingRows = input.userId
     ? existingRows.filter((row) => row.userId && row.userId !== input.userId)
     : [];
-  const liveConflict = conflictingRows.find((row) => {
-    if (!row.isActive) return false;
-    const lastSeen = row.lastSeenAt?.getTime() ?? 0;
-    return Date.now() - lastSeen <= RUNTIME_CONNECTION_STALE_AFTER_MS;
-  });
+  // Canlılık SOKETTEN sorulur, `devices.lastSeenAt`'ten değil: o damga canlı bir
+  // bağlantı olmadan da tazeleniyor ve kullanıcıyı kendi bilgisayarından kalıcı
+  // olarak kilitliyordu (bkz. `hasLiveRuntimeConnection`).
+  let liveConflict: (typeof conflictingRows)[number] | undefined;
+  for (const row of conflictingRows) {
+    if (!row.isActive) continue;
+    if (await hasLiveRuntimeConnection(app, row.id)) {
+      liveConflict = row;
+      break;
+    }
+  }
   if (liveConflict) {
     throw conflict("Desktop runtime is already paired with another user");
   }
@@ -562,10 +568,11 @@ export async function claimPairSession(
   // Eşleştirme kodu masaüstünde gösteriliyor, yani makineye fiziksel erişim
   // zaten kanıtlanmış durumda.
   if (pairSession.currentDeviceUserId && pairSession.currentDeviceUserId !== input.userId) {
-    const lastSeen = pairSession.currentDeviceLastSeenAt?.getTime() ?? 0;
+    // Aynı düzeltme claim yolunda da şart: kullanıcı kodu girdiği anda
+    // reddediliyordu. Canlılık soketten sorulur.
     const liveElsewhere =
       pairSession.currentDeviceActive === true &&
-      Date.now() - lastSeen <= RUNTIME_CONNECTION_STALE_AFTER_MS;
+      (await hasLiveRuntimeConnection(app, pairSession.desktopDeviceId));
     if (liveElsewhere) {
       throw new AppError(
         409,
