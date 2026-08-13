@@ -3688,6 +3688,85 @@ function compactSessionArtifactSnapshot(input: {
   };
 }
 
+/**
+ * Kullanıcının YÜKLEDİĞİ görseli KALICI artefakta terfi ettirir.
+ *
+ * Sorun mimariydi, eksik kanca değil. İki ayrı temsil vardı:
+ *   - Elyan'ın ÜRETTİĞİ görsel → `task_artifacts` satırı + `artifact` sahipli
+ *     blob → oturum hafızasından `artifactId`+`taskId` ile geri çözülebiliyor,
+ *     bu yüzden "bunu düzenle" çalışıyordu
+ *   - Kullanıcının YÜKLEDİĞİ görsel → `media_input` sahipli blob + imzalı
+ *     token, TTL 15 DAKİKA → oturum hafızasının işaret edebileceği kalıcı bir
+ *     kimliği YOK, üstelik süresi doluyor
+ *
+ * `resolveLastVisualArtifactImageSource` `artifactId`+`taskId` isteyip
+ * `task_artifacts`'tan okuduğu için yüklenen görseli hiçbir zaman bulamıyordu:
+ * kullanıcı bir görsel atıp sonraki turda "bunu düzenle" dediğinde akış
+ * `image_edit_source_missing` ile düşüyordu — yani Elyan attığınız resmi
+ * unutuyordu.
+ *
+ * Terfi sonrası tek bir kalıcı temsil kalıyor ve zaten ÇALIŞAN üretilen-görsel
+ * yolu (görme, yorumlama, yeniden üretme, düzenleme) yüklenen görseller için de
+ * kendiliğinden geçerli oluyor. Yeni bir çözümleme yolu eklenmiyor.
+ *
+ * Bunlar asistanın ÜRETTİĞİ çıktı listesine KATILMAZ; yalnız oturum görsel
+ * hafızasına girer. Kaynağı `origin: "user_upload"` ile işaretlenir.
+ */
+async function promoteUploadedImagesToArtifacts(
+  app: FastifyInstance,
+  input: {
+    taskId: string;
+    userId: string;
+    prompt: string;
+    images: HostedImageSource[];
+  },
+): Promise<Array<ReturnType<typeof shapeTaskArtifact>>> {
+  if (input.images.length === 0) {
+    return [];
+  }
+  try {
+    const items: PersistableArtifactInput[] = input.images
+      .slice(0, 4)
+      .map((image, index) => ({
+        kind: "file" as const,
+        name: `kullanici-gorseli-${index + 1}.${
+          image.mimeType === "image/png"
+            ? "png"
+            : image.mimeType === "image/webp"
+              ? "webp"
+              : "jpg"
+        }`,
+        contentType: image.mimeType,
+        binaryBody: Buffer.from(image.base64Data, "base64"),
+        metadata: {
+          artifact_type: "image",
+          contentFamily: "image",
+          origin: "user_upload",
+          visualSummary: compactTextPreview(input.prompt, 300) ?? undefined,
+        },
+      }));
+    const stored = await persistArtifacts(
+      app,
+      input.taskId,
+      input.userId,
+      items,
+    );
+    return await Promise.all(
+      stored.map((artifact) =>
+        shapePublicArtifactRecord(app, artifact, input.userId),
+      ),
+    );
+  } catch (error) {
+    // Görselin kalıcılaştırılamaması turu bozmamalı: kullanıcı cevabını yine
+    // alır, yalnız sonraki turda "bunu düzenle" diyemez.
+    app.log.warn(
+      { taskId: input.taskId, error },
+      "uploaded image could not be promoted to a durable artifact",
+    );
+    return [];
+  }
+}
+
 async function persistSessionArtifactMemory(
   app: FastifyInstance,
   input: {
@@ -6383,19 +6462,40 @@ async function completeServerBrainTask(
     },
   });
 
-  if (structuredOutputArtifacts.length > 0) {
+  // Kullanıcının bu turda YÜKLEDİĞİ görseller de oturum görsel hafızasına
+  // girer. Aksi halde Elyan attığınız resmi bir sonraki turda unutuyordu:
+  // yüklenen görselin `task_artifacts` kimliği olmadığı için "bunu düzenle"
+  // isteği `image_edit_source_missing` ile düşüyordu.
+  const promotedUploadArtifacts = await promoteUploadedImagesToArtifacts(app, {
+    taskId: updatedTask.id,
+    userId: input.userId,
+    prompt,
+    images: referencedSourceImages,
+  });
+  const visualMemoryArtifacts = [
+    ...structuredOutputArtifacts,
+    ...promotedUploadArtifacts,
+  ];
+
+  if (visualMemoryArtifacts.length > 0) {
     await persistSessionArtifactMemory(app, {
       userId: input.userId,
       sessionId: input.chatSessionId,
       prompt,
-      artifacts: structuredOutputArtifacts,
+      artifacts: visualMemoryArtifacts,
     }).catch((error) => {
       app.log.warn(
         { taskId: updatedTask.id, error },
         "session artifact memory could not be persisted",
       );
     });
+  }
 
+  // Artefakt OLAYLARI yalnız asistanın ÜRETTİĞİ çıktılar için yayınlanır.
+  // Terfi ettirilen kullanıcı yüklemesi hafızaya girer ama çıktı DEĞİLDİR;
+  // buraya karışsaydı telefonda "Elyan bir dosya üretti" gibi görünürdü —
+  // ve yalnız yükleme olan turda `artifactCount: 0` ile boş olay yayınlanırdı.
+  if (structuredOutputArtifacts.length > 0) {
     await insertTaskEvent(app, {
       taskId: updatedTask.id,
       userId: updatedTask.userId,

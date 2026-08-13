@@ -39,15 +39,44 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => compactText(value)).filter(Boolean))];
 }
 
+/** Model gpt ailesinden mi? */
+function isGptFamilyModel(model: string): boolean {
+  return model.toLowerCase().includes("gpt");
+}
+
+/**
+ * MODEL POLİTİKASI: yalnız gpt ailesi.
+ *
+ * Politikayı env hijyenine bırakmıyoruz, YAPISAL yapıyoruz. Sebebi ölçüldü:
+ * canlı `.env`'de `GROQ_REASONING_MODEL` hiç tanımlı değildi ve
+ * `ELYAN_SHARED_BRAIN_MODEL=llama-3.1-8b-instant` zincirin ikinci halkasından
+ * girip kodun `gpt-oss-120b` niyetini eziyordu. Sonuç: ana sohbet, planlama,
+ * belge ve tablo üretiminin TAMAMI 8B bir modelde koşuyordu — kodun kendi
+ * yorumu "ana sohbet yolu artık büyük reasoning modelinde" derken.
+ *
+ * Artık gpt DIŞI bir değer geldiğinde sessizce yok sayılıp gpt varsayılanına
+ * düşülür; yani bayat bir env satırı bir daha model seçimini ele geçiremez.
+ */
+function gptOnlyModel(
+  candidate: string | null | undefined,
+  fallback: string,
+): string {
+  const value = compactText(candidate);
+  if (!value) return fallback;
+  return isGptFamilyModel(value) ? value : fallback;
+}
+
 export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelCatalog {
-  const reasoningModel =
+  const reasoningModel = gptOnlyModel(
     compactText(config.GROQ_REASONING_MODEL) ||
-    compactText(config.ELYAN_SHARED_BRAIN_MODEL) ||
-    "openai/gpt-oss-120b";
-  const fastModel =
+      compactText(config.ELYAN_SHARED_BRAIN_MODEL),
+    "openai/gpt-oss-120b",
+  );
+  const fastModel = gptOnlyModel(
     compactText(config.GROQ_FAST_MODEL) ||
-    compactText(config.ELYAN_SHARED_BRAIN_FAST_MODEL) ||
-    "openai/gpt-oss-20b";
+      compactText(config.ELYAN_SHARED_BRAIN_FAST_MODEL),
+    "openai/gpt-oss-20b",
+  );
   // YÖNLENDİRME MODELİ — sohbet modelinden AYRI ve bilinçli olarak
   // reasoning-DIŞI.
   //
@@ -60,11 +89,25 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
   //   llama-3.1-8b → finish_reason=stop, GEÇERLİ JSON, doğru karar
   // Yönlendirici karar veremeyince hiçbir görev masaüstüne yönlenmiyordu.
   // Sohbet yolları (`mobile_chat_*`) bu değişiklikten ETKİLENMEZ.
-  const routingModel =
-    compactText(config.GROQ_ROUTING_MODEL) || "llama-3.1-8b-instant";
-  const fallbackModel =
-    compactText(config.GROQ_FALLBACK_MODEL) ||
-    "qwen/qwen3.6-27b";
+  // YÖNLENDİRME MODELİ ARTIK GPT. Yukarıdaki ölçüm (2026-08-08) gpt-oss'un
+  // gizli düşünme turunu token bütçesinden yiyip görünür JSON üretmediğini
+  // göstermişti. O tuzağın panzehiri bugün YERİNDE: `resolveReasoningEffort`
+  // hem `intent` hem `fast_route` iş yükleri için "low" döndürüyor, yani gizli
+  // tur bütçeyi tüketmiyor. Yine de bu, canlı doğrulaması yapılması gereken
+  // TEK riskli geçiş: yönlendirici karar veremezse hiçbir görev masaüstüne
+  // gitmez. Geri alma tek satır: GROQ_ROUTING_MODEL.
+  const routingModel = gptOnlyModel(
+    config.GROQ_ROUTING_MODEL,
+    "openai/gpt-oss-20b",
+  );
+  const fallbackModel = gptOnlyModel(
+    config.GROQ_FALLBACK_MODEL,
+    "openai/gpt-oss-120b",
+  );
+  // TEK İSTİSNA — GÖRME. Groq'ta gpt-oss ailesinin görsel girdisi yok; buraya
+  // bir gpt adı yazmak vision'ı tamamen kırar. Bu yüzden politika dışında
+  // bırakıldı ve BİLEREK belgelendi. Gerçek gpt görme istenirse yol Groq değil
+  // frontier/OpenAI sağlayıcısıdır ve ayrı bir yönlendirme işidir.
   const visionModel =
     compactText(config.GROQ_VISION_MODEL) ||
     compactText(config.ELYAN_SHARED_BRAIN_VISION_MODEL) ||
