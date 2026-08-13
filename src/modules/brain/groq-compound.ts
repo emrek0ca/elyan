@@ -156,7 +156,16 @@ export function buildGroqCompoundRequestExtensions(
   const searchSettings: Record<string, unknown> = {};
   if (includeDomains.length > 0) searchSettings.include_domains = includeDomains;
   if (excludeDomains.length > 0) searchSettings.exclude_domains = excludeDomains;
-  if (country) searchSettings.country = country;
+  // `country` ISO kodu DEĞİL, ülke ADI bekler (Tavily şeması). Ölçüm:
+  // `tr` → HTTP 400 "invalid country code: tr", `turkey` → 200.
+  //
+  // ISO kodu yazılması çok kolay bir yapılandırma hatası ve bedeli ağır: ayar
+  // aramayı yerelleştirmek yerine HER compound isteğini düşürür, yani tüm
+  // araştırma yolu sessizce fallback'e iner. İki harfli değeri göndermek yerine
+  // düşürmek, kesinti yerine yalnız yerelleştirme kaybıdır.
+  if (country && country.length > 2) {
+    searchSettings.country = country;
+  }
 
   if (Object.keys(searchSettings).length === 0) return {};
   // `search_settings` GÖVDENİN KÖKÜNDE olmalı.

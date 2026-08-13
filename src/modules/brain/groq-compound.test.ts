@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildGroqCompoundRequestExtensions,
   isGroqCompoundModel,
   resolveGroqCompoundModel,
   shouldUseGroqCompound,
@@ -109,4 +110,33 @@ test("resolveGroqCompoundModel picks mini for fast paths and full compound for d
     "groq/compound",
   );
   assert.equal(resolveGroqCompoundModel(baseConfig, "planning"), "groq/compound");
+});
+
+test("ISO ülke kodu search_settings'e girmez, ülke adı girer", () => {
+  // Ölçüm: `tr` → HTTP 400 "invalid country code: tr", `turkey` → 200.
+  // ISO kodu göndermek aramayı yerelleştirmiyor, HER compound isteğini
+  // düşürüyor: tüm araştırma yolu sessizce fallback'e iniyor.
+  const base = {
+    GROQ_COMPOUND_ENABLED: true,
+    GROQ_COMPOUND_RESEARCH_ENABLED: true,
+    GROQ_COMPOUND_DEEP_ENABLED: true,
+    GROQ_COMPOUND_MODEL: "groq/compound",
+    GROQ_COMPOUND_MINI_MODEL: "groq/compound-mini",
+  } as Parameters<typeof buildGroqCompoundRequestExtensions>[0];
+
+  assert.deepEqual(
+    buildGroqCompoundRequestExtensions(
+      { ...base, GROQ_COMPOUND_SEARCH_COUNTRY: "tr" },
+      "groq/compound",
+    ),
+    {},
+    "iki harfli kod düşürülmeli",
+  );
+  assert.deepEqual(
+    buildGroqCompoundRequestExtensions(
+      { ...base, GROQ_COMPOUND_SEARCH_COUNTRY: "turkey" },
+      "groq/compound",
+    ),
+    { search_settings: { country: "turkey" } },
+  );
 });
