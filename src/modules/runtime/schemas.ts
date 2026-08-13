@@ -89,6 +89,32 @@ export const runtimeTaskUpdateBodySchema = z
     result: boundedJsonRecordSchema.optional(),
     operator: boundedJsonRecordSchema.optional(),
     artifacts: z.array(artifactInputSchema).default([]),
+    /**
+     * CANLI ADIM İLERLEMESİ.
+     *
+     * Bu alan olmadan mobil widget, görev bitene kadar ilk hâlinde donuk
+     * duruyordu: ölçüm (2026-08-13, görev 48d33ba2) "Chrome'u kapat" görevinin
+     * 65 saniye sürdüğünü ve o süre boyunca telefona tek bir ara güncelleme
+     * gitmediğini gösterdi. Adım zaman çizelgesi ancak SONDA tek seferde
+     * yazıldığı için bütün adımlar aynı başlangıç/bitiş damgasını taşıyordu.
+     *
+     * Yalnız DURUM taşınır: adımın başlığı/yeteneği plana ait ve mesaj bloğunda
+     * zaten duruyor, her ilerleme olayında tekrar göndermek boşa yük olurdu.
+     */
+    progress: z
+      .object({
+        activeStepId: z.string().trim().max(120).optional(),
+        steps: z
+          .array(
+            z.object({
+              id: z.string().trim().min(1).max(120),
+              status: z.string().trim().max(40),
+            }),
+          )
+          .max(32)
+          .default([]),
+      })
+      .optional(),
   })
   .superRefine((input, ctx) => {
     if (input.approvalRequest?.kind === "connector_write") {
