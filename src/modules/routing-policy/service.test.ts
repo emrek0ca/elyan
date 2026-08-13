@@ -1521,6 +1521,23 @@ test("decideCommandRoute routes desktop action to the desktop when dispatch is o
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
+test("decideCommandRoute keeps desktop actions on the server when dispatch is explicitly off", async () => {
+  const app = createDesktopReadyApp(["browser_control"]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "user-1",
+    message: "Chrome'da yeni sekme aç",
+    source: "mobile",
+    metadata: { desktopDispatch: false },
+    requestedCapabilities: ["browser_control"],
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.targetDeviceId, undefined);
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.taskRoute?.target, "server_brain");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
+});
+
 test("decideCommandRoute ignores legacy routePreference/desktopDispatchOnce signals", async () => {
   // Only desktopDispatch routes. Older/alias signals never reach the desktop —
   // this keeps the contract to a single source of truth.

@@ -2338,6 +2338,7 @@ export async function decideCommandRoute(
     explicitRequestedCapabilities,
   ).includes("mcp.call.tool");
   const desktopDispatchRequested = metadata.desktopDispatch === true;
+  const desktopDispatchDisabled = metadata.desktopDispatch === false;
   // Bu kullanıcının CANLI masaüstü çalışma zamanı var mı (bellek içi soket
   // haritası; ek sorgu yok). Hem rota modelinin çağrılıp çağrılmayacağını hem
   // de modelin "sohbet" kararının bağlayıcı olup olmadığını belirler.
@@ -2389,6 +2390,7 @@ export async function decideCommandRoute(
       : input.routeContinuity;
   const shouldConsultRouteModel =
     !runtimeMcpRequested &&
+    !desktopDispatchDisabled &&
     explicitRequestedCapabilities.length === 0 &&
     (input.source === "mobile" ||
       input.source === "desktop" ||
@@ -2525,10 +2527,11 @@ export async function decideCommandRoute(
     !isDesktopAdviceOnlyRequest(message);
 
   const userWantsDesktop =
-    explicitRuntimeCapabilityRequested ||
-    modelRequiresDesktop ||
-    failClosedDesktopFallback ||
-    classifierRequiresReadyDesktop;
+    !desktopDispatchDisabled &&
+    (explicitRuntimeCapabilityRequested ||
+      modelRequiresDesktop ||
+      failClosedDesktopFallback ||
+      classifierRequiresReadyDesktop);
 
   if (userWantsDesktop) {
     const needsPrivateDesktopData =
