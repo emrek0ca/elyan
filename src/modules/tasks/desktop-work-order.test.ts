@@ -912,3 +912,52 @@ test("anlama zarfı hiç gelmese bile kullanıcının çıktı klasörleri yazı
     );
   }
 });
+
+test("klasör isteği yazıcı yeteneği doğurmaz — fiil tek başına kanıt değildir", () => {
+  // Canlı arıza (2026-08-13, görev cc5fed45): "Masaüstünde kütüphane adlı
+  // klasör oluştur" görevi "DOCX oluşturuldu: masaustunde-kutuphane-adli-
+  // klasor-olustur.docx" diye bitti. Kullanıcı belge istememişti.
+  //
+  // Zincir: cümledeki `oluştur` fiili yazıcı dalına düşüyor → tahmine
+  // `document_write` giriyor → `requiredCapabilities` onu taşıyor →
+  // masaüstünün plan tamamlayıcısı bu listeyi SÖZLEŞME sayıp sunucunun tek
+  // adımlık planına (`make_directory`) bir yazıcı adımı ekliyor.
+  //
+  // `expectedOutputs` tarafındaki daha önceki düzeltme yalnız "zorunlu artefakt
+  // beyanı"nı engellemişti; tahmin bir sonraki halkadan geri geldi.
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstünde kütüphane adlı klasör oluştur",
+    title: "Klasör oluştur",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+
+  assert.ok(
+    workOrder.requiredCapabilities.includes("make_directory"),
+    "klasör oluşturma yeteneği planlanmalı",
+  );
+  for (const writer of ["document_write", "spreadsheet_write", "presentation_write"]) {
+    assert.ok(
+      !workOrder.requiredCapabilities.includes(writer),
+      `${writer} istenmedi; klasör dosya üretmez`,
+    );
+  }
+  assert.ok(
+    !workOrder.expectedOutputs.some(
+      (output) => output.kind === "artifact" && output.required,
+    ),
+    "zorunlu artefakt beyanı olmamalı",
+  );
+});
+
+test("belge açıkça istendiğinde yazıcı yeteneği korunur", () => {
+  // Karşı taraf: düzeltme, gerçek belge isteğini kısıtlamamalı.
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstünde kütüphane adlı klasör oluştur ve içine bir rapor yaz",
+    title: "Klasör ve rapor",
+    routeDecision: routeDecision(),
+    requestedCapabilities: [],
+  });
+
+  assert.ok(workOrder.requiredCapabilities.includes("document_write"));
+});

@@ -933,7 +933,28 @@ function inferCapabilities(
     capabilities.add("presentation_write");
     capabilities.delete("desktop_operator.run");
   }
-  if (unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|çıkar\p{L}*|cikar\p{L}*|hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
+  // FİİL TEK BAŞINA YAZICI YETENEĞİ DOĞURAMAZ.
+  //
+  // "Masaüstünde kütüphane adlı klasör oluştur" cümlesindeki `oluştur` bu dala
+  // düşüyor ve nesnenin ne olduğu sorulmadan `document_write` ekleniyordu.
+  // Sonuç canlıda ölçüldü (2026-08-13, görev cc5fed45): klasör istendi, görev
+  // "DOCX oluşturuldu" diye bitti.
+  //
+  // `inferExpectedOutputs` bu tahmini zaten ZORUNLU saymıyor (aşağıdaki
+  // `artifactGroundedInRequest` notu), ama `requiredCapabilities` tahmini
+  // taşımaya devam ediyor ve masaüstünün plan tamamlayıcısı o listeyi
+  // sözleşme sayıp yazıcı adımını ekliyor. Yani ilk düzeltme zincirin
+  // yalnızca bir halkasını kapatmış.
+  //
+  // Klasör isteğinin kendi tanıyıcısı var; ortada belge nesnesi de anılmadıysa
+  // yazıcı tahmininin hiçbir dayanağı yok.
+  const folderOnlyRequest =
+    parseDirectFolderCreateCommand(message) !== null &&
+    !unicodeWordPattern(
+      String.raw`\b(dosya|belge|rapor|not|metin|yazı|yazi|pdf|docx|xlsx|pptx|csv|svg)\b`,
+      "i",
+    ).test(normalized);
+  if (!folderOnlyRequest && unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|çıkar\p{L}*|cikar\p{L}*|hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
     if (presentationRequested) capabilities.add("presentation_write");
     else if (unicodeWordPattern(String.raw`\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b`, "i").test(normalized)) capabilities.add("spreadsheet_write");
     else if (unicodeWordPattern(String.raw`\b(pdf|svg|canvas|görsel|gorsel)\b`, "i").test(normalized)) capabilities.add("canvas_write");
