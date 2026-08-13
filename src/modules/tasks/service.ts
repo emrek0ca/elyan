@@ -93,6 +93,7 @@ import {
 import { resolveVisualIntentContract } from "../brain/visual-intent-semantic.js";
 import {
   isGenericAssistantFallbackReply,
+  responsePolicyForPrompt,
   sanitizeFinalAssistantResponse,
 } from "../brain/response-policy.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
@@ -370,6 +371,21 @@ export function buildAssistantRevisionMetadata(input: {
   return revised ? { revised: true, previousContent } : { revised: false };
 }
 
+/**
+ * Kullanıcının kendi sözünü aynalamanın DOĞRU cevap olduğu tur mu?
+ *
+ * Karar kendi desenimizle değil, mevcut tur sınıflandırıcısıyla veriliyor
+ * (`responsePolicyForPrompt` → `casual_chat`). Kelime sınırı, uzun bir sohbet
+ * mesajının gerçekten papağanlanması hâlinde korumanın yürürlükte kalması
+ * içindir.
+ */
+function isSocialMirrorTurn(prompt: string): boolean {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (normalized.split(" ").length > 6) return false;
+  return responsePolicyForPrompt(normalized).intent === "casual_chat";
+}
+
 export function stripPromptEchoFromAssistantText(input: {
   prompt: string;
   responseText: string;
@@ -389,6 +405,26 @@ export function stripPromptEchoFromAssistantText(input: {
     sanitizerOptions,
   ).trim();
   if (!prompt || !responseText) {
+    return responseText;
+  }
+
+  // SOSYAL TURDA AYNALAMA EKO DEĞİLDİR.
+  //
+  // "Merhaba" turuna "Merhaba." demek DOĞRU cevaptır. Eko koruması bunu birebir
+  // eşleşme sayıp siliyor, boş metin de `provider_empty_output` üretiyor ve
+  // kullanıcı "Bu turda yanıt oluşturulamadı" görüyordu.
+  //
+  // Canlı ölçüm (2026-08-13 20:26 UTC, task 469113ae): rota kararı doğruydu
+  // (`server_brain`, `needsDesktop:false`), sağlayıcı hata vermedi, model
+  // "Merhaba." dedi — cevabı bu kapı yok etti. Aynı DB'de "Selam" → "Merhaba."
+  // `completed`; tek fark istemin selamla AYNI kelime olmasıydı.
+  //
+  // Aynı kapı, selamla başlayan geçerli cevapları da buduyordu:
+  // "Merhaba! Nasıl yardımcı olabilirim?" → "Nasıl yardımcı olabilirim?".
+  //
+  // Kısa tutuyoruz: uzun bir sohbet mesajı gerçekten papağanlanırsa koruma
+  // yürürlükte kalsın.
+  if (isSocialMirrorTurn(prompt)) {
     return responseText;
   }
 

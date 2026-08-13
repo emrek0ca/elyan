@@ -18,6 +18,7 @@ import {
   readServerBrainCompletionMetadata,
   resolveSharedBrainChatDispatchPolicy,
   restoreQueuedEphemeralVisionCarrier,
+  resolveNonEchoAssistantText,
   stripPromptEchoFromAssistantText,
   reconcileStaleRuntimeTasks,
   extractRuntimeDispatchPolicyFeedback,
@@ -1744,4 +1745,41 @@ test("reconcileStaleRuntimeTasks re-dispatches expired planning tasks to a ready
   assert.equal(runtimeDispatches[0]?.type, "task.dispatch");
   assert.equal(runtimeDispatches[0]?.leaseId != null, true);
   assert.equal(published[0]?.topic, "runtime.leased");
+});
+
+test("sosyal turda aynalama eko sayılmaz — selam cevabı silinmez", () => {
+  // Canlı arıza (2026-08-13 20:26 UTC, task 469113ae): kullanıcı "Merhaba"
+  // yazdı, model "Merhaba." dedi, kullanıcı "Bu turda yanıt oluşturulamadı."
+  // gördü. Rota kararı doğruydu (server_brain, needsDesktop:false) ve
+  // sağlayıcı hata vermedi — cevabı eko koruması yok etti: birebir eşleşme
+  // sayıp boş string döndürdü, boş string de provider_empty_output üretti.
+  //
+  // Aynı DB'de "Selam" → "Merhaba." completed'dı; tek fark istemin cevapla
+  // AYNI kelime olmasıydı.
+  assert.equal(
+    stripPromptEchoFromAssistantText({ prompt: "Merhaba", responseText: "Merhaba." }),
+    "Merhaba.",
+  );
+  // Selamla başlayan geçerli cevabın selamı da budanıyordu.
+  assert.equal(
+    stripPromptEchoFromAssistantText({
+      prompt: "Merhaba",
+      responseText: "Merhaba! Nasıl yardımcı olabilirim?",
+    }),
+    "Merhaba! Nasıl yardımcı olabilirim?",
+  );
+});
+
+test("gerçek eko koruması duruyor — uzun istem papağanlanırsa cevap boş sayılır", () => {
+  // Karşı taraf: düzeltme korumayı geneline yaymamalı. Uzun bir iş isteğinin
+  // birebir tekrarı hâlâ cevap DEĞİLDİR ve yeniden denemeyi tetiklemelidir.
+  const prompt = "Masaüstünde kütüphane adlı klasör oluştur";
+  assert.equal(
+    stripPromptEchoFromAssistantText({ prompt, responseText: prompt }),
+    "",
+  );
+  assert.equal(
+    resolveNonEchoAssistantText({ prompt, responseText: prompt }),
+    "",
+  );
 });
