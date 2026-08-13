@@ -75,7 +75,11 @@ if [ "${HEALTH_OK}" -eq 1 ]; then
   # dilimlemek `Unexpected non-whitespace character after JSON` ile patlıyordu;
   # sağlık geçmiş deploy'lar exit 1 dönüyor, yani çıkış kodu YALAN söylüyordu.
   # Gerçek bir arıza ile bu gürültü ayırt edilemez hâle geliyordu.
-  ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && if npm run brain:benchmark > .codex-benchmark.json 2>&1; then node -e \"const fs=require('fs');const raw=fs.readFileSync('.codex-benchmark.json','utf8');const start=raw.indexOf('{');const end=raw.lastIndexOf('}');if(start<0||end<start)throw new Error('benchmark output carries no JSON object');const data=JSON.parse(raw.slice(start,end+1));console.log(JSON.stringify({status:data.status,overall_score:data.overall_score,boundary_score:data.boundary_score,reasoning_score:data.reasoning_score,clarification_score:data.clarification_score,tool_use_score:data.tool_use_score,latency_score:data.latency_score,case_count:data.case_count,live_model_case_count:data.live_model_case_count}, null, 2)); if(data.status!=='pass') console.log('BENCHMARK_WARN_ONLY=1');\"; else echo 'Benchmark runner failed; continuing warn-only.'; fi" || echo "Benchmark step failed; deploy already healthy, continuing warn-only."
+  # `runner_error` MUTLAKA basılır: benchmark CLI her hatayı jenerik
+  # `status:warn, case_count:0` yüküne çeviriyor. O alan basılmayınca
+  # "ölçüm koştu ama 0 vaka" ile "ölçüm hiç başlamadı" ayırt edilemiyordu —
+  # canlıda sebep `RUNTIME_SECRET_PEPPER: Required` idi ve haftalarca görünmedi.
+  ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && if npm run brain:benchmark > .codex-benchmark.json 2>&1; then node -e \"const fs=require('fs');const raw=fs.readFileSync('.codex-benchmark.json','utf8');const start=raw.indexOf('{');const end=raw.lastIndexOf('}');if(start<0||end<start)throw new Error('benchmark output carries no JSON object');const data=JSON.parse(raw.slice(start,end+1));console.log(JSON.stringify({status:data.status,overall_score:data.overall_score,boundary_score:data.boundary_score,reasoning_score:data.reasoning_score,clarification_score:data.clarification_score,tool_use_score:data.tool_use_score,latency_score:data.latency_score,case_count:data.case_count,live_model_case_count:data.live_model_case_count,runner_error:data.runner_error ?? null}, null, 2)); if(data.status!=='pass') console.log('BENCHMARK_WARN_ONLY=1');\"; else echo 'Benchmark runner failed; continuing warn-only.'; fi" || echo "Benchmark step failed; deploy already healthy, continuing warn-only."
   echo "==> Deploy complete (health verified)"
   exit 0
 fi

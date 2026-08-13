@@ -871,6 +871,19 @@ export const learningEvents = pgTable(
     taskIdx: index("learning_events_task_idx").on(table.taskId),
     lookupIdx: index("learning_events_lookup_idx").on(table.userId, table.scope, table.type, table.key),
     expiresIdx: index("learning_events_expires_idx").on(table.expiresAt),
+    // MÜKERRER ÖĞRENME KAYDINA KARŞI YAPISAL KISIT.
+    //
+    // Bir sohbet turu birden fazla kez işlenebiliyor (sağlayıcı fallback'i işi
+    // ikinci kuyruğa alıyor). Yazım idempotent olmadığı için aynı olgu korpusa
+    // iki-üç kez giriyordu; ölçüm (2026-08-13, üretim): task kapsamlı 1426
+    // kaydın 494'ü mükerrer — %35. Bu tablo eğitim korpusunun KENDİSİ, yani
+    // mükerrer satır aynı olguyu birden çok kez saydırıp modeli yanıltır.
+    //
+    // Kısmi: `task_id` NULL olan kayıtlar (görev bağlamı olmayan sinyaller)
+    // kapsam dışı — Postgres'te NULL'lar zaten birbirinden farklı sayılır.
+    taskKeyUidx: uniqueIndex("learning_events_task_key_uidx")
+      .on(table.taskId, table.type, table.key)
+      .where(sql`${table.taskId} is not null`),
   }),
 );
 

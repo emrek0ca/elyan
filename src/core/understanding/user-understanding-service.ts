@@ -535,7 +535,11 @@ export async function persistLearningSignals(
         },
         expiresAt: signal.ttlDays ? new Date(now + signal.ttlDays * 86_400_000) : null,
       })),
-    );
+    )
+    // Yukarıdaki eleme okuma-sonra-yazma; iki koşu 100 ms arayla geldiğinde
+    // ikisi de "yok" görebilir. Yarışı kapatan yer kısıtın kendisi
+    // (`learning_events_task_key_uidx`, migration 0052).
+    .onConflictDoNothing();
 
     app.log.info(
       {
