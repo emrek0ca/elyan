@@ -85,6 +85,26 @@ export type McpToolDeclaration = {
   contract: string;
 };
 
+/**
+ * Permission metadata is connection-scoped. The same remote tool name can
+ * exist on two servers with different annotations/descriptions; caching by
+ * app/tool alone could reuse one tenant's classification for another.
+ */
+export function mcpPermissionCacheKey(
+  declaration: Pick<
+    McpToolDeclaration,
+    "appId" | "remoteToolName" | "connectionId" | "serverId" | "serverUrl"
+  >,
+): string {
+  return JSON.stringify([
+    declaration.serverId ?? "",
+    declaration.connectionId,
+    declaration.serverUrl ?? "",
+    declaration.appId,
+    declaration.remoteToolName,
+  ]);
+}
+
 export type McpToolOperation = "read" | "write";
 
 export type McpToolSelection = {
@@ -457,7 +477,7 @@ export async function resolveMcpToolPermission(
     cache = new Map();
     mcpPermissionCache.set(app, cache);
   }
-  const cacheKey = `${declaration.appId}:${declaration.remoteToolName}`;
+  const cacheKey = mcpPermissionCacheKey(declaration);
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.permission;
 
@@ -694,6 +714,8 @@ export async function callMcpTool(
   app: FastifyInstance,
   input: { userId: string; toolName: string; args: Record<string, unknown> },
 ): Promise<McpToolCallOutcome> {
+  let permission: McpToolPermission = "side_effect";
+  try {
   // Tool execution re-reads the connection catalog so a just-revoked
   // integration can never remain usable through the advertisement cache.
   const declaration = await resolveMcpToolDeclaration(
@@ -723,16 +745,27 @@ export async function callMcpTool(
     };
   }
 
-  const accessToken = declaration.authType === "none"
-    ? ""
-    : declaration.connectionId && declaration.provider
-      ? await getConnectionAccessTokenForProbe(
-          app,
-          declaration.connectionId,
-          declaration.provider as Parameters<typeof getConnectionAccessTokenForProbe>[2],
-          declaration.connectionAppId ?? (declaration.serverId ? undefined : declaration.appId),
-        )
-      : "";
+  let accessToken = "";
+  try {
+    accessToken = declaration.authType === "none"
+      ? ""
+      : declaration.connectionId && declaration.provider
+        ? await getConnectionAccessTokenForProbe(
+            app,
+            declaration.connectionId,
+            declaration.provider as Parameters<typeof getConnectionAccessTokenForProbe>[2],
+            declaration.connectionAppId ?? (declaration.serverId ? undefined : declaration.appId),
+          )
+        : "";
+  } catch {
+    return {
+      ok: false,
+      permission,
+      output: null,
+      errorCode: "mcp_auth_required",
+      errorMessage: "Bağlantı yetkisi alınamadı, yeniden bağlan.",
+    };
+  }
   if (!accessToken) {
     if (declaration.authType === "none") {
       // Anonymous MCP servers intentionally use the empty bearer value.
@@ -747,7 +780,7 @@ export async function callMcpTool(
     }
   }
 
-  const permission = await resolveMcpToolPermission(app, declaration);
+  permission = await resolveMcpToolPermission(app, declaration);
 
   const result = await callMcpToolViaSdk({
     url: serverUrl,
@@ -783,4 +816,13 @@ export async function callMcpTool(
     errorCode: null,
     errorMessage: null,
   };
+  } catch {
+    return {
+      ok: false,
+      permission,
+      output: null,
+      errorCode: "mcp_tool_failed",
+      errorMessage: "MCP aracı şu anda kullanılamıyor.",
+    };
+  }
 }

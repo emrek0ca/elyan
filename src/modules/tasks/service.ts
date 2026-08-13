@@ -237,6 +237,7 @@ import {
   MAX_ACTIVE_USER_APPROVALS,
   MAX_TASK_DISPATCH_ATTEMPTS,
   approvalRequestRevision,
+  buildPublicTaskApprovalEventFields,
   buildTaskApprovalResolution,
   buildTaskApprovalResumeUpdate,
   buildTaskCancellationUpdate,
@@ -11212,6 +11213,10 @@ export async function resolveTaskApproval(
       taskId: updatedTask.id,
       approved: true,
       approvalSource: "backend_plan",
+      ...buildPublicTaskApprovalEventFields(updatedTask.approvalRequest, {
+        status: updatedTask.status,
+        updatedAt: updatedTask.updatedAt,
+      }),
     });
     await syncChatTaskLifecycle(app, {
       originalTask: task,
@@ -11294,6 +11299,10 @@ export async function resolveTaskApproval(
     taskId: updatedTask.id,
     approved: true,
     notes: input.notes,
+    ...buildPublicTaskApprovalEventFields(updatedTask.approvalRequest, {
+      status: updatedTask.status,
+      updatedAt: updatedTask.updatedAt,
+    }),
   });
 
   await syncChatTaskLifecycle(app, {
@@ -11870,6 +11879,10 @@ export async function updateTaskFromRuntime(
       taskId: updatedTask.id,
       approved: true,
       source: "trusted_idempotent_write",
+      ...buildPublicTaskApprovalEventFields(updatedTask.approvalRequest, {
+        status: updatedTask.status,
+        updatedAt: updatedTask.updatedAt,
+      }),
     });
     await app.services.realtimeHub.sendToRuntimeDistributed(
       updatedTask.targetDeviceId,

@@ -91,6 +91,47 @@ export function approvalRequestKey(approvalRequest: unknown): string {
   return readString(request?.approvalKey) || readString(request?.token);
 }
 
+/**
+ * Public approval event fields shared by every approval resolution path.
+ *
+ * Approval tokens and free-form notes are intentionally excluded: clients
+ * need a stable request identity and resolution state, never a credential or
+ * private execution detail.
+ */
+export function buildPublicTaskApprovalEventFields(
+  approvalRequest: unknown,
+  input: { status?: string; updatedAt?: Date } = {},
+) {
+  const request = readRecord(approvalRequest);
+  const resolution = readRecord(request?.resolution);
+  const approved = typeof resolution?.approved === "boolean"
+    ? resolution.approved
+    : null;
+  const resolutionRevision = readNumber(resolution?.revision);
+  const resolutionState = approved === true
+    ? "approved"
+    : approved === false
+      ? "rejected"
+      : readString(resolution?.state) || null;
+
+  return {
+    approvalKey: readString(request?.approvalKey) || null,
+    approvalRevision: approvalRequestRevision(request),
+    status: readString(input.status) || null,
+    resolution: resolution
+      ? {
+          approved,
+          state: resolutionState,
+          resolvedAt: readString(resolution.resolvedAt) || null,
+          revision: resolutionRevision == null
+            ? approvalRequestRevision(request)
+            : Math.max(1, Math.floor(resolutionRevision)),
+        }
+      : null,
+    updatedAt: (input.updatedAt ?? new Date()).toISOString(),
+  };
+}
+
 export function approvalRequestExpiresAt(
   approvalRequest: unknown,
   now: Date = new Date(),

@@ -7,6 +7,7 @@ import {
   buildTaskDispatchLeaseAckUpdate,
   buildTaskRuntimeOwnershipUpdate,
   buildTaskRuntimeUpdate,
+  buildPublicTaskApprovalEventFields,
   isApprovalAlreadyResolved,
   isApprovalRequestExpired,
   normalizeTaskApprovalRequest,
@@ -231,6 +232,39 @@ test("buildTaskApprovalResolution merges the existing request and appends the re
       approvalKey: null,
     },
   });
+});
+
+test("buildPublicTaskApprovalEventFields exposes identity without approval secrets", () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  const fields = buildPublicTaskApprovalEventFields(
+    {
+      approvalKey: "task-1:2",
+      token: "secret-token-must-not-leak",
+      revision: 2,
+      resolution: {
+        approved: true,
+        notes: "private approval note",
+        resolvedAt: now.toISOString(),
+        revision: 2,
+      },
+    },
+    { status: "queued", updatedAt: now },
+  );
+
+  assert.deepEqual(fields, {
+    approvalKey: "task-1:2",
+    approvalRevision: 2,
+    status: "queued",
+    resolution: {
+      approved: true,
+      state: "approved",
+      resolvedAt: now.toISOString(),
+      revision: 2,
+    },
+    updatedAt: now.toISOString(),
+  });
+  assert.equal("token" in fields, false);
+  assert.equal("notes" in (fields.resolution ?? {}), false);
 });
 
 test("normalizeTaskApprovalRequest creates a single expiring full-access surface", () => {
