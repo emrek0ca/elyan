@@ -1660,12 +1660,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "desktop_operator.locate",
     "displayName": "Ekranda konum bulma",
-    "description": "Metin veya öğe tipine göre ekrandaki hedef öğeyi bulur (operator alt-adımı).",
-    "usage": "İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde.",
+    "description": "EKRAN konumlandırıcısı: görünen bir öğenin ekran koordinatını (x/y) döndürür. Dosya ya da klasör YOLU döndürmez, dosya sistemi aramaz.",
+    "usage": "Yalnız ekran otomasyonunun alt adımı (genelde desktop_operator.run içinde). Yol çözücü DEĞİLDİR: çıktısı sonraki adıma 'path' olarak verilemez. Klasör açmak için tek başına make_directory yeterlidir.",
     "requiredArgs": [],
     "requiresApproval": true,
     "whenToUse": [
-      "İleri ekran otomasyonu alt-adımı; genelde desktop_operator.run içinde."
+      "Yalnız ekran otomasyonunun alt adımı (genelde desktop_operator.run içinde). Yol çözücü DEĞİLDİR: çıktısı sonraki adıma 'path' olarak verilemez. Klasör açmak için tek başına make_directory yeterlidir."
     ],
     "whenNotToUse": [
       "Do not use when this capability does not directly advance the requested outcome."

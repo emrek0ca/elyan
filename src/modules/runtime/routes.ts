@@ -112,6 +112,10 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  // GERİYE DÖNÜK UYUMLULUK. Güncel masaüstü görev durumunu YALNIZ soketten
+  // gönderir (tek taşıma yolu); bu uç yalnızca sahadaki eski sürümler için
+  // duruyor. Yeni davranış buraya EKLENMEZ — soket yolu (`task.update`) ile
+  // ikiye ayrılan her mantık, iki farklı gecikmeli kanal doğurur.
   app.post("/tasks/:taskId/status", async (request, reply) => {
     await app.authenticateRuntime(request, reply);
 
