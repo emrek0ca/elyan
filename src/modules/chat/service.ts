@@ -979,6 +979,32 @@ function normalizeChatMessagePageLimit(input: {
   return Math.max(1, Math.min(requestedLimit, CHAT_MESSAGE_PAGE_LIMIT_MAX));
 }
 
+/**
+ * Ham `sql` şablonunda kullanılabilir keyset zaman damgası.
+ *
+ * Drizzle, TİPLİ bir kolonla karşılaştırırken kolonun dönüştürücüsünü uygular;
+ * ham `sql` parçasında ise tip bilgisi YOKTUR ve `Date` nesnesi doğrudan
+ * postgres-js'e gider. Sürücü onu serileştiremez:
+ *   TypeError: The "string" argument must be of type string or an instance of
+ *   Buffer or ArrayBuffer. Received an instance of Date
+ *
+ * Canlı sonuç 500'dü (2026-08-13, `GET /v1/chat/sessions?cursor=…`): kullanıcı
+ * ilk sayfadan sonrasını HİÇ göremiyordu. Aynı hata eski mesaj sayfalamasında
+ * da vardı, yani sohbet geçmişinde yukarı kaydırma da kırıktı.
+ *
+ * ISO metin + açık `::timestamptz` cast'i hem sürücüyü hem sorgu planlayıcısını
+ * belirsizlikte bırakmaz. Bozuk imleçte `null` döner: sayfalama koşulu hiç
+ * eklenmez ve kullanıcı boş sayfa yerine ilk sayfayı görür.
+ */
+function cursorTimestampSql(rawTimestamp: unknown) {
+  const parsed = new Date(String(rawTimestamp ?? ""));
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  const iso = parsed.toISOString();
+  return sql`${iso}::timestamptz`;
+}
+
 function decodeCursor<T extends ChatSessionCursor | ChatMessageCursor>(
   rawCursor: string | undefined,
 ): T | null {
@@ -1512,10 +1538,12 @@ export async function listChatSessions(
   const sortTimestamp = sql<Date>`coalesce(${chatSessions.lastMessageAt}, ${chatSessions.updatedAt})`;
   const decodedCursor = decodeCursor<ChatSessionCursor>(input.cursor);
   if (decodedCursor) {
-    const cursorTimestamp = new Date(decodedCursor.timestamp);
-    conditions.push(
-      sql`(${sortTimestamp} < ${cursorTimestamp} OR (${sortTimestamp} = ${cursorTimestamp} AND ${chatSessions.id} < ${decodedCursor.id}))`,
-    );
+    const cursorTimestamp = cursorTimestampSql(decodedCursor.timestamp);
+    if (cursorTimestamp) {
+      conditions.push(
+        sql`(${sortTimestamp} < ${cursorTimestamp} OR (${sortTimestamp} = ${cursorTimestamp} AND ${chatSessions.id} < ${decodedCursor.id}))`,
+      );
+    }
   }
 
   const sessions = await app.db
@@ -1621,10 +1649,12 @@ export async function listChatSessionMessages(
     eq(chatMessages.userId, input.userId),
   ];
   if (decodedCursor) {
-    const cursorTimestamp = new Date(decodedCursor.timestamp);
-    messageConditions.push(
-      sql`(${sortTimestamp} < ${cursorTimestamp} OR (${sortTimestamp} = ${cursorTimestamp} AND ${chatMessages.id} < ${decodedCursor.id}))`,
-    );
+    const cursorTimestamp = cursorTimestampSql(decodedCursor.timestamp);
+    if (cursorTimestamp) {
+      messageConditions.push(
+        sql`(${sortTimestamp} < ${cursorTimestamp} OR (${sortTimestamp} = ${cursorTimestamp} AND ${chatMessages.id} < ${decodedCursor.id}))`,
+      );
+    }
   }
 
   const messages = await app.db

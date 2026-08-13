@@ -336,6 +336,53 @@ export async function buildTaskUnderstanding(
   }
 }
 
+/**
+ * Bu görev için ZATEN yazılmış sinyalleri eler.
+ *
+ * Tek bir sohbet turu birden fazla kez işlenebiliyor (sağlayıcı fallback'i işi
+ * ikinci kuyruğa alıyor). Öğrenme yazımı idempotent olmadığı için aynı olgu
+ * korpusa iki-üç kez giriyordu; ölçüm (2026-08-13, üretim): task kapsamlı 1426
+ * kaydın 494'ü mükerrer.
+ *
+ * `type + key` üzerinden eliyoruz: bir görev içinde aynı anahtarın tek bir
+ * doğru değeri vardır. Sorgu okunamazsa sinyaller olduğu gibi geçer — öğrenme
+ * yazımı, bir dedupe sorgusu yüzünden asla kaybolmamalı.
+ */
+async function filterAlreadyPersistedSignals<T extends { type: string; key: string }>(
+  app: FastifyInstance,
+  taskId: string,
+  signals: T[],
+): Promise<T[]> {
+  if (signals.length === 0) {
+    return signals;
+  }
+  try {
+    const existing = await app.db
+      .select({ type: learningEvents.type, key: learningEvents.key })
+      .from(learningEvents)
+      .where(
+        and(
+          eq(learningEvents.taskId, taskId),
+          inArray(
+            learningEvents.key,
+            [...new Set(signals.map((signal) => signal.key))],
+          ),
+        ),
+      );
+    if (existing.length === 0) {
+      return signals;
+    }
+    const seen = new Set(
+      existing.map((row) => `${String(row.type)}::${String(row.key)}`),
+    );
+    return signals.filter(
+      (signal) => !seen.has(`${signal.type}::${signal.key}`),
+    );
+  } catch {
+    return signals;
+  }
+}
+
 export async function persistLearningSignals(
   app: FastifyInstance,
   input: {
@@ -449,8 +496,29 @@ export async function persistLearningSignals(
         .catch(() => undefined);
     }
 
+    // MÜKERRER ÖĞRENME KAYDI ENGELİ.
+    //
+    // Bir sohbet turu birden fazla kez işlenebiliyor (sağlayıcı fallback'i
+    // işi ikinci kuyruğa alıyor; canlıda aynı taskId hem chat-worker-1'de iki
+    // kez hem chat-worker-2'de bir kez koştu, üçü de persistedCount=6). Her
+    // koşu aynı sinyalleri YENİDEN yazıyordu.
+    //
+    // Ölçüm (2026-08-13, üretim): task kapsamlı 1426 kaydın 494'ü mükerrer —
+    // %35. Bu tablo öğrenme/eğitim korpusunun kendisi olduğu için mükerrer
+    // satır yalnız yer kaplamıyor, aynı olguyu üç kez sayarak modeli
+    // yanıltıyor.
+    //
+    // NOT: kalıcı çözüm (task_id, type, key) üzerinde kısmi UNIQUE index +
+    // upsert'tir; o üretim verisinde temizlik gerektirdiği için ayrı adım.
+    // Buradaki kapı yeni mükerrerleri bugünden durdurur.
+    const deduplicatedSignals = input.taskId
+      ? await filterAlreadyPersistedSignals(app, input.taskId, signals)
+      : signals;
+    if (deduplicatedSignals.length === 0) {
+      return 0;
+    }
     await app.db.insert(learningEvents).values(
-      signals.map((signal) => ({
+      deduplicatedSignals.map((signal) => ({
         userId: input.userId,
         accountId: input.accountId ?? input.userId,
         taskId: input.taskId,
@@ -473,7 +541,8 @@ export async function persistLearningSignals(
       {
         userId: input.userId,
         taskId: input.taskId,
-        persistedCount: signals.length,
+        persistedCount: deduplicatedSignals.length,
+        skippedDuplicates: signals.length - deduplicatedSignals.length,
       },
       "understanding learning persisted",
     );
