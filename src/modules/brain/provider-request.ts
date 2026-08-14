@@ -302,19 +302,36 @@ export function buildRequestBody(
     ["groq", "openai", "openrouter"].includes(provider)
       ? { tools, tool_choice: toolChoice }
       : {}),
+    // ŞEMA MODU YALNIZ DESTEKLEYEN MODELE GÖNDERİLİR.
+    //
+    // Yetenek kontrolü (`modelSupportsJsonSchemaFormat`) kod tabanında zaten
+    // vardı ama SADECE TurnEnvelope yolunda uygulanıyordu; ana istek kurucusu
+    // şemayı koşulsuz ekliyordu. Sonuç canlıda ölçüldü (2026-08-14, görev
+    // 20687958 — "Bana anlatır mısın Atatürk'ün gençliğini"):
+    //   llama-3.1-8b + json_schema → HTTP 400 invalid_request_error
+    //   gpt-oss-20b  + json_schema → json_validate_failed
+    // İki model de reddedince zincir tükendi ve kullanıcı "Bu turda yanıt
+    // oluşturulamadı" gördü. Doğrudan sağlayıcıya atılan testte llama'nın
+    // `json_object` modunda 200 döndüğü doğrulandı.
+    //
+    // Desteklemeyen modelde `json_object`e düşüyoruz: biçim yine JSON'a
+    // zorlanır, şema ise prompt'ta anlatılır. Cevapsız kalmaktansa şemasız
+    // ama GEÇERLİ bir JSON almak her zaman iyidir.
     ...(!(tools && tools.length > 0) &&
     responseSchema &&
     ["gemini", "groq", "openai", "openrouter"].includes(provider)
-      ? {
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "elyan_structured_output",
-              strict: true,
-              schema: responseSchema,
+      ? modelSupportsJsonSchemaFormat(provider, model)
+        ? {
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "elyan_structured_output",
+                strict: true,
+                schema: responseSchema,
+              },
             },
-          },
-        }
+          }
+        : { response_format: { type: "json_object" } }
       : !(tools && tools.length > 0) &&
           jsonObjectMode &&
           ["gemini", "groq", "openai", "openrouter"].includes(provider)

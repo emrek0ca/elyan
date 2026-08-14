@@ -1,5 +1,23 @@
+# LOG KALICILIĞI VE DÖNDÜRME.
+#
+# Docker varsayılanı `json-file`, döndürme YOK ve log dosyası konteynerin
+# ömrüne bağlı: `docker compose up -d` konteyneri yeniden YARATTIĞI için her
+# deploy'da geçmiş siliniyor. Canlı bedeli ölçüldü (2026-08-14): 6 tur
+# `queued`'da asılı kaldı, sebebini araştırdığımızda o pencerenin backend
+# logları yoktu — yalnız postgres ve redis satırları kalmıştı.
+#
+# Döndürme sınırı diski korur; deploy scripti ayrıca her deploy ÖNCESİ logları
+# host'a arşivler (scripts/deploy-core-agent-readiness.sh), böylece teşhis
+# geçmişi konteyner yeniden yaratılsa da kaybolmaz.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   postgres:
+    logging: *default-logging
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
@@ -15,6 +33,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   redis:
+    logging: *default-logging
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
@@ -27,6 +46,7 @@ services:
       - redis_data:/data
 
   searxng:
+    logging: *default-logging
     image: searxng/searxng:latest
     restart: unless-stopped
     volumes:
@@ -43,6 +63,7 @@ services:
       - "8080"
 
   backend:
+    logging: *default-logging
     build:
       context: .
     restart: unless-stopped
@@ -143,6 +164,7 @@ services:
       retries: 12
 
   training-worker:
+    logging: *default-logging
     build:
       context: .
     restart: unless-stopped
@@ -198,6 +220,7 @@ services:
     command: ["sh", "-lc", "echo 'node training worker disabled; ml-worker owns training job execution'; sleep infinity"]
 
   brain-worker:
+    logging: *default-logging
     build:
       context: .
     restart: unless-stopped
@@ -218,6 +241,7 @@ services:
     command: ["node", "dist/workers/brain-worker.js"]
 
   chat-worker:
+    logging: *default-logging
     build:
       context: .
     restart: unless-stopped
@@ -291,6 +315,7 @@ services:
       replicas: ${ELYAN_CHAT_WORKER_REPLICAS:-2}
 
   document-worker:
+    logging: *default-logging
     build:
       context: .
     restart: unless-stopped
@@ -310,6 +335,7 @@ services:
     command: ["node", "dist/workers/document-worker.js"]
 
   proactive-scheduler:
+    logging: *default-logging
     build:
       context: .
     restart: unless-stopped
@@ -336,6 +362,7 @@ services:
     command: ["node", "dist/workers/proactive-scheduler.js"]
 
   ml-worker:
+    logging: *default-logging
     build:
       context: ./ml-worker
     restart: unless-stopped

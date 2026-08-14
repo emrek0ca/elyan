@@ -654,22 +654,24 @@ function hasLocalDerivedDocumentContext(metadata: unknown, depth = 0): boolean {
     return false;
   }
 
-  const rawFileUploaded = readBoolean(record, "raw_file_uploaded");
-  const dataOrigin = normalizeFlag(
-    readString(record, "data_origin") ??
-      readString(record, "dataOrigin") ??
-      readString(record, "origin"),
-  );
-  const privacyLevel = normalizeFlag(
-    readString(record, "privacy_level") ?? readString(record, "privacyLevel"),
-  );
-  if (
-    rawFileUploaded === false &&
-    (dataOrigin === "local_derived" || privacyLevel === "local_derived")
-  ) {
-    return true;
-  }
-
+  // GİZLİLİK DAMGASI TEK BAŞINA BELGE BAĞLAMI DEĞİLDİR.
+  //
+  // Eskiden `rawFileUploaded === false && local_derived` görülünce doğrudan
+  // "yerel belge bağlamı var" deniyordu. Ama `rawFileUploaded === false` HER
+  // sohbet turunun varsayılanı (dosya yüklenmemiş) ve `data_origin:
+  // "local_derived"` mobil istemcinin her turda bastığı bir gizlilik damgası.
+  // Sonuç: EK OLMAYAN HER DÜZ MESAJ belge bağlamı sayılıyordu.
+  //
+  // Canlı bedeli ölçüldü (2026-08-14, görev 20687958 — "Bana anlatır mısın
+  // Atatürk'ün gençliğini"): tur `document_analysis` iş yüküne düştü, o yol
+  // katı JSON istediği için llama 400 `invalid_request_error`, gpt-oss 400
+  // `json_validate_failed` verdi, zincir tükendi ve kullanıcı "Bu turda yanıt
+  // oluşturulamadı" gördü. Düz sohbetin belge analizi olarak sınıflanması
+  // günlerdir süren "cevap veremiyor" şikâyetinin kökü.
+  //
+  // Karar artık TEK kaynaktan: gerçekten türetilmiş bir belge/analiz yükü var
+  // mı. Damganın kendisi kanıt değil; aşağıdaki `candidates` taraması kanıtı
+  // arar ve damga olmadan da doğru çalışır.
   const candidates = [
     record.document_analysis,
     record.documentAnalysis,

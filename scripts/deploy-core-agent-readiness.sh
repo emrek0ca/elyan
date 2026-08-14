@@ -48,6 +48,17 @@ echo "==> Schema bootstrap and Docker restart"
 # deploy sonrası ESKİ imajda kalıyorlardı: backend yenilenmiş görünürken
 # sohbet üretimi hâlâ eski kodu koşuyordu — "düzelttim ama değişmedi"
 # vakalarının kaynağı buydu.
+# LOGLARI ARŞİVLE — konteyner yeniden yaratılmadan ÖNCE.
+#
+# `up -d --build` konteyneri yeniden YARATIYOR; json-file log dosyası da
+# konteynerin ömrüne bağlı olduğu için o anda geçmiş siliniyor. Canlı bedeli
+# ölçüldü (2026-08-14): 6 tur `queued`'da asılı kaldı ve sebebini araştırırken
+# o pencerenin backend logları yoktu — teşhis imkânsızlaştı.
+#
+# Arşiv host'ta `logs/` altında kalır ve deploy'u ASLA bozmaz (`|| true`).
+echo "==> Log arşivi"
+ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && mkdir -p logs && docker compose -f '${COMPOSE_FILE}' logs --no-color --timestamps > \"logs/predeploy-\$(date -u +%Y%m%dT%H%M%SZ).log\" 2>&1; ls -t logs/predeploy-*.log 2>/dev/null | tail -n +15 | xargs -r rm -f; du -sh logs 2>/dev/null" || true
+
 ssh "${REMOTE_HOST}" "cd '${REMOTE_DIR}' && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build redis backend training-worker ml-worker chat-worker brain-worker document-worker"
 
 echo "==> Health poll"
