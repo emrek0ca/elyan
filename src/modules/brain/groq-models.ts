@@ -154,7 +154,14 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       document_generate: reasoningModel,
       table_generate: reasoningModel,
       image_analyze: visionModel,
-      planning: reasoningModel,
+      // KATI-JSON ŞERİDİ. Masaüstü plan materyalizasyonu ve eleştirisi
+      // `response_format: json_schema` kullanıyor. Canlı 2026-08-14 görsel
+      // poster görevinde planning → gpt-oss adayları Groq'ta 400
+      // `json_validate_failed` verdi; Gemini adayı da veri paylaşımı izni
+      // olmadan policy tarafından bloklandı. Mevcut reasoning/Gemini/Compound
+      // modelleri korunur; yalnız bu şemalı iş yükü güvenilir JSON şeridine
+      // alınır.
+      planning: structuredJsonModel,
       public_research: reasoningModel,
       public_deep_research: reasoningModel,
       public_quantum_research: reasoningModel,

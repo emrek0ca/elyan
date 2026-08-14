@@ -35,7 +35,8 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
     document_generate: "openai/gpt-oss-120b",
     table_generate: "openai/gpt-oss-120b",
     image_analyze: "qwen/qwen3.6-27b",
-    planning: "openai/gpt-oss-120b",
+    // Masaüstü plan JSON'u reasoning gpt-oss yerine katı-JSON şeridini kullanır.
+    planning: "llama-3.1-8b-instant",
     // Public research yolları kalite-öncelikli: büyük reasoning modelinde.
     public_research: "openai/gpt-oss-120b",
     public_deep_research: "openai/gpt-oss-120b",
