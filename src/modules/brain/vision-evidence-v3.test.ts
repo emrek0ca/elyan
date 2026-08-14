@@ -72,7 +72,7 @@ test("v3 prompt exposes evidence but not raw device engine internals", () => {
   assert.doesNotMatch(prompt, /apple_vision|gemini|groq/iu);
 });
 
-test("session-derived vision evidence stores no image bytes or hashes", () => {
+test("session-derived vision evidence stores no image bytes and only an optional one-way hash", () => {
   const evidence = buildSessionVisionEvidenceV3({
     task: "screen_debugging",
     summary: "Ekranda E104 bağlantı zaman aşımı uyarısı görünüyor.",
@@ -81,9 +81,10 @@ test("session-derived vision evidence stores no image bytes or hashes", () => {
     sensitivity: "personal",
     cloudUsed: true,
     confidence: 0.78,
+    contentHash: "sha256-normalized-image-123",
   });
   assert.equal(evidence.source.retention, "session_derived");
-  assert.equal(evidence.image.content_hash, null);
+  assert.equal(evidence.image.content_hash, "sha256-normalized-image-123");
   assert.equal(evidence.image.metadata_stripped, true);
   assert.doesNotMatch(JSON.stringify(evidence), /base64/iu);
 });

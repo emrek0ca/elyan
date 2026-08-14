@@ -10000,6 +10000,7 @@ export async function generateSharedBrainReply(
       verifiedPhysicalImageCount,
       qualityScore: visionQualityScore ?? 0.5,
       summary: result.text,
+      sensitivity: visionMediaDecision.sensitivity,
     });
     const finalizedSessionVisionEvidence =
       cloudVisionActive && visionMemoryPolicy.persist
@@ -10010,6 +10011,7 @@ export async function generateSharedBrainReply(
             height: clientVisionImages[0]?.height,
             sensitivity: visionMediaDecision.sensitivity,
             cloudUsed: true,
+            contentHash: preprocessedVision.variants[0]?.contentHash ?? null,
             confidence: Math.min(
               visionEscalationUsed ? 0.82 : 0.72,
               variantsToPreprocess.length > 0 && visionQualityScore != null

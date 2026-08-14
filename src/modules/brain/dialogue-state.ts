@@ -11,9 +11,30 @@ import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
 const uuidSchema = z.string().uuid();
 
 const DIALOGUE_STATE_CACHE_TTL_MS = 750;
+/**
+ * Dialogue state is working memory. Durable facts, episodes, and goals remain
+ * available through the cognitive memory layer, while stale turn-local loops
+ * should not resurrect themselves after a long inactive period.
+ */
+export const DIALOGUE_WORKING_MEMORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DIALOGUE_STATE_CACHE_MAX_ENTRIES = 4_096;
 const RELATIONSHIP_DEPTH_CACHE_TTL_MS = 5_000;
 const RELATIONSHIP_DEPTH_CACHE_MAX_ENTRIES = 4_096;
+
+export function isDialogueStateFresh(
+  updatedAt: Date | string | null | undefined,
+  now = new Date(),
+): boolean {
+  if (updatedAt == null || updatedAt === "") {
+    // Keep rows written before the freshness field was consumed compatible.
+    return true;
+  }
+  const parsed = updatedAt instanceof Date ? updatedAt : new Date(updatedAt);
+  if (!Number.isFinite(parsed.getTime())) {
+    return false;
+  }
+  return now.getTime() - parsed.getTime() <= DIALOGUE_WORKING_MEMORY_TTL_MS;
+}
 
 type DialogueStateCacheEntry = {
   value: DialogueStateSnapshot | null;
@@ -143,6 +164,7 @@ export type DialogueStateSnapshot = {
   userId: string;
   revision: number;
   state: DialogueState;
+  updatedAt?: Date;
 };
 
 export type DialogueStateTurnInput = {
@@ -1169,6 +1191,7 @@ export function invalidateDialogueStateCache(
 export async function readDialogueStateOnDb(
   db: DialogueDb,
   input: { userId: string; sessionId: string },
+  options: { includeStale?: boolean } = {},
 ): Promise<DialogueStateSnapshot | null> {
   const rows = await db
     .select({
@@ -1176,6 +1199,7 @@ export async function readDialogueStateOnDb(
       userId: dialogueStates.userId,
       revision: dialogueStates.revision,
       state: dialogueStates.state,
+      updatedAt: dialogueStates.updatedAt,
     })
     .from(dialogueStates)
     .where(and(eq(dialogueStates.sessionId, input.sessionId), eq(dialogueStates.userId, input.userId)))
@@ -1184,11 +1208,15 @@ export async function readDialogueStateOnDb(
   if (!row) {
     return null;
   }
+  if (!options.includeStale && !isDialogueStateFresh(row.updatedAt)) {
+    return null;
+  }
   return {
     sessionId: row.sessionId,
     userId: row.userId,
     revision: row.revision,
     state: sanitizeDialogueStateSnapshot(dialogueStateSchema.parse(row.state)),
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -1243,9 +1271,10 @@ export async function recordDialogueStateTurnOnDb(
     const current = await readDialogueStateOnDb(db, {
       userId: input.userId,
       sessionId: input.sessionId,
-    });
+    }, { includeStale: true });
+    const currentIsFresh = current ? isDialogueStateFresh(current.updatedAt) : false;
     const nextState = mergeDialogueState({
-      previous: current?.state,
+      previous: currentIsFresh ? current?.state : undefined,
       fallback,
       userMessage: input.userMessage,
       assistantText: input.assistantText,
@@ -1273,12 +1302,16 @@ export async function recordDialogueStateTurnOnDb(
           userId: input.userId,
           revision: nextRevision,
           state: nextState,
+          updatedAt: now,
         };
       } catch {
         continue;
       }
     }
 
+    // Reuse the existing row when only its working-memory window expired. This
+    // resets turn-local context without racing a second INSERT against the
+    // session primary key.
     const updated = await db
       .update(dialogueStates)
       .set({
@@ -1300,6 +1333,7 @@ export async function recordDialogueStateTurnOnDb(
         userId: input.userId,
         revision: nextRevision,
         state: nextState,
+        updatedAt: now,
       };
     }
   }

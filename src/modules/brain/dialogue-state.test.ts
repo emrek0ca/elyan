@@ -3,12 +3,33 @@ import test from "node:test";
 import {
   applyCanonicalDialogueStateToMetadata,
   buildDialogueStateFallbackFromMetadata,
+  DIALOGUE_WORKING_MEMORY_TTL_MS,
   dialogueStateSchema,
   deriveConversationDynamics,
+  isDialogueStateFresh,
   mergeDialogueState,
   recordDialogueStateTurn,
   resolveDialogueStateSessionId,
 } from "./dialogue-state.js";
+
+test("dialogue working memory expires while durable memory remains separate", () => {
+  const now = new Date("2026-08-14T12:00:00.000Z");
+  assert.equal(
+    isDialogueStateFresh(
+      new Date(now.getTime() - DIALOGUE_WORKING_MEMORY_TTL_MS + 1),
+      now,
+    ),
+    true,
+  );
+  assert.equal(
+    isDialogueStateFresh(
+      new Date(now.getTime() - DIALOGUE_WORKING_MEMORY_TTL_MS - 1),
+      now,
+    ),
+    false,
+  );
+  assert.equal(isDialogueStateFresh(undefined, now), true);
+});
 
 test("conversation dynamics tracks reply cadence and bounded phrase signatures", () => {
   const first = deriveConversationDynamics(

@@ -24,6 +24,7 @@ import {
 import { buildVisionTaskPromptBlock, classifyVisionTask } from "./vision-task-policy.js";
 import { assessVisionEvidence, buildVisionEvidenceGatePrompt } from "./vision-evidence-gate.js";
 import { extractClientAttachments } from "./document-types.js";
+import { isSessionVisionMemoryFresh } from "./vision-memory-policy.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 3;
 const DEFAULT_MAX_CHUNKS = 20;
@@ -1514,6 +1515,9 @@ function collectSessionVisionBlocks(
     String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")),
   );
   for (const candidate of ordered) {
+    if (!isSessionVisionMemoryFresh(candidate.createdAt)) {
+      continue;
+    }
     for (const block of collectVisionBlocksFromCarrier(
       extractAttachmentMetadataCarrier(candidate.metadata),
     )) {

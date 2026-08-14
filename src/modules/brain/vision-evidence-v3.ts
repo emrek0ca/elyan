@@ -158,6 +158,8 @@ export function buildSessionVisionEvidenceV3(input: {
   sensitivity: "none" | "personal" | "sensitive" | "restricted";
   cloudUsed: boolean;
   confidence?: number;
+  /** One-way identity for the normalized image; never the image bytes. */
+  contentHash?: string | null;
 }): VisionEvidenceV3 {
   const summary = stripVisionProviderAttribution(input.summary)
     .replace(/(?:visionBlock|vision_evidence|cloudVisionOptIn|request_ephemeral|base64|image_url)/giu, "")
@@ -180,7 +182,7 @@ export function buildSessionVisionEvidenceV3(input: {
       engines: [source, "evidence_fusion"],
     },
     image: {
-      content_hash: null,
+      content_hash: input.contentHash?.trim().slice(0, 128) || null,
       mime_type: "unknown",
       width: Math.max(0, Math.floor(input.width ?? 0)),
       height: Math.max(0, Math.floor(input.height ?? 0)),

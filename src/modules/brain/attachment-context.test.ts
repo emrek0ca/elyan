@@ -682,6 +682,36 @@ test("resolveAttachmentContext recovers session-derived visual evidence without 
   assert.match(context.promptBlock, /kırmızı bir uyarı/iu);
 });
 
+test("resolveAttachmentContext does not recover expired session visual evidence", () => {
+  const visionBlock = buildSessionVisionEvidenceV3({
+    task: "scene_understanding",
+    summary: "Solda kırmızı bir uyarı simgesi bulunuyor.",
+    sensitivity: "personal",
+    cloudUsed: true,
+  });
+  const staleCandidate: AttachmentContextCandidate = {
+    messageId: "message-vision-stale",
+    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000 - 1).toISOString(),
+    prompt: "Burada ne var",
+    metadata: {
+      ...buildAttachmentMetadata({
+        documentId: "doc-vision-stale",
+        fileName: "masa.jpg",
+        text: "Görsel cihazda analiz edildi. Sahne: genel.",
+      }),
+      cloudVisionOptIn: true,
+      visionBlock,
+    },
+  };
+
+  const context = resolveAttachmentContext({
+    prompt: "soldaki nesne ne?",
+    sessionAttachmentCandidates: [staleCandidate],
+  });
+
+  assert.equal(context?.visionBlocks?.length ?? 0, 0);
+});
+
 test("resolveAttachmentContext never re-surfaces session images without the opt-in marker", () => {
   const nonConsentedCandidate: AttachmentContextCandidate = {
     messageId: "message-vision-2",

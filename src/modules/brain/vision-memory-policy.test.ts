@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { shouldPersistSessionVisionEvidence } from "./vision-memory-policy.js";
+import {
+  isSessionVisionMemoryFresh,
+  SESSION_VISION_MEMORY_TTL_MS,
+  shouldPersistSessionVisionEvidence,
+} from "./vision-memory-policy.js";
 import { classifyVisionTask } from "./vision-task-policy.js";
 
 test("verified visual answer is eligible for session-derived memory", () => {
@@ -48,4 +52,38 @@ test("fine-text memory requires stronger image quality and full coverage", () =>
   assert.equal(decision.persist, false);
   assert.ok(decision.reasons.includes("incomplete_image_coverage"));
   assert.ok(decision.reasons.includes("quality_below_memory_threshold"));
+});
+
+test("restricted visual evidence never becomes session memory", () => {
+  const task = classifyVisionTask({ prompt: "Kimlik belgesini oku", imageCount: 1 });
+  const decision = shouldPersistSessionVisionEvidence({
+    task,
+    answerAccepted: true,
+    answerFlags: [],
+    expectedPhysicalImageCount: 1,
+    verifiedPhysicalImageCount: 1,
+    qualityScore: 0.9,
+    summary: "Belgede kişisel bilgiler var.",
+    sensitivity: "restricted",
+  });
+  assert.equal(decision.persist, false);
+  assert.ok(decision.reasons.includes("restricted_visual_memory"));
+});
+
+test("session visual evidence expires only after its working-memory TTL", () => {
+  const now = new Date("2026-08-14T12:00:00.000Z");
+  assert.equal(
+    isSessionVisionMemoryFresh(
+      new Date(now.getTime() - SESSION_VISION_MEMORY_TTL_MS + 1),
+      now,
+    ),
+    true,
+  );
+  assert.equal(
+    isSessionVisionMemoryFresh(
+      new Date(now.getTime() - SESSION_VISION_MEMORY_TTL_MS - 1),
+      now,
+    ),
+    false,
+  );
 });
