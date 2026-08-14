@@ -1,4 +1,5 @@
 import type { ResolvedAttachmentContextVisionImage } from "./attachment-context.js";
+import type { ChatCompletionTool } from "./tool-schemas.js";
 import {
   ANALYTICAL_GENERATION_TEMPERATURE,
   isReasoningChannelModel,
@@ -243,6 +244,21 @@ export function buildRequestBody(
   // biçimli mesajlarda ~%40 düzyazı → sınıflandırma kaybı → degraded).
   jsonObjectMode = false,
   nativeGemini = false,
+  // YEREL ARAÇ ÇAĞRISI. Verilmezse davranış birebir eskisi gibidir.
+  //
+  // Ana sohbet yolu bugüne kadar modele HİÇ araç göndermiyordu: yetenekler
+  // yalnız prompt metniydi ve model, dayatılan bir plan şemasını doldurmaya
+  // çalışıyordu. O yol `response_format: json_schema` üzerinden gittiği için
+  // reasoning kanalı olan modellerde Groq `json_validate_failed` ile 400
+  // dönüyor (ölçüldü: 2026-08-08 yönlendirme, 2026-08-13 görev a4924a76).
+  // Araçlar sağlayıcının kendi mekanizmasıyla verildiğinde o hata sınıfı yok
+  // ve model aracı GERÇEKTEN seçebiliyor.
+  //
+  // Şema modu ile araç modu AYNI istekte gönderilmez: ikisi modelden farklı
+  // çıktı biçimi ister ve birlikte gönderildiğinde sağlayıcı çoğu kez şemayı
+  // kazandırıp araç çağrısını sessizce düşürür.
+  tools?: ChatCompletionTool[],
+  toolChoice: "auto" | "none" | "required" = "auto",
 ) {
   if (provider === "ollama") {
     return {
@@ -282,7 +298,13 @@ export function buildRequestBody(
     temperature,
     max_tokens: maxTokens,
     stream,
-    ...(responseSchema && ["gemini", "groq", "openai", "openrouter"].includes(provider)
+    ...(tools && tools.length > 0 &&
+    ["groq", "openai", "openrouter"].includes(provider)
+      ? { tools, tool_choice: toolChoice }
+      : {}),
+    ...(!(tools && tools.length > 0) &&
+    responseSchema &&
+    ["gemini", "groq", "openai", "openrouter"].includes(provider)
       ? {
           response_format: {
             type: "json_schema",
@@ -293,7 +315,8 @@ export function buildRequestBody(
             },
           },
         }
-      : jsonObjectMode &&
+      : !(tools && tools.length > 0) &&
+          jsonObjectMode &&
           ["gemini", "groq", "openai", "openrouter"].includes(provider)
         ? { response_format: { type: "json_object" } }
         : {}),
