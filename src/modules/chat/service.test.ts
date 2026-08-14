@@ -16,6 +16,7 @@ import {
   listChatSessions,
   estimatePendingChatTokenDebit,
   resolveChatSessionTargetDeviceId,
+  shouldReconcileOrphanedChatMessage,
   trimConversationForSharedBrain,
 } from "./service.js";
 import { buildSessionVisionEvidenceV3 } from "../brain/vision-evidence-v3.js";
@@ -79,6 +80,53 @@ test("admission lock keys on the idempotency key when the client sends one", () 
       idempotencyKey: "req-a",
     }),
     null,
+  );
+});
+
+test("orphaned task-less assistant messages become eligible for terminal recovery", () => {
+  const now = new Date("2030-01-01T12:00:00.000Z");
+  const oldEnough = new Date(now.getTime() - 91_000);
+  const recent = new Date(now.getTime() - 89_000);
+
+  assert.equal(
+    shouldReconcileOrphanedChatMessage({
+      role: "assistant",
+      status: "queued",
+      taskId: null,
+      createdAt: oldEnough,
+      now,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldReconcileOrphanedChatMessage({
+      role: "assistant",
+      status: "running",
+      taskId: null,
+      createdAt: recent,
+      now,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldReconcileOrphanedChatMessage({
+      role: "assistant",
+      status: "queued",
+      taskId: "task-1",
+      createdAt: oldEnough,
+      now,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldReconcileOrphanedChatMessage({
+      role: "assistant",
+      status: "completed",
+      taskId: null,
+      createdAt: oldEnough,
+      now,
+    }),
+    false,
   );
 });
 

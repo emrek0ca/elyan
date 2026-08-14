@@ -542,10 +542,11 @@ export async function buildApp(envInput?: AppEnv) {
  */
 function reportDisabledCapabilities(app: FastifyInstance): void {
   const disabled: string[] = [];
+  const geminiApiKey = String(app.config.GEMINI_API_KEY ?? "").trim();
 
-  if (!String(app.config.GEMINI_API_KEY ?? "").trim()) {
+  if (!geminiApiKey) {
     disabled.push(
-      "GEMINI_API_KEY yok → görsel üretimi, görsel düzenleme, görü çıkarımı ve Gemini ücretsiz katmanı KAPALI",
+      "GEMINI_API_KEY yok → Gemini metin/görü/görsel özellikleri KAPALI",
     );
   }
   if (!String(app.config.GROQ_API_KEY ?? "").trim()) {

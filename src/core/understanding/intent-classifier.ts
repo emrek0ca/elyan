@@ -342,8 +342,13 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
         ? "chat"
         : semanticIntent ?? matched[0] ?? (text.trim().length > 0 ? "chat" : "unknown");
     const secondaryIntents = unique(matched.filter((intent) => intent !== primaryIntent));
+    // A compound request can be ordered by a generic intent first while the
+    // semantic secondary intent carries the actual computer surface. Treat
+    // that typed signal as local evidence instead of depending on one exact
+    // spelling or suffix in the raw message.
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
+      secondaryIntents.includes("computer") ||
       /\b(local(?!-first)|desktop|file system|screenshot|click|type|hotkey|browser|terminal|shell|keyboard shortcut|mouse|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text) ||
       Boolean(/(?<!\p{L})(yerel|masaustu|masaüstü|dosya|klasör|klasor|terminal|tarayıcı|tarayici|ekran|pencere|uygulama aç|safari|chrome|firefox|finder|tuş kısayolu|tus kisayolu|ekran görüntüsü|ekran goruntusu|ekran kaydı|ekran kaydi|ses kayıt|ses kayit|bildirim gönder|takvim aç|kamera|mikrofon)(?!\p{L})/iu.test(text)) ||
       Boolean(/(?<!\p{L})(aç|ac|kapat|çalıştır|calistir|başlat|indir|kaydet|taşı|tasi|sil|kopyala)(?!\p{L}).{0,60}(?<!\p{L})(dosya|klasör|klasor|uygulama|safari|chrome|firefox|finder|terminal|masaüstü|masaustu)(?!\p{L})/iu.test(text));

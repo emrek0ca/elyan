@@ -23,6 +23,22 @@ function compactText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/**
+ * Gemini image model ids changed from preview aliases to stable ids. Keep the
+ * compatibility mapping in one place so an old server .env cannot re-enable
+ * models that the provider no longer exposes.
+ */
+export function normalizeGeminiImageModel(value: unknown): string {
+  const model = compactText(value).replace(/^models\//i, "");
+  const aliases: Record<string, string> = {
+    "gemini-2.0-flash-preview-image-generation": "gemini-3.1-flash-image",
+    "gemini-2.5-flash-image-preview": "gemini-3.1-flash-image",
+    "gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
+    "gemini-3-pro-image-preview": "gemini-3-pro-image",
+  };
+  return aliases[model.toLowerCase()] ?? model;
+}
+
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => compactText(value)).filter(Boolean))];
 }
@@ -36,7 +52,8 @@ export function buildGeminiModelCatalog(
   const textModel = compactText(config.GEMINI_TEXT_MODEL) || reasoningModel;
   const visionModel = compactText(config.GEMINI_VISION_MODEL) || "gemini-3.6-flash";
   const imageModel =
-    compactText(config.GEMINI_IMAGE_MODEL) || "gemini-3.1-flash-image";
+    normalizeGeminiImageModel(config.GEMINI_IMAGE_MODEL) ||
+    "gemini-3.1-flash-image";
 
   return {
     textModel,

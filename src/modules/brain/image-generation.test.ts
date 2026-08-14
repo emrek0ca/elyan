@@ -100,6 +100,7 @@ function appWithConfig(
     },
     log: {
       warn: () => undefined,
+      error: () => undefined,
     },
     services: { reliability: { store: options.store ?? createMemoryStore() } },
     ...(options.db ? { db: options.db } : {}),
@@ -202,7 +203,7 @@ test("maybeGenerateHostedImageArtifact prefers Gemini and returns widget-rendera
     assert.equal(requests[0]?.geminiKey, "gemini-test-key");
     // Maliyet politikası: "poster" tek başına artık premium değil (Pro flag
     // default kapalı) ve açık çözünürlük istenmedikçe 1K üretilir.
-    assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image-preview");
+    assert.equal(requests[0]?.body.model, "gemini-3.1-flash-image");
     assert.equal(requests[0]?.body.store, false);
     const responseFormat = requests[0]?.body.response_format as Record<
       string,
@@ -299,7 +300,79 @@ test("maybeGenerateHostedImageArtifact records provider quota failures safely", 
 
     assert.equal(result, null);
     assert.equal(metadata.imageGenerationBlockedReason, "image_generation_provider_quota");
-    assert.deepEqual(metadata.imageGenerationBlockedDetails, { retryAfterSeconds: 300 });
+    assert.equal(
+      (metadata.imageGenerationBlockedDetails as Record<string, unknown>)
+        .retryAfterSeconds,
+      300,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("canonicalizes retired image aliases and uses the single Gemini key", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ model: string; key: string | null }> = [];
+  const jpegBase64 = (await createTestJpeg(40)).toString("base64");
+
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    requests.push({
+      model: String(body.model ?? ""),
+      key: new Headers(init?.headers).get("x-goog-api-key"),
+    });
+    return Response.json({
+      output_image: { data: jpegBase64, mime_type: "image/jpeg" },
+    });
+  };
+
+  try {
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig({
+        GEMINI_API_KEY: "gemini-key",
+        GEMINI_IMAGE_MODEL: "gemini-2.5-flash-image-preview",
+      }),
+      { prompt: "Bana bir kedi çiz", responseText: "" },
+    );
+
+    assert.ok(result);
+    assert.deepEqual(requests, [
+      { model: "gemini-3.1-flash-image", key: "gemini-key" },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("surfaces provider access denial instead of the generic image fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  const metadata: Record<string, unknown> = {};
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        error: {
+          status: "PERMISSION_DENIED",
+          message: "Your project has been denied access.",
+        },
+      }),
+      { status: 403, headers: { "content-type": "application/json" } },
+    );
+
+  try {
+    const result = await maybeGenerateHostedImageArtifact(
+      appWithConfig({ GEMINI_API_KEY: "gemini-test-key" }),
+      { prompt: "Bana üstünde Elyan yazan bir kedi çiz", responseText: "", metadata },
+    );
+
+    assert.equal(result, null);
+    assert.equal(
+      metadata.imageGenerationBlockedReason,
+      "image_generation_provider_access_denied",
+    );
+    const details = metadata.imageGenerationBlockedDetails as Record<string, unknown>;
+    assert.deepEqual(details.attemptedModels, ["gemini-3.1-flash-image"]);
+    assert.deepEqual(details.statuses, [403]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -367,7 +440,7 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
     // denendiği yapılandırmaya bağlı; sabitlenen şey PREMIUM ÖNCE, FLASH
     // SONRA kuralı.
     const attempted = requests.map((request) => String(request.model ?? ""));
-    assert.equal(attempted[0], "gemini-3-pro-image-preview");
+    assert.equal(attempted[0], "gemini-3-pro-image");
     assert.ok(
       attempted.some((model) => model.includes("flash-image")),
       `premium tükenince flash denenmeli, denenenler: ${attempted.join(", ")}`,
@@ -413,7 +486,7 @@ test("maybeGenerateHostedImageArtifact treats Turkish draw prompts as image gene
     assert.ok(result);
     assert.deepEqual(
       requests.map((request) => request.model),
-      ["gemini-3.1-flash-image-preview"],
+      ["gemini-3.1-flash-image"],
     );
     assert.equal(result.previewText, "Görsel hazır.");
     assert.equal(result.artifact.textContent, "Görsel hazır.");
@@ -749,7 +822,7 @@ test("premium prompts stay on Flash while GEMINI_IMAGE_PRO_ENABLED is off (cost 
     assert.ok(result);
     assert.deepEqual(
       requests.map((request) => request.model),
-      ["gemini-3.1-flash-image-preview"],
+      ["gemini-3.1-flash-image"],
     );
   } finally {
     globalThis.fetch = originalFetch;

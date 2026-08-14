@@ -102,6 +102,9 @@ const CHAT_TURN_ADMISSION_LOCK_TTL_MS = 30_000;
 const CHAT_TURN_ADMISSION_WAIT_MS = 2_500;
 const CHAT_TURN_ADMISSION_POLL_MS = 125;
 const CHAT_MESSAGE_INLINE_CONTENT_MAX_BYTES = 64 * 1024;
+const ORPHANED_CHAT_MESSAGE_GRACE_MS = 90_000;
+const GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE =
+  "Yanıt başlatılamadı. Lütfen tekrar dene.";
 
 type ChatSessionCursor = {
   timestamp: string;
@@ -941,6 +944,181 @@ function shapeChatMessageForResponse<
   return shaped;
 }
 
+export function shouldReconcileOrphanedChatMessage(input: {
+  role: string;
+  status: string;
+  taskId?: string | null;
+  createdAt: Date | string;
+  now?: Date;
+}): boolean {
+  if (input.role !== "assistant" || input.taskId) {
+    return false;
+  }
+  if (input.status !== "queued" && input.status !== "running") {
+    return false;
+  }
+  const createdAt =
+    input.createdAt instanceof Date
+      ? input.createdAt.getTime()
+      : new Date(input.createdAt).getTime();
+  const now = (input.now ?? new Date()).getTime();
+  return Number.isFinite(createdAt) && now - createdAt >= ORPHANED_CHAT_MESSAGE_GRACE_MS;
+}
+
+function resolveChatAcceptanceFailure(error: unknown): {
+  code: string;
+  message: string;
+} {
+  if (error instanceof AppError) {
+    return {
+      code: error.code,
+      message: error.message || GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE,
+    };
+  }
+  return {
+    code: "chat_acceptance_failed",
+    message: GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE,
+  };
+}
+
+async function terminalizeChatMessageWithoutTask(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    sessionId: string;
+    assistantMessageId: string;
+    deviceId?: string | null;
+    failure?: { code: string; message: string };
+  },
+) {
+  const failure = input.failure ?? {
+    code: "chat_acceptance_timeout",
+    message: GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE,
+  };
+  const updatedAt = new Date();
+  const rows = await app.db
+    .update(chatMessages)
+    .set({
+      status: "failed",
+      error: failure.message,
+      content: failure.message,
+      contentBlobId: null,
+      preview: compactMessagePreview(failure.message),
+      tokenCount: estimateMessageTokens(failure.message),
+      metadata: withAssistantBlocksMetadata(
+        {
+          failureReason: failure.code,
+          streaming: false,
+          terminal: true,
+        },
+        {
+          content: failure.message,
+          blocks: [],
+          streaming: false,
+        },
+      ),
+      updatedAt,
+    })
+    .where(
+      and(
+        eq(chatMessages.id, input.assistantMessageId),
+        eq(chatMessages.sessionId, input.sessionId),
+        eq(chatMessages.userId, input.userId),
+        eq(chatMessages.role, "assistant"),
+        isNull(chatMessages.taskId),
+        sql`${chatMessages.status} not in ('completed', 'failed', 'canceled')`,
+      ),
+    )
+    .returning();
+
+  const assistantMessage = rows[0];
+  if (!assistantMessage) {
+    return null;
+  }
+
+  await app.db
+    .update(chatSessions)
+    .set({ updatedAt })
+    .where(
+      and(
+        eq(chatSessions.id, input.sessionId),
+        eq(chatSessions.userId, input.userId),
+      ),
+    );
+
+  await app.services.eventBus.publish({
+    topic: "chat.message.updated",
+    userId: input.userId,
+    deviceId: input.deviceId ?? undefined,
+    payload: {
+      sessionId: input.sessionId,
+      assistantMessageId: assistantMessage.id,
+      statusRank: 90,
+      eventRank: 30,
+      messageStatusRank: 90,
+      terminal: true,
+      presentation: "chat",
+      assistantMessage: shapeAssistantMessagePayload(assistantMessage),
+      taskStatus: "failed",
+      task: null,
+    },
+  });
+
+  return assistantMessage;
+}
+
+async function reconcileOrphanedChatMessages(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    session: typeof chatSessions.$inferSelect;
+  },
+) {
+  // Unit-test doubles and legacy adapters may not have the realtime service;
+  // production always does. Do not add a second DB round trip to those paths.
+  if (!app.services?.eventBus) {
+    return;
+  }
+  const cutoff = new Date(Date.now() - ORPHANED_CHAT_MESSAGE_GRACE_MS);
+  const orphaned = await app.db
+    .select()
+    .from(chatMessages)
+    .where(
+      and(
+        eq(chatMessages.sessionId, input.session.id),
+        eq(chatMessages.userId, input.userId),
+        eq(chatMessages.role, "assistant"),
+        isNull(chatMessages.taskId),
+        inArray(chatMessages.status, ["queued", "running"]),
+        lt(chatMessages.createdAt, cutoff),
+      ),
+    )
+    // Keep history reads bounded when an old client/runtime left many
+    // task-less assistant rows behind. The oldest rows are the ones that can
+    // be terminalized on this pass; later pages will be reconciled on demand.
+    .limit(32);
+
+  for (const message of orphaned) {
+    if (
+      !shouldReconcileOrphanedChatMessage({
+        role: message.role,
+        status: message.status,
+        taskId: message.taskId,
+        createdAt: message.createdAt,
+        now: cutoff,
+      })
+    ) {
+      continue;
+    }
+    await terminalizeChatMessageWithoutTask(app, {
+      userId: input.userId,
+      sessionId: input.session.id,
+      assistantMessageId: message.id,
+      deviceId: input.session.targetDeviceId,
+    });
+  }
+}
+
 function shapeChatSessionForResponse<
   T extends typeof chatSessions.$inferSelect,
 >(session: T): T {
@@ -1632,6 +1810,10 @@ export async function listChatSessionMessages(
     input.userId,
     input.sessionId,
   );
+  await reconcileOrphanedChatMessages(app, {
+    userId: input.userId,
+    session,
+  });
   await maybeInjectDueProactiveOpeningMessage(app, {
     userId: input.userId,
     sessionId: input.sessionId,
@@ -2156,12 +2338,11 @@ export async function createChatMessage(
       throw createUpgradeOrByokRequiredError(usageAccess);
     }
   }
-  const trialQuotaPromise =
-    routeDecision.route === "server_brain" &&
-    usageAccess.mode === "trial" &&
-    usageAccess.planCode === "free"
-      ? getTrialQuotaUsage(app.db, input.userId)
-      : Promise.resolve(null);
+  // Task admission is authoritative, but chat rows must not be written before
+  // this check. Previously a paid mobile user who hit the five-hour window got
+  // a 409 from createTask after the assistant row was already persisted; the
+  // history screen then rendered that task-less row as an endless spinner.
+  const trialQuotaPromise = getTrialQuotaUsage(app.db, input.userId);
   if (routeDecision.route === "server_brain") {
     const dispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
       isSharedBrain: true,
@@ -2634,57 +2815,92 @@ export async function createChatMessage(
 
     chatMessageCreatedPublished = true;
   };
-  const taskResult = await createTask(app, {
-    userId: input.userId,
-    usageAccess,
-    targetDeviceId: session.targetDeviceId,
-    requestedTargetDeviceId: input.targetDeviceId,
-    title: deriveChatTitle(input.title ?? session.title, input.content),
-    payload: {
-      prompt: input.content,
-      source: input.source,
-      metadata: {
-        ...requestChatMetadata,
-        // Mark this as a chat-channel task so the fast streaming flow
-        // (processSharedBrainChatTask + token-by-token SSE deltas) is used
-        // instead of the synchronous REST reply. Without this the answer
-        // arrives in one shot.
-        channel: "chat",
-        routeDecision,
-        chat: {
-          sessionId: session.id,
-          userMessageId: userMessage.id,
-          assistantMessageId: assistantMessage.id,
+  let taskResult: Awaited<ReturnType<typeof createTask>>;
+  try {
+    taskResult = await createTask(app, {
+      userId: input.userId,
+      usageAccess,
+      targetDeviceId: session.targetDeviceId,
+      requestedTargetDeviceId: input.targetDeviceId,
+      title: deriveChatTitle(input.title ?? session.title, input.content),
+      payload: {
+        prompt: input.content,
+        source: input.source,
+        metadata: {
+          ...requestChatMetadata,
+          // Mark this as a chat-channel task so the fast streaming flow
+          // (processSharedBrainChatTask + token-by-token SSE deltas) is used
+          // instead of the synchronous REST reply. Without this the answer
+          // arrives in one shot.
+          channel: "chat",
+          routeDecision,
+          chat: {
+            sessionId: session.id,
+            userMessageId: userMessage.id,
+            assistantMessageId: assistantMessage.id,
+          },
+        },
+        brainContext: {
+          ...(deferChatContextHydration
+            ? {}
+            : { conversation: priorChatContext.conversation ?? [] }),
+          ...(priorChatContext.attachmentCandidates.length > 0
+            ? { attachmentCandidates: priorChatContext.attachmentCandidates }
+            : {}),
         },
       },
-      brainContext: {
-        ...(deferChatContextHydration
-          ? {}
-          : { conversation: priorChatContext.conversation ?? [] }),
-        ...(priorChatContext.attachmentCandidates.length > 0
-          ? { attachmentCandidates: priorChatContext.attachmentCandidates }
-          : {}),
+      requestedCapabilities: effectiveRequestedCapabilities,
+      requestedCapabilitiesResolved: true,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      requestId: input.requestId,
+      idempotencyKey: input.idempotencyKey,
+      ephemeralVision: input.ephemeralVision,
+      preResolvedChatFast: routeDecision.route === "server_brain",
+      onTaskReady: async ({ task, reused }) => {
+        if (routeDecision.route === "server_brain") {
+          // The fast chat path publishes exactly once after createTask returns.
+          // createTask can notify this callback before its durable dispatch
+          // branch finishes; publishing here as well creates a race that can
+          // duplicate message.created and briefly resurrect the ACK snapshot.
+          return;
+        }
+        await publishChatMessageCreated(task, { reused });
       },
-    },
-    requestedCapabilities: effectiveRequestedCapabilities,
-    requestedCapabilitiesResolved: true,
-    ipAddress: input.ipAddress,
-    userAgent: input.userAgent,
-    requestId: input.requestId,
-    idempotencyKey: input.idempotencyKey,
-    ephemeralVision: input.ephemeralVision,
-    preResolvedChatFast: routeDecision.route === "server_brain",
-    onTaskReady: async ({ task, reused }) => {
-      if (routeDecision.route === "server_brain") {
-        // The fast chat path publishes exactly once after createTask returns.
-        // createTask can notify this callback before its durable dispatch
-        // branch finishes; publishing here as well creates a race that can
-        // duplicate message.created and briefly resurrect the ACK snapshot.
-        return;
-      }
-      await publishChatMessageCreated(task, { reused });
-    },
-  });
+    });
+  } catch (error) {
+    // createTask can still reject after the precheck (for example a concurrent
+    // request consumes the last quota unit). The chat rows are already visible
+    // by this point, so terminalize them before returning the HTTP error. The
+    // CAS in terminalizeChatMessageWithoutTask protects a task that won a race
+    // and was linked just before an unrelated callback failed.
+    try {
+      await terminalizeChatMessageWithoutTask(app, {
+        userId: input.userId,
+        sessionId: session.id,
+        assistantMessageId: assistantMessage.id,
+        deviceId: session.targetDeviceId,
+        failure: resolveChatAcceptanceFailure(error),
+      });
+    } catch (finalizeError) {
+      app.log.error(
+        { error: finalizeError, requestId: input.requestId },
+        "chat acceptance failure finalization failed",
+      );
+    }
+    if (admissionLockAcquired && admissionLockKey) {
+      await app.services.reliability.store
+        .releaseLock(admissionLockKey, admissionLockOwner)
+        .catch((releaseError) => {
+          app.log.warn(
+            { error: releaseError, requestId: input.requestId },
+            "chat admission lock release after failure deferred",
+          );
+        });
+      admissionLockAcquired = false;
+    }
+    throw error;
+  }
 
   // The task row and chat message rows are already durable at this point. The
   // remaining ACK/session metadata update is not acceptance-critical. Defer it

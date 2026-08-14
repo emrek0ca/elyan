@@ -1503,6 +1503,61 @@ test("decideCommandRoute keeps public chat on the server when dispatch is on", a
   assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
+test("decideCommandRoute keeps public visual generation on the server when dispatch is on", async () => {
+  const app = createDesktopReadyApp(["image_generate"]);
+  let routeModelCalls = 0;
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => {
+        routeModelCalls += 1;
+        throw new Error("public visual generation must not become a desktop task");
+      },
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "public-visual-dispatch-user",
+    message: "Yeni bir görsel üret kedi resmi olsun",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.mode, "chat");
+  assert.equal(decision.requiredRuntime, "server");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(routeModelCalls, 0);
+});
+
+test("decideCommandRoute semantically corrects a desktop visual misroute", async () => {
+  const app = createDesktopReadyApp(["image_generate"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "desktop_runtime" as const,
+        operationalRoute: "desktop_runtime" as const,
+        executionPlan: ["desktop_runtime" as const],
+        reason: "The model incorrectly treated the public visual request as local work.",
+        needsDesktop: true,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "paraphrased-visual-dispatch-user",
+    message: "Bana bir kedi çiz",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.targetDeviceId, undefined);
+  assert.match(decision.reason, /Public visual output/);
+});
+
 test("decideCommandRoute routes desktop action to the desktop when dispatch is on and ready", async () => {
   const app = createDesktopReadyApp(["browser_control"]);
   const decision = await decideCommandRoute(app as never, {
@@ -1637,6 +1692,8 @@ test("command route prompt defines semantic local execution without keyword code
   assert.match(prompt, /asks for advice, not execution/);
   assert.match(prompt, /"target":"desktop_runtime"/);
   assert.match(prompt, /Always return requiredCapabilities as an empty array/);
+  assert.match(prompt, /public image/);
+  assert.match(prompt, /literal keyword/);
   assert.match(prompt, /Masaüstü klasörümdekileri listele/);
   assert.match(prompt, /previous turn used desktop_runtime/);
   assert.match(prompt, /clear topic change must be routed independently/);

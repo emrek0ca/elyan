@@ -14,6 +14,16 @@ test("classifyIntent detects coding and local runtime hints deterministically", 
   assert.equal(result.routingHints.avoidCloud, true);
 });
 
+test("classifyIntent carries a secondary computer surface into local routing", () => {
+  const result = classifyIntent({
+    userId: "user_1",
+    message: "Masaüstümde kedi resmi çiz",
+  });
+
+  assert.equal(result.secondaryIntents.includes("computer"), true);
+  assert.equal(result.requiresLocalRuntime, true);
+});
+
 test("classifyIntent marks research requests as retrieval and citation work", () => {
   const result = classifyIntent({
     userId: "user_1",

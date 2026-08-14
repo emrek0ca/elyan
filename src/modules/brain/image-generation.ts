@@ -18,6 +18,7 @@ import {
   extractHostedGeneratedImage,
   type HostedImageProviderConfig,
 } from "./media/hosted-image-adapter.js";
+import { normalizeGeminiImageModel } from "./gemini-models.js";
 import { resolveVisualIntentContract } from "./visual-intent-semantic.js";
 import {
   buildVisualIntentContract,
@@ -98,6 +99,62 @@ function classifyHostedImageFailure(status: number): HostedImageFailureKind {
   if (status === 401 || status === 403) return "auth_or_model_access";
   if (status === 402 || status === 429) return "quota_or_rate";
   return "provider_error";
+}
+
+type HostedImageFailureObservation = {
+  model: string;
+  status: number | null;
+  failureKind: HostedImageFailureKind;
+  transport: "interactions";
+};
+
+function resolveHostedImageApiKey(app: FastifyInstance): string {
+  return String(app.config.GEMINI_API_KEY ?? "").trim();
+}
+
+export function isHostedImageGenerationConfigured(app: FastifyInstance): boolean {
+  return Boolean(resolveHostedImageApiKey(app));
+}
+
+function resolveImageProviderBlockReason(
+  failures: HostedImageFailureObservation[],
+): string {
+  if (failures.some((failure) => failure.failureKind === "auth_or_model_access")) {
+    return "image_generation_provider_access_denied";
+  }
+  if (failures.some((failure) => failure.failureKind === "quota_or_rate")) {
+    return "image_generation_provider_quota";
+  }
+  if (failures.some((failure) => failure.status === 404)) {
+    return "image_generation_model_unavailable";
+  }
+  if (failures.some((failure) => failure.failureKind === "bad_request")) {
+    return "image_generation_provider_request_invalid";
+  }
+  return "image_generation_provider_unavailable";
+}
+
+function imageProviderFailureDetails(
+  failures: HostedImageFailureObservation[],
+): Record<string, unknown> {
+  const attempts = failures.slice(-8).map((failure) => ({
+    model: failure.model,
+    status: failure.status,
+    kind: failure.failureKind,
+    transport: failure.transport,
+  }));
+  return {
+    provider: "gemini",
+    attemptedModels: [...new Set(failures.map((failure) => failure.model))],
+    statuses: [
+      ...new Set(
+        failures
+          .map((failure) => failure.status)
+          .filter((status): status is number => status !== null),
+      ),
+    ],
+    attempts,
+  };
 }
 
 async function readHostedImageFailureReason(response: Response): Promise<string | null> {
@@ -985,7 +1042,7 @@ export async function maybeGenerateHostedImageArtifact(
     // zaman düzelmeyecek bir arıza için "sonra tekrar dene" demek yanlış, ve
     // hiçbir yerde iz kalmadığı için teşhis de edilemiyordu.
     setImageGenerationBlockReason(
-      input.metadata,
+      metadata,
       "image_generation_provider_unconfigured",
     );
     app.log.error(
@@ -1084,7 +1141,9 @@ export async function maybeGenerateHostedImageArtifact(
     );
     if (result) {
       const premiumModel = String(
-        app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+        normalizeGeminiImageModel(
+          app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+        ),
       ).trim();
       const cacheMatchesRequestedTier =
         !premiumRequested ||
@@ -1180,7 +1239,7 @@ function buildHostedImageProviderConfigs(
   prompt: string,
   usePremium: boolean,
 ): HostedImageProviderConfig[] {
-  const geminiApiKey = String(app.config.GEMINI_API_KEY ?? "").trim();
+  const geminiApiKey = resolveHostedImageApiKey(app);
   const providers: HostedImageProviderConfig[] = [];
 
   if (geminiApiKey) {
@@ -1203,13 +1262,15 @@ function buildHostedImageProviderConfigs(
     const fastImageModels = [
       ...configuredFastImageModels,
       "gemini-3.1-flash-image",
-      "gemini-2.5-flash-image-preview",
-      "gemini-2.0-flash-preview-image-generation",
-    ].filter((model, index, values) => model && values.indexOf(model) === index);
+    ]
+      .map((model) => normalizeGeminiImageModel(model))
+      .filter((model, index, values) => model && values.indexOf(model) === index);
     const premiumImageModels = [
       ...configuredPremiumImageModels,
       "gemini-3-pro-image",
-    ].filter((model, index, values) => model && values.indexOf(model) === index);
+    ]
+      .map((model) => normalizeGeminiImageModel(model))
+      .filter((model, index, values) => model && values.indexOf(model) === index);
     const imageSize = resolveGeminiImageSize(
       prompt,
       app.config.GEMINI_IMAGE_SIZE ?? "1K",
@@ -1259,6 +1320,7 @@ async function generateHostedImageArtifactWithPermit(
     (input.sourceImages?.length ?? 0) > 0 ||
     visualIntent.intent === "image_edit" ||
     visualIntent.intent === "image_continue";
+  const failures: HostedImageFailureObservation[] = [];
 
   for (const providerConfig of providers) {
     const circuitKey = imageCircuitKey(providerConfig.provider, providerConfig.model);
@@ -1290,14 +1352,17 @@ async function generateHostedImageArtifactWithPermit(
       if (!response.ok) {
         const failureKind = classifyHostedImageFailure(response.status);
         const safeReason = await readHostedImageFailureReason(response);
-        if (failureKind === "quota_or_rate") {
-          setImageGenerationBlockReason(input.metadata, "image_generation_provider_quota", {
-            retryAfterSeconds: 300,
-          });
-        }
+        failures.push({
+          model: providerConfig.model,
+          status: response.status,
+          failureKind,
+          transport: "interactions",
+        });
         app.log.warn(
           {
             provider: providerConfig.provider,
+            model: providerConfig.model,
+            transport: "interactions",
             statusCode: response.status,
             failureKind,
             safeReason,
@@ -1319,7 +1384,12 @@ async function generateHostedImageArtifactWithPermit(
 
       const validatedImage = await validateHostedImageOutput(base64);
       const brandedImage = await applyElyanImageBranding(validatedImage);
-      if (input.metadata?.imageGenerationBlockedReason === "image_generation_provider_quota") {
+      if (
+        typeof input.metadata?.imageGenerationBlockedReason === "string" &&
+        input.metadata.imageGenerationBlockedReason.startsWith(
+          "image_generation_provider_",
+        )
+      ) {
         delete input.metadata.imageGenerationBlockedReason;
         delete input.metadata.imageGenerationBlockedDetails;
       }
@@ -1337,12 +1407,45 @@ async function generateHostedImageArtifactWithPermit(
         visualIntent,
       });
     } catch (error) {
+      failures.push({
+        model: providerConfig.model,
+        status: null,
+        failureKind: "provider_error",
+        transport: "interactions",
+      });
       app.log.warn(
-        { err: error, provider: providerConfig.provider },
+        {
+          provider: providerConfig.provider,
+          model: providerConfig.model,
+          transport: "interactions",
+          errorCode: error instanceof Error ? error.name : "unknown_error",
+        },
         "hosted image generation failed",
       );
       await recordProviderFailure(store, circuitKey, null);
     }
+  }
+
+  if (failures.length > 0) {
+    const reason = resolveImageProviderBlockReason(failures);
+    const details = imageProviderFailureDetails(failures);
+    if (reason === "image_generation_provider_quota") {
+      details.retryAfterSeconds = 300;
+    }
+    setImageGenerationBlockReason(input.metadata, reason, details);
+    app.log.error(
+      {
+        reason,
+        ...details,
+      },
+      "hosted image generation exhausted provider attempts",
+    );
+  } else {
+    setImageGenerationBlockReason(
+      input.metadata,
+      "image_generation_provider_unavailable",
+      { provider: "gemini", attemptedModels: [] },
+    );
   }
 
   return null;

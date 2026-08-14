@@ -81,6 +81,7 @@ import {
   isHostedImageEditIntent,
   isHostedImageEditRequest,
   isHostedImageGenerationRequest,
+  isHostedImageGenerationConfigured,
   maybeGenerateHostedImageArtifact,
   type HostedImageSource,
 } from "../brain/image-generation.js";
@@ -2665,7 +2666,15 @@ function resolveImageGenerationFallbackText(
       // Yapılandırma eksikliği; "sonra tekrar dene" yanlış öneri olurdu.
       return "Görsel üretimi bu sunucuda şu an devre dışı. Ekibe ilettim.";
     case "image_generation_provider_quota":
-      return "Görsel sağlayıcısı şu an yanıt vermiyor. Birkaç dakika içinde tekrar dene.";
+      return "Görsel sağlayıcısının kotası veya faturalandırması uygun değil. Ekibe ilettim.";
+    case "image_generation_provider_access_denied":
+      return "Görsel sağlayıcısına erişim yetkisi yok. Ekibe ilettim.";
+    case "image_generation_model_unavailable":
+      return "Görsel modeli şu anda kullanılamıyor. Ekibe ilettim.";
+    case "image_generation_provider_request_invalid":
+      return "Görsel isteği sağlayıcı tarafından reddedildi. Ekibe ilettim.";
+    case "image_generation_provider_unavailable":
+      return "Görsel sağlayıcısı şu anda kullanılamıyor. Biraz sonra tekrar deneyebilirsin.";
     case "image_generation_provider_unconfigured":
       // "Sonra tekrar dene" DEMİYORUZ: bu yapılandırma eksikliği, geçici bir
       // arıza değil. Tekrar denemek hiçbir zaman çalışmaz.
@@ -5876,8 +5885,8 @@ async function completeServerBrainTask(
           visualIntent,
         });
   const visualCapabilityAwareness = {
-    imageGenerationConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
-    imageEditConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+    imageGenerationConfigured: isHostedImageGenerationConfigured(app),
+    imageEditConfigured: isHostedImageGenerationConfigured(app),
     lastImageArtifactAvailable: Boolean(
       resolveLastVisualArtifactMemory(
         payloadMetadata,

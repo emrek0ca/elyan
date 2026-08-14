@@ -686,6 +686,11 @@ function isImageEditCommand(message: string): boolean {
 
 function inferKind(routeDecision: CommandRouteDecision, message: string): string {
   const semanticDesktopContract = semanticDesktopContractFromRoute(routeDecision);
+  const semanticCapabilities = new Set(
+    semanticDesktopContract?.requiredSemanticCapabilities ?? [],
+  );
+  if (semanticCapabilities.has("image_generate")) return "image_generate";
+  if (semanticCapabilities.has("image_edit")) return "image_edit";
   if (semanticDesktopContract) {
     switch (semanticDesktopContract.intent) {
       case "screen_action":
@@ -705,6 +710,9 @@ function inferKind(routeDecision: CommandRouteDecision, message: string): string
     routeDecision.capabilities.some((capability) =>
       capability === "image_edit" || capability === "image.edit"
     ) ||
+    // Legacy offline work-order typing only. This branch is intentionally
+    // after the semantic contract and never participates in server-vs-desktop
+    // routing; a route contract always wins above.
     isImageEditCommand(message)
   ) return "image_edit";
   if (unicodeWordPattern(String.raw`\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b`, "i").test(normalized)

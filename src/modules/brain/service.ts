@@ -45,6 +45,7 @@ import {
 import { resolveSharedBrainModel } from "./model-resolution.js";
 import { buildGroqModelCatalog } from "./groq-models.js";
 import { buildBrainProfileSections } from "./profile-sections.js";
+import { isHostedImageGenerationConfigured } from "./image-generation.js";
 import { getWorldSignalTtlHours } from "../../core/understanding/context-packets.js";
 import {
   assertAttachmentQuotaAllowedFromUsage,
@@ -796,12 +797,12 @@ async function readLastTurnBehaviorUsage(
       readBoolean(quality, "image_generation_configured") ??
       readBoolean(taskResult, "imageGenerationConfigured") ??
       readBoolean(visualAwareness, "imageGenerationConfigured") ??
-      Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+      isHostedImageGenerationConfigured(app),
     imageEditConfigured:
       readBoolean(quality, "image_edit_configured") ??
       readBoolean(taskResult, "imageEditConfigured") ??
       readBoolean(visualAwareness, "imageEditConfigured") ??
-      Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+      isHostedImageGenerationConfigured(app),
     lastImageArtifactAvailable:
       lastImageArtifactAvailable ||
       readBoolean(quality, "last_image_artifact_available") === true ||
@@ -2150,8 +2151,8 @@ export async function getBrainProfile(
       imageGeneration: false,
       imageEdit: false,
       visualIntent: null,
-      imageGenerationConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
-      imageEditConfigured: Boolean(String(app.config.GEMINI_API_KEY ?? "").trim()),
+      imageGenerationConfigured: isHostedImageGenerationConfigured(app),
+      imageEditConfigured: isHostedImageGenerationConfigured(app),
       lastImageArtifactAvailable: false,
       visualContinuationSupported: true,
     }),
@@ -2474,9 +2475,7 @@ export async function getBrainProfile(
     app.config.GEMINI_API_KEY ||
     app.config.OPENROUTER_API_KEY,
   );
-  const imageGenerationConfigured = Boolean(
-    String(app.config.GEMINI_API_KEY ?? "").trim(),
-  );
+  const imageGenerationConfigured = isHostedImageGenerationConfigured(app);
   const imageEditConfigured = imageGenerationConfigured;
   const visualCapabilities = {
     imageGenerationConfigured,
