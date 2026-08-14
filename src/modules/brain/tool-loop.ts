@@ -8,6 +8,9 @@ import {
 } from "./tool-registry.js";
 import { serverToolJsonSchema } from "./tool-schemas.js";
 import type { ChatCompletionTool } from "./tool-schemas.js";
+import { buildRequestBody } from "./provider-request.js";
+import { postJson } from "./provider-http.js";
+import type { SharedBrainProvider } from "./runtime.js";
 
 /**
  * GÖZLE-UYGULA DÖNGÜSÜ.
@@ -185,4 +188,157 @@ export async function runToolCalls(
     }),
   );
   return results;
+}
+
+/**
+ * TAM DÖNGÜ: model → tool_call → gerçek sonuç → model → … → cevap
+ *
+ * Kendi sağlayıcı gidiş-dönüşünü yapar. Ana `inference.ts` akışının içine
+ * yerleştirilmedi çünkü orada yanıt tüketimi ÜÇ ayrı yere dağılmış (akışlı,
+ * akışsız, aday) ve altı denemeli bir yedekleme makinesinin içinde; oraya
+ * körlemesine dokunmak bugün çalışır hale gelen sohbet yolunu riske atardı.
+ * Bu fonksiyon o makineyi değiştirmeden, aynı ilkelerle (aynı istek kurucusu,
+ * aynı yürütücü, aynı onay sınırı) döngüyü tamamlar.
+ *
+ * Sözleşme:
+ *   - Model araç istemezse ilk turda düz cevabı döner (döngü maliyeti sıfır).
+ *   - Araç isterse sonuçlar `tool` mesajı olarak geri beslenir ve model
+ *     devam eder; en fazla `TOOL_LOOP_MAX_ROUNDS` tur.
+ *   - Tur tavanı dolarsa modele araçsız son bir tur verilir ki kullanıcı
+ *     cevapsız kalmasın (bu projede cevapsız tur = "hâlâ çalışıyor"da donma).
+ */
+export async function runServerToolLoop(
+  app: FastifyInstance,
+  input: {
+    provider: SharedBrainProvider;
+    model: string;
+    url: string;
+    messages: Array<Record<string, unknown>>;
+    maxTokens: number;
+    temperature: number;
+    reasoningEffort: "low" | "medium" | "high";
+    userId: string;
+    sessionId?: string | null;
+    taskId?: string | null;
+    workload: AgentToolContext["workload"];
+    allowlist?: readonly string[];
+  },
+): Promise<{ text: string; steps: ToolLoopStep[]; rounds: number }> {
+  const tools = buildReadOnlyServerTools({ allowlist: input.allowlist });
+  const messages = [...input.messages];
+  const steps: ToolLoopStep[] = [];
+
+  for (let round = 0; round < TOOL_LOOP_MAX_ROUNDS; round += 1) {
+    const lastRound = round === TOOL_LOOP_MAX_ROUNDS - 1;
+    const body = buildRequestBody(
+      input.provider,
+      input.model,
+      messages as never,
+      input.maxTokens,
+      undefined,
+      false,
+      [],
+      "hidden",
+      input.reasoningEffort,
+      input.temperature,
+      undefined,
+      false,
+      false,
+      // Son turda araç sunulmaz: model artık CEVAP vermeli, yeni iş açmamalı.
+      lastRound ? undefined : tools,
+      "auto",
+    ) as Record<string, unknown>;
+
+    const response = await postJson(app, input.provider, input.url, body);
+    if (!response.ok) {
+      return { text: "", steps, rounds: round + 1 };
+    }
+    const payload = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: unknown;
+          tool_calls?: unknown;
+        };
+      }>;
+    };
+    const message = payload.choices?.[0]?.message;
+    const rawCalls = message?.tool_calls;
+    const requested = Array.isArray(rawCalls) ? rawCalls : [];
+
+    if (requested.length === 0) {
+      const text = typeof message?.content === "string" ? message.content : "";
+      return { text, steps, rounds: round + 1 };
+    }
+
+    // Modelin kendi araç isteği konuşmaya AYNEN geri konur; sağlayıcı bir
+    // sonraki turda `tool` mesajlarını ancak bu çağrıyla eşleştirebilir.
+    messages.push({
+      role: "assistant",
+      content: typeof message?.content === "string" ? message.content : "",
+      tool_calls: requested,
+    });
+
+    const calls = requested
+      .map((item) => {
+        const record = item as Record<string, unknown>;
+        const fn = record.function as Record<string, unknown> | undefined;
+        const name = typeof fn?.name === "string" ? fn.name : "";
+        const tool = serverToolForName(name);
+        if (!tool) return null;
+        let args: Record<string, unknown> = {};
+        const rawArgs = fn?.arguments;
+        if (typeof rawArgs === "string" && rawArgs.trim()) {
+          try {
+            const parsed: unknown = JSON.parse(rawArgs);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              args = parsed as Record<string, unknown>;
+            }
+          } catch {
+            return null;
+          }
+        }
+        return {
+          id: typeof record.id === "string" ? record.id : tool,
+          tool,
+          args,
+        };
+      })
+      .filter((call): call is { id: string; tool: string; args: Record<string, unknown> } => call != null);
+
+    if (calls.length === 0) {
+      // Model yalnız tanınmayan/bozuk araç istedi: yeni tur açmak aynı hatayı
+      // tekrarlatır. Elimizdeki metinle dönmek daha dürüst.
+      const text = typeof message?.content === "string" ? message.content : "";
+      return { text, steps, rounds: round + 1 };
+    }
+
+    const executed = await runToolCalls(app, {
+      userId: input.userId,
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      workload: input.workload,
+      calls,
+    });
+    steps.push(...executed);
+
+    for (const [index, call] of calls.entries()) {
+      const result = executed[index];
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        content: result
+          ? toolResultToMessage({
+              tool: call.tool,
+              ok: result.ok,
+              permission: "read",
+              durationMs: result.durationMs,
+              output: result.output,
+              error: result.error,
+            })
+          : JSON.stringify({ ok: false, error: "tool_missing_result" }),
+      });
+    }
+  }
+
+  return { text: "", steps, rounds: TOOL_LOOP_MAX_ROUNDS };
 }

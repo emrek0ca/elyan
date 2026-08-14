@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { runServerToolLoop } from "./tool-loop.js";
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
 import {
@@ -8117,6 +8118,63 @@ export async function generateSharedBrainReply(
                   }
                 }
               } else {
+                // YEREL ARAÇ ÇAĞRISI DÖNGÜSÜ.
+                //
+                // Model, aracı SAĞLAYICININ kendi mekanizmasıyla seçer ve
+                // gerçek sonucu görüp devam eder — plan-tek-atış yolunda
+                // mümkün olmayan şey buydu. Yalnız okuma araçları sunulur;
+                // yan etkili/yazan işler mevcut ONAY yolunda kalır.
+                //
+                // Kapsam dar tutuldu: şema/zarf dayatan turlar (makine-JSON,
+                // TurnEnvelope) döngüye girmez — o turlar modelden farklı bir
+                // çıktı biçimi ister ve ikisi aynı istekte çakışır.
+                if (
+                  app.config.ELYAN_SERVER_TOOL_LOOP_ENABLED === true &&
+                  !attempt.turnEnvelopeMode &&
+                  !machineJsonRoute &&
+                  ["groq", "openai", "openrouter"].includes(candidate.provider)
+                ) {
+                  const looped = await runServerToolLoop(app, {
+                    provider: candidate.provider,
+                    model: String(
+                      (attempt.body as { model?: unknown }).model ?? "",
+                    ),
+                    url: joinProviderUrl(
+                      providerBaseUrlForPath(candidate, attempt.path),
+                      attempt.path,
+                    ),
+                    messages: (attempt.body as { messages?: Array<Record<string, unknown>> })
+                      .messages ?? [],
+                    maxTokens,
+                    temperature: generationTemperature,
+                    reasoningEffort,
+                    userId: input.userId,
+                    sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+                    taskId: input.taskId ?? null,
+                    workload,
+                  }).catch(() => null);
+                  // Döngü araç KULLANDIYSA ve cevap ürettiyse onu kullan.
+                  // Araç kullanmadıysa normal yola düşülür: ikinci bir
+                  // gidiş-dönüşün maliyetini boşuna ödemeyiz.
+                  if (looped && looped.steps.length > 0 && looped.text.trim()) {
+                    app.log.info(
+                      {
+                        taskId: input.taskId,
+                        rounds: looped.rounds,
+                        tools: looped.steps.map((step) => step.tool),
+                      },
+                      "server tool loop produced the answer",
+                    );
+                    return {
+                      text: looped.text,
+                      provider: candidate.provider,
+                      model: String(
+                        (attempt.body as { model?: unknown }).model ?? "",
+                      ),
+                      metadata: { serverToolLoop: true, toolSteps: looped.steps },
+                    } as never;
+                  }
+                }
                 const candidateResponse = await postJson(
                   app,
                   candidate.provider,
