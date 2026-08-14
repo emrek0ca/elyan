@@ -163,9 +163,11 @@ test("buildInferenceProviderCandidates uses Groq Compound for planning when enab
   });
 
   assert.equal(candidates[0]?.provider, "groq");
+  // Compound remains the primary planner; the JSON-safe structured lane is
+  // the next candidate instead of a reasoning-only model.
   assert.deepEqual(candidates[0]?.preferredModels, [
     "groq/compound",
-    "openai/gpt-groq-reasoning",
+    "llama-3.1-8b-instant",
     "openai/gpt-groq-fallback",
   ]);
 });
