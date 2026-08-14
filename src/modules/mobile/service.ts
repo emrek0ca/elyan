@@ -29,6 +29,7 @@ import {
   sanitizeInboundContextText,
 } from "../../lib/context-text-sanitizer.js";
 import { getWorldSignalTtlHours } from "../../core/understanding/context-packets.js";
+import { buildMobileQuickActions } from "./quick-actions.js";
 
 const MAX_WORLD_SIGNAL_PAYLOAD_BYTES = 24 * 1024;
 const MAX_WORLD_SIGNAL_FUTURE_SKEW_MS = 5 * 60_000;
@@ -527,6 +528,7 @@ export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
     },
     brain: shapeMobileBootstrapBrain(brain),
     devices,
+    quickActions: buildMobileQuickActions(devices),
     recentTasks: [],
     historyFeed: history.historyFeed,
     historyMeta: history.historyMeta,
