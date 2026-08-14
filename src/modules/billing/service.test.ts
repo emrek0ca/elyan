@@ -5,6 +5,7 @@ import {
   assertSharedBrainUsageBudgetAllowed,
   buildTrialSubscriptionSeed,
   createUpgradeOrByokRequiredError,
+  decideStoreWebhookSync,
   decideAppleSubscriptionOwnership,
   getBillingProviderForStorePlatform,
   getSharedBrainUsageBudget,
@@ -349,6 +350,81 @@ test("stale store verification defers a DOWNGRADE within an active paid period (
       now,
     ),
     true,
+  );
+});
+
+test("store webhook downgrade is deferred instead of replacing the active paid plan", () => {
+  const now = new Date("2026-06-30T00:00:00.000Z");
+
+  assert.equal(
+    decideStoreWebhookSync(
+      {
+        billingProvider: "apple_store",
+        planCode: "pro",
+        status: "active",
+        periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      "DID_CHANGE_RENEWAL_PREF",
+      now,
+    ),
+    "defer_downgrade",
+  );
+});
+
+test("store webhook status events do not regress plan or period", () => {
+  const now = new Date("2026-06-30T00:00:00.000Z");
+  const existing = {
+    billingProvider: "apple_store",
+    planCode: "pro",
+    status: "active",
+    periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+  };
+  const incoming = {
+    billingProvider: "apple_store",
+    planCode: "pro",
+    status: "canceled",
+    periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+  };
+
+  assert.equal(decideStoreWebhookSync(existing, incoming, "REFUND", now), "apply_status_only");
+  assert.equal(
+    decideStoreWebhookSync(
+      existing,
+      { ...incoming, status: "active" },
+      "DID_CHANGE_RENEWAL_STATUS",
+      now,
+    ),
+    "apply_status_only",
+  );
+});
+
+test("stale ordinary store webhooks are ignored", () => {
+  const now = new Date("2026-06-30T00:00:00.000Z");
+
+  assert.equal(
+    decideStoreWebhookSync(
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-25T00:00:00.000Z"),
+      },
+      {
+        billingProvider: "apple_store",
+        planCode: "solo",
+        status: "active",
+        periodEndsAt: new Date("2026-07-01T00:00:00.000Z"),
+      },
+      "DID_RENEW",
+      now,
+    ),
+    "ignore",
   );
 });
 

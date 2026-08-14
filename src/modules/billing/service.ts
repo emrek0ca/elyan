@@ -640,6 +640,66 @@ export function shouldIgnoreStaleStoreVerification(
   return !(incomingPeriodEndsAt instanceof Date) || incomingPeriodEndsAt.getTime() <= existingPeriodEndsAt.getTime();
 }
 
+export type StoreWebhookSyncDecision =
+  | "apply"
+  | "defer_downgrade"
+  | "apply_status_only"
+  | "ignore";
+
+/**
+ * Apple/Google bildirimleri mağaza tarafından sıralı teslim edilmez.
+ * NEDEN: Doğrulama endpoint'i eski makbuzları korurken webhook yolu doğrudan
+ * yazarsa, geç gelen EXPIRED/DID_RENEW bildirimi güncel entitlement gerçeğini
+ * geri alabilir. Durum bildirimleri (refund, retry, renewal-status) ise aynı
+ * dönem içinde planı değiştirmeden güvenle uygulanmalıdır.
+ */
+export function decideStoreWebhookSync(
+  existing: {
+    billingProvider?: string | null;
+    planCode?: string | null;
+    status?: string | null;
+    periodEndsAt?: Date | null;
+  } | null | undefined,
+  incoming: {
+    billingProvider?: string | null;
+    planCode?: string | null;
+    status?: string | null;
+    periodEndsAt?: Date | null;
+  },
+  eventType?: string | null,
+  currentTime: Date = now(),
+): StoreWebhookSyncDecision {
+  const normalizedEventType = String(eventType || "").trim().toUpperCase();
+  const stale = shouldIgnoreStaleStoreVerification(existing, incoming, currentTime);
+  if (!stale) {
+    return "apply";
+  }
+
+  if (
+    normalizedEventType === "DID_CHANGE_RENEWAL_STATUS" ||
+    normalizedEventType === "DID_FAIL_TO_RENEW" ||
+    normalizedEventType === "REFUND" ||
+    normalizedEventType === "REVOKE"
+  ) {
+    return "apply_status_only";
+  }
+
+  const incomingStatus = normalizeSubscriptionStatus(incoming.status);
+  const existingPlanCode = normalizeBillingPlanCode(existing?.planCode);
+  const incomingPlanCode = normalizeBillingPlanCode(incoming.planCode);
+  const existingPeriodEndsAt = existing?.periodEndsAt;
+  const isDeferredDowngrade =
+    existing != null &&
+    (incomingStatus === "active" || incomingStatus === "trialing") &&
+    incomingPlanCode !== "free" &&
+    incomingPlanCode !== existingPlanCode &&
+    planTierRank(incomingPlanCode) < planTierRank(existingPlanCode) &&
+    existingPeriodEndsAt instanceof Date &&
+    existingPeriodEndsAt.getTime() > currentTime.getTime();
+
+  return isDeferredDowngrade ? "defer_downgrade" : "ignore";
+}
+
 async function getUserRow(app: FastifyInstance, userId: string) {
   const rows = await app.db
     .select({
@@ -1527,12 +1587,14 @@ async function applyStoreEntitlementEvent(
     storeTransactionId?: string | null;
     currentPeriodStartedAt?: Date | null;
     periodEndsAt?: Date | null;
+    grantCredits?: boolean;
     payload: Record<string, unknown>;
   },
 ) {
   const planCode = normalizeBillingPlanCode(input.planCode);
   const plan = getBillingPlan(planCode);
   const shouldGrant =
+    input.grantCredits !== false &&
     (input.status === "active" || input.status === "trialing") &&
     input.periodEndsAt instanceof Date &&
     input.periodEndsAt.getTime() > Date.now();
@@ -3184,6 +3246,7 @@ async function syncStoreSubscriptionFromProof(
     provider: BillingProvider;
     userId?: string | null;
     planCodeHint?: BillingPlanCode | null;
+    storeTransactionPlanCodeHint?: BillingPlanCode | null;
     providerSubscriptionReferenceCode?: string | null;
     providerCustomerReferenceCode?: string | null;
     providerPricingPlanReferenceCode?: string | null;
@@ -3221,25 +3284,106 @@ async function syncStoreSubscriptionFromProof(
     getBillingPlan(subscription.planCode).code,
   );
 
-  await persistSubscriptionState(app, subscription.userId, {
-    planCode: resolvedPlanCode,
-    status: input.status,
-    billingProvider: input.provider,
-    providerCustomerReferenceCode: input.providerCustomerReferenceCode || subscription.providerCustomerReferenceCode,
-    providerSubscriptionReferenceCode:
-      input.providerSubscriptionReferenceCode || subscription.providerSubscriptionReferenceCode,
-    providerPricingPlanReferenceCode:
-      input.providerPricingPlanReferenceCode || subscription.providerPricingPlanReferenceCode,
-    currentPeriodStartedAt: input.currentPeriodStartedAt ?? subscription.currentPeriodStartedAt,
-    periodEndsAt: input.periodEndsAt ?? subscription.periodEndsAt,
-    trialEndsAt: input.trialEndsAt ?? subscription.trialEndsAt,
-    cancelAtPeriodEnd: input.cancelAtPeriodEnd,
-  });
+  const eventType = input.eventType?.trim().toUpperCase() || "WEBHOOK_SYNC";
+  const syncDecision = decideStoreWebhookSync(
+    subscription,
+    {
+      billingProvider: input.provider,
+      planCode: resolvedPlanCode,
+      status: input.status,
+      periodEndsAt: input.periodEndsAt,
+    },
+    eventType,
+  );
+  let grantCredits = true;
 
+  if (syncDecision === "apply") {
+    await persistSubscriptionState(app, subscription.userId, {
+      planCode: resolvedPlanCode,
+      status: input.status,
+      billingProvider: input.provider,
+      providerCustomerReferenceCode: input.providerCustomerReferenceCode || subscription.providerCustomerReferenceCode,
+      providerSubscriptionReferenceCode:
+        input.providerSubscriptionReferenceCode || subscription.providerSubscriptionReferenceCode,
+      providerPricingPlanReferenceCode:
+        input.providerPricingPlanReferenceCode || subscription.providerPricingPlanReferenceCode,
+      currentPeriodStartedAt: input.currentPeriodStartedAt ?? subscription.currentPeriodStartedAt,
+      periodEndsAt: input.periodEndsAt ?? subscription.periodEndsAt,
+      trialEndsAt: input.trialEndsAt ?? subscription.trialEndsAt,
+      // Renewal notifications without a decoded auto-renew bit must not
+      // silently clear an already recorded cancellation preference.
+      cancelAtPeriodEnd:
+        input.cancelAtPeriodEnd ??
+        (input.status === "canceled" ? true : subscription.cancelAtPeriodEnd),
+    });
+  } else if (syncDecision === "defer_downgrade") {
+    // NEDEN: Apple downgrade bildirimi ödemenin gelecek dönem tercihini
+    // gösterir; mevcut Pro dönemi bitmeden Solo entitlement'ı başlatmak,
+    // kullanıcının ödediği Pro günlerini ve kredilerini kaybettirir.
+    await app.db
+      .update(subscriptions)
+      .set({
+        pendingPlanCode: resolvedPlanCode,
+        pendingPlanEffectiveAt: subscription.periodEndsAt,
+        updatedAt: now(),
+      })
+      .where(eq(subscriptions.userId, subscription.userId));
+    invalidateBrainProfileCache(app, subscription.userId);
+    app.log.info(
+      {
+        userId: subscription.userId,
+        provider: input.provider,
+        eventType,
+        currentPlanCode: subscription.planCode,
+        pendingPlanCode: resolvedPlanCode,
+        pendingPlanEffectiveAt: subscription.periodEndsAt,
+      },
+      "Recorded deferred store webhook downgrade; current paid period remains active",
+    );
+    grantCredits = false;
+  } else if (syncDecision === "apply_status_only") {
+    // NEDEN: durum bildirimlerinin periodEndsAt değeri eski/eşit olabilir;
+    // planı ve dönemi geri sarmadan yalnızca güvenilir durum bitini uygula.
+    const statusOnlyUpdate: Record<string, unknown> = { updatedAt: now() };
+    if (eventType === "DID_FAIL_TO_RENEW" || eventType === "REFUND" || eventType === "REVOKE") {
+      statusOnlyUpdate.status = input.status;
+    }
+    if (eventType === "DID_CHANGE_RENEWAL_STATUS") {
+      statusOnlyUpdate.cancelAtPeriodEnd = input.cancelAtPeriodEnd ?? subscription.cancelAtPeriodEnd;
+    }
+    if (eventType === "REFUND" || eventType === "REVOKE") {
+      statusOnlyUpdate.cancelAtPeriodEnd = true;
+    }
+    await app.db
+      .update(subscriptions)
+      .set(statusOnlyUpdate)
+      .where(eq(subscriptions.userId, subscription.userId));
+    invalidateBrainProfileCache(app, subscription.userId);
+    grantCredits = false;
+  } else {
+    app.log.warn(
+      {
+        userId: subscription.userId,
+        provider: input.provider,
+        eventType,
+        currentPlanCode: subscription.planCode,
+        currentPeriodEndsAt: subscription.periodEndsAt,
+        incomingPlanCode: resolvedPlanCode,
+        incomingStatus: input.status,
+        incomingPeriodEndsAt: input.periodEndsAt,
+      },
+      "Ignoring stale store webhook that would regress subscription truth",
+    );
+    grantCredits = false;
+  }
+
+  const storeTransactionPlanCode = normalizeBillingPlanCode(
+    input.storeTransactionPlanCodeHint ?? resolvedPlanCode,
+  );
   const storeTransaction = await upsertStoreTransaction(app, {
     userId: subscription.userId,
     provider: input.provider,
-    planCode: resolvedPlanCode,
+    planCode: storeTransactionPlanCode,
     productId: input.providerPricingPlanReferenceCode ?? null,
     purchaseToken: input.purchaseToken ?? input.providerSubscriptionReferenceCode ?? null,
     originalTransactionId: input.providerCustomerReferenceCode ?? input.providerSubscriptionReferenceCode ?? null,
@@ -3257,12 +3401,13 @@ async function syncStoreSubscriptionFromProof(
     userId: subscription.userId,
     sourceProvider: input.provider,
     planCode: resolvedPlanCode,
-    eventType: input.eventType?.trim() || "webhook_sync",
+    eventType,
     status: input.status,
     sourceReferenceCode: input.providerSubscriptionReferenceCode ?? input.providerCustomerReferenceCode ?? null,
     storeTransactionId: storeTransaction.id,
     currentPeriodStartedAt: input.currentPeriodStartedAt ?? subscription.currentPeriodStartedAt,
     periodEndsAt: input.periodEndsAt ?? subscription.periodEndsAt,
+    grantCredits,
     payload: input.payload,
   });
 
@@ -3285,6 +3430,23 @@ export async function handleAppleStoreWebhook(app: FastifyInstance, payload: Rec
   const providerCustomerReferenceCode = providerSubscriptionReferenceCode;
   const providerPricingPlanReferenceCode =
     readReceiptText(transactionInfo?.productId) || null;
+  const transactionPlanCode = providerPricingPlanReferenceCode
+    ? resolveApplePlanCode(app, providerPricingPlanReferenceCode)
+    : undefined;
+  const autoRenewProductId = readReceiptText(renewalInfo?.autoRenewProductId);
+  // NEDEN: DID_CHANGE_RENEWAL_PREF içindeki transaction mevcut dönemi,
+  // autoRenewProductId ise kullanıcının gelecek dönem seçimini temsil eder.
+  // Gelecek dönem downgrade'ını mevcut entitlement gibi yazmamak için hedefi
+  // ayrı çözümlüyoruz; transaction kaydı yine mevcut ürünle tutuluyor.
+  const renewalPreferencePlanCode =
+    notificationType === "DID_CHANGE_RENEWAL_PREF" && autoRenewProductId
+      ? resolveApplePlanCode(app, autoRenewProductId)
+      : undefined;
+  const autoRenewStatus = Number(renewalInfo?.autoRenewStatus);
+  const cancelAtPeriodEnd =
+    notificationType === "DID_CHANGE_RENEWAL_STATUS" && Number.isFinite(autoRenewStatus)
+      ? autoRenewStatus === 0
+      : undefined;
   const status =
     notificationType === "REFUND" ||
     notificationType === "REVOKE" ||
@@ -3331,13 +3493,10 @@ export async function handleAppleStoreWebhook(app: FastifyInstance, payload: Rec
       status,
       currentPeriodStartedAt: parseEpochMs(transactionInfo.purchaseDate),
       periodEndsAt: parseEpochMs(transactionInfo.expiresDate),
-      cancelAtPeriodEnd:
-        notificationType === "DID_CHANGE_RENEWAL_STATUS" &&
-        Number(renewalInfo?.autoRenewStatus) === 0,
+      cancelAtPeriodEnd,
       appAccountToken: readReceiptText(transactionInfo.appAccountToken) || null,
-      planCodeHint: providerPricingPlanReferenceCode
-        ? resolveApplePlanCode(app, providerPricingPlanReferenceCode)
-        : undefined,
+      planCodeHint: renewalPreferencePlanCode ?? transactionPlanCode,
+      storeTransactionPlanCodeHint: transactionPlanCode,
       payload: {
         notificationType,
         subtype: subtype || null,
