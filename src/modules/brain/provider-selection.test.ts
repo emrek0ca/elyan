@@ -1,3 +1,6 @@
+// NOT: model adları gpt ailesinden seçilir. `buildGroqModelCatalog`
+// gpt-only politikası uygular; gpt DIŞI bir ad sessizce gpt varsayılanına
+// düşer, bu yüzden yer tutucular da gpt adları olmalı.
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
@@ -93,9 +96,9 @@ test("buildProviderHeaders adds Gemini bearer auth", () => {
 test("buildInferenceProviderCandidates prefers hosted Groq when configured", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_REASONING_MODEL: "reasoning-model",
-    GROQ_FALLBACK_MODEL: "reasoning-model",
-    GROQ_FAST_MODEL: "fast-model",
+    GROQ_REASONING_MODEL: "openai/gpt-reasoning-model",
+    GROQ_FALLBACK_MODEL: "openai/gpt-reasoning-model",
+    GROQ_FAST_MODEL: "openai/gpt-fast-model",
   });
 
   const candidates = buildInferenceProviderCandidates({
@@ -108,7 +111,7 @@ test("buildInferenceProviderCandidates prefers hosted Groq when configured", () 
   assert.equal(candidates[0]?.provider, "groq");
   assert.equal(candidates[0]?.hosted, true);
   assert.equal(candidates[0]?.baseUrl, "https://api.groq.com/openai/v1");
-  assert.deepEqual(candidates[0]?.preferredModels, ["reasoning-model", "fast-model"]);
+  assert.deepEqual(candidates[0]?.preferredModels, ["openai/gpt-reasoning-model", "openai/gpt-fast-model"]);
   assert.equal(candidates[1]?.provider, "ollama");
   assert.equal(candidates[1]?.hosted, false);
 });
@@ -116,9 +119,9 @@ test("buildInferenceProviderCandidates prefers hosted Groq when configured", () 
 test("buildInferenceProviderCandidates keeps Groq first for normal chat when Gemini is configured", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
     GEMINI_API_KEY: "gemini-key",
     GEMINI_TEXT_MODEL: "gemini-text",
     GEMINI_FAST_MODEL: "gemini-fast",
@@ -136,8 +139,8 @@ test("buildInferenceProviderCandidates keeps Groq first for normal chat when Gem
   // Sohbet workload'ları primary 120b düşerse hızlı+güvenilir 20b'ye iner
   // (kırılgan qwen ikinci sıraya alındı).
   assert.deepEqual(candidates[0]?.preferredModels, [
-    "groq-reasoning",
-    "groq-fast",
+    "openai/gpt-groq-reasoning",
+    "openai/gpt-groq-fast",
   ]);
   assert.equal(candidates[1]?.provider, "gemini");
   assert.deepEqual(candidates[1]?.preferredModels, ["gemini-text", "gemini-fast"]);
@@ -147,9 +150,9 @@ test("buildInferenceProviderCandidates uses Groq Compound for planning when enab
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
   });
 
   const candidates = buildInferenceProviderCandidates({
@@ -162,8 +165,8 @@ test("buildInferenceProviderCandidates uses Groq Compound for planning when enab
   assert.equal(candidates[0]?.provider, "groq");
   assert.deepEqual(candidates[0]?.preferredModels, [
     "groq/compound",
-    "groq-reasoning",
-    "groq-fallback",
+    "openai/gpt-groq-reasoning",
+    "openai/gpt-groq-fallback",
   ]);
 });
 
@@ -172,9 +175,9 @@ test("buildInferenceProviderCandidates uses Compound mini for public fresh resea
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
     GROQ_COMPOUND_RESEARCH_ENABLED: true,
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
   });
 
   const candidates = buildInferenceProviderCandidates({
@@ -187,8 +190,8 @@ test("buildInferenceProviderCandidates uses Compound mini for public fresh resea
   assert.equal(candidates[0]?.provider, "groq");
   assert.deepEqual(candidates[0]?.preferredModels, [
     "groq/compound-mini",
-    "groq-reasoning",
-    "groq-fast",
+    "openai/gpt-groq-reasoning",
+    "openai/gpt-groq-fast",
   ]);
 });
 
@@ -197,9 +200,9 @@ test("buildInferenceProviderCandidates keeps Compound off when research flag is 
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
     GROQ_COMPOUND_RESEARCH_ENABLED: false,
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
   });
 
   const candidates = buildInferenceProviderCandidates({
@@ -210,8 +213,8 @@ test("buildInferenceProviderCandidates keeps Compound off when research flag is 
   });
 
   assert.deepEqual(candidates[0]?.preferredModels, [
-    "groq-reasoning",
-    "groq-fast",
+    "openai/gpt-groq-reasoning",
+    "openai/gpt-groq-fast",
   ]);
 });
 
@@ -219,9 +222,9 @@ test("buildInferenceProviderCandidates depth-router escalates a live-web chat tu
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
   });
 
   const withSignal = buildInferenceProviderCandidates({
@@ -247,9 +250,9 @@ test("buildInferenceProviderCandidates depth-router is a no-op while the Compoun
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: false,
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
   });
 
   const candidates = buildInferenceProviderCandidates({
@@ -267,9 +270,9 @@ test("buildInferenceProviderCandidates adds OpenAI frontier after Groq for deep 
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
     GROQ_COMPOUND_DEEP_ENABLED: true,
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
     OPENAI_API_KEY: "openai-key",
     OPENAI_FRONTIER_MODEL: "frontier-model",
   });
@@ -290,9 +293,9 @@ test("buildInferenceProviderCandidates does not use Groq Compound for document a
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
   });
 
   const candidates = buildInferenceProviderCandidates({
@@ -303,18 +306,22 @@ test("buildInferenceProviderCandidates does not use Groq Compound for document a
   });
 
   assert.equal(candidates[0]?.provider, "groq");
+  // KATI-JSON ŞERİDİ. `document_analysis` şemaya uyan JSON döndürüyor, bu yüzden
+  // reasoning-DIŞI modelle başlar. Canlı ölçüm (2026-08-13, görev a4924a76 —
+  // "3.sınıf matematik PDF yaz"): bu iş yükünde gpt-oss-20b ve qwen ikisi de
+  // 400 json_validate_failed verdi, zincir tükendi ve PDF hiç üretilemedi.
   assert.deepEqual(candidates[0]?.preferredModels, [
-    "groq-fallback",
-    "groq-fast",
+    "llama-3.1-8b-instant",
+    "openai/gpt-groq-fast",
   ]);
 });
 
 test("buildInferenceProviderCandidates can isolate primary and fallback workers", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_REASONING_MODEL: "groq-reasoning",
-    GROQ_FAST_MODEL: "groq-fast",
-    GROQ_FALLBACK_MODEL: "groq-fallback",
+    GROQ_REASONING_MODEL: "openai/gpt-groq-reasoning",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
+    GROQ_FALLBACK_MODEL: "openai/gpt-groq-fallback",
     GEMINI_API_KEY: "gemini-key",
     GEMINI_TEXT_MODEL: "gemini-text",
     GEMINI_FAST_MODEL: "gemini-fast",
@@ -366,8 +373,8 @@ test("paid Gemini fallback is not constrained by the free-tier model allowlist",
 test("buildInferenceProviderCandidates prefers Gemini for vision workloads", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_VISION_MODEL: "groq-vision",
-    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_VISION_MODEL: "openai/gpt-groq-vision",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
     GEMINI_API_KEY: "gemini-key",
     GEMINI_VISION_MODEL: "gemini-vision",
     GEMINI_FAST_MODEL: "gemini-fast",
@@ -391,8 +398,8 @@ test("buildInferenceProviderCandidates prefers Gemini for vision workloads", () 
 test("buildInferenceProviderCandidates prefers Groq for fast vision profile", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_VISION_MODEL: "groq-vision",
-    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_VISION_MODEL: "openai/gpt-groq-vision",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
     GEMINI_API_KEY: "gemini-key",
     GEMINI_VISION_MODEL: "gemini-vision",
     GEMINI_FAST_MODEL: "gemini-fast",
@@ -421,7 +428,7 @@ test("buildInferenceProviderCandidates prefers Groq for fast vision profile", ()
 test("document analysis uses Gemini Flash-Lite with 3.5 fallback", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_FAST_MODEL: "groq-fast",
+    GROQ_FAST_MODEL: "openai/gpt-groq-fast",
     GEMINI_API_KEY: "gemini-key",
     GEMINI_FAST_MODEL: "gemini-fast",
     GEMINI_TEXT_MODEL: "gemini-quality",
@@ -444,7 +451,7 @@ test("document analysis uses Gemini Flash-Lite with 3.5 fallback", () => {
 test("sensitive vision excludes hosted providers without privacy attestation", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_VISION_MODEL: "groq-vision",
+    GROQ_VISION_MODEL: "openai/gpt-groq-vision",
     GEMINI_API_KEY: "gemini-key",
     GEMINI_VISION_MODEL: "gemini-vision",
     GROQ_VISION_SENSITIVE_DATA_ATTESTED: false,
@@ -464,7 +471,7 @@ test("sensitive vision excludes hosted providers without privacy attestation", (
 test("sensitive vision allows only explicitly attested hosted provider", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
-    GROQ_VISION_MODEL: "groq-vision",
+    GROQ_VISION_MODEL: "openai/gpt-groq-vision",
     GEMINI_API_KEY: "gemini-key",
     GEMINI_VISION_MODEL: "gemini-vision",
     GROQ_VISION_SENSITIVE_DATA_ATTESTED: true,

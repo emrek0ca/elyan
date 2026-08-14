@@ -77,29 +77,33 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       compactText(config.ELYAN_SHARED_BRAIN_FAST_MODEL),
     "openai/gpt-oss-20b",
   );
-  // YÖNLENDİRME MODELİ — sohbet modelinden AYRI ve bilinçli olarak
-  // reasoning-DIŞI.
+  // KATI-JSON ŞERİDİ — gpt-only politikasının BİLİNÇLİ İSTİSNASI.
   //
-  // `intent`/`fast_route` iş yükleri modelden KATI JSON ister (yönlendirici
-  // şeması iç içe `semanticDesktopContract` taşır). gpt-oss ailesi cevaptan
+  // Bu şerit modelden şemaya birebir uyan JSON ister. gpt-oss ailesi cevaptan
   // önce gizli bir düşünme turu yapar ve o turun token'ları bütçeye sayılır;
-  // sonuçta görünür JSON hiç üretilmez (Groq json_validate_failed) ve tur
-  // "yanıt oluşturamadım" fallback'ine düşer. Canlı ölçüm (2026-08-08):
-  //   gpt-oss-20b  → görünür çıktı BOŞ, yönlendirici hiç karar veremedi
-  //   llama-3.1-8b → finish_reason=stop, GEÇERLİ JSON, doğru karar
-  // Yönlendirici karar veremeyince hiçbir görev masaüstüne yönlenmiyordu.
-  // Sohbet yolları (`mobile_chat_*`) bu değişiklikten ETKİLENMEZ.
-  // YÖNLENDİRME MODELİ ARTIK GPT. Yukarıdaki ölçüm (2026-08-08) gpt-oss'un
-  // gizli düşünme turunu token bütçesinden yiyip görünür JSON üretmediğini
-  // göstermişti. O tuzağın panzehiri bugün YERİNDE: `resolveReasoningEffort`
-  // hem `intent` hem `fast_route` iş yükleri için "low" döndürüyor, yani gizli
-  // tur bütçeyi tüketmiyor. Yine de bu, canlı doğrulaması yapılması gereken
-  // TEK riskli geçiş: yönlendirici karar veremezse hiçbir görev masaüstüne
-  // gitmez. Geri alma tek satır: GROQ_ROUTING_MODEL.
-  const routingModel = gptOnlyModel(
-    config.GROQ_ROUTING_MODEL,
-    "openai/gpt-oss-20b",
-  );
+  // geriye geçerli JSON kalmaz. İstek gövdesinde `response_format: json_schema`
+  // ile `reasoning_effort` yan yana gidiyor (`provider-request.ts`), Groq da
+  // bunu `json_validate_failed` ile 400'lüyor.
+  //
+  // İKİ AYRI CANLI ÖLÇÜM, aynı sonuç:
+  //   2026-08-08 (yönlendirme): gpt-oss-20b → görünür çıktı BOŞ, yönlendirici
+  //     karar veremedi, hiçbir görev masaüstüne gitmedi.
+  //     llama-3.1-8b → finish_reason=stop, GEÇERLİ JSON, doğru karar.
+  //   2026-08-13 (görev a4924a76, "3.sınıf matematik PDF yaz"):
+  //     gpt-oss-20b → 400 json_validate_failed
+  //     qwen3.6-27b → 400 json_validate_failed
+  //     → server_brain_unavailable → kullanıcı "Bu turda yanıt oluşturulamadı"
+  //       gördü ve PDF hiç üretilmedi.
+  //
+  // `reasoning_effort: "low"` panzehir DEĞİL: ikinci ölçümde efor zaten
+  // düşüktü ve yine 400 geldi. Bu yüzden şerit reasoning-DIŞI bir modele
+  // sabitlenir; `gptOnlyModel` filtresinden bilerek geçirilmez.
+  //
+  // Kapsam dar: sohbet, akıl yürütme, planlama ve belge ÜRETİMİ tamamen gpt
+  // kalır. Burada değişen yalnız "şemaya uyan JSON döndür" çağrıları.
+  const structuredJsonModel =
+    compactText(config.GROQ_ROUTING_MODEL) || "llama-3.1-8b-instant";
+  const routingModel = structuredJsonModel;
   const fallbackModel = gptOnlyModel(
     config.GROQ_FALLBACK_MODEL,
     "openai/gpt-oss-120b",
@@ -143,7 +147,10 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       mobile_chat_fast: fastModel,
       mobile_chat_balanced: reasoningModel,
       mobile_chat_deep_refine: reasoningModel,
-      document_analysis: fallbackModel,
+      // KATI-JSON ŞERİDİ. Belge analizi şemaya uyan JSON döndürüyor; canlıda
+      // (2026-08-13, görev a4924a76) bu iş yükünde önce gpt-oss-20b sonra
+      // qwen 400 `json_validate_failed` verdi ve PDF isteği hiç üretilemedi.
+      document_analysis: structuredJsonModel,
       document_generate: reasoningModel,
       table_generate: reasoningModel,
       image_analyze: visionModel,
@@ -154,6 +161,9 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       desktop_handoff: fastModel,
       vision_reasoning: visionModel,
     },
+    // `models` sağlayıcı aday/keşif listesidir. Katı-JSON modeli buraya
+    // GİRMEZ — yönlendirme modeli de hiç girmiyordu. Şerit iş yükü bazında
+    // seçilir; listeye eklemek sağlayıcı adaylarını sessizce değiştirirdi.
     models: uniqueStrings([reasoningModel, fastModel, fallbackModel, visionModel]),
   };
 }

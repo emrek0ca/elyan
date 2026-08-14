@@ -370,6 +370,7 @@ import {
   buildElyanVoiceProfilePromptBlock,
   sanitizeFinalAssistantResponse,
   isMachineOutputWorkload,
+  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
 } from "./response-policy.js";
 import { buildBehaviorLearningPromptBlock } from "./behavior-learning.js";
 import {
@@ -8567,7 +8568,7 @@ export async function generateSharedBrainReply(
       throw new AppError(
         503,
         "server_brain_unavailable",
-        "Bu turda yanıt oluşturulamadı. Tekrar dene.",
+        ASSISTANT_TURN_FAILURE_FALLBACK_TR,
         {
           route: input.route ?? "shared_brain",
           workload,

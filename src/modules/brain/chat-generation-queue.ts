@@ -1,3 +1,4 @@
+import { ASSISTANT_TURN_FAILURE_FALLBACK_TR } from "./response-policy.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   DelayedError,
@@ -474,7 +475,7 @@ async function enqueueFallback(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        "Bu turda yanıt oluşturulamadı. Tekrar dene.",
+        ASSISTANT_TURN_FAILURE_FALLBACK_TR,
         {
           transient: false,
           retrySuggested: false,

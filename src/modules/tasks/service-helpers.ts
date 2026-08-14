@@ -1,3 +1,4 @@
+import { ASSISTANT_TURN_FAILURE_FALLBACK_TR } from "../brain/response-policy.js";
 import type { TaskStatus } from "../../contracts/domain.js";
 import { createIdempotencyFingerprint } from "../../lib/idempotency.js";
 import { AppError, unprocessableEntity } from "../../lib/errors.js";
@@ -1227,7 +1228,7 @@ export function extractSharedBrainConversation(
 
 export function getSharedBrainFallbackMessage(
   error: unknown,
-  fallback = "Bu turda yanıt oluşturulamadı. Tekrar dene.",
+  fallback = ASSISTANT_TURN_FAILURE_FALLBACK_TR,
 ) {
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();
@@ -1388,7 +1389,7 @@ export function resolveSafeChatContinuityReply(input: {
     );
   return asksQuestion
     ? "Bu turda yanıt tamamlanamadı. Lütfen yeniden dene."
-    : "Bu turda yanıt oluşturulamadı. Tekrar dene.";
+    : ASSISTANT_TURN_FAILURE_FALLBACK_TR;
 }
 
 function looksLikeUnsafeBackendError(message: string) {

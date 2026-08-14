@@ -1,3 +1,6 @@
+// NOT: model adları gpt ailesinden seçilir. `buildGroqModelCatalog`
+// gpt-only politikası uygular; gpt DIŞI bir ad sessizce gpt varsayılanına
+// düşer, bu yüzden yer tutucular da gpt adları olmalı.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { acquireGeminiInferencePermit } from "./gemini-inference-policy.js";
@@ -7,7 +10,7 @@ function paidApp(overrides: Record<string, unknown> = {}) {
     config: {
       GEMINI_FREE_ONLY: false,
       GEMINI_API_KEY: "paid-key",
-      GEMINI_FAST_MODEL: "fast-model",
+      GEMINI_FAST_MODEL: "openai/gpt-fast-model",
       GEMINI_PAID_FALLBACK_ENABLED: true,
       GEMINI_PAID_DATA_PROCESSING_ATTESTED: true,
       ...overrides,
@@ -18,7 +21,7 @@ function paidApp(overrides: Record<string, unknown> = {}) {
 const baseInput = {
   feature: "brain_response" as const,
   userId: "user-1",
-  model: "fast-model",
+  model: "openai/gpt-fast-model",
   requestPayload: { messages: [{ role: "user", content: "Merhaba" }] },
   dataSharingConsentValidated: true,
 };

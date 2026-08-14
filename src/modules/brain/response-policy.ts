@@ -489,6 +489,21 @@ export const ASSISTANT_GENERIC_FALLBACK_TR =
   "Bu kez düzgün bir yanıt oluşturamadım. Mesajını yeniden gönderir misin?";
 export const ASSISTANT_GENERIC_FALLBACK_EN =
   "I couldn't produce a complete answer this time. Please send the message again.";
+/**
+ * İKİNCİ çıkmaz cümle — sağlayıcı zinciri tükendiğinde üretilen.
+ *
+ * Bu metin kod tabanında BEŞ ayrı yerde düz string olarak tekrarlanıyordu ve
+ * kanonik bir sabiti yoktu; sonuç olarak `isGenericAssistantFallbackReply`
+ * onu TANIMIYORDU. Oysa o kontrolün tek işi "bu bir cevap değil" demek.
+ *
+ * Canlı bedeli (2026-08-13, görev a4924a76 — "3.sınıf matematik PDF yaz"):
+ * sağlayıcı zinciri json_validate_failed ile tükendi, continuity dalı bu
+ * cümleyi üretti, koruma tanımadığı için tur BAŞARILI sayılıp `completed`
+ * yazıldı. Kullanıcı cevapsız kaldı, görev bitmiş göründü, mobil widget
+ * "hâlâ çalışıyor"da dondu.
+ */
+export const ASSISTANT_TURN_FAILURE_FALLBACK_TR =
+  "Bu turda yanıt oluşturulamadı. Tekrar dene.";
 
 /**
  * Metin, "üretemedim" son çaresinin ta kendisi mi?
@@ -506,7 +521,8 @@ export function isGenericAssistantFallbackReply(text: unknown): boolean {
   }
   return (
     normalized === ASSISTANT_GENERIC_FALLBACK_TR ||
-    normalized === ASSISTANT_GENERIC_FALLBACK_EN
+    normalized === ASSISTANT_GENERIC_FALLBACK_EN ||
+    normalized === ASSISTANT_TURN_FAILURE_FALLBACK_TR
   );
 }
 

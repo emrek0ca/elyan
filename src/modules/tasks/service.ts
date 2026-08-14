@@ -95,6 +95,7 @@ import {
   isGenericAssistantFallbackReply,
   responsePolicyForPrompt,
   sanitizeFinalAssistantResponse,
+  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
 } from "../brain/response-policy.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import {
@@ -7758,7 +7759,7 @@ async function processSharedBrainChatTask(
       throw new AppError(
         502,
         "provider_empty_output",
-        "Bu turda yanıt oluşturulamadı. Tekrar dene.",
+        ASSISTANT_TURN_FAILURE_FALLBACK_TR,
         {
           transient: retryable,
           retrySuggested: retryable,
@@ -8255,6 +8256,24 @@ async function completeSafeChatContinuityFallback(
         errorCode,
         failureClass: details?.failureClass,
       });
+  // ÇIKMAZ CÜMLE BİR CEVAP DEĞİLDİR — TAMAMLANDI DİYE YAZILAMAZ.
+  //
+  // Continuity dalı sağlayıcı zinciri tükendiğinde "Bu turda yanıt
+  // oluşturulamadı." üretebiliyor. Cümle boş-olmayan bir string olduğu için
+  // aşağıdaki akış turu BAŞARILI sayıp `completed` yazıyordu: kullanıcı
+  // cevapsız kalıyor, görev bitmiş görünüyor, mobil widget "hâlâ çalışıyor"da
+  // donuyordu (canlı: 2026-08-13, görev a4924a76 — "3.sınıf matematik PDF yaz").
+  //
+  // `false` dönerek gerçek hata yolunu çalıştırıyoruz: hata görünür olur,
+  // yeniden deneme mümkün kalır ve görev yalancı bir "completed" ile
+  // kapanmaz. Deterministik grafik gerçek bir cevaptır, o muaf.
+  if (!derivableChart && isGenericAssistantFallbackReply(responseText)) {
+    app.log.warn(
+      { taskId: task.id, requestId: input.requestId, errorCode },
+      "continuity reply is a dead-end sentence; task is not completed",
+    );
+    return false;
+  }
   if (!responseText || extractChatStreamingMetadata(task) == null) {
     return false;
   }

@@ -22,12 +22,21 @@ function createLearningMemoryFakeApp() {
     },
     insert() {
       return {
-        values: async (values: unknown[] | Record<string, unknown>) => {
+        // Gerçek drizzle builder'ı `.onConflictDoNothing()` zincirlemesine izin
+        // verir; üretim kodu mükerrer öğrenme kaydını orada eliyor
+        // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
+        // hem de o metodu taşır.
+        values: (values: unknown[] | Record<string, unknown>) => {
           if (Array.isArray(values)) {
             learningRows.push(...values);
-            return;
+          } else {
+            memoryFacts.push(values);
           }
-          memoryFacts.push(values);
+          const result = Promise.resolve(undefined) as Promise<undefined> & {
+            onConflictDoNothing: () => Promise<undefined>;
+          };
+          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          return result;
         },
       };
     },
@@ -134,8 +143,17 @@ test("persistLearningSignals stores only policy-approved safe events", async () 
     },
     db: {
       insert: () => ({
-        values: async (values: unknown[]) => {
+        // Gerçek drizzle builder'ı `.onConflictDoNothing()` zincirlemesine izin
+        // verir; üretim kodu mükerrer öğrenme kaydını orada eliyor
+        // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
+        // hem de o metodu taşır ki testler gerçek API'yi yansıtsın.
+        values: (values: unknown[]) => {
           inserted.push(...values);
+          const result = Promise.resolve(undefined) as Promise<undefined> & {
+            onConflictDoNothing: () => Promise<undefined>;
+          };
+          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          return result;
         },
       }),
     },
@@ -204,8 +222,17 @@ test("persistLearningSignals suppresses repeated implicit observations but keeps
     },
     db: {
       insert: () => ({
-        values: async (values: unknown[]) => {
+        // Gerçek drizzle builder'ı `.onConflictDoNothing()` zincirlemesine izin
+        // verir; üretim kodu mükerrer öğrenme kaydını orada eliyor
+        // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
+        // hem de o metodu taşır ki testler gerçek API'yi yansıtsın.
+        values: (values: unknown[]) => {
           inserted.push(...values);
+          const result = Promise.resolve(undefined) as Promise<undefined> & {
+            onConflictDoNothing: () => Promise<undefined>;
+          };
+          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          return result;
         },
       }),
     },
@@ -363,8 +390,17 @@ test("recordBridgeLearningSignals stores safe routing and bridge outcome signals
     },
     db: {
       insert: () => ({
-        values: async (values: unknown[]) => {
+        // Gerçek drizzle builder'ı `.onConflictDoNothing()` zincirlemesine izin
+        // verir; üretim kodu mükerrer öğrenme kaydını orada eliyor
+        // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
+        // hem de o metodu taşır ki testler gerçek API'yi yansıtsın.
+        values: (values: unknown[]) => {
           inserted.push(...values);
+          const result = Promise.resolve(undefined) as Promise<undefined> & {
+            onConflictDoNothing: () => Promise<undefined>;
+          };
+          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          return result;
         },
       }),
     },
@@ -402,8 +438,17 @@ test("recordTaskLearningFromCompletion stores terminal and completion state sign
     },
     db: {
       insert: () => ({
-        values: async (values: unknown[]) => {
+        // Gerçek drizzle builder'ı `.onConflictDoNothing()` zincirlemesine izin
+        // verir; üretim kodu mükerrer öğrenme kaydını orada eliyor
+        // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
+        // hem de o metodu taşır ki testler gerçek API'yi yansıtsın.
+        values: (values: unknown[]) => {
           inserted.push(...values);
+          const result = Promise.resolve(undefined) as Promise<undefined> & {
+            onConflictDoNothing: () => Promise<undefined>;
+          };
+          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          return result;
         },
       }),
     },
@@ -435,8 +480,17 @@ test("recordBlockQualityLearning stores safe block quality feedback signals", as
     },
     db: {
       insert: () => ({
-        values: async (values: unknown[]) => {
+        // Gerçek drizzle builder'ı `.onConflictDoNothing()` zincirlemesine izin
+        // verir; üretim kodu mükerrer öğrenme kaydını orada eliyor
+        // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
+        // hem de o metodu taşır ki testler gerçek API'yi yansıtsın.
+        values: (values: unknown[]) => {
           inserted.push(...values);
+          const result = Promise.resolve(undefined) as Promise<undefined> & {
+            onConflictDoNothing: () => Promise<undefined>;
+          };
+          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          return result;
         },
       }),
     },
@@ -491,8 +545,17 @@ test("recordTaskFeedback stores a compact workflow outcome signal", async () => 
     },
     db: {
       insert: () => ({
-        values: async (values: unknown[]) => {
+        // Gerçek drizzle builder'ı `.onConflictDoNothing()` zincirlemesine izin
+        // verir; üretim kodu mükerrer öğrenme kaydını orada eliyor
+        // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
+        // hem de o metodu taşır ki testler gerçek API'yi yansıtsın.
+        values: (values: unknown[]) => {
           inserted.push(...values);
+          const result = Promise.resolve(undefined) as Promise<undefined> & {
+            onConflictDoNothing: () => Promise<undefined>;
+          };
+          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          return result;
         },
       }),
     },
