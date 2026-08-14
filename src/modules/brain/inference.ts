@@ -279,6 +279,7 @@ import {
   getSharedBrainWorkloadProfile,
   type SharedBrainWorkload,
 } from "./workloads.js";
+import { logBrainDecisionObservation } from "./decision-observability.js";
 export { calculateBillableAiCredits } from "./credits.js";
 import {
   type GenerationAffect,
@@ -7318,6 +7319,21 @@ export async function generateSharedBrainReply(
         (fastTextTurn &&
           fastTextToolsExplicitlyRequested &&
           (input.agentToolCatalog?.length ?? 0) > 0));
+    const responseFormat = input.responseSchemaOverride
+      ? "json_schema"
+      : machineJsonRoute || turnEnvelopeEnabled
+        ? "json_object"
+        : "text";
+    logBrainDecisionObservation(app, {
+      taskId: input.taskId ?? null,
+      workload,
+      route: input.route ?? "shared_brain",
+      model: baseModel,
+      responseFormat,
+      result: "running",
+      durationMs: Date.now() - startedAt,
+      semanticContract: input.routeDecision?.semanticContract,
+    });
     // When registered tools are available, the envelope is an execution
     // protocol rather than an optional presentation format. Falling back to
     // unstructured prose here can expose a perfectly understood tool plan as
@@ -8520,6 +8536,16 @@ export async function generateSharedBrainReply(
     }
 
     if (!successfulProvider) {
+      logBrainDecisionObservation(app, {
+        taskId: input.taskId ?? null,
+        workload,
+        route: input.route ?? "shared_brain",
+        model: baseModel,
+        responseFormat,
+        result: "error",
+        durationMs: Date.now() - startedAt,
+        semanticContract: input.routeDecision?.semanticContract,
+      });
       if (!input.internalEvaluation?.skipInvocationLogging) {
         await app.db.insert(aiProviderInvocations).values({
           userId: input.userId,
@@ -8860,6 +8886,17 @@ export async function generateSharedBrainReply(
     });
     const billableAiCredits = billableTokenUsage.billableTokens;
     const latencyMs = Date.now() - startedAt;
+
+    logBrainDecisionObservation(app, {
+      taskId: input.taskId ?? null,
+      workload,
+      route: input.route ?? "shared_brain",
+      model: successfulModel,
+      responseFormat,
+      result: fallbackUsed ? "fallback" : "success",
+      durationMs: latencyMs,
+      semanticContract: input.routeDecision?.semanticContract,
+    });
 
     if (!input.internalEvaluation?.skipInvocationLogging) {
       await app.db.transaction(async (tx) => {

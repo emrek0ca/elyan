@@ -1,8 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { classifyIntent } from "../../core/understanding/intent-classifier.js";
+import {
+  buildSemanticContract,
+  finalizeSemanticContractForRoute,
+  type SemanticContract,
+} from "../../core/understanding/intent-semantic.js";
+import {
+  compileOutputContract,
+  workloadFromOutputContract,
+} from "../../core/understanding/output-contract.js";
 import { selectPolicyWorkload } from "../../core/understanding/policy-rules.js";
-import { selectToolSkillForTurn } from "../../core/understanding/tool-skill-selector.js";
 import type {
   IntentClassification,
   UnderstandingIntent,
@@ -112,6 +120,9 @@ export type CommandRouteDecision = {
   shouldAskClarification: boolean;
   failClosedReason: string | null;
   selectedWorkload: SharedBrainWorkload;
+  // Kept optional for additive compatibility with persisted/manual route fixtures;
+  // fresh decisions always populate the contract before workload selection.
+  semanticContract?: SemanticContract;
   qualityGuard?: {
     strategy: "quantum_quality_guard_v1";
     source: "runtime_quantum_liveness_feedback";
@@ -1244,6 +1255,8 @@ function deriveSelectedWorkloadWithGuard(input: {
   brainProfile?: PlanBrainProfile | null;
   rawBrainProfile?: unknown;
   confidence: number;
+  semanticContract: SemanticContract;
+  outputContract: ReturnType<typeof compileOutputContract>;
 }): {
   selectedWorkload: SharedBrainWorkload;
   qualityGuard?: CommandRouteDecision["qualityGuard"];
@@ -1256,15 +1269,13 @@ function deriveSelectedWorkloadWithGuard(input: {
     return { selectedWorkload: "desktop_handoff" };
   }
   const responsePolicy = responsePolicyForPrompt(input.message);
-  const toolSkillSelection = selectToolSkillForTurn({
-    message: input.message,
-  });
+  const contractWorkload = workloadFromOutputContract(input.outputContract);
   if (
-    toolSkillSelection.selected.workload &&
-    toolSkillSelection.outputContract.requiresArtifact &&
-    toolSkillSelection.outputContract.confidence >= 0.68
+    contractWorkload &&
+    input.semanticContract.artifact !== "none" &&
+    input.semanticContract.confidence >= 0.68
   ) {
-    return { selectedWorkload: toolSkillSelection.selected.workload };
+    return { selectedWorkload: contractWorkload };
   }
   // Structured workload rules live in a data-backed policy table so examples
   // can become fixtures instead of hidden routing branches.
@@ -1276,11 +1287,13 @@ function deriveSelectedWorkloadWithGuard(input: {
   }
   if (input.intent === "planning_request") {
     if (
-      hasPublicFreshResearchSignal(input.message) &&
+      input.semanticContract.evidence.includes("fresh_public_research") &&
       !isCompoundUnsafeSubject(input.message)
     ) {
       return {
-        selectedWorkload: hasPublicDeepResearchSignal(input.message)
+        selectedWorkload: input.semanticContract.evidence.includes(
+          "deep_public_research",
+        )
           ? "public_deep_research"
           : "public_research",
       };
@@ -1305,11 +1318,13 @@ function deriveSelectedWorkloadWithGuard(input: {
       return { selectedWorkload: "public_quantum_research" };
     }
     if (
-      hasPublicFreshResearchSignal(input.message) &&
+      input.semanticContract.evidence.includes("fresh_public_research") &&
       !isCompoundUnsafeSubject(input.message)
     ) {
       return {
-        selectedWorkload: hasPublicDeepResearchSignal(input.message)
+        selectedWorkload: input.semanticContract.evidence.includes(
+          "deep_public_research",
+        )
           ? "public_deep_research"
           : "public_research",
       };
@@ -1404,6 +1419,8 @@ function buildDecision(input: {
   brainProfile?: unknown;
   failClosedReason?: string | null;
   selectedWorkloadOverride?: SharedBrainWorkload;
+  semanticContract: SemanticContract;
+  outputContract: ReturnType<typeof compileOutputContract>;
 }): CommandRouteDecision {
   const intent = deriveNormalizedIntent({
     primaryIntent: input.primaryIntent,
@@ -1412,6 +1429,13 @@ function buildDecision(input: {
     capabilities: input.capabilities,
     message: input.message,
     confidence: input.confidence,
+  });
+  const routedSemanticContract = finalizeSemanticContractForRoute({
+    contract: input.semanticContract,
+    route: input.route,
+    requiresApproval: input.requiresApproval,
+    capabilities: input.capabilities,
+    reason: input.reason,
   });
   const workloadDecision = input.selectedWorkloadOverride
     ? {
@@ -1425,6 +1449,8 @@ function buildDecision(input: {
         brainProfile: normalizePlanBrainProfile(input.brainProfile),
         rawBrainProfile: input.brainProfile,
         confidence: input.confidence,
+        semanticContract: routedSemanticContract,
+        outputContract: input.outputContract,
       });
   const publicResearchWorkload =
     workloadDecision.selectedWorkload === "public_research" ||
@@ -1465,6 +1491,7 @@ function buildDecision(input: {
         ? input.reason
         : null),
     selectedWorkload: workloadDecision.selectedWorkload,
+    semanticContract: routedSemanticContract,
     ...(workloadDecision.qualityGuard
       ? { qualityGuard: workloadDecision.qualityGuard }
       : {}),
@@ -2427,6 +2454,25 @@ export async function decideCommandRoute(
       requestedCapabilities: input.requestedCapabilities ?? [],
     },
   });
+  // This is the only route-stage interpretation of the raw turn. The typed
+  // contract is carried through workload selection, task persistence, and the
+  // worker so later layers do not independently reclassify the prompt.
+  const outputContract = compileOutputContract({
+    message: input.message,
+    metadata,
+  });
+  const semanticContract = buildSemanticContract({
+    classification,
+    outputContract,
+    additionalEvidence: [
+      ...(hasPublicFreshResearchSignal(message)
+        ? ["fresh_public_research"]
+        : []),
+      ...(hasPublicDeepResearchSignal(message)
+        ? ["deep_public_research"]
+        : []),
+    ],
+  });
   const explicitRequestedCapabilities = uniqueSemanticCapabilities(
     input.requestedCapabilities ?? [],
   );
@@ -2718,6 +2764,8 @@ export async function decideCommandRoute(
         requiresLocalRuntime: true,
         message,
         failClosedReason: "desktop_plan_required",
+        semanticContract,
+        outputContract,
       });
     }
 
@@ -2754,6 +2802,8 @@ export async function decideCommandRoute(
         requiresLocalRuntime: true,
         message,
         failClosedReason: "desktop_runtime_selected_target",
+        semanticContract,
+        outputContract,
       });
     }
 
@@ -2785,6 +2835,8 @@ export async function decideCommandRoute(
       failClosedReason: runtimeMcpRequested
         ? "remote_mcp_runtime_unavailable"
         : "desktop_runtime_unavailable",
+      semanticContract,
+      outputContract,
     });
   }
 
@@ -2816,6 +2868,8 @@ export async function decideCommandRoute(
     requiresLocalRuntime: false,
     message,
     brainProfile: input.brainProfile,
+    semanticContract,
+    outputContract,
   });
 }
 

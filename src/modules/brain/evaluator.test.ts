@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateBrainAnswer } from "./evaluator.js";
+import { evaluateBrainAnswer, buildBrainBenchmarkCases } from "./evaluator.js";
 
 test("evaluateBrainAnswer flags incomplete and truncated mobile answers", () => {
   const result = evaluateBrainAnswer({
@@ -140,4 +140,37 @@ test("evaluateBrainAnswer classifies robotic, repeated and generic non-answers",
     retrievalUsed: false,
   });
   assert.ok(nonAnswer.failureTypes.includes("non_answer"));
+});
+
+test("brain benchmark includes the ten ordinary chat routing regressions", () => {
+  const cases = buildBrainBenchmarkCases().filter(
+    (item) => item.family === "ordinary_chat",
+  );
+
+  assert.equal(cases.length, 10);
+  assert.equal(
+    cases.every(
+      (item) =>
+        item.expectedRoute === "server_brain" &&
+        item.expectedWorkload != null &&
+        item.requiresClarification !== true &&
+        item.toolUseRequired !== true,
+    ),
+    true,
+  );
+  assert.deepEqual(
+    cases.map((item) => item.prompt),
+    [
+      "Bana anlatır mısın Atatürk'ün gençliğini",
+      "Fotosentez nasıl çalışır",
+      "Python'da list comprehension nedir",
+      "İyi bir CV nasıl yazılır",
+      "Uykusuzluk neden olur",
+      "Roma İmparatorluğu neden çöktü",
+      "Bir fıkra anlat",
+      "Kuantum dolanıklık nedir",
+      "Evde kahve nasıl demlenir",
+      "Motivasyonumu nasıl artırırım",
+    ],
+  );
 });

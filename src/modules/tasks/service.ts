@@ -40,7 +40,6 @@ import {
   envelopeTelemetrySummary,
   preferredWorkloadFromUnderstandingEnvelope,
 } from "../../core/understanding/understanding-envelope.js";
-import { selectToolSkillForTurn } from "../../core/understanding/tool-skill-selector.js";
 import {
   isExplicitChartRequest,
   isExplicitMathOrLatexRequest,
@@ -137,6 +136,7 @@ import {
   sharedBrainWorkloadValues,
   type SharedBrainWorkload,
 } from "../brain/workloads.js";
+import { logBrainDecisionObservation } from "../brain/decision-observability.js";
 import {
   chatGenerationProviderForStage,
   decideChatQueueAdmission,
@@ -468,6 +468,33 @@ function buildPromptEchoRecoveryAnswer(prompt: string) {
   }
 
   return "";
+}
+
+/**
+ * A source-backed document must fail closed as an artifact when evidence is
+ * missing, but a substantive model answer should not disappear with it. Keep
+ * the answer as an explicitly unverified continuity reply; never expose an
+ * empty terminal state when the model already produced useful prose.
+ */
+export function buildGroundingFailureContinuityText(
+  responseText: string | null | undefined,
+): string | null {
+  const candidate = sanitizeAssistantVisibleText(responseText, {
+    fallback: "",
+  }).trim();
+  if (
+    candidate.length < 40 ||
+    /^(?:araştırma için|istenen çıktıyı|bu turda yanıt|yanıt oluşturulamadı)/iu.test(
+      candidate,
+    )
+  ) {
+    return null;
+  }
+  return [
+    "Kaynak doğrulaması yapılamadığı için belge oluşturmadım.",
+    "Aşağıdaki kısa açıklama doğrulanmış kaynak yerine geçmez:",
+    candidate.slice(0, 4_000),
+  ].join("\n\n");
 }
 
 export function resolveNonEchoAssistantText(input: {
@@ -2052,6 +2079,20 @@ async function logRouteDecision(
   }
 
   app.log.info(buildRouteDecisionLogEntry(input), "task route decision");
+  logBrainDecisionObservation(app, {
+    taskId: input.taskId,
+    workload: input.routeDecision?.selectedWorkload ?? null,
+    route: input.routeDecision?.route ?? null,
+    model: null,
+    responseFormat:
+      input.routeDecision?.semanticContract?.artifact &&
+      input.routeDecision.semanticContract.artifact !== "none"
+        ? "json_object"
+        : "text",
+    result: "queued",
+    durationMs: 0,
+    semanticContract: input.routeDecision?.semanticContract,
+  });
 }
 
 async function notifyTaskReady(
@@ -5713,6 +5754,7 @@ async function completeServerBrainTask(
     );
   } else if (artifactPipeline.kind === "evidence_required") {
     visibleResponseText =
+      buildGroundingFailureContinuityText(visibleResponseText) ??
       "Araştırma için yeterli doğrulanabilir kaynak veya içerik oluşmadı; bu yüzden belge hazırlanmadı. Lütfen tekrar dene.";
     const evidenceValidation = validateAssistantBlockContract({
       // A failed evidence gate is authoritative terminal truth. Do not retain
@@ -6790,40 +6832,22 @@ function resolveSharedBrainWorkloadForUnderstanding(input: {
   hasVisionImage?: boolean;
   envelope?: UnderstandingEnvelope | null;
 }) {
-  const toolSkillSelection = selectToolSkillForTurn({
-    message: input.prompt,
-  });
-  const selectorWorkload =
-    toolSkillSelection.selected.workload &&
-    toolSkillSelection.outputContract.requiresArtifact &&
-    toolSkillSelection.outputContract.confidence >= 0.68
-      ? toolSkillSelection.selected.workload
-      : null;
-  const envelopeWorkload = preferredWorkloadFromUnderstandingEnvelope(
-    input.envelope,
-    input.prompt,
-  );
-  const visualActionNegated = isNegatedVisualActionRequest(input.prompt);
-  const eligibleSelectorWorkload =
-    visualActionNegated && selectorWorkload === "image_analyze"
-      ? null
-      : selectorWorkload;
-  const eligibleEnvelopeWorkload =
-    visualActionNegated && envelopeWorkload === "image_analyze"
-      ? null
-      : envelopeWorkload;
-  const selectedWorkload =
-    (eligibleSelectorWorkload ?? eligibleEnvelopeWorkload) &&
-    (!input.routeDecision?.selectedWorkload ||
-      input.routeDecision.selectedWorkload === "mobile_chat_fast" ||
-      input.routeDecision.selectedWorkload === "mobile_chat_balanced" ||
-      input.routeDecision.selectedWorkload === "fast_route")
-      ? (eligibleSelectorWorkload ?? eligibleEnvelopeWorkload)
-      : input.routeDecision?.selectedWorkload;
+  // The route decision is the single workload authority. Re-running the raw
+  // prompt through tool/format selectors here caused a second decision after
+  // routing (for example, ordinary chat with derived metadata becoming a
+  // document workload). Only runtime evidence discovered after routing may
+  // upgrade a chat turn: a real attachment context or a real vision image.
+  const selectedWorkload = input.routeDecision?.selectedWorkload ?? null;
+  const legacyWorkload = selectedWorkload
+    ? null
+    : preferredWorkloadFromUnderstandingEnvelope(input.envelope, input.prompt);
 
   return resolveAttachmentAwareSharedBrainWorkload({
     route: input.routeDecision?.route,
-    selectedWorkload,
+    selectedWorkload:
+      selectedWorkload ??
+      legacyWorkload ??
+      (input.envelope?.intent.action === "plan" ? "planning" : null),
     attachmentContextUsed: input.attachmentContextUsed,
     hasVisionImage: input.hasVisionImage,
   });

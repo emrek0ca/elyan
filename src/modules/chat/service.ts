@@ -23,6 +23,7 @@ import {
   resolveAttachmentAwareSharedBrainWorkload,
   type SharedBrainWorkload,
 } from "../brain/workloads.js";
+import { logBrainDecisionObservation } from "../brain/decision-observability.js";
 import {
   canUseDesktopConnections,
   normalizePlanBrainProfile,
@@ -2305,6 +2306,7 @@ export async function createChatMessage(
       }));
   const effectiveRequestedCapabilities =
     remoteMcpResolution.requestedCapabilities;
+  const routeStartedAt = Date.now();
   const routeDecision = await routeChatTurn(app, {
     userId: input.userId,
     message: input.content,
@@ -2318,6 +2320,20 @@ export async function createChatMessage(
     bootstrap: undefined,
     brainProfile: usageAccess.brainProfile,
     quota: undefined,
+  });
+  logBrainDecisionObservation(app, {
+    taskId: null,
+    workload: routeDecision.selectedWorkload,
+    route: routeDecision.route,
+    model: null,
+    responseFormat:
+      routeDecision.semanticContract?.artifact &&
+      routeDecision.semanticContract.artifact !== "none"
+        ? "json_object"
+        : "text",
+    result: "queued",
+    durationMs: Date.now() - routeStartedAt,
+    semanticContract: routeDecision.semanticContract,
   });
   const routingMetadata = {
     ...input.metadata,

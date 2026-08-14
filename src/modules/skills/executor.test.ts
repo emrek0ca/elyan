@@ -571,3 +571,52 @@ test("executor honors repairAttempts zero", async () => {
   assert.equal(result.metadata.failureCode, "invalid_json");
   assert.equal(calls, 1);
 });
+
+test("research document keeps a substantive unverified answer when evidence is unavailable", async () => {
+  resetSkillRegistryForTests();
+  resetSkillExecutionCacheForTests();
+  const skill = await getActiveSkillById("research_document");
+  assert.ok(skill);
+  const summary = `Bu konu hakkında modelin oluşturduğu kapsamlı açıklama [1] doğrulanmış web kanıtı olmadan belgeye dönüştürülmemelidir.`;
+  const section = `Bu bölümde konuya ilişkin temel çerçeve, nedenler ve sonuçlar ayrıntılı biçimde açıklanır; ancak kaynak erişimi olmadığı için bu içerik kesin bilgi olarak sunulmamalıdır. Kullanıcı, önemli tarih ve iddiaları yetkili kaynaklarla ayrıca kontrol etmelidir. [1]`;
+
+  const result = await executeSkill({
+    app: { db: new FakeDb() } as never,
+    userId: "user-1",
+    skill,
+    skillInput: {
+      prompt: "Kedilerin tarihini araştırıp PDF olarak ver",
+    },
+    routeDecision: {
+      needsSkill: true,
+      skillId: "research_document",
+      confidence: 0.9,
+      reason: "research_document",
+      source: "deterministic",
+    },
+    modelCall: async () => ({
+      text: JSON.stringify({
+        title: "Kedilerin tarihi",
+        summary,
+        sections: [
+          { heading: "Temel çerçeve", content: section },
+          { heading: "Sonuç", content: section },
+        ],
+        confidence: 0.8,
+      }),
+      provider: "groq",
+      model: "test-model",
+      latencyMs: 8,
+      promptTokens: 100,
+      completionTokens: 40,
+      totalTokens: 140,
+      metadata: {},
+    }),
+  });
+
+  assert.ok(result);
+  assert.equal(result.structuredOutput, null);
+  assert.equal(result.metadata.failureCode, "grounding_evidence_unavailable");
+  assert.match(result.text, /Kaynak doğrulaması yapılamadığı için belge oluşturmadım/u);
+  assert.match(result.text, /modelin oluşturduğu kapsamlı açıklama/u);
+});

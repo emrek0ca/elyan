@@ -130,7 +130,7 @@ function inferFormat(text: string, metadata: Record<string, unknown> | null): Ou
     const match = text.match(/\b(png|jpg|jpeg|webp)\b/iu);
     return normalize(match?.[1]) as OutputFormat;
   }
-  if (/(?<!\p{L})(?:görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto\p{L}*|fotoğraf\p{L}*|fotograf\p{L}*|image|picture|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L})/iu.test(text)) {
+  if (/(?<!\p{L})(?:görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto(?!sentez)\p{L}*|fotoğraf\p{L}*|fotograf\p{L}*|image|picture|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L})/iu.test(text)) {
     return "png";
   }
   const hasDocumentNoun = /(?<!\p{L})(?:rapor\p{L}*|makale\p{L}*|belge\p{L}*|döküman\p{L}*|dokuman\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*|sözleşme\p{L}*|sozlesme\p{L}*)(?!\p{L})/iu.test(text);
@@ -206,7 +206,7 @@ function outputKindFor(format: OutputFormat | null, text: string): OutputKind {
   if (format === "svg") return "svg";
   if (format && IMAGE_FORMATS.has(format)) return "image";
   if (/\b(?:rapor|makale|belge|döküman|dokuman|dilekçe|dilekce)\b/iu.test(text)) return "document";
-  if (/(?<!\p{L})(?:görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto\p{L}*|fotoğraf\p{L}*|fotograf\p{L}*|image|picture|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L})/iu.test(text)) return "image";
+  if (/(?<!\p{L})(?:görsel\p{L}*|gorsel\p{L}*|resm\p{L}*|foto(?!sentez)\p{L}*|fotoğraf\p{L}*|fotograf\p{L}*|image|picture|poster|afiş\p{L}*|afis\p{L}*)(?!\p{L})/iu.test(text)) return "image";
   if (/\b(?:tablo|spreadsheet|excel)\b/iu.test(text)) return "table";
   if (/\b(?:grafik|chart|plot)\b/iu.test(text)) return "chart";
   return "chat_reply";

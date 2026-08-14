@@ -30,6 +30,17 @@ test("output contract resolves referential PDF and Excel conversions as transfor
   assert.equal(xlsx.outputFormat, "xlsx");
 });
 
+test("output contract does not confuse fotosentez with a photo request", () => {
+  const contract = compileOutputContract({
+    message: "Fotosentez nasıl çalışır",
+  });
+
+  assert.equal(contract.operation, "answer");
+  assert.equal(contract.outputKind, "chat_reply");
+  assert.equal(contract.outputFormat, null);
+  assert.equal(contract.requiresArtifact, false);
+});
+
 test("reference resolver carries previous assistant answer for 'bunu pdf yap'", () => {
   const resolved = resolveConversationReference({
     message: "bunu pdf yap",

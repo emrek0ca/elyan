@@ -761,6 +761,26 @@ function buildSafeSkillFailureText(
   return "İstenen çıktı güvenilir biçimde oluşturulamadı. Lütfen tekrar dene.";
 }
 
+function buildResearchContinuityAnswer(
+  output: Record<string, unknown>,
+): string | null {
+  const summary = compactText(output.summary);
+  const sections = Array.isArray(output.sections)
+    ? output.sections
+        .map(readRecord)
+        .filter((section): section is Record<string, unknown> => Boolean(section))
+        .map((section) => compactText(section.content))
+        .filter(Boolean)
+    : [];
+  const candidate = [summary, sections[0] ?? ""].filter(Boolean).join("\n\n");
+  if (candidate.length < 40) return null;
+  return [
+    "Kaynak doğrulaması yapılamadığı için belge oluşturmadım.",
+    "Aşağıdaki kısa açıklama doğrulanmış kaynak yerine geçmez:",
+    candidate.slice(0, 4_000),
+  ].join("\n\n");
+}
+
 async function recordSkillExecution(app: FastifyInstance, input: SkillExecutionLogInput) {
   await app.db.insert(learningEvents).values({
     userId: input.userId,
@@ -926,6 +946,7 @@ export async function executeSkill(input: {
   ];
   const buildFailedExecutionResult = (
     errorCode: string,
+    fallbackText?: string | null,
   ): SkillExecutionResult => {
     const executionSignals = mergeSkillModelExecutionSignals({
       metadataSnapshots: modelMetadataSnapshots,
@@ -933,7 +954,8 @@ export async function executeSkill(input: {
       documentSourceCount: payload.documents.length,
     });
     return {
-      text: buildSafeSkillFailureText(input.skill, errorCode),
+      text:
+        fallbackText?.trim() || buildSafeSkillFailureText(input.skill, errorCode),
       structuredOutput: null,
       provider: modelResult.provider,
       model: modelResult.model,
@@ -1176,10 +1198,12 @@ export async function executeSkill(input: {
           : "invalid_research_citations",
       manualHintUsed: input.routeDecision.source === "manual_hint",
     });
+    const errorCode = researchEvidenceUnavailable
+      ? "grounding_evidence_unavailable"
+      : "invalid_research_citations";
     return buildFailedExecutionResult(
-      researchEvidenceUnavailable
-        ? "grounding_evidence_unavailable"
-        : "invalid_research_citations",
+      errorCode,
+      buildResearchContinuityAnswer(parsed),
     );
   }
 

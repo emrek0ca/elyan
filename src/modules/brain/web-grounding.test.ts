@@ -140,6 +140,23 @@ test("detectFactualityGrounding leaves general knowledge and chit-chat ungrounde
   assert.equal(detectFactualityGrounding("teşekkür ederim").triggered, false);
 });
 
+test("detectFactualityGrounding leaves stable concept questions ungrounded", () => {
+  for (const prompt of [
+    "Python'da list comprehension nedir",
+    "Kuantum dolanıklık nedir",
+  ]) {
+    assert.equal(detectFactualityGrounding(prompt).triggered, false, prompt);
+    assert.equal(
+      shouldUseWebGrounding({
+        prompt,
+        workload: "mobile_chat_fast",
+      }),
+      false,
+      prompt,
+    );
+  }
+});
+
 test("shouldUseWebGrounding grounds volatile factual questions without keywords", () => {
   assert.equal(
     shouldUseWebGrounding({ prompt: "Dolar kaç TL", workload: "mobile_chat_fast" }),
@@ -384,6 +401,29 @@ test("buildWebGroundingAbstentionBlock stays silent for ordinary chat and for us
     }),
     null,
   );
+});
+
+test("buildWebGroundingAbstentionBlock stays silent for optional stable research", () => {
+  const block = buildWebGroundingAbstentionBlock({
+    enabled: true,
+    used: false,
+    query: "yapay zeka eğitim yaklaşımları",
+    queries: [],
+    source: "duckduckgo_html",
+    results: [],
+    degradedReason: "web_search_no_results",
+    confidence: "low",
+    decisionReasons: [
+      "web_decision:web_optional",
+      "external_or_fresh_fact_request",
+    ],
+    freshData: {
+      ...makeFreshData(0, false),
+      freshnessRequired: false,
+    },
+  });
+
+  assert.equal(block, null);
 });
 
 test("parseDuckDuckGoHtml extracts public search results and decodes redirect urls", () => {

@@ -54,6 +54,8 @@ try {
         latency_score: 0,
         case_count: 0,
         live_model_case_count: 0,
+        workload_case_count: 0,
+        workload_pass_count: 0,
         cases: [],
         runner_error: error instanceof Error ? error.message : "benchmark_runner_failed",
       },

@@ -29,6 +29,9 @@ export type BrainBenchmarkCaseResult = {
   failure_type: string | null;
   corrected_answer: string | null;
   latency_ms: number;
+  workload_decision: string;
+  expected_workload: string | null;
+  workload_pass: boolean;
   pass: boolean;
 };
 
@@ -43,6 +46,8 @@ export type BrainBenchmarkResult = {
   latency_score: number;
   case_count: number;
   live_model_case_count: number;
+  workload_case_count: number;
+  workload_pass_count: number;
   cases: BrainBenchmarkCaseResult[];
 };
 
@@ -129,6 +134,8 @@ export async function runBrainBenchmark(
       latency_score: 0,
       case_count: 0,
       live_model_case_count: 0,
+      workload_case_count: 0,
+      workload_pass_count: 0,
       cases: [],
     };
   }
@@ -145,6 +152,9 @@ export async function runBrainBenchmark(
       requestedCapabilities: [],
     });
     const shouldUseLiveModel = liveModelCaseIds.has(testCase.caseId);
+    const workloadPass =
+      testCase.expectedWorkload == null ||
+      routeDecision.selectedWorkload === testCase.expectedWorkload;
 
     if (shouldUseLiveModel) {
       const reply = await generateGovernedSharedBrainReply(app, {
@@ -179,7 +189,13 @@ export async function runBrainBenchmark(
         failure_type: reply.evaluation.failureTypes.find((item) => item !== "none") ?? null,
         corrected_answer: reply.evaluation.correctedAnswer,
         latency_ms: reply.latencyMs,
-        pass: reply.evaluation.overallScore >= 0.8 && reply.evaluation.subscores.boundary >= 0.95,
+        workload_decision: routeDecision.selectedWorkload,
+        expected_workload: testCase.expectedWorkload ?? null,
+        workload_pass: workloadPass,
+        pass:
+          reply.evaluation.overallScore >= 0.8 &&
+          reply.evaluation.subscores.boundary >= 0.95 &&
+          workloadPass,
       });
       continue;
     }
@@ -239,7 +255,13 @@ export async function runBrainBenchmark(
       failure_type: evaluation.failureTypes.find((item) => item !== "none") ?? null,
       corrected_answer: evaluation.correctedAnswer,
       latency_ms: 0,
-      pass: evaluation.overallScore >= 0.8 && evaluation.subscores.boundary >= 0.95,
+      workload_decision: routeDecision.selectedWorkload,
+      expected_workload: testCase.expectedWorkload ?? null,
+      workload_pass: workloadPass,
+      pass:
+        evaluation.overallScore >= 0.8 &&
+        evaluation.subscores.boundary >= 0.95 &&
+        workloadPass,
     });
   }
 
@@ -265,7 +287,16 @@ export async function runBrainBenchmark(
       return 0.2;
     }),
   );
-  const status = overallScore >= 0.8 && boundaryScore >= 0.95 ? "pass" : "warn";
+  const workloadCases = results.filter((item) => item.expected_workload != null);
+  const workloadPassCount = workloadCases.filter(
+    (item) => item.workload_pass,
+  ).length;
+  const status =
+    overallScore >= 0.8 &&
+    boundaryScore >= 0.95 &&
+    workloadPassCount === workloadCases.length
+      ? "pass"
+      : "warn";
 
   const summary: BrainBenchmarkResult = {
     status,
@@ -278,6 +309,8 @@ export async function runBrainBenchmark(
     latency_score: latencyScore,
     case_count: results.length,
     live_model_case_count: results.filter((item) => item.execution_mode === "live_model").length,
+    workload_case_count: workloadCases.length,
+    workload_pass_count: workloadPassCount,
     cases: results,
   };
 

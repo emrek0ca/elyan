@@ -3,7 +3,11 @@ import {
   embedQueryForStorage,
   embedTextsForStorage,
 } from "../../modules/brain/semantic-embedder.js";
-import type { UnderstandingIntent } from "./types.js";
+import type {
+  IntentClassification,
+  UnderstandingIntent,
+} from "./types.js";
+import type { OutputContract } from "./output-contract.js";
 
 /**
  * Semantic fallback for the regex intent classifier.
@@ -340,4 +344,292 @@ export async function classifyIntentTransformer(
   // higher minScore guards against weak matches polluting routing decisions.
   if (!best || best.score < minScore) return null;
   return best;
+}
+
+export const semanticContractConversationModeValues = [
+  "chat",
+  "execute",
+  "hybrid",
+] as const;
+
+export const semanticContractSurfaceValues = [
+  "server_brain",
+  "desktop_runtime",
+  "hybrid",
+] as const;
+
+export const semanticContractIntentValues = [
+  "answer",
+  "research",
+  "create",
+  "inspect",
+  "modify",
+  "automate",
+] as const;
+
+export const semanticContractArtifactValues = [
+  "none",
+  "text",
+  "image",
+  "document",
+  "data",
+] as const;
+
+export const semanticContractContextValues = [
+  "none",
+  "local_files",
+  "screen",
+  "browser",
+  "app",
+] as const;
+
+export const semanticContractSideEffectValues = [
+  "none",
+  "read",
+  "write",
+  "destructive",
+] as const;
+
+export const semanticContractPrivacyValues = [
+  "public",
+  "account",
+  "local_private",
+] as const;
+
+export type SemanticContract = {
+  schemaVersion: "elyan.semantic_contract.v1";
+  conversationMode: (typeof semanticContractConversationModeValues)[number];
+  surface: (typeof semanticContractSurfaceValues)[number];
+  intent: (typeof semanticContractIntentValues)[number];
+  artifact: (typeof semanticContractArtifactValues)[number];
+  requiredContext: Array<(typeof semanticContractContextValues)[number]>;
+  sideEffect: (typeof semanticContractSideEffectValues)[number];
+  privacyClass: (typeof semanticContractPrivacyValues)[number];
+  requiredCapabilities: string[];
+  needsApproval: boolean;
+  confidence: number;
+  ambiguity: number;
+  evidence: string[];
+};
+
+function clampSemanticScore(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, Number(value.toFixed(3))));
+}
+
+function uniqueSemanticValues(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function semanticIntentForClassification(
+  classification: IntentClassification,
+  outputContract: OutputContract,
+): SemanticContract["intent"] {
+  if (classification.requiresLocalRuntime) return "automate";
+  if (outputContract.operation === "edit") {
+    return "modify";
+  }
+  if (outputContract.requiresArtifact) return "create";
+  if (classification.primaryIntent === "research") return "research";
+  if (
+    classification.primaryIntent === "document" ||
+    classification.primaryIntent === "image"
+  ) {
+    return "inspect";
+  }
+  return "answer";
+}
+
+function semanticArtifactForOutput(
+  outputContract: OutputContract,
+): SemanticContract["artifact"] {
+  if (!outputContract.requiresArtifact) return "none";
+  if (outputContract.outputKind === "image" || outputContract.outputKind === "svg") {
+    return "image";
+  }
+  if (outputContract.outputKind === "document") return "document";
+  if (
+    outputContract.outputKind === "table" ||
+    outputContract.outputKind === "chart"
+  ) {
+    return "data";
+  }
+  return "text";
+}
+
+function semanticContextForClassification(
+  classification: IntentClassification,
+): SemanticContract["requiredContext"] {
+  if (!classification.requiresLocalRuntime) return ["none"];
+  if (
+    classification.primaryIntent === "browser" ||
+    classification.secondaryIntents.includes("browser")
+  ) {
+    return ["browser"];
+  }
+  if (
+    classification.primaryIntent === "computer" ||
+    classification.secondaryIntents.includes("computer")
+  ) {
+    return ["screen", "app"];
+  }
+  return ["local_files"];
+}
+
+function semanticSideEffectForTurn(input: {
+  classification: IntentClassification;
+  outputContract: OutputContract;
+}): SemanticContract["sideEffect"] {
+  if (!input.classification.requiresLocalRuntime) return "none";
+  if (input.outputContract.operation === "edit") return "write";
+  if (
+    input.classification.primaryIntent === "automation" ||
+    input.outputContract.operation === "create" ||
+    input.outputContract.operation === "export" ||
+    input.outputContract.operation === "transform"
+  ) {
+    return "write";
+  }
+  return "read";
+}
+
+function requiredCapabilitiesForContract(input: {
+  classification: IntentClassification;
+  artifact: SemanticContract["artifact"];
+  sideEffect: SemanticContract["sideEffect"];
+}): string[] {
+  const capabilities: string[] = [];
+  const primary = input.classification.primaryIntent;
+  if (primary === "research" || input.classification.requiresCitation) {
+    capabilities.push("web_research");
+  }
+  if (primary === "document") capabilities.push("document.read");
+  if (primary === "image") capabilities.push("image.read");
+  if (primary === "browser") capabilities.push("browser.read");
+  if (primary === "computer") capabilities.push("desktop.runtime");
+  if (primary === "automation") capabilities.push("automation.schedule");
+  if (input.artifact === "document") capabilities.push("document.write");
+  if (input.artifact === "data") capabilities.push("data.generate");
+  if (input.artifact === "image") capabilities.push("image.generate");
+  if (input.sideEffect === "write") capabilities.push("filesystem.write");
+  return uniqueSemanticValues(capabilities);
+}
+
+/**
+ * Builds the single request-scoped semantic contract consumed by routing and
+ * the worker. Raw text interpretation belongs here; downstream layers must
+ * use this typed result and runtime evidence instead of independently
+ * reclassifying the user's sentence.
+ */
+export function buildSemanticContract(input: {
+  classification: IntentClassification;
+  outputContract: OutputContract;
+  additionalEvidence?: string[];
+}): SemanticContract {
+  const intent = semanticIntentForClassification(
+    input.classification,
+    input.outputContract,
+  );
+  const artifact = semanticArtifactForOutput(input.outputContract);
+  const requiredContext = semanticContextForClassification(input.classification);
+  const sideEffect = semanticSideEffectForTurn(input);
+  const privacyClass = input.classification.requiresLocalRuntime
+    ? "local_private"
+    : "public";
+  const surface = input.classification.requiresLocalRuntime
+    ? artifact === "none"
+      ? "desktop_runtime"
+      : "hybrid"
+    : "server_brain";
+  const conversationMode = input.classification.requiresLocalRuntime
+    ? artifact === "none"
+      ? "execute"
+      : "hybrid"
+    : "chat";
+  const confidence = clampSemanticScore(
+    Math.max(
+      input.classification.confidence,
+      input.outputContract.requiresArtifact
+        ? input.outputContract.confidence
+        : 0,
+    ),
+  );
+  const ambiguity = input.classification.taskFrame.shouldClarify
+    ? clampSemanticScore(1 - confidence)
+    : 0.02;
+  const evidence = uniqueSemanticValues([
+    `classifier:${input.classification.reason}`,
+    `classifier_intent:${input.classification.primaryIntent}`,
+    `reasoning:${input.classification.taskFrame.reasoningMode}`,
+    `intent:${intent}`,
+    `artifact:${artifact}`,
+    `context:${requiredContext.join(",")}`,
+    ...(input.outputContract.reasons ?? []).slice(0, 4),
+    ...(input.additionalEvidence ?? []).slice(0, 4),
+  ]).slice(0, 12);
+
+  return {
+    schemaVersion: "elyan.semantic_contract.v1",
+    conversationMode,
+    surface,
+    intent,
+    artifact,
+    requiredContext,
+    sideEffect,
+    privacyClass,
+    requiredCapabilities: requiredCapabilitiesForContract({
+      classification: input.classification,
+      artifact,
+      sideEffect,
+    }),
+    needsApproval: sideEffect === "write" || sideEffect === "destructive",
+    confidence,
+    ambiguity,
+    evidence,
+  };
+}
+
+/**
+ * Applies the trusted route/runtime result to the contract without reopening
+ * raw-prompt classification. This is the hand-off point from understanding
+ * to execution policy.
+ */
+export function finalizeSemanticContractForRoute(input: {
+  contract: SemanticContract;
+  route: "server_brain" | "desktop_runtime" | "pairing_required" | "unavailable";
+  requiresApproval: boolean;
+  capabilities: string[];
+  reason: string;
+}): SemanticContract {
+  const desktopRoute =
+    input.route === "desktop_runtime" ||
+    input.route === "pairing_required" ||
+    input.route === "unavailable";
+  const surface = desktopRoute
+    ? input.contract.artifact === "none"
+      ? "desktop_runtime"
+      : "hybrid"
+    : input.contract.surface;
+  const conversationMode = desktopRoute
+    ? input.contract.artifact === "none"
+      ? "execute"
+      : "hybrid"
+    : input.contract.conversationMode;
+  return {
+    ...input.contract,
+    conversationMode,
+    surface,
+    requiredCapabilities: uniqueSemanticValues([
+      ...input.contract.requiredCapabilities,
+      ...input.capabilities,
+    ]),
+    needsApproval: input.contract.needsApproval || input.requiresApproval,
+    evidence: uniqueSemanticValues([
+      ...input.contract.evidence,
+      `route:${input.route}`,
+      // Route reasons may originate from a model response. Keep the contract
+      // and its content-free logs categorical; never copy free-form text here.
+      `route_reason:${input.route}`,
+    ]).slice(0, 16),
+  };
 }

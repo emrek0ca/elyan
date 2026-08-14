@@ -284,7 +284,15 @@ export function detectFactualityGrounding(prompt: string): {
   if (VOLATILE_HOWTO_PATTERN.test(lower) && !EXPLICIT_FRESHNESS_PATTERN.test(lower)) {
     return { triggered: false, reason: null };
   }
-  if (isQuestion && hasProperNounEntity(normalized)) {
+  // A capitalized concept or programming language is not, by itself, a
+  // current fact. Requiring web verification for "Python'da ... nedir" or
+  // "Kuantum dolanıklık nedir" made ordinary educational turns fail closed
+  // when search was unavailable. Named-entity grounding remains enabled for
+  // identity-style questions (for example, "Elon Musk kimdir?").
+  const stableConceptQuestion =
+    /\b(?:nedir|ne demek|nasıl çalışır|nasil calisir|what is|how does|how do)\b/iu.test(lower) &&
+    !/\b(?:kimdir|kim\b|who is|who are)\b/iu.test(lower);
+  if (isQuestion && hasProperNounEntity(normalized) && !stableConceptQuestion) {
     return { triggered: true, reason: "named_entity_factual_question" };
   }
   if (
@@ -3280,6 +3288,28 @@ export function buildWebGroundingAbstentionBlock(input: WebGroundingResult): str
   const attempted = actionableReasons.length > 0 || input.degradedReason != null;
   const hasUsableResults = input.used && input.results.length > 0;
   if (!attempted || hasUsableResults) {
+    return null;
+  }
+  const verificationReasons = new Set([
+    "explicit_web_request",
+    "explicit_research_action",
+    "volatile_market_fact",
+    "release_or_availability_fact",
+    "live_event_fact",
+    "technology_freshness_fact",
+    "howto_with_named_entity",
+    "named_entity_factual_question",
+    "turkic_research_request",
+    "data_artifact_needs_grounding",
+    "skill_contract:web_required",
+  ]);
+  const requiresVerification =
+    input.freshData.freshnessRequired ||
+    actionableReasons.some((reason) => verificationReasons.has(reason));
+  // Optional/stable research can still yield a useful answer from the model.
+  // Only a positive freshness, explicit-web, or evidence-required signal may
+  // turn a failed search into a hard verification instruction.
+  if (!requiresVerification) {
     return null;
   }
   return [

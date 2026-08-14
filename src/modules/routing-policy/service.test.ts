@@ -133,6 +133,59 @@ test("decideCommandRoute keeps public chat on the shared brain", async () => {
   assert.equal(decision.requiredRuntime, "server");
 });
 
+test("decideCommandRoute keeps the objective's ordinary Turkish prompts on chat workloads", async () => {
+  const cases = [
+    ["Bana anlatır mısın Atatürk'ün gençliğini", "mobile_chat_balanced"],
+    ["Fotosentez nasıl çalışır", "mobile_chat_fast"],
+    ["Python'da list comprehension nedir", "mobile_chat_fast"],
+    ["İyi bir CV nasıl yazılır", "mobile_chat_fast"],
+    ["Uykusuzluk neden olur", "mobile_chat_balanced"],
+    ["Roma İmparatorluğu neden çöktü", "mobile_chat_balanced"],
+    ["Bir fıkra anlat", "mobile_chat_balanced"],
+    ["Kuantum dolanıklık nedir", "mobile_chat_fast"],
+    ["Evde kahve nasıl demlenir", "mobile_chat_fast"],
+    ["Motivasyonumu nasıl artırırım", "mobile_chat_balanced"],
+  ] as const;
+
+  for (const [message, expectedWorkload] of cases) {
+    const decision = await decideCommandRoute(createApp([]) as never, {
+      userId: "user-1",
+      message,
+      source: "mobile",
+      // These are the derived privacy flags added to chat metadata. They are
+      // not evidence of an uploaded document and must not escalate the turn.
+      metadata: {
+        rawFileUploaded: false,
+        data_origin: "local_derived",
+        privacy_level: "local_derived",
+      },
+    });
+
+    assert.equal(decision.route, "server_brain", message);
+    assert.equal(decision.selectedWorkload, expectedWorkload, message);
+    assert.ok(decision.semanticContract, message);
+    assert.equal(decision.semanticContract?.conversationMode, "chat", message);
+    assert.equal(decision.semanticContract?.surface, "server_brain", message);
+    assert.equal(decision.semanticContract?.intent, "answer", message);
+    assert.equal(decision.semanticContract?.artifact, "none", message);
+    assert.deepEqual(decision.semanticContract?.requiredContext, ["none"], message);
+    assert.equal(decision.semanticContract?.sideEffect, "none", message);
+    assert.equal(decision.semanticContract?.privacyClass, "public", message);
+    assert.equal(decision.semanticContract?.needsApproval, false, message);
+    assert.equal(
+      new Set([
+        "document_analysis",
+        "document_generate",
+        "public_research",
+        "public_deep_research",
+        "public_quantum_research",
+      ]).has(decision.selectedWorkload),
+      false,
+      message,
+    );
+  }
+});
+
 test("decideCommandRoute accepts the additive web source without changing routing truth", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
