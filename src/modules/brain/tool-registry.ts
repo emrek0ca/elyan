@@ -1160,6 +1160,17 @@ const registry = new Map<string, AgentToolDefinition<z.ZodTypeAny>>(
   toolDefinitions.map((tool) => [tool.name, tool]),
 );
 
+/**
+ * Aracın zod argüman şemasını dışarı verir.
+ *
+ * Sağlayıcıya yerel araç sunabilmek için şemayı JSON Schema'ya çevirmek gerek;
+ * çeviri `tool-schemas.ts` içinde, kaynak burada. Kayıt tek gerçek kaynak
+ * kalsın diye şema kopyalanmıyor.
+ */
+export function serverToolArgsSchema(toolName: string): z.ZodTypeAny | null {
+  return registry.get(toolName)?.argsSchema ?? null;
+}
+
 export function listAgentTools(): Array<{ name: string; permission: AgentToolPermission }> {
   return toolDefinitions.map((tool) => ({
     name: tool.name,

@@ -2,6 +2,7 @@ import {
   DESKTOP_CAPABILITY_MANIFEST,
   type DesktopCapabilityManifestEntry,
 } from "../tasks/desktop-capability-manifest.js";
+import { serverToolArgsSchema } from "./tool-registry.js";
 
 /**
  * YETENEK KATALOĞUNU MODELE "ARAÇ" OLARAK SUNAN KATMAN.
@@ -219,4 +220,104 @@ export function parseToolCalls(raw: unknown): ParsedToolCall[] {
     });
   }
   return calls;
+}
+
+/* -------------------------------------------------------------------------
+ * SUNUCU ARAÇLARI
+ *
+ * `tool-registry.ts` zaten YÜRÜTÜLEBİLİR araçlar taşıyor: her tanımda zod
+ * `argsSchema`, `outputSchema` ve gerçek bir `execute()` var. Eksik olan tek
+ * şey bunları modele SAĞLAYICININ araç mekanizmasıyla sunmak — bugüne kadar
+ * model bu araçların varlığını yalnız prompt metninden biliyordu ve
+ * çağıramıyordu.
+ *
+ * GÜVENLİK SINIRI: varsayılan olarak yalnız `permission: "read"` araçlar
+ * sunulur. Yan etkili/yazan araçlar (bugün 4 tane) mevcut onay yolundan
+ * geçmeye devam eder; modele doğrudan verilmeleri, onay kapısını atlatmak
+ * anlamına gelirdi.
+ * ---------------------------------------------------------------------- */
+
+type ZodLike = {
+  _def?: Record<string, unknown>;
+  shape?: Record<string, unknown>;
+};
+
+/**
+ * Zod şemasını JSON Schema'ya çevirir (araç argümanları için gereken alt küme).
+ *
+ * `zod-to-json-schema` bağımlılığı yok ve tek bir dönüşüm için eklemek
+ * istemedik. Kapsam bilinçli olarak dar: object/string/number/boolean/enum/
+ * array/optional/default/nullable. Tanınmayan tip `string`e düşer — model yine
+ * çağırabilir, argüman doğrulaması zaten yürütme anında zod tarafından yapılır.
+ */
+function zodToJsonSchema(schema: unknown): Record<string, unknown> {
+  const node = schema as ZodLike | undefined;
+  const def = node?._def as Record<string, unknown> | undefined;
+  const typeName = String(def?.typeName ?? "");
+
+  switch (typeName) {
+    case "ZodObject": {
+      const shapeSource = def?.shape;
+      const shape =
+        typeof shapeSource === "function"
+          ? (shapeSource as () => Record<string, unknown>)()
+          : ((shapeSource ?? {}) as Record<string, unknown>);
+      const properties: Record<string, unknown> = {};
+      const required: string[] = [];
+      for (const [key, value] of Object.entries(shape)) {
+        properties[key] = zodToJsonSchema(value);
+        const childDef = (value as ZodLike)?._def as
+          | Record<string, unknown>
+          | undefined;
+        const childType = String(childDef?.typeName ?? "");
+        if (childType !== "ZodOptional" && childType !== "ZodDefault") {
+          required.push(key);
+        }
+      }
+      return {
+        type: "object",
+        properties,
+        ...(required.length > 0 ? { required } : {}),
+        additionalProperties: false,
+      };
+    }
+    case "ZodOptional":
+    case "ZodNullable":
+    case "ZodDefault":
+      return zodToJsonSchema(def?.innerType);
+    case "ZodArray":
+      return { type: "array", items: zodToJsonSchema(def?.type) };
+    case "ZodEnum":
+      return { type: "string", enum: def?.values ?? [] };
+    case "ZodNumber":
+      return { type: "number" };
+    case "ZodBoolean":
+      return { type: "boolean" };
+    default:
+      return { type: "string" };
+  }
+}
+
+/**
+ * Kayıttaki bir sunucu aracının argüman şemasını JSON Schema olarak verir.
+ *
+ * Kayıt zod şeması tutuyor; sağlayıcı JSON Schema istiyor. Şema okunamazsa
+ * `null` döner ve araç modele hiç sunulmaz — yanlış şemayla sunmak, modelin
+ * dolduramayacağı bir aracı katalogda göstermek demektir.
+ */
+export function serverToolJsonSchema(
+  toolName: string,
+): ChatCompletionTool["function"]["parameters"] | null {
+  const schema = serverToolArgsSchema(toolName);
+  if (!schema) return null;
+  const converted = zodToJsonSchema(schema);
+  if (converted.type !== "object") return null;
+  return {
+    type: "object",
+    properties: (converted.properties ?? {}) as Record<string, unknown>,
+    ...(Array.isArray(converted.required) && converted.required.length > 0
+      ? { required: converted.required as string[] }
+      : {}),
+    additionalProperties: false,
+  };
 }

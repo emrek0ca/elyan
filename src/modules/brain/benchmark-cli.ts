@@ -22,6 +22,9 @@ try {
   if (code !== "ENOENT") throw error;
 }
 
+const BENCHMARK_RESULT_BEGIN = "<<<ELYAN_BENCHMARK_RESULT";
+const BENCHMARK_RESULT_END = "ELYAN_BENCHMARK_RESULT>>>";
+
 let app: Awaited<ReturnType<typeof buildApp>> | null = null;
 
 try {
@@ -29,8 +32,15 @@ try {
   const result = await runBrainBenchmark(app, {
     persistSummary: true,
   });
+  // İŞARETÇİ ŞART. `buildApp()` ayağa kalkarken pino JSON log satırları
+  // basıyor; deploy scripti sonucu "ilk { → son }" diye dilimlediği için o
+  // loglarla sonuç tek parçaya karışıp JSON.parse'ı patlatıyordu (ölçüldü:
+  // 2026-08-14 deploy). Sonuç artık kendi sınırlarını taşıyor.
+  console.log(BENCHMARK_RESULT_BEGIN);
   console.log(JSON.stringify(result, null, 2));
+  console.log(BENCHMARK_RESULT_END);
 } catch (error) {
+  console.log(BENCHMARK_RESULT_BEGIN);
   console.log(
     JSON.stringify(
       {
@@ -51,6 +61,7 @@ try {
       2,
     ),
   );
+  console.log(BENCHMARK_RESULT_END);
 } finally {
   await app?.close();
 }
