@@ -17,6 +17,7 @@ import {
   enhanceIntentWithTransformer,
 } from "./intent-classifier.js";
 import { buildUserContext } from "./context-builder.js";
+import { primeWidgetShapeSemantic } from "./widget-shape-semantic.js";
 import {
   buildEmptyUnderstandingEnvelope,
   buildTypedUnderstandingEnvelope,
@@ -232,6 +233,13 @@ export async function buildTaskUnderstanding(
       },
       "understanding context built",
     );
+
+    // Zarf kurucusu SENKRON ve artık widget biçim sözleşmesini okuyor. Bu
+    // servis `generateSharedBrainReply`ten bağımsız çağrılabildiği için oradaki
+    // ısıtma buraya ulaşmıyordu; ısıtmadan okunan karar e5'e değil hash'e
+    // düşüyor — yani parafraz yine kaçıyordu. Isıtma başarısız olursa zarf
+    // hash yoluyla kurulur, hiçbir yol tıkanmaz.
+    await primeWidgetShapeSemantic(input.message ?? "").catch(() => undefined);
 
     let envelope = shouldBuildUnderstandingEnvelope(app)
       ? buildTypedUnderstandingEnvelope({

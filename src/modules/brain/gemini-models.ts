@@ -31,10 +31,14 @@ function compactText(value: unknown): string {
 export function normalizeGeminiImageModel(value: unknown): string {
   const model = compactText(value).replace(/^models\//i, "");
   const aliases: Record<string, string> = {
-    "gemini-2.0-flash-preview-image-generation": "gemini-3.1-flash-image",
-    "gemini-2.5-flash-image-preview": "gemini-3.1-flash-image",
+    "gemini-2.0-flash-preview-image-generation": "gemini-3.1-flash-lite-image",
+    "gemini-2.5-flash-image-preview": "gemini-3.1-flash-lite-image",
     "gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
-    "gemini-3-pro-image-preview": "gemini-3-pro-image",
+    // `gemini-3-pro-image` artık kullanılmıyor: kalite ucu 3.1-flash-image.
+    // Sunucudaki bayat `.env` bu kimliği taşıyorsa sessizce doğru uca çevrilir
+    // — bu eşlemenin var oluş sebebi tam olarak bu.
+    "gemini-3-pro-image-preview": "gemini-3.1-flash-image",
+    "gemini-3-pro-image": "gemini-3.1-flash-image",
   };
   return aliases[model.toLowerCase()] ?? model;
 }
@@ -46,14 +50,15 @@ function uniqueStrings(values: string[]): string[] {
 export function buildGeminiModelCatalog(
   config: GeminiModelConfigSource,
 ): GeminiModelCatalog {
-  const fastModel = compactText(config.GEMINI_FAST_MODEL) || "gemini-3.5-flash-lite";
+  const fastModel = compactText(config.GEMINI_FAST_MODEL) || "gemini-2.5-flash-lite";
   const reasoningModel =
     compactText(config.GEMINI_REASONING_MODEL) || "gemini-3.6-flash";
   const textModel = compactText(config.GEMINI_TEXT_MODEL) || reasoningModel;
-  const visionModel = compactText(config.GEMINI_VISION_MODEL) || "gemini-3.6-flash";
+  const visionModel =
+    compactText(config.GEMINI_VISION_MODEL) || "gemini-3.1-flash-lite";
   const imageModel =
     normalizeGeminiImageModel(config.GEMINI_IMAGE_MODEL) ||
-    "gemini-3.1-flash-image";
+    "gemini-3.1-flash-lite-image";
 
   return {
     textModel,

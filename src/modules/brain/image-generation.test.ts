@@ -336,8 +336,10 @@ test("canonicalizes retired image aliases and uses the single Gemini key", async
     );
 
     assert.ok(result);
+    // Emekli `gemini-2.5-flash-image-preview` artık varsayılan ucuz uca
+    // (`gemini-3.1-flash-lite-image`) kanonikleşiyor.
     assert.deepEqual(requests, [
-      { model: "gemini-3.1-flash-image", key: "gemini-key" },
+      { model: "gemini-3.1-flash-lite-image", key: "gemini-key" },
     ]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -371,14 +373,21 @@ test("surfaces provider access denial instead of the generic image fallback", as
       "image_generation_provider_access_denied",
     );
     const details = metadata.imageGenerationBlockedDetails as Record<string, unknown>;
-    assert.deepEqual(details.attemptedModels, ["gemini-3.1-flash-image"]);
+    // Ucuz uç yedeği zincire eklendiği için 403 iki modelde de görülüyor;
+    // sabitlenen şey sebebin genel "sonra tekrar dene"ye düşmemesi.
+    assert.deepEqual(details.attemptedModels, [
+      "gemini-3.1-flash-image",
+      "gemini-3.1-flash-lite-image",
+    ]);
+    // Tek 403: erişim reddi yeniden denenebilir bir hata değil, zincir orada
+    // duruyor (kota/ağ hatasından farkı bu).
     assert.deepEqual(details.statuses, [403]);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash for high-quality prompts", async () => {
+test("maybeGenerateHostedImageArtifact falls back from the quality image model to the cheap one", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
   const jpegBody = await createTestJpeg(41);
@@ -387,10 +396,11 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     requests.push(body);
-    // TÜM premium varyantları düşür: testin konusu "premium tükenince
-    // flash'a düşme". Yalnız ilk premium modeli düşürmek, zincirin ikinci
-    // premium modelde başarılı olup flash'a hiç ulaşmamasına yol açıyordu.
-    if (String(body.model).includes("pro-image")) {
+    // Kaliteli ucu düşür: testin konusu "kaliteli uç tükenince ucuz uca
+    // düşme". Ayrı bir `gemini-3-pro-image` ucu artık yok — kalite ve premium
+    // aynı model (`gemini-3.1-flash-image`), ucuz uç ise
+    // `gemini-3.1-flash-lite-image`.
+    if (String(body.model) === "gemini-3.1-flash-image") {
       return new Response("busy", { status: 429 });
     }
     return Response.json({
@@ -436,14 +446,13 @@ test("maybeGenerateHostedImageArtifact falls back from premium Gemini to Flash f
     );
 
     assert.ok(result);
-    // Sıra: önce premium modeller, sonra flash. Kaç premium varyantı
-    // denendiği yapılandırmaya bağlı; sabitlenen şey PREMIUM ÖNCE, FLASH
-    // SONRA kuralı.
+    // Sıra: önce kaliteli uç, sonra ucuz uç. Kaç varyant denendiği
+    // yapılandırmaya bağlı; sabitlenen şey KALİTELİ ÖNCE, UCUZ SONRA kuralı.
     const attempted = requests.map((request) => String(request.model ?? ""));
-    assert.equal(attempted[0], "gemini-3-pro-image");
+    assert.equal(attempted[0], "gemini-3.1-flash-image");
     assert.ok(
-      attempted.some((model) => model.includes("flash-image")),
-      `premium tükenince flash denenmeli, denenenler: ${attempted.join(", ")}`,
+      attempted.indexOf("gemini-3.1-flash-lite-image") > 0,
+      `kaliteli uç tükenince ucuz uç denenmeli, denenenler: ${attempted.join(", ")}`,
     );
     assert.equal(result.mimeType, "image/jpeg");
     assert.notDeepEqual([...result.binaryBody], [...jpegBody]);

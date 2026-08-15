@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 import { understandingEnvelopeSchema } from "./types.js";
 import { normalizePersonalName } from "./identity-name.js";
-import { isExplicitTableRequest } from "./structured-output-policy.js";
+import { requestsChartOutput, requestsTableOutput } from "./structured-output-policy.js";
 import {
   compileOutputContract,
   workloadFromOutputContract,
@@ -708,13 +708,18 @@ function buildDesiredOutputs(input: {
   }
 
   if (
-    isExplicitTableRequest(input.text) &&
+    requestsTableOutput(input.text) &&
     !outputs.some((output) => output.kind === "table")
   ) {
     addDesiredOutput(outputs, { kind: "table", format: input.format === "xlsx" ? "xlsx" : "table", target: input.format === "xlsx" ? "artifact" : "widget", confidence: explicitExport ? 0.88 : 0.78, constraints: ["table_required"] });
   }
 
-  if (/\b(grafik|chart|çizelge|cizelge)\b/i.test(normalized)) {
+  // Burası kendi DÖRDÜNCÜ kelime listesiydi (`grafik|chart|çizelge`) ve
+  // `isExplicitChartRequest`ten bile dardı: "plot", "çiz", "görselleştir",
+  // "3 boyutlu yüzey" hiçbiri yoktu. Artık tablo tarafıyla aynı sözleşmeyi
+  // okuyor, dolayısıyla parafrazlar da (`şeklini görebilir miyim`) buraya
+  // ulaşıyor.
+  if (requestsChartOutput(input.text)) {
     addDesiredOutput(outputs, { kind: "chart", format: null, target: "widget", confidence: 0.82, constraints: ["chart_data"] });
   }
 
@@ -1301,7 +1306,7 @@ export function preferredWorkloadFromUnderstandingEnvelope(
   }
   if (
     envelope.desired_outputs.some((output) => output.kind === "table") &&
-    (prompt == null || isExplicitTableRequest(prompt))
+    (prompt == null || requestsTableOutput(prompt))
   ) {
     return "table_generate";
   }

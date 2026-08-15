@@ -316,12 +316,19 @@ const envSchema = z.object({
     .url()
     .default("https://generativelanguage.googleapis.com/v1beta"),
   GEMINI_TEXT_MODEL: z.string().default("gemini-3.6-flash"),
-  GEMINI_FAST_MODEL: z.string().default("gemini-3.5-flash-lite"),
+  // En ucuz çok-kipli uç. Görsel/video/PDF alır; hızlı yol ve niyet turları
+  // burada koşar.
+  GEMINI_FAST_MODEL: z.string().default("gemini-2.5-flash-lite"),
   GEMINI_REASONING_MODEL: z.string().default("gemini-3.6-flash"),
-  GEMINI_VISION_MODEL: z.string().default("gemini-3.6-flash"),
+  // Görme varsayılanı: yeni GA, düşük gecikme, çok-kipli — prodüksiyon için
+  // 3.6-flash'tan daha mantıklı.
+  GEMINI_VISION_MODEL: z.string().default("gemini-3.1-flash-lite"),
   GEMINI_VISION_SENSITIVE_DATA_ATTESTED: booleanFlag(false),
-  GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-image"),
-  GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3-pro-image"),
+  // Görsel üretimi: varsayılan en ucuz/hızlı uç, "pro" ise kalite/fiyat
+  // dengesi iyi olan 4K'ya çıkabilen uç. Her ikisi de canlı anahtarla
+  // HTTP 200 doğrulandı.
+  GEMINI_IMAGE_MODEL: z.string().default("gemini-3.1-flash-lite-image"),
+  GEMINI_IMAGE_PRO_MODEL: z.string().default("gemini-3.1-flash-image"),
   GEMINI_IMAGE_SIZE: z.enum(["1K", "2K", "4K"]).default("1K"),
   GEMINI_IMAGE_PRO_ENABLED: booleanFlag(false),
   GEMINI_IMAGE_DAILY_GLOBAL_LIMIT: z.coerce
@@ -349,7 +356,7 @@ const envSchema = z.object({
   GEMINI_PAID_DATA_PROCESSING_ATTESTED: booleanFlag(false),
   GEMINI_FREE_MODEL_ALLOWLIST: z
     .string()
-    .default("gemini-3.5-flash-lite,gemini-3.1-flash-lite"),
+    .default("gemini-2.5-flash-lite,gemini-3.1-flash-lite"),
   GEMINI_FREE_DAILY_REQUEST_LIMIT: z.coerce
     .number()
     .int()

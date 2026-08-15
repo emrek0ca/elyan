@@ -1142,7 +1142,7 @@ export async function maybeGenerateHostedImageArtifact(
     if (result) {
       const premiumModel = String(
         normalizeGeminiImageModel(
-          app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+          app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3.1-flash-image",
         ),
       ).trim();
       const cacheMatchesRequestedTier =
@@ -1248,26 +1248,30 @@ function buildHostedImageProviderConfigs(
         "https://generativelanguage.googleapis.com/v1beta",
     ).trim();
     const configuredFastImageModels = String(
-      app.config.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-image",
+      app.config.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-lite-image",
     )
       .split(",")
       .map((model) => model.trim())
       .filter(Boolean);
     const configuredPremiumImageModels = String(
-      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3-pro-image",
+      app.config.GEMINI_IMAGE_PRO_MODEL ?? "gemini-3.1-flash-image",
     )
       .split(",")
       .map((model) => model.trim())
       .filter(Boolean);
+    // Ucuz uç birincil, kaliteli uç yedek. `normalizeGeminiImageModel` bayat
+    // `.env`'deki emekli kimlikleri buraya gelmeden çeviriyor, dedup da
+    // aynı modelin iki kez denenmesini engelliyor.
     const fastImageModels = [
       ...configuredFastImageModels,
+      "gemini-3.1-flash-lite-image",
       "gemini-3.1-flash-image",
     ]
       .map((model) => normalizeGeminiImageModel(model))
       .filter((model, index, values) => model && values.indexOf(model) === index);
     const premiumImageModels = [
       ...configuredPremiumImageModels,
-      "gemini-3-pro-image",
+      "gemini-3.1-flash-image",
     ]
       .map((model) => normalizeGeminiImageModel(model))
       .filter((model, index, values) => model && values.indexOf(model) === index);

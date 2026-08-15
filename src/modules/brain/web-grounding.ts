@@ -11,8 +11,8 @@ import {
 } from "../../core/understanding/turkic-language.js";
 import { responsePolicyForPrompt } from "./response-policy.js";
 import {
-  isExplicitChartRequest,
-  isExplicitTableRequest,
+  requestsChartOutput,
+  requestsTableOutput,
 } from "../../core/understanding/structured-output-policy.js";
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
@@ -2098,9 +2098,14 @@ export function shouldUseWebGrounding(input: {
  * kaynağının gerekliliğini gösteren YAPISAL bir sinyaldir (regex domain
  * sözlüğünden bağımsız). Grounding kararını, veri-görselleştirme istekleri
  * için "önce araştır" yönünde tetiklemek üzere kullanılır.
+ *
+ * Karar artık `structured-output-policy`'nin tek sözleşmesinden okunuyor:
+ * kelime listesi + semantik prototip. Daha önce ham `isExplicit*` çağrılıyordu,
+ * bu yüzden "şu iki şehrin nüfusunu yan yana göster" gibi bir tur widget
+ * kararında tablo sayılırken burada sayılmıyor, veri aranmadan reddediliyordu.
  */
 export function explicitDataArtifactRequest(prompt: string): boolean {
-  return isExplicitChartRequest(prompt) || isExplicitTableRequest(prompt);
+  return requestsChartOutput(prompt) || requestsTableOutput(prompt);
 }
 
 /**
@@ -2421,7 +2426,7 @@ export async function searchPublicWebGrounding(
   );
   // RC-5 — `grounding_not_attempted` bir RET sebebi değil, bir TETİKLEYİCİ
   // olmalı. Kullanıcı açıkça bir veri chart'ı/tablosu istediğinde (yapısal
-  // sinyal: mevcut isExplicitChartRequest/isExplicitTableRequest tespiti) ve
+  // sinyal: `requestsChartOutput`/`requestsTableOutput` tespiti) ve
   // veri yerel/kişisel/ekli DEĞİLSE, veri dışarıdan gelmek zorundadır. Regex
   // sözlüğü "enflasyon"u domain olarak tanımadığı için karar `no_web_needed`
   // dönüyor, sonra artefakt kapısı "güvenilir veriye dayandıramadım" diye

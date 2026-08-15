@@ -141,23 +141,74 @@ export function isPlanOrStepRequest(prompt: string): boolean {
   return PLAN_OR_STEP_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+/**
+ * TEK KARAR NOKTASI — "kullanıcı tablo istiyor mu?"
+ *
+ * `isExplicitTableRequest` yalnız KELİME listesini yanıtlar. Onu doğrudan
+ * çağıran her yer, listenin göremediği parafrazı da kaçırıyordu; sonuç,
+ * aynı turda katmanların birbirine ters karar vermesiydi:
+ * `decideStructuredResponseDecision` semantik yolla "table" derken
+ * `understanding-envelope` ve `web-grounding` hâlâ "tablo yok" diyordu.
+ *
+ * Bu fonksiyon sözleşmeyi tek yere topluyor: önce kelime (ucuz ve kesin),
+ * sonra olumsuzlama/düz-yazı tercihi (kullanıcı hayır dediyse semantiğe hiç
+ * sorma), en sonda prototip benzerliği. Yeni çağıran `isExplicitTableRequest`
+ * değil BUNU kullanmalı.
+ */
+export function requestsTableOutput(prompt: string): boolean {
+  const normalized = compactText(prompt);
+  if (!normalized) {
+    return false;
+  }
+  if (isExplicitTableRequest(normalized)) {
+    return true;
+  }
+  // `isExplicitTableRequest` false dönmesi iki farklı şey olabilir: "tablo
+  // kelimesi yok" ya da "tablo İSTENMİYOR". İkincisinde semantik katmana
+  // sormak yanlış — kullanıcı zaten hayır demiş.
+  if (
+    NEGATED_TABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    prefersPlainProseExplicitly(normalized)
+  ) {
+    return false;
+  }
+  // Kelime listesi "tablo" demeyen ama tablo isteyen turu kaçırıyordu:
+  // "bunları yan yana koyup göster", "hangisi daha iyi karşılaştıralım".
+  return resolveWidgetShapeSemantic(normalized)?.shape === "table";
+}
+
+/**
+ * TEK KARAR NOKTASI — "kullanıcı grafik istiyor mu?"
+ *
+ * `requestsTableOutput` ile aynı gerekçe. 3B yüzey de grafik ailesindendir:
+ * dışarıdan veri gerekliliği ve widget beklentisi açısından ikisi aynı
+ * sözleşmeye tabidir.
+ */
+export function requestsChartOutput(prompt: string): boolean {
+  const normalized = compactText(prompt);
+  if (!normalized) {
+    return false;
+  }
+  if (isExplicitChartRequest(normalized) || isExplicitMathSurface3DRequest(normalized)) {
+    return true;
+  }
+  if (
+    NEGATED_CHART_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    prefersPlainProseExplicitly(normalized)
+  ) {
+    return false;
+  }
+  const shape = resolveWidgetShapeSemantic(normalized)?.shape;
+  return shape === "chart" || shape === "math_surface_3d";
+}
+
 export function shouldPromoteMarkdownTableToWidget(input: {
   prompt?: string | null;
   selectedWorkload?: string | null;
 }): boolean {
   // Workload metadata can be stale or model-derived. The user's current
   // wording is the final authority for turning prose into a table widget.
-  const prompt = input.prompt ?? "";
-  if (isExplicitTableRequest(prompt)) {
-    return true;
-  }
-  // Kelime listesi "tablo" demeyen ama tablo isteyen turu kaçırıyordu:
-  // "bunları yan yana koyup göster", "hangisi daha iyi karşılaştıralım".
-  // Olumsuzlama (tablo istemiyorum) yukarıdaki kapıda zaten eleniyor.
-  if (prefersPlainProseExplicitly(prompt)) {
-    return false;
-  }
-  return resolveWidgetShapeSemantic(prompt)?.shape === "table";
+  return requestsTableOutput(input.prompt ?? "");
 }
 
 export function isExplicitChartRequest(prompt: string): boolean {
