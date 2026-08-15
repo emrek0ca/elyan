@@ -5,6 +5,7 @@ import {
   classifyIntentTransformer,
 } from "./intent-semantic.js";
 import { explicitMobileContextKindsForPrompt } from "./context-packets.js";
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 
 const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = [
   {
@@ -98,7 +99,20 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
     intent: "computer",
     patterns: [
       /\b(computer|desktop|screenshot|hotkey|keyboard|mouse|window)\b/i,
-      /\b(bilgisayar|masaustu|masaüstü|ekran görüntüsü|ekran goruntusu|klavye|fare)\b/i,
+      // `\b` ile yazıldığında "masaüstümde" YANLIŞLIKLA eşleşiyordu (ASCII
+      // `\b` için 'ü'→'m' geçişi sınır gibi görünür), "bilgisayarımda" ise
+      // hiç eşleşmiyordu. `trStemPattern` ikisini de doğru yapar: kök +
+      // sınırlı ek toleransı. "fare" kısa ve ek almadan kullanılıyor, yine de
+      // toleransla güvenli ("farelerin" da fare demektir).
+      trStemPattern([
+        "bilgisayar",
+        "masaustu",
+        "masaüstü",
+        "ekran görüntüsü",
+        "ekran goruntusu",
+        "klavye",
+        "fare",
+      ]),
       /(?<!\p{L})(ekran görüntüsü al|ekran goruntusu al|screenshot al|video kaydet|ses kaydet)(?!\p{L})/iu,
       /(?<!\p{L})(yerel|local)(?!\p{L}).*(?<!\p{L})(dosya|klasör|klasor|uygulama|program)(?!\p{L})/iu,
     ],
