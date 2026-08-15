@@ -422,6 +422,7 @@ import {
 import { routeSkill } from "../skills/router.js";
 import { parseStrictJsonObject } from "../skills/validator.js";
 import { getTurkicLanguagePromptHint } from "../../core/understanding/turkic-language.js";
+import { primeWidgetShapeSemantic } from "../../core/understanding/widget-shape-semantic.js";
 import {
   decideStructuredResponseDecision,
   isExplicitChartRequest,
@@ -5785,6 +5786,14 @@ export async function generateSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
 ): Promise<SharedBrainInferenceResult> {
+  // Widget biçim kararı TUR BAŞINDA bir kez, semantik olarak hesaplanır.
+  //
+  // `decideStructuredResponseDecision` üç ayrı istem kurucusundan SENKRON
+  // çağrılıyor, dolayısıyla model çağrısını oraya koyamayız. Burada bir kez
+  // hesaplayıp önbelleğe koyuyoruz; senkron karar onu okuyor. Başarısız
+  // olursa karar hash prototipine düşer — hiçbir yol tıkanmaz.
+  await primeWidgetShapeSemantic(input.prompt).catch(() => undefined);
+
   // A plain fast turn has no reason to wait for dialogue-state enrichment.
   // Keep this conservative: any request carrying image context still gets
   // the full preparation path so visual continuity is never lost.

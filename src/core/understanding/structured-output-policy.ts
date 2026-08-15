@@ -1,3 +1,5 @@
+import { resolveWidgetShapeSemantic } from "./widget-shape-semantic.js";
+
 function compactText(value: string): string {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -145,7 +147,17 @@ export function shouldPromoteMarkdownTableToWidget(input: {
 }): boolean {
   // Workload metadata can be stale or model-derived. The user's current
   // wording is the final authority for turning prose into a table widget.
-  return isExplicitTableRequest(input.prompt ?? "");
+  const prompt = input.prompt ?? "";
+  if (isExplicitTableRequest(prompt)) {
+    return true;
+  }
+  // Kelime listesi "tablo" demeyen ama tablo isteyen turu kaçırıyordu:
+  // "bunları yan yana koyup göster", "hangisi daha iyi karşılaştıralım".
+  // Olumsuzlama (tablo istemiyorum) yukarıdaki kapıda zaten eleniyor.
+  if (prefersPlainProseExplicitly(prompt)) {
+    return false;
+  }
+  return resolveWidgetShapeSemantic(prompt)?.shape === "table";
 }
 
 export function isExplicitChartRequest(prompt: string): boolean {
@@ -284,6 +296,37 @@ export function decideStructuredResponseDecision(input: {
       primaryBlockType: "text",
       tablePolicy: "forbidden",
       widgetPolicy: "none",
+      reasons,
+    };
+  }
+
+  // SEMANTİK KAT. Buraya kadar hiçbir kelime listesi eşleşmedi. Bu, kullanıcının
+  // widget istemediği anlamına GELMEZ — yalnızca listelerin göremediği bir
+  // ifadeyle istediği anlamına gelir: "bunları yan yana koyup göster",
+  // "şeklini görebilir miyim", "hangisi daha iyi karşılaştıralım". Kapalı
+  // listeye kelime eklemek bu sorunu bitirmiyordu; prototip benzerliği
+  // parafrazı yakalıyor.
+  //
+  // Karar TUTUCU: kazanan biçim düz metin prototipini belirgin farkla
+  // geçemezse widget'a zorlanmıyor. Kararsızlıkta widget üretmek, widget'ı
+  // kaçırmaktan kötüdür — kullanıcı istemediği bir tabloyla karşılaşır.
+  const semanticShape = resolveWidgetShapeSemantic(prompt);
+  if (semanticShape) {
+    reasons.push(`semantic_${semanticShape.shape}_request`);
+    if (semanticShape.shape === "table") {
+      return {
+        primaryShape: "table",
+        primaryBlockType: "table",
+        tablePolicy: "explicit_only",
+        widgetPolicy: "single_primary_widget",
+        reasons,
+      };
+    }
+    return {
+      primaryShape: semanticShape.shape,
+      primaryBlockType: semanticShape.shape,
+      tablePolicy: "forbidden",
+      widgetPolicy: "single_primary_widget",
       reasons,
     };
   }
