@@ -793,3 +793,35 @@ test("long model prose cannot become a research PDF without web or RAG evidence"
   if (result.kind !== "evidence_required") return;
   assert.equal(result.reason, "grounding_evidence_unavailable");
 });
+
+test("word/docx istekleri belge artefaktı üretir (ekli isimlerle birlikte)", async () => {
+  // PRODÜKSİYON VAKASI: "raporunu word belgesi olarak hazırla" hiçbir artefakt
+  // üretmiyordu. İki kusur: (1) `word`/`docx` desende hiç yoktu, (2) `\brapor\b`
+  // "raporunu" ile eşleşmiyor — ek gelince sağ sınır oluşmuyor. Anlama katmanı
+  // aynı tur için `format=docx, requiresArtifact=true` diyordu; iki katman
+  // çelişiyordu.
+  const rapor = "# Tanıtım Raporu\n\n## Özet\nKısa bir özet.\n\n## Sonuç\nBitti.";
+  for (const request of [
+    "tanıtım raporunu word belgesi olarak hazırla",
+    "bu raporu word belgesi yap",
+    "bunu docx yap",
+    "sözleşmeyi hazırla",
+  ]) {
+    const result = await buildArtifactPipeline({
+      userRequest: request,
+      responseText: rapor,
+      metadata: {},
+    });
+    assert.notEqual(result.kind, "none", `artefakt üretilmeliydi: ${request}`);
+    assert.equal(result.intent.type, "document", `belge olmalıydı: ${request}`);
+  }
+});
+
+test("belgesel bir belge isteği değildir", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "bana güzel bir belgesel öner",
+    responseText: "Şunları önerebilirim.",
+    metadata: {},
+  });
+  assert.equal(result.intent.type, null);
+});

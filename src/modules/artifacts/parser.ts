@@ -131,7 +131,25 @@ function detectArtifactType(text: string, metadata?: Record<string, unknown>, en
   ) {
     return "pdf";
   }
-  if (/\b(teklif\s+dosyası|teklif\s+dosyasi|sözleşme|sozlesme|rapor|doküman|dokuman|belge)\b/i.test(normalized)) {
+  // BELGE TESPİTİ — iki kusur düzeltildi (ölçüldü, canlı kod üzerinde):
+  //
+  // 1) `word` ve `docx` desende HİÇ YOKTU. Kullanıcının Word belgesi istemesinin
+  //    en doğal yolu bu ("word belgesi yap", "bunu docx yap") ve hiçbir artefakt
+  //    üretilmiyordu — üstelik anlama katmanı aynı tur için `format=docx,
+  //    requiresArtifact=true, confidence=0.96` diyordu. İki katman çelişiyordu.
+  //
+  // 2) `\brapor\b` "raporunu" ile, `\bbelge\b` "belgesi" ile EŞLEŞMİYOR: ek
+  //    geldiğinde sağ sınır oluşmuyor. Yani belge üretimi yalnız isim YALIN
+  //    söylendiğinde çalışıyordu ("bir rapor hazırla" ✓ / "raporunu word
+  //    belgesi yap" ✗) — doğal Türkçede kimse öyle konuşmuyor.
+  //
+  // Ek toleransı sınırlı (`\p{L}{0,6}`) ve "belgesel" bilinçli dışarıda:
+  // belgesel bir film türü, belge isteği değil.
+  if (
+    /(?<!\p{L})(?:teklif\s+dosya\p{L}{0,6}|sözleşme\p{L}{0,6}|sozlesme\p{L}{0,6}|rapor\p{L}{0,6}|doküman\p{L}{0,6}|dokuman\p{L}{0,6}|belge(?!sel)\p{L}{0,6}|word|docx?)(?!\p{L})/iu.test(
+      normalized,
+    )
+  ) {
     return "document";
   }
   if (/\b(profesyonel\s+(?:mesaj|metin)|metni\s+(?:daha\s+)?profesyonel|sadece\s+metin|mail\s+taslağı|email\s+draft)\b/i.test(normalized)) {
