@@ -1,4 +1,9 @@
 import type { FastifyBaseLogger } from "fastify";
+import { normalizeText } from "./desktop-capability-ontology.js";
+import {
+  actionPolarityAdjustment,
+  resolveQueryActionPolarity,
+} from "./capability-action-polarity.js";
 import {
   embedQueryForStorage,
   embedTextsForStorage,
@@ -239,11 +244,23 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
     semantic.map((item) => lexicalByCapability.get(item.candidate.capability) ?? 0),
   );
 
+  // Eylem kutbu HARMANDAN SONRA uygulanır.
+  //
+  // Sözcüksel katmanda uygulanan ceza buraya ulaşmıyor: `normalizeScores`
+  // adayları min-max normalize ettiği için ceza sıralamayı korusa bile
+  // ölçeklenerek eziliyordu. Ölçüldü: sözcüksel katman düzeltildikten SONRA
+  // bile tam boru hattında "Chrome'u aç" top-1'de `close_app` veriyordu.
+  // Zıt eylem yapısal bir veto; harmanın çıktısına uygulanmalı.
+  const queryPolarity = resolveQueryActionPolarity(normalizeText(input.query));
   const blended = semantic.map((item, index) => {
     const combined =
       EMBEDDING_WEIGHT * normalizedSemantic[index] +
       LEXICAL_WEIGHT * normalizedLexical[index] -
-      NEGATIVE_MARGIN_WEIGHT * item.margin;
+      NEGATIVE_MARGIN_WEIGHT * item.margin +
+      actionPolarityAdjustment({
+        queryPolarity,
+        capabilityId: item.candidate.capability,
+      });
     return {
       capability: item.candidate.capability,
       score: Number(Math.max(0, combined).toFixed(4)),

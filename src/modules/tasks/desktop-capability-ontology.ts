@@ -41,7 +41,12 @@ const EMBEDDING_BUCKETS = 16_384;
 const ontologyCache = new Map<string, DesktopCapabilityOntologyEntry[]>();
 const embeddingCache = new Map<string, SparseEmbedding>();
 
-function normalizeText(value: string): string {
+/**
+ * Kanonik normalleştirici. Eylem kutupluluğu katmanı da BUNU kullanır —
+ * ikinci bir normalleştirme kuralı seti, iki katmanın sessizce ayrışması
+ * demektir.
+ */
+export function normalizeText(value: string): string {
   return value
     .toLocaleLowerCase("tr-TR")
     .normalize("NFKD")
