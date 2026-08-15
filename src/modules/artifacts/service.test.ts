@@ -837,7 +837,10 @@ test("PDF başlığı cevabın kendi başlığından türer", async () => {
   });
   assert.equal(result.kind, "rendered");
   if (result.kind !== "rendered") return;
-  const content = result.output.output?.content as Record<string, unknown>;
+  const rendered = result.output.output;
+  assert.equal(rendered.kind, "json");
+  if (rendered.kind !== "json") return;
+  const content = rendered.content as Record<string, unknown>;
   assert.equal(content.fileName, "elyan_tanitim_raporu.pdf");
   assert.match(String(content.markdown), /^# Elyan Tanıtım Raporu/);
 });

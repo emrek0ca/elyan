@@ -1053,4 +1053,52 @@ export const ROUTING_EVAL_HELDOUT: RoutingEvalCase[] = [
     mustNotMatch: ["web_research", "text_analyze"],
     group: "heldout_chat",
   },
+  // ── 2026-08-16 eklenenler ───────────────────────────────────────────────
+  // Bu turlar CANLI kod üzerinde ölçülürken toplandı. Tutulan küme yalnız
+  // "hiç görülmemiş ifade" ile anlamlıdır; buraya bakıp AYAR YAPMAK ölçümü
+  // öldürür. Yeni vaka eklemek serbest, eşiği/ağırlığı buna göre oynatmak
+  // yasak.
+  {
+    utterance: "chrome'u açar mısın",
+    expected: "open_app",
+    mustNotMatch: ["close_app"],
+    group: "heldout_open",
+    note: "Canlıda top-1 close_app üretiyordu — eylem kutbu düzeltmesinin konusu.",
+  },
+  {
+    utterance: "finder'ı aç bakalım",
+    expected: "open_app",
+    mustNotMatch: ["close_app"],
+    group: "heldout_open",
+  },
+  {
+    utterance: "safariyi kapatıver",
+    expected: "close_app",
+    mustNotMatch: ["open_app"],
+    group: "heldout_close",
+  },
+  {
+    utterance: "şu görseli üretiver bana",
+    expected: "image_generate",
+    group: "heldout_image",
+    note: "\\büret\\b Türkçe 'ü' yüzünden hiç eşleşmiyordu.",
+  },
+  {
+    utterance: "bir afiş üret",
+    expected: "image_generate",
+    group: "heldout_image",
+  },
+  {
+    utterance: "raporunu word belgesi olarak hazırlar mısın",
+    expected: "document_write",
+    group: "heldout_document",
+    note: "Ekli isim: \\brapor\\b 'raporunu' ile eşleşmiyordu.",
+  },
+  {
+    utterance: "bana güzel bir belgesel öner",
+    expected: null,
+    mustNotMatch: ["document_write", "document_read"],
+    group: "heldout_chat",
+    note: "belgesel ≠ belge; ek toleransının üst sınırını koruyan vaka.",
+  },
 ];
