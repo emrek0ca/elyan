@@ -31,14 +31,27 @@ export function resolveReasoningEffort(
   if (workload === "fast_route" || workload === "mobile_chat_fast") {
     return "low";
   }
+  // DERİN ŞERİT — gerçekten derinlik gerektiren işler. Sıradan sohbet BURADA
+  // DEĞİL: `mobile_chat_balanced` bu listedeydi ve her sıradan tur
+  // gpt-oss-120b'de `reasoning_effort: "high"` ile koşuyordu. Görünür tek bir
+  // token akmadan önce gizli düşünme turu bitmek zorunda olduğu için cevaplar
+  // fark edilir biçimde geç başlıyordu. (`groq-models.ts` içindeki yorum zaten
+  // "medium'da tutuluyor" diyordu — yorum ile kod ayrışmıştı.)
   if (
     workload === "planning" ||
     workload === "document_generate" ||
     workload === "document_analysis" ||
-    workload === "mobile_chat_deep_refine" ||
-    workload === "mobile_chat_balanced"
+    workload === "mobile_chat_deep_refine"
   ) {
     return "high";
+  }
+  // Sıradan sohbet: MODEL küçülmüyor (akıl kalitesi gpt-oss-120b'de kalıyor),
+  // yalnız gizli düşünme bütçesi kısalıyor. "Hem hızlı hem akıllı" dengesi
+  // burada: kaliteyi modelden, hızı efordan alıyoruz. Kullanıcı ya da anlama
+  // katmanı turu açıkça derin işaretlerse yukarıdaki `deep` kısa devresi yine
+  // "high"a çıkarıyor — derinlik sinyali kaybolmuyor.
+  if (workload === "mobile_chat_balanced") {
+    return "medium";
   }
   if (reasoningMode === "balanced") {
     return "medium";
