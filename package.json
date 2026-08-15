@@ -43,7 +43,8 @@
     "db:generate": "npm run build && drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "npm run build && drizzle-kit push",
-    "retrieval:eval": "tsx scripts/retrieval-eval.mts"
+    "retrieval:eval": "tsx scripts/retrieval-eval.mts",
+    "eval:routing": "tsx src/scripts/routing-eval-report.ts"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",
