@@ -3,7 +3,11 @@ import { env, pipeline } from "@huggingface/transformers";
 
 type SemanticComputeRequest = {
   id: number;
-  task: "embed";
+  /**
+   * `warmup` modeli diskten belleğe yükler ve TEK bir gömme üretir. Amaç,
+   * ONNX oturum başlatma maliyetini ilk KULLANICI turunun ödememesi.
+   */
+  task: "embed" | "warmup";
   modelName: string;
   texts: string[];
 };
@@ -85,10 +89,17 @@ function getExtractor(modelName: string): Promise<Extractor> {
 
 parentPort?.on("message", async (request: SemanticComputeRequest) => {
   try {
-    if (request.task !== "embed") {
+    if (request.task !== "embed" && request.task !== "warmup") {
       throw new Error("unsupported_semantic_compute_task");
     }
     const extractor = await getExtractor(request.modelName);
+    if (request.task === "warmup") {
+      // Tek kısa metin: ONNX oturumu kurulur, ağırlıklar belleğe gelir.
+      // Vektör kullanılmaz; amaç yalnız maliyeti şimdi ödemek.
+      await extractor(["query: warmup"], { pooling: "mean", normalize: true });
+      parentPort?.postMessage({ id: request.id, ok: true, vectors: [] });
+      return;
+    }
     const output = await extractor(request.texts, {
       pooling: "mean",
       normalize: true,

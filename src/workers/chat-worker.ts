@@ -2,6 +2,7 @@ import { buildApp } from "../app/build-app.js";
 import { loadEnv } from "../config/env.js";
 import { ensureChatGenerationWorkers } from "../modules/brain/chat-generation-queue.js";
 import { warmSharedBrainRuntime } from "../modules/brain/runtime.js";
+import { primeSemanticComputeWorker } from "../modules/brain/semantic-compute-client.js";
 
 try {
   process.loadEnvFile();
@@ -25,6 +26,21 @@ const app = await buildApp(env);
 void warmSharedBrainRuntime(app).catch((error) => {
   app.log.warn({ error }, "chat worker brain runtime warmup unavailable");
 });
+// e5 modeli imaja gömülü ama ONNX oturumu ilk `embed` isteğinde kuruluyordu:
+// o maliyeti ilk KULLANICI turu ödüyor, çağıranın bütçesini aşıyor ve arka
+// arkaya 5 timeout semantik katmanı 60 sn cooldown'a sokuyordu. Canlıda saatte
+// 15 timeout ölçüldü — semantik kararlar çoğunlukla hash yedeğinde koşuyordu.
+// Maliyeti açılışta ödüyoruz; başarısız olursa davranış eskisiyle aynı.
+void primeSemanticComputeWorker({
+  modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
+  logger: app.log,
+})
+  .then((warmed) => {
+    app.log.info({ warmed }, "semantic compute model warmup finished");
+  })
+  .catch((error) => {
+    app.log.warn({ error }, "semantic compute model warmup unavailable");
+  });
 await ensureChatGenerationWorkers(app);
 app.log.info("chat generation worker ready");
 

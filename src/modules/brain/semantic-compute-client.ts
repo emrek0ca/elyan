@@ -467,6 +467,65 @@ export async function embedTextsWithSemanticWorker(input: {
   return vectors.every((vector): vector is number[] => Array.isArray(vector)) ? vectors : null;
 }
 
+let warmupPromise: Promise<boolean> | null = null;
+
+/**
+ * Modeli AÇILIŞTA belleğe yükler.
+ *
+ * NEDEN
+ * -----
+ * Model imaja gömülü (Dockerfile `local_files_only=true` ile doğruluyor), yani
+ * indirme yok. Ama ONNX oturumu ilk `embed` isteğinde kuruluyordu ve o maliyeti
+ * ilk KULLANICI turu ödüyordu. Canlıda ölçüldü: yükleme çağıranın 8 sn'lik
+ * bütçesini aşıyor, arka arkaya 5 timeout `FAILURE_THRESHOLD`'u tetikliyor,
+ * 60 sn `COOLDOWN_MS` boyunca `isSemanticComputeWorkerUnavailable()` true
+ * kalıyor ve TÜM semantik kararlar hash yedeğine düşüyordu. Saatte 15 timeout
+ * ölçüldü — yani semantik katman prodüksiyonda çoğunlukla hiç çalışmıyordu.
+ *
+ * Isıtmanın çağıran zaman aşımı YOK ve başarısızlığı cooldown sayacına
+ * İŞLENMEZ: açılışta bir kez denenir, tutmazsa sistem eskisi gibi hash'e
+ * düşer — yani bu ekleme hiçbir yolu kötüleştiremez.
+ */
+export function primeSemanticComputeWorker(input: {
+  modelName: string;
+  logger?: SemanticComputeLogger;
+}): Promise<boolean> {
+  if (warmupPromise) return warmupPromise;
+  if (testDispatcher || !workerEnabled()) return Promise.resolve(false);
+
+  warmupPromise = new Promise<boolean>((resolve) => {
+    const activeWorker = getWorker(input.logger);
+    if (!activeWorker) {
+      resolve(false);
+      return;
+    }
+    const id = nextRequestId;
+    nextRequestId += 1;
+    // Isıtma için zamanlayıcı kurulmuyor; `pending` girdisi yanıt gelince
+    // temizleniyor. Yanıt hiç gelmezse süreç zaten hash yolunda çalışır.
+    pending.set(id, {
+      resolve: (vectors) => {
+        // Isıtma başarısı cooldown'u SIFIRLAR: soğuk başlangıçta birikmiş
+        // sahte başarısızlıklar gerçek trafiği cezalandırmasın.
+        if (Array.isArray(vectors)) recordSuccess();
+        resolve(Array.isArray(vectors));
+      },
+      timer: setTimeout(() => undefined, 0),
+    });
+    activeWorker.postMessage({
+      id,
+      task: "warmup",
+      modelName: input.modelName,
+      texts: [],
+    });
+  });
+  return warmupPromise;
+}
+
+export function resetSemanticComputeWarmupForTests(): void {
+  warmupPromise = null;
+}
+
 export function getSemanticComputeMetrics(): SemanticComputeMetricsSnapshot {
   return {
     ...metricCounts,
@@ -491,6 +550,7 @@ export function setSemanticComputeDispatcherForTests(dispatcher: SemanticCompute
 }
 
 export function resetSemanticComputeWorkerForTests(): void {
+  warmupPromise = null;
   resolveAllPending(null);
   stopWorker();
   schedulerGeneration += 1;

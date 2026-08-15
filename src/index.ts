@@ -3,6 +3,7 @@ import { getBaseUrlReachability, loadEnv } from "./config/env.js";
 import { ensureElyanServerBrainBootstrap } from "./modules/brain/bootstrap.js";
 import { maybeStartSemanticV2Backfill } from "./modules/brain/retrieval.js";
 import { warmSharedBrainRuntime } from "./modules/brain/runtime.js";
+import { primeSemanticComputeWorker } from "./modules/brain/semantic-compute-client.js";
 
 try {
   process.loadEnvFile();
@@ -33,6 +34,19 @@ const app = await buildApp(env);
 // out of buildApp prevents every queue worker from loading a duplicate model
 // merely because they share the application factory.
 maybeStartSemanticV2Backfill(app);
+
+// e5 oturumunu açılışta kur; ilk kullanıcı turu ONNX yükleme maliyetini
+// ödemesin (bkz. `primeSemanticComputeWorker` gerekçesi).
+void primeSemanticComputeWorker({
+  modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
+  logger: app.log,
+})
+  .then((warmed) => {
+    app.log.info({ warmed }, "semantic compute model warmup finished");
+  })
+  .catch((error) => {
+    app.log.warn({ error }, "semantic compute model warmup unavailable");
+  });
 
 try {
   const bootstrap = await ensureElyanServerBrainBootstrap(app);
