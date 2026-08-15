@@ -348,6 +348,24 @@ function tableSpecDataFromBlock(
   };
 }
 
+/**
+ * Cevabın kendi markdown başlığı (ilk `#`/`##`). PDF/belge başlığı için son
+ * çare: yetkili veri ya da kaynak belge başlık vermediğinde, üretilen metnin
+ * kendi başlığı jenerik "Belge"den her zaman daha iyidir.
+ */
+function headingFromMarkdown(value: string | null | undefined): string | null {
+  const text = String(value ?? "");
+  if (!text.trim()) return null;
+  for (const line of text.split("\n").slice(0, 12)) {
+    const match = /^\s{0,3}#{1,3}\s+(.{2,120}?)\s*$/.exec(line);
+    if (match) {
+      const heading = match[1].replace(/[*_`]+/g, "").trim();
+      if (heading) return heading.slice(0, 120);
+    }
+  }
+  return null;
+}
+
 function buildPdfSpec(input: BuildSpecInput): PdfSpec {
   const base = baseFor(input, "pdf");
   const sourceDocument = canonicalDocumentBlock(input.assistantBlocks);
@@ -456,7 +474,13 @@ function buildPdfSpec(input: BuildSpecInput): PdfSpec {
         ? { title: sourceDocument.title }
         : sourceTable?.title
           ? { title: sourceTable.title }
-          : {}),
+          : // Son çare: cevabın KENDİ başlığı. Bu yoktu ve sonucu her belgede
+            // görünüyordu — metin "# Elyan Tanıtım Raporu" ile başlasa bile
+            // PDF "Belge" başlığıyla ve `custom.pdf` adıyla üretiliyordu.
+            // Kullanıcının gördüğü ilk şey bu.
+            (headingFromMarkdown(input.responseText)
+              ? { title: headingFromMarkdown(input.responseText) as string }
+              : {})),
     blocks,
     page: {
       size: "A4",

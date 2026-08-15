@@ -430,6 +430,8 @@ import {
   isExplicitMathOrLatexRequest,
   isExplicitSvgRequest,
   isExplicitTableRequest,
+  requestsChartOutput,
+  requestsTableOutput,
 } from "../../core/understanding/structured-output-policy.js";
 import {
   type AssistantMessageBlock,
@@ -9595,8 +9597,14 @@ export async function generateSharedBrainReply(
         result.metadata.toolResults = summarizeToolResultsForMetadata(
           toolLoop.results,
         );
-        const chartRequested = isExplicitChartRequest(input.prompt);
-        const tableRequested = isExplicitTableRequest(input.prompt);
+        // TEK SÖZLEŞME. Burada ham `isExplicit*` çağrılıyordu, yani parafrazla
+        // istenen bir veri tablosu ("her birinin fiyatını düzenli göster")
+        // araç sonuçlarını üretiyor ama YETKİLİ VERİ olarak bağlamıyordu —
+        // sonra artefakt kapısı `authoritative_table_data_unavailable` ile
+        // reddediyordu. Widget kararı, zarf ve grounding aynı sözleşmeyi
+        // okuyor; burası da okumalı.
+        const chartRequested = requestsChartOutput(input.prompt);
+        const tableRequested = requestsTableOutput(input.prompt);
         const authoritativeArtifactData =
           buildAuthoritativeArtifactDataFromToolResults(
             chartRequested && !tableRequested

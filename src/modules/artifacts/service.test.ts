@@ -825,3 +825,19 @@ test("belgesel bir belge isteği değildir", async () => {
   });
   assert.equal(result.intent.type, null);
 });
+
+test("PDF başlığı cevabın kendi başlığından türer", async () => {
+  // Eskiden yetkili veri/kaynak belge başlık vermediğinde PDF jenerik
+  // "Belge" başlığı ve `custom.pdf` adıyla üretiliyordu — metin
+  // "# Elyan Tanıtım Raporu" ile başlasa bile. Kullanıcının gördüğü ilk şey.
+  const result = await buildArtifactPipeline({
+    userRequest: "şirket raporu hazırla pdf olarak",
+    responseText: "# Elyan Tanıtım Raporu\n\n## Özet\nKısa özet.\n\n## Sonuç\nBitti.",
+    metadata: {},
+  });
+  assert.equal(result.kind, "rendered");
+  if (result.kind !== "rendered") return;
+  const content = result.output.output?.content as Record<string, unknown>;
+  assert.equal(content.fileName, "elyan_tanitim_raporu.pdf");
+  assert.match(String(content.markdown), /^# Elyan Tanıtım Raporu/);
+});
