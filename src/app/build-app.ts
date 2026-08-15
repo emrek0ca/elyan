@@ -52,6 +52,7 @@ import { trainPanelRoutes } from "../modules/admin/train-panel.js";
 import { webRoutes } from "../modules/web/routes.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { warmDesktopCapabilityVectors } from "../modules/tasks/desktop-capability-embedding-match.js";
+import { primeSemanticComputeWorker } from "../modules/brain/semantic-compute-client.js";
 import { startTaskLeaseSweeper } from "../modules/tasks/lease-sweeper.js";
 import { startRealtimeEventRetentionPruner } from "../modules/realtime/log.js";
 import { startInProcessMemoryWorker } from "../modules/brain/worker.js";
@@ -524,7 +525,31 @@ export async function buildApp(envInput?: AppEnv) {
   // skorla çalışmayı sürdürür, ısınma bitince tam anlamsal skora geçer.
   // Bilinçli olarak `await` edilmiyor: açılışı bloklamaz ve başarısız olursa
   // sunucu yine ayağa kalkar.
-  void warmDesktopCapabilityVectors(app.log).catch(() => null);
+  // SIRA ÖNEMLİ: önce MODEL, sonra vektörler.
+  //
+  // `warmDesktopCapabilityVectors` ~490 metni 20 sn bütçeyle gömüyor. O çağrı
+  // modeli de yüklemek zorunda kalırsa bütçe yükleme + gömme için paylaşılıyor
+  // ve yükleme tek başına bütçeyi yiyor. Beş süreç (backend, brain-worker,
+  // chat-worker ×2, document-worker, proactive-scheduler) bunu AYNI ANDA
+  // yapınca CPU'da boğuşuyorlar; canlıda ölçüldü — her açılışta ~24 timeout ve
+  // ardından 60 sn cooldown, yani semantik katman hash'e düşüyordu.
+  //
+  // `primeSemanticComputeWorker` çağıran zaman aşımı OLMADAN yalnız modeli
+  // yükler; vektör ısınması ondan sonra başlar ve 20 sn bütçesini gerçekten
+  // gömme için kullanır. Isıtma başarısız olsa bile davranış eskisiyle aynı
+  // kalır (hash yedeği), yani bu sıralama hiçbir yolu kötüleştiremez.
+  //
+  // Tek yerde duruyor: süreç başına kopyalamak bu projenin baskın hata sınıfı
+  // ("aynı karar iki sahip") — her yeni worker bunu unutmadan kazanmalı.
+  void primeSemanticComputeWorker({
+    modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
+    logger: app.log,
+  })
+    .then((warmed) => {
+      app.log.info({ warmed }, "semantic compute model warmup finished");
+      return warmDesktopCapabilityVectors(app.log);
+    })
+    .catch(() => null);
 
   return app;
 }
