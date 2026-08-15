@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { classifyIntent } from "./intent-classifier.js";
 import type { IntentClassification } from "./types.js";
 import {
   buildTypedUnderstandingEnvelope,
@@ -260,4 +261,38 @@ test("buildTypedUnderstandingEnvelope does not convert prompt injection into mem
 
   assert.equal(envelope.risk.prompt_injection, true);
   assert.equal(envelope.memory_candidates.length, 0);
+});
+
+test("zarf olumsuzlanan görsel isteğini artefakt saymaz", () => {
+  // TUTARLILIK RAPORU BULGUSU: "görsel üretme, sadece anlat" turunda zarf
+  // `image` artefaktı istiyordu — kullanıcı açıkça ÜRETME demişken. Zarf
+  // üretimde otorite olduğu için bu canlı bir yanlış davranıştı.
+  const message = "görsel üretme, sadece anlat";
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "u",
+    message,
+    intent: classifyIntent({ userId: "u", message }),
+    source: "typed_extractor",
+  });
+  assert.equal(
+    envelope.desired_outputs.some((output) => output.kind === "image"),
+    false,
+  );
+});
+
+test("3B yüzey isteği zarfta chart olarak görünmez", () => {
+  // Zarf `chart`, widget kararı `math_surface_3d` diyordu — aynı turda iki
+  // katman çelişiyordu. Yüzey kendi widget'ında üretilir, chart verisi
+  // beklenmez.
+  const message = "z = x^2 + y^2 yüzeyini 3 boyutlu çiz";
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "u",
+    message,
+    intent: classifyIntent({ userId: "u", message }),
+    source: "typed_extractor",
+  });
+  assert.equal(
+    envelope.desired_outputs.some((output) => output.kind === "chart"),
+    false,
+  );
 });

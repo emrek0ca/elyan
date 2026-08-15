@@ -14,7 +14,12 @@ import type {
 } from "./types.js";
 import { understandingEnvelopeSchema } from "./types.js";
 import { normalizePersonalName } from "./identity-name.js";
-import { requestsChartOutput, requestsTableOutput } from "./structured-output-policy.js";
+import {
+  isExplicitMathSurface3DRequest,
+  requestsChartOutput,
+  requestsTableOutput,
+} from "./structured-output-policy.js";
+import { isNegatedVisualActionRequest } from "../../modules/brain/visual-intent-contract.js";
 import {
   compileOutputContract,
   workloadFromOutputContract,
@@ -719,7 +724,12 @@ function buildDesiredOutputs(input: {
   // "3 boyutlu yüzey" hiçbiri yoktu. Artık tablo tarafıyla aynı sözleşmeyi
   // okuyor, dolayısıyla parafrazlar da (`şeklini görebilir miyim`) buraya
   // ulaşıyor.
-  if (requestsChartOutput(input.text)) {
+  // 3B YÜZEY BİR CHART DEĞİLDİR. `requestsChartOutput` grounding için yazıldı
+  // ("dışarıdan veri gerekir mi?") ve yüzeyi de grafik ailesinde sayıyor — o
+  // bağlamda doğru. Ama ARTEFAKT TİPİ için yanlış: aynı turda zarf `chart`,
+  // widget kararı `math_surface_3d` diyordu; tutarlılık raporu bunu yakaladı.
+  // Yüzey isteği kendi widget'ında üretilir, chart verisi beklenmez.
+  if (requestsChartOutput(input.text) && !isExplicitMathSurface3DRequest(input.text)) {
     addDesiredOutput(outputs, { kind: "chart", format: null, target: "widget", confidence: 0.82, constraints: ["chart_data"] });
   }
 
@@ -771,7 +781,16 @@ function buildDesiredOutputs(input: {
         confidence: input.outputContract.confidence,
         constraints: ["output_contract"],
       });
-    } else if (input.outputContract.outputKind === "image") {
+    } else if (
+      input.outputContract.outputKind === "image" &&
+      // OLUMSUZLAMA KAPISI. "görsel üretme, sadece anlat" turunda zarf
+      // `image_prompt` artefaktı istiyordu — kullanıcı açıkça ÜRETME demişken.
+      // Zarf üretimde otorite olduğu için bu canlı bir yanlış davranıştı;
+      // tutarlılık raporu yakaladı. Olumsuzlamanın tek sahibi
+      // `isNegatedVisualActionRequest`; burada da o okunuyor, ikinci bir
+      // olumsuzlama listesi türetilmiyor.
+      !isNegatedVisualActionRequest(input.text)
+    ) {
       addDesiredOutput(outputs, {
         kind: "image",
         format: format ?? "png",
