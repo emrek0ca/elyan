@@ -2,6 +2,10 @@ import {
   DESKTOP_CAPABILITY_MANIFEST,
   type DesktopCapabilityManifestEntry,
 } from "./desktop-capability-manifest.js";
+import {
+  actionPolarityAdjustment,
+  resolveQueryActionPolarity,
+} from "./capability-action-polarity.js";
 
 export type DesktopCapabilitySideEffectClass =
   | "none"
@@ -328,6 +332,11 @@ export function matchDesktopCapabilitiesSemantically(input: {
   const index = getScoringIndex();
   const queryEmbedding = applyIdf(embedText(query), index.idf);
   const intent = input.intent ?? "";
+  // Eylem kutbu YAPISAL bir boyut, kelime torbasında bir özellik değil.
+  // Torbada "aç" (2 harf, 0 n-gram) nesne adının yanında eziliyor ve
+  // "Chrome'u aç" top-1'de `close_app` üretiyordu. Bkz.
+  // `capability-action-polarity.ts`.
+  const queryPolarity = resolveQueryActionPolarity(query);
   const matches = getDesktopCapabilityOntology()
     .map((entry) => {
       let positive = 0;
@@ -366,12 +375,17 @@ export function matchDesktopCapabilitiesSemantically(input: {
       )
         ? 0
         : 0.18;
+      const polarityAdjustment = actionPolarityAdjustment({
+        queryPolarity,
+        capabilityId: entry.canonicalId,
+      });
       return {
         capability: entry.canonicalId,
         score: Number(
-          Math.max(0, positive + intentBoost - negative * 0.5 - sideEffectPenalty).toFixed(
-            4,
-          ),
+          Math.max(
+            0,
+            positive + intentBoost + polarityAdjustment - negative * 0.5 - sideEffectPenalty,
+          ).toFixed(4),
         ),
         entry,
       };

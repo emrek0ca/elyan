@@ -7,6 +7,7 @@ import {
   ROUTING_EVAL_CORPUS,
   ROUTING_EVAL_HELDOUT,
 } from "../modules/tasks/routing-eval-corpus.js";
+import { matchDesktopCapabilitiesWithEmbeddings } from "../modules/tasks/desktop-capability-embedding-match.js";
 
 /**
  * YÖNLENDİRME ÖLÇÜM KAPISI.
@@ -43,7 +44,42 @@ function summarize(scope: Summary["scope"], report: RoutingEvalReport): Summary 
   };
 }
 
+/**
+ * İKİ AŞAMA AYRI ÖLÇÜLÜR.
+ *
+ * Üretim yolu `matchDesktopCapabilitiesWithEmbeddings`: önce sözcüksel katman
+ * 128 aday üretir, sonra e5 yeniden sıralar. Yalnız sözcüksel katmanı ölçmek
+ * yanıltıcıdır — ama e5 aşamasını ölçmemek de öyle, çünkü e5 erişilemezse
+ * (model yüklenmemiş, timeout) üretim SESSİZCE sözcüksel skora düşer. İki
+ * sayıyı yan yana görmek, o düşüşün bedelini görünür kılar.
+ */
+async function runFullPipelineEval(corpus: typeof ROUTING_EVAL_CORPUS) {
+  let top1 = 0;
+  let scored = 0;
+  const misses: string[] = [];
+  for (const testCase of corpus) {
+    if (!testCase.expected) continue;
+    scored += 1;
+    const matches = await matchDesktopCapabilitiesWithEmbeddings({
+      query: testCase.utterance,
+      intent: testCase.intent ?? null,
+      sideEffectLevel: testCase.sideEffectLevel ?? null,
+      limit: 3,
+    });
+    const acceptable = new Set([testCase.expected, ...(testCase.alsoAcceptable ?? [])]);
+    if (matches[0] && acceptable.has(matches[0].capability)) {
+      top1 += 1;
+    } else {
+      misses.push(
+        `  "${testCase.utterance}" → bekleniyordu ${testCase.expected}, geldi ${matches.map((m) => m.capability).join(", ") || "(yok)"}`,
+      );
+    }
+  }
+  return { scored, top1, rate: scored > 0 ? top1 / scored : 0, misses };
+}
+
 const asJson = process.argv.includes("--json");
+const withEmbeddings = process.argv.includes("--full");
 const corpusReport = runRoutingEval(ROUTING_EVAL_CORPUS);
 const heldoutReport = runRoutingEval(ROUTING_EVAL_HELDOUT);
 
@@ -70,4 +106,16 @@ if (asJson) {
     `\nGENELLEME PAYI: korpus ${(corpusTop1 * 100).toFixed(1)}% → tutulan ${(heldoutTop1 * 100).toFixed(1)}%` +
       ` (fark ${((corpusTop1 - heldoutTop1) * 100).toFixed(1)} puan)`,
   );
+}
+
+if (withEmbeddings) {
+  console.log("\n===== TAM BORU HATTI (sözcüksel + e5 yeniden sıralama) =====");
+  for (const [name, corpus] of [
+    ["KORPUS", ROUTING_EVAL_CORPUS],
+    ["TUTULAN", ROUTING_EVAL_HELDOUT],
+  ] as const) {
+    const full = await runFullPipelineEval(corpus);
+    console.log(`${name}: top-1 ${full.top1}/${full.scored} (${(full.rate * 100).toFixed(1)}%)`);
+    for (const miss of full.misses.slice(0, 12)) console.log(miss);
+  }
 }

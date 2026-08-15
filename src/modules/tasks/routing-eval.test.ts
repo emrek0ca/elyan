@@ -5,6 +5,7 @@ import {
   ROUTING_EVAL_CORPUS,
   ROUTING_EVAL_HELDOUT,
 } from "./routing-eval-corpus.js";
+import { matchDesktopCapabilitiesSemantically } from "./desktop-capability-ontology.js";
 import { getDesktopCapabilityOntology } from "./desktop-capability-ontology.js";
 
 // Yönlendirme kalitesinin REGRESYON KAPISI.
@@ -52,6 +53,38 @@ test("held-out corpus stays independent from the capability phrasebook", () => {
     assert.ok(
       !phrasebook.has(testCase.utterance.trim().toLocaleLowerCase("tr-TR")),
       `tutulan küme ifadesi sözlüğe sızmış: "${testCase.utterance}"`,
+    );
+  }
+});
+
+test("eylem kutupluluğu zıt eylemi top-1'den eler", () => {
+  // PRODÜKSİYON VAKASI: "Chrome'u aç" ve "Finder'ı aç" top-1'de `close_app`
+  // üretiyordu — istenenin TERSİ eylem. Sebep yapısal: kelime torbasında
+  // "aç" (normalize → "ac", 2 harf) 0 karakter-ngramı üretiyor, nesne adı
+  // ("chrome", 9 ngram) eylemi eziyor.
+  for (const utterance of ["Chrome'u aç", "Finder'ı aç", "Safari'yi aç"]) {
+    const matches = matchDesktopCapabilitiesSemantically({
+      query: utterance,
+      limit: 3,
+      threshold: 0,
+    });
+    assert.notEqual(
+      matches[0]?.capability,
+      "close_app",
+      `zıt eylem top-1 olmamalı: ${utterance}`,
+    );
+  }
+  // Kapatma yönü bozulmamalı.
+  for (const utterance of ["Chrome'u kapat", "Safari'yi kapat"]) {
+    const matches = matchDesktopCapabilitiesSemantically({
+      query: utterance,
+      limit: 3,
+      threshold: 0,
+    });
+    assert.notEqual(
+      matches[0]?.capability,
+      "open_app",
+      `zıt eylem top-1 olmamalı: ${utterance}`,
     );
   }
 });
