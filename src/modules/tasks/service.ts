@@ -2716,6 +2716,10 @@ function resolveImageGenerationFallbackText(
       return "Görsel isteği sağlayıcı tarafından reddedildi. Ekibe ilettim.";
     case "image_generation_provider_unavailable":
       return "Görsel sağlayıcısı şu anda kullanılamıyor. Biraz sonra tekrar deneyebilirsin.";
+    case "image_generation_intent_not_visual":
+      // Görsel değil grafik/şema isteği sanıldı; kullanıcıya "tekrar dene"
+      // demek yanlış olur.
+      return "Bunu bir görsel isteği olarak anlamadım. Ne çizmemi istediğini tek cümleyle yazarsan hemen üretirim.";
     case "image_generation_provider_unconfigured":
       // "Sonra tekrar dene" DEMİYORUZ: bu yapılandırma eksikliği, geçici bir
       // arıza değil. Tekrar denemek hiçbir zaman çalışmaz.

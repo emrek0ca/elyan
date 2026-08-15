@@ -994,7 +994,23 @@ export async function maybeGenerateHostedImageArtifact(
     isHostedImageEditRequest(input.prompt, sourceImageCount) ||
     (hasSessionImageArtifact(metadata) && isHostedImageEditIntent(input.prompt));
   if (!isVisualImageRequested(visualIntent, input.prompt) && !editing) {
-    return null;
+    // SESSİZ ARIZA KAPATILDI. Buradaki `null`, çağıranın (tasks/service.ts)
+    // zaten "bu bir görsel isteği" dediği turlarda da dönebiliyordu: çağıran
+    // `isHostedImageGenerationRequest` ile, burası `isVisualImageRequested` ile
+    // karar veriyor ve iki kelime listesi birbirini tutmuyordu. Sonuç:
+    // sebep yazılmadan `null`, kullanıcıya jenerik "Görseli şu anda
+    // üretemedim", logda ve Redis'te HİÇBİR iz — teşhis edilemez bir arıza.
+    // (Gerçek vaka: "Yeni bir görsel üret…" — `\büret\b` Türkçe 'ü' yüzünden
+    // hiç eşleşmiyordu; bkz. visual-intent-contract.ts.)
+    //
+    // Artık çağıranın geniş kapısı da kabul ediliyor; yine de reddedilirse
+    // sebep METADATAYA yazılıyor ki bir daha görünmez olmasın.
+    if (!isHostedImageGenerationRequest(input.prompt)) {
+      setImageGenerationBlockReason(metadata, "image_generation_intent_not_visual", {
+        intent: visualIntent.intent,
+      });
+      return null;
+    }
   }
   if (
     (visualIntent.intent === "image_edit" ||

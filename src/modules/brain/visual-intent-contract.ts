@@ -1,3 +1,5 @@
+import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
+
 export type VisualIntentKind = "image_generate" | "image_edit" | "image_continue";
 
 export type VisualIntentContract = {
@@ -27,29 +29,49 @@ type VisualIntentInput = {
   sourceImageCount?: number;
 };
 
+/**
+ * TÜRKÇE SINIR TUZAĞI — bu dosyadaki kalıplar `unicodeWordPattern` ile
+ * kurulmalı, çıplak `/.../i` ile DEĞİL.
+ *
+ * JS'de `\b`, ASCII `\w` tabanlıdır. "üret" gibi Türkçe bir harfle BAŞLAYAN
+ * (ya da "aynı", "kontrastı" gibi bitenen) kelimede `\büret\b` asla eşleşmez —
+ * kural sessizce ölür. Prodüksiyonda tam olarak bu oldu: "Yeni bir görsel üret
+ * kedi resmi olsun" isteği `isVisualGenerationIntent` tarafından reddedildi,
+ * `maybeGenerateHostedImageArtifact` sebep yazmadan `null` döndü ve kullanıcı
+ * jenerik "Görseli şu anda üretemedim" mesajı aldı. "kedi resmi oluştur"
+ * çalışıyordu, çünkü "oluştur" ASCII bir harfle başlıyor — arızanın rastgele
+ * görünmesinin sebebi buydu.
+ *
+ * Aynı sessiz ölüm bu dosyada `şuna`, `şunu`, `aynı`, `önceki`, `önüne`,
+ * `üstüne`, `ışığı`, `kontrastı`, `afiş`, `çizim`, `illüstrasyon` kelimelerini
+ * de vuruyordu.
+ */
 const CONTINUATION_PATTERNS = [
-  /\b(buna|şuna|suna|ona|bunu|şunu|sunu|bunun|şunun|sunun|onun)\b/i,
-  /\b(aynı|ayni)\s+(görsel|gorsel|resim|sahne|stil|tarz)\b/i,
-  /\b(bu|son|önceki|onceki)\s+(görsel|gorsel|resim|fotoğraf|fotograf|sahne)\b/i,
-  /\b(devam|devamında|devaminda|follow[-\s]?up|continue|continuation)\b/i,
-  /\b(yanına|yanina|yaninda|yanına da|yanina da|next to|beside|alongside)\b/i,
-  /\b(arkasına|arkasina|önüne|onune|üstüne|ustune|altına|altina)\b/i,
-  /\b(bir tane daha|1 tane daha|bir de|ayrıca|ayrica|another|one more)\b/i,
-];
+  String.raw`\b(buna|şuna|suna|ona|bunu|şunu|sunu|bunun|şunun|sunun|onun)\b`,
+  String.raw`\b(aynı|ayni)\s+(görsel|gorsel|resim|sahne|stil|tarz)\b`,
+  String.raw`\b(bu|son|önceki|onceki)\s+(görsel|gorsel|resim|fotoğraf|fotograf|sahne)\b`,
+  String.raw`\b(devam|devamında|devaminda|follow[-\s]?up|continue|continuation)\b`,
+  String.raw`\b(yanına|yanina|yaninda|yanına da|yanina da|next to|beside|alongside)\b`,
+  String.raw`\b(arkasına|arkasina|önüne|onune|üstüne|ustune|altına|altina)\b`,
+  String.raw`\b(bir tane daha|1 tane daha|bir de|ayrıca|ayrica|another|one more)\b`,
+].map((source) => unicodeWordPattern(source, "i"));
 
 const EDIT_PATTERNS = [
-  /\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|kırp|kirp|büyüt|buyut|küçült|kucult)\b/i,
-  /\b(edit|remove|replace|erase|add|enhance|upscale|crop|blur|retouch|change)\b/i,
-  /\b(arka plan|rengini|stilini|ışığı|isigi|kontrastı|kontrasti)\b/i,
-  /\b(make|turn|transform)\s+(this|it|the image|the photo)\b/i,
-];
+  String.raw`\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|kırp|kirp|büyüt|buyut|küçült|kucult)\b`,
+  String.raw`\b(edit|remove|replace|erase|add|enhance|upscale|crop|blur|retouch|change)\b`,
+  String.raw`\b(arka plan|rengini|stilini|ışığı|isigi|kontrastı|kontrasti)\b`,
+  String.raw`\b(make|turn|transform)\s+(this|it|the image|the photo)\b`,
+].map((source) => unicodeWordPattern(source, "i"));
+
+const VISUAL_NOUNS = String.raw`görsel|gorsel|resim|resmi|resmini|image|afiş|afis|poster|banner|kapak|thumbnail|illüstrasyon|illustration|mockup|cover|logo|ikon|avatar|maskot|sticker|çizim|cizim`;
+const VISUAL_VERBS = String.raw`üret|uret|oluştur|olustur|hazırla|hazirla|tasarla|çiz|ciz|draw|paint|sketch|design|generate|create`;
 
 const GENERATION_PATTERNS = [
-  /\b(görsel|gorsel|resim|resmi|resmini|image|afiş|afis|poster|banner|kapak|thumbnail|illüstrasyon|illustration|mockup|cover|logo|ikon|avatar|maskot|sticker|çizim|cizim)\b.*\b(üret|uret|oluştur|olustur|hazırla|hazirla|tasarla|çiz|ciz|draw|paint|sketch|design|generate|create)\b/i,
-  /\b(üret|uret|oluştur|olustur|hazırla|hazirla|tasarla|çiz|ciz|draw|paint|sketch|design|generate|create)\b.*\b(görsel|gorsel|resim|resmi|resmini|image|afiş|afis|poster|banner|kapak|thumbnail|illüstrasyon|illustration|mockup|cover|logo|ikon|avatar|maskot|sticker|çizim|cizim)\b/i,
-  /(?<!\p{L})(çiz|ciz)(er|ersen|sene|senize|ebilir|iver|in|iniz|elim|sin)?(?!\p{L})/iu,
-  /\b(draw|sketch|paint|illustrate|generate|create)\b/i,
-];
+  String.raw`\b(${VISUAL_NOUNS})\b.*\b(${VISUAL_VERBS})\b`,
+  String.raw`\b(${VISUAL_VERBS})\b.*\b(${VISUAL_NOUNS})\b`,
+  String.raw`(?<!\p{L})(çiz|ciz)(er|ersen|sene|senize|ebilir|iver|in|iniz|elim|sin)?(?!\p{L})`,
+  String.raw`\b(draw|sketch|paint|illustrate|generate|create)\b`,
+].map((source) => unicodeWordPattern(source, "i"));
 
 const NEGATED_VISUAL_ACTION_PATTERNS = [
   /(?<!\p{L})(?:görsel|gorsel|resim|image)(?:i|ı|u|ü)?\s+(?:oluştur|olustur|üret|uret|çiz|ciz|generate|create)(?:ma|me)(?!\p{L})/iu,
@@ -60,16 +82,16 @@ const NEGATED_VISUAL_ACTION_PATTERNS = [
 ];
 
 const SUBJECT_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(at|atlar|atı|atin|horse|horses)\b/iu, "horse"],
-  [/\b(kedi|kediler|cat|cats)\b/iu, "cat"],
-  [/\b(köpek|kopek|köpekler|kopekler|dog|dogs)\b/iu, "dog"],
-  [/\b(çocuk|cocuk|çocuklar|cocuklar|child|children|kid|kids)\b/iu, "child"],
-  [/\b(araba|otomobil|car|cars)\b/iu, "car"],
-  [/\b(insan|kişi|kisi|person|people|human)\b/iu, "person"],
-  [/\b(kadın|kadin|woman|women)\b/iu, "woman"],
-  [/\b(erkek|adam|man|men)\b/iu, "man"],
-  [/\b(logo|ikon|icon)\b/iu, "logo"],
-  [/\b(avatar|maskot|mascot)\b/iu, "character"],
+  [unicodeWordPattern(String.raw`\b(at|atlar|atı|atin|horse|horses)\b`, "i"), "horse"],
+  [unicodeWordPattern(String.raw`\b(kedi|kediler|cat|cats)\b`, "i"), "cat"],
+  [unicodeWordPattern(String.raw`\b(köpek|kopek|köpekler|kopekler|dog|dogs)\b`, "i"), "dog"],
+  [unicodeWordPattern(String.raw`\b(çocuk|cocuk|çocuklar|cocuklar|child|children|kid|kids)\b`, "i"), "child"],
+  [unicodeWordPattern(String.raw`\b(araba|otomobil|car|cars)\b`, "i"), "car"],
+  [unicodeWordPattern(String.raw`\b(insan|kişi|kisi|person|people|human)\b`, "i"), "person"],
+  [unicodeWordPattern(String.raw`\b(kadın|kadin|woman|women)\b`, "i"), "woman"],
+  [unicodeWordPattern(String.raw`\b(erkek|adam|man|men)\b`, "i"), "man"],
+  [unicodeWordPattern(String.raw`\b(logo|ikon|icon)\b`, "i"), "logo"],
+  [unicodeWordPattern(String.raw`\b(avatar|maskot|mascot)\b`, "i"), "character"],
 ];
 
 const NEGATIVE_SUBJECT_CLAUSE_PATTERNS = [
@@ -78,38 +100,38 @@ const NEGATIVE_SUBJECT_CLAUSE_PATTERNS = [
 ];
 
 const STYLE_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(anime)\b/i, "anime"],
-  [/\b(çizgi film|cizgi film|cartoon)\b/i, "cartoon"],
-  [/\b(sinematik|cinematic)\b/i, "cinematic"],
-  [/\b(fotogerçekçi|fotogercekci|photorealistic|realistic)\b/i, "photorealistic"],
-  [/\b(sulu boya|watercolor)\b/i, "watercolor"],
-  [/\b(yağlı boya|yagli boya|oil painting)\b/i, "oil painting"],
-  [/\b(minimal|minimalist)\b/i, "minimal"],
-  [/\b(3d)\b/i, "3d"],
+  [unicodeWordPattern(String.raw`\b(anime)\b`, "i"), "anime"],
+  [unicodeWordPattern(String.raw`\b(çizgi film|cizgi film|cartoon)\b`, "i"), "cartoon"],
+  [unicodeWordPattern(String.raw`\b(sinematik|cinematic)\b`, "i"), "cinematic"],
+  [unicodeWordPattern(String.raw`\b(fotogerçekçi|fotogercekci|photorealistic|realistic)\b`, "i"), "photorealistic"],
+  [unicodeWordPattern(String.raw`\b(sulu boya|watercolor)\b`, "i"), "watercolor"],
+  [unicodeWordPattern(String.raw`\b(yağlı boya|yagli boya|oil painting)\b`, "i"), "oil painting"],
+  [unicodeWordPattern(String.raw`\b(minimal|minimalist)\b`, "i"), "minimal"],
+  [unicodeWordPattern(String.raw`\b(3d)\b`, "i"), "3d"],
 ];
 
 const COLOR_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(kırmızı|kirmizi|red)\b/iu, "red"],
-  [/\b(mavi|blue)\b/iu, "blue"],
-  [/\b(yeşil|yesil|green)\b/iu, "green"],
-  [/\b(sarı|sari|yellow)\b/iu, "yellow"],
-  [/\b(siyah|black)\b/iu, "black"],
-  [/\b(beyaz|white)\b/iu, "white"],
-  [/\b(mor|purple)\b/iu, "purple"],
-  [/\b(pembe|pink)\b/iu, "pink"],
-  [/\b(turuncu|orange)\b/iu, "orange"],
-  [/\b(gri|gray|grey)\b/iu, "gray"],
-  [/\b(kahverengi|brown)\b/iu, "brown"],
-  [/\b(altın|altin|gold)\b/iu, "gold"],
-  [/\b(gümüş|gumus|silver)\b/iu, "silver"],
+  [unicodeWordPattern(String.raw`\b(kırmızı|kirmizi|red)\b`, "i"), "red"],
+  [unicodeWordPattern(String.raw`\b(mavi|blue)\b`, "i"), "blue"],
+  [unicodeWordPattern(String.raw`\b(yeşil|yesil|green)\b`, "i"), "green"],
+  [unicodeWordPattern(String.raw`\b(sarı|sari|yellow)\b`, "i"), "yellow"],
+  [unicodeWordPattern(String.raw`\b(siyah|black)\b`, "i"), "black"],
+  [unicodeWordPattern(String.raw`\b(beyaz|white)\b`, "i"), "white"],
+  [unicodeWordPattern(String.raw`\b(mor|purple)\b`, "i"), "purple"],
+  [unicodeWordPattern(String.raw`\b(pembe|pink)\b`, "i"), "pink"],
+  [unicodeWordPattern(String.raw`\b(turuncu|orange)\b`, "i"), "orange"],
+  [unicodeWordPattern(String.raw`\b(gri|gray|grey)\b`, "i"), "gray"],
+  [unicodeWordPattern(String.raw`\b(kahverengi|brown)\b`, "i"), "brown"],
+  [unicodeWordPattern(String.raw`\b(altın|altin|gold)\b`, "i"), "gold"],
+  [unicodeWordPattern(String.raw`\b(gümüş|gumus|silver)\b`, "i"), "silver"],
 ];
 
 const COUNT_WORDS: Array<[RegExp, number]> = [
-  [/\b(bir|1|one)\b/iu, 1],
-  [/\b(iki|2|two)\b/iu, 2],
-  [/\b(üç|uc|3|three)\b/iu, 3],
-  [/\b(dört|dort|4|four)\b/iu, 4],
-  [/\b(beş|bes|5|five)\b/iu, 5],
+  [unicodeWordPattern(String.raw`\b(bir|1|one)\b`, "i"), 1],
+  [unicodeWordPattern(String.raw`\b(iki|2|two)\b`, "i"), 2],
+  [unicodeWordPattern(String.raw`\b(üç|uc|3|three)\b`, "i"), 3],
+  [unicodeWordPattern(String.raw`\b(dört|dort|4|four)\b`, "i"), 4],
+  [unicodeWordPattern(String.raw`\b(beş|bes|5|five)\b`, "i"), 5],
 ];
 
 function compactText(value: unknown): string {

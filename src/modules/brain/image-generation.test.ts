@@ -1222,3 +1222,62 @@ test("latestImageArtifactFromMetadata ignores a non-image lastVisualArtifact", (
     null,
   );
 });
+
+test("Türkçe harfle BAŞLAYAN fiiller görsel isteğini düşürmez (\\b tuzağı)", () => {
+  // PRODÜKSİYON VAKASI. "Yeni bir görsel üret …" isteği kullanıcıya jenerik
+  // "Görseli şu anda üretemedim" döndürüyordu: JS'de `\b` ASCII `\w` tabanlı
+  // olduğu için `\büret\b` hiç eşleşmiyor ('ü' kelime karakteri sayılmıyor).
+  // "oluştur" ASCII bir harfle başladığından ÇALIŞIYORDU — arızanın rastgele
+  // görünmesinin sebebi buydu. Kalıplar artık `unicodeWordPattern` ile kuruluyor.
+  const prompts = [
+    "Yeni bir görsel üret kedi resmi olsun üstünde elyan yazsın turuncu renkle",
+    "bir görsel üret",
+    "kedi resmi üret",
+    "afiş üret",
+    "bana bir illüstrasyon hazırla",
+  ];
+  for (const prompt of prompts) {
+    const contract = buildVisualIntentContract({
+      prompt,
+      metadata: {},
+      sourceImageCount: 0,
+    });
+    assert.equal(
+      isVisualImageRequested(contract, prompt),
+      true,
+      `görsel isteği sayılmalıydı: ${prompt}`,
+    );
+    // İki kapının ANLAŞMASI şart: çağıran bu, üretici öteki kapıyı kullanıyordu
+    // ve ayrıştıklarında sebep yazılmadan sessizce null dönülüyordu.
+    assert.equal(
+      isHostedImageGenerationRequest(prompt),
+      true,
+      `çağıranın kapısı da geçmeliydi: ${prompt}`,
+    );
+  }
+});
+
+test("Türkçe harfle biten kelimeler renk/sayı çıkarımında da ölmüyor", () => {
+  const contract = buildVisualIntentContract({
+    prompt: "üç tane gümüş kedi çiz, altın detaylar olsun",
+    metadata: {},
+    sourceImageCount: 0,
+  });
+  assert.equal(contract.count, 3);
+  assert.ok(contract.subject.includes("cat"));
+});
+
+test("olumsuzlanan görsel isteği hâlâ reddediliyor", () => {
+  for (const prompt of ["görsel üretme", "resim oluşturma", "bana görsel çizme"]) {
+    const contract = buildVisualIntentContract({
+      prompt,
+      metadata: {},
+      sourceImageCount: 0,
+    });
+    assert.equal(
+      isVisualImageRequested(contract, prompt),
+      false,
+      `olumsuzlama korunmalıydı: ${prompt}`,
+    );
+  }
+});
