@@ -3,7 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { and, desc, eq } from "drizzle-orm";
 import { aiProviderInvocations } from "../../db/schema.js";
 import { buildGeminiModelCatalog, resolveGeminiFallbackModel } from "./gemini-models.js";
-import { buildGroqModelCatalog, resolveGroqFallbackModel } from "./groq-models.js";
+import {
+  buildGroqModelCatalog,
+  isStructuredGroqWorkload,
+  resolveGroqFallbackModel,
+} from "./groq-models.js";
 import { resolveGroqCompoundModel, shouldUseGroqCompound } from "./groq-compound.js";
 import {
   listSharedBrainProviderCandidates,
@@ -198,12 +202,15 @@ function buildHostedProviderCandidates(
   visionProfile?: VisionMediaProfile,
   visionSensitivity?: VisionMediaDecision["sensitivity"],
   structuredOutputRequired?: boolean,
+  structuredGeminiEligible?: boolean,
   /** Derinlik-router: turda canlı web / güncel veri ihtiyacı sinyali. Compound
    * bayrağı açıkken bu, uygun olmayan iş yüklerinde bile compound'u güçlendirir
    * (bkz. shouldUseGroqCompound). Bayrak kapalıysa etkisizdir. */
   liveWebSignal?: boolean,
 ): SharedBrainProviderCandidate[] {
   const hostedCandidates: SharedBrainProviderCandidate[] = [];
+  const strictStructuredOutput =
+    structuredOutputRequired === true || isStructuredGroqWorkload(workload);
 
   const groqApiKey = getConfiguredProviderApiKey(app, "groq");
   const groqBaseUrl = getConfiguredProviderBaseUrl(app, "groq");
@@ -223,15 +230,13 @@ function buildHostedProviderCandidates(
   // empty_response` iki denemede, ardından gerçek modele sıra gelmeden gecikme.
   // Yapısal çıktı gerektiğinde compound zincire HİÇ girmez; gpt-oss birincil olur.
   const compoundEligible =
-    structuredOutputRequired !== true &&
+    strictStructuredOutput !== true &&
     (!visionSensitivity || visionSensitivity === "none") &&
     shouldUseGroqCompound({ config: app.config, workload, liveWebSignal });
   const groqCompoundModel = compoundEligible
     ? resolveGroqCompoundModel(app.config, workload)
     : "";
-  const structuredFallbackModel = structuredOutputRequired
-    ? groqCatalog.fastModel
-    : "";
+  const structuredFallbackModel = "";
   if (groqApiKey && groqBaseUrl && groqPrimaryModel) {
     hostedCandidates.push({
       provider: "groq",
@@ -239,8 +244,9 @@ function buildHostedProviderCandidates(
       preferredModels: [
         groqCompoundModel,
         groqPrimaryModel,
-        structuredFallbackModel,
-        groqFallbackModel,
+        ...(strictStructuredOutput
+          ? []
+          : [structuredFallbackModel, groqFallbackModel]),
       ].filter(
         (model, index, values): model is string =>
           Boolean(model) && values.indexOf(model) === index,
@@ -286,7 +292,9 @@ function buildHostedProviderCandidates(
         ? geminiCatalog.textModel
         : resolveGeminiFallbackModel(app.config, geminiPrimaryModel) ??
           geminiCatalog.fastModel;
-  if (geminiApiKey && geminiBaseUrl && geminiPrimaryModel) {
+  const allowStructuredGemini =
+    strictStructuredOutput !== true || structuredGeminiEligible === true;
+  if (geminiApiKey && geminiBaseUrl && geminiPrimaryModel && allowStructuredGemini) {
     const preferredModels = [geminiPrimaryModel, geminiFallbackModel].filter(
       (model, index, values): model is string =>
         Boolean(model) &&
@@ -475,6 +483,20 @@ export async function rankInferenceProviderCandidates(input: {
 }): Promise<SharedBrainProviderCandidate[]> {
   if (!input.candidates.length || !input.app.db) return input.candidates;
 
+  // Structured output is a compatibility contract, not a latency contest.
+  // Keep the policy order (Groq structured lane, then an eligible Gemini
+  // candidate) instead of allowing historical latency to promote a provider
+  // that cannot satisfy the schema.
+  const strictStructuredOutput =
+    input.structuredOutputRequired === true ||
+    isStructuredGroqWorkload(input.workload);
+  if (strictStructuredOutput) {
+    return input.candidates.map((candidate) => ({
+      ...candidate,
+      preferredModels: [...candidate.preferredModels],
+    }));
+  }
+
   const performance = await loadRecentProviderPerformance(
     input.app,
     input.workload,
@@ -488,7 +510,7 @@ export async function rankInferenceProviderCandidates(input: {
         input.visionProfile === "restricted"
           ? undefined
           : input.visionProfile,
-      structured: input.structuredOutputRequired,
+      structured: strictStructuredOutput,
     });
     const stats = performance.get(performanceKey(provider, model));
     if (!stats) return score;
@@ -573,6 +595,8 @@ export function buildInferenceProviderCandidates(input: {
   /** Katı JSON bekleniyor (plan zarfı / response schema): araç-ajanı modeller
    * zincire alınmaz — düzyazı döndürüp turu boşa harcarlar. */
   structuredOutputRequired?: boolean;
+  /** Paid Gemini structured fallback is legal only after consent validation. */
+  structuredGeminiEligible?: boolean;
   /** Derinlik-router sinyali: turda canlı web / güncel veri ihtiyacı. Compound
    * bayrağı açıkken doğru turlarda compound'u tercih ettirir; kapalıysa no-op. */
   liveWebSignal?: boolean;
@@ -595,6 +619,7 @@ export function buildInferenceProviderCandidates(input: {
     input.visionProfile,
     input.visionSensitivity,
     input.structuredOutputRequired,
+    input.structuredGeminiEligible,
     input.liveWebSignal,
   );
   const preferredLocalCandidate = input.runtime.ready

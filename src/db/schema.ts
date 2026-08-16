@@ -1642,6 +1642,11 @@ export const chatMessages = pgTable(
     userIdx: index("chat_messages_user_idx").on(table.userId),
     taskIdx: index("chat_messages_task_idx").on(table.taskId),
     statusIdx: index("chat_messages_status_idx").on(table.status),
+    orphanReconcileIdx: index("chat_messages_orphan_reconcile_idx")
+      .on(table.createdAt)
+      .where(
+        sql`${table.role} = 'assistant' and ${table.taskId} is null and ${table.status} in ('queued', 'running')`,
+      ),
   }),
 );
 

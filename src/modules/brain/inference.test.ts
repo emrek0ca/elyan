@@ -2658,11 +2658,12 @@ test("resolveReasoningEffort escalates hard analytical work to high and keeps ch
   // A fast workload still escalates when the understanding layer marked the
   // task frame as deep reasoning.
   assert.equal(resolveReasoningEffort("mobile_chat_fast", "deep"), "high");
-  // Balanced chat now uses high effort; short educational/analytical prompts
-  // need quality over raw latency.
+  // Balanced is a compatibility name for the fast model and stays low. Deep
+  // task-frame signals are promoted to mobile_chat_deep_refine before this
+  // function is called.
   assert.equal(
     resolveReasoningEffort("mobile_chat_balanced", undefined),
-    "high",
+    "low",
   );
   // Hız-öncelikli şeritler düşük eforda kalır: ilk görünür token'ı gizli bir
   // düşünme turu geciktirmesin. (Kalite/gecikme dengesi ürün kararıdır;
@@ -7020,6 +7021,21 @@ test("resolveEffectiveWorkload keeps greetings and non-fast workloads untouched"
     },
   } as never;
   assert.equal(resolveEffectiveWorkload(planning), "planning");
+});
+
+test("resolveEffectiveWorkload promotes a deep task frame to the deep model lane", () => {
+  const deepTask = {
+    userId: "user-1",
+    prompt: "x^2 türevini adım adım çöz",
+    workload: "mobile_chat_balanced",
+    understandingContext: {
+      taskFrame: {
+        reasoningMode: "deep",
+      },
+    },
+  } as never;
+
+  assert.equal(resolveEffectiveWorkload(deepTask), "mobile_chat_deep_refine");
 });
 
 test("isReasoningOnlyReply flags newly added reasoning-dump preambles", () => {

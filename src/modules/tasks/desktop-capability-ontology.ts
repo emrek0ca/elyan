@@ -4,6 +4,7 @@ import {
 } from "./desktop-capability-manifest.js";
 import {
   actionPolarityAdjustment,
+  capabilitySafetyAdjustment,
   resolveQueryActionPolarity,
 } from "./capability-action-polarity.js";
 
@@ -49,6 +50,9 @@ const embeddingCache = new Map<string, SparseEmbedding>();
 export function normalizeText(value: string): string {
   return value
     .toLocaleLowerCase("tr-TR")
+    // NFKD does not decompose Turkish dotless ı; keep the canonical token
+    // space consistent with the ASCII capability/action dictionaries.
+    .replaceAll("ı", "i")
     .normalize("NFKD")
     .replace(/\p{Diacritic}/gu, "")
     .replace(/[_./-]+/g, " ")
@@ -71,6 +75,27 @@ function addFeature(vector: SparseEmbedding, feature: string, weight: number) {
   vector.set(bucket, (vector.get(bucket) ?? 0) + weight);
 }
 
+// Turkish case/number suffixes are kept as secondary features. The original
+// token remains authoritative, while a conservative stem feature lets
+// `whatsapptan`, `safariyi`, `raporu` and `sekmeye` meet their catalog forms.
+// This is morphology support, not a second routing dictionary; notably
+// `belgesel` has no removable suffix here and does not collapse to `belge`.
+const INFLECTION_SUFFIXES = [
+  "lardan", "lerden", "lerinin",
+  "ndan", "nden", "tan", "ten", "dan", "den", "nin", "nun",
+  "leri", "lari", "ler", "lar", "yi", "yu", "ye", "ya",
+];
+
+function stemVariants(token: string): string[] {
+  const variants: string[] = [];
+  for (const suffix of INFLECTION_SUFFIXES) {
+    if (!token.endsWith(suffix)) continue;
+    const stem = token.slice(0, -suffix.length);
+    if (stem.length >= 4) variants.push(stem);
+  }
+  return [...new Set(variants)];
+}
+
 function embedText(value: string): SparseEmbedding {
   const normalized = normalizeText(value);
   const cached = embeddingCache.get(normalized);
@@ -82,6 +107,14 @@ function embedText(value: string): SparseEmbedding {
     for (let size = 3; size <= 5; size += 1) {
       for (let index = 0; index + size <= token.length; index += 1) {
         addFeature(vector, `c:${token.slice(index, index + size)}`, 0.18);
+      }
+    }
+    for (const stem of stemVariants(token)) {
+      addFeature(vector, `s:${stem}`, 0.72);
+      for (let size = 3; size <= 5; size += 1) {
+        for (let index = 0; index + size <= stem.length; index += 1) {
+          addFeature(vector, `sc:${stem.slice(index, index + size)}`, 0.1);
+        }
       }
     }
   }
@@ -384,12 +417,21 @@ export function matchDesktopCapabilitiesSemantically(input: {
         queryPolarity,
         capabilityId: entry.canonicalId,
       });
+      const safetyAdjustment = capabilitySafetyAdjustment({
+        normalizedQuery: query,
+        capabilityId: entry.canonicalId,
+      });
       return {
         capability: entry.canonicalId,
         score: Number(
           Math.max(
             0,
-            positive + intentBoost + polarityAdjustment - negative * 0.5 - sideEffectPenalty,
+            positive +
+              intentBoost +
+              polarityAdjustment +
+              safetyAdjustment -
+              negative * 0.5 -
+              sideEffectPenalty,
           ).toFixed(4),
         ),
         entry,

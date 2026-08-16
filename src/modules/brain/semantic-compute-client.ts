@@ -70,6 +70,7 @@ const MAX_CACHE_ENTRIES = 1_024;
 const MAX_LATENCY_SAMPLES = 512;
 
 let worker: Worker | null = null;
+let workerWarm = false;
 let nextRequestId = 1;
 let consecutiveFailures = 0;
 let cooldownUntil = 0;
@@ -154,6 +155,7 @@ function resolveAllPending(value: number[][] | null): void {
 function stopWorker(): void {
   const current = worker;
   worker = null;
+  workerWarm = false;
   if (current) {
     void current.terminate().catch(() => undefined);
   }
@@ -190,6 +192,7 @@ function getWorker(logger?: SemanticComputeLogger): Worker | null {
       stopWorker();
     });
     created.on("exit", (code) => {
+      workerWarm = false;
       if (code !== 0) {
         logger?.warn?.({ code }, "semantic compute worker exited unexpectedly");
         recordFailure();
@@ -493,6 +496,7 @@ export function primeSemanticComputeWorker(input: {
   if (warmupPromise) return warmupPromise;
   if (testDispatcher || !workerEnabled()) return Promise.resolve(false);
 
+  workerWarm = false;
   warmupPromise = new Promise<boolean>((resolve) => {
     const activeWorker = getWorker(input.logger);
     if (!activeWorker) {
@@ -507,8 +511,12 @@ export function primeSemanticComputeWorker(input: {
       resolve: (vectors) => {
         // Isıtma başarısı cooldown'u SIFIRLAR: soğuk başlangıçta birikmiş
         // sahte başarısızlıklar gerçek trafiği cezalandırmasın.
-        if (Array.isArray(vectors)) recordSuccess();
-        resolve(Array.isArray(vectors));
+        const warmed = Array.isArray(vectors);
+        if (warmed) {
+          recordSuccess();
+          workerWarm = true;
+        }
+        resolve(warmed);
       },
       timer: setTimeout(() => undefined, 0),
     });
@@ -524,6 +532,7 @@ export function primeSemanticComputeWorker(input: {
 
 export function resetSemanticComputeWarmupForTests(): void {
   warmupPromise = null;
+  workerWarm = false;
 }
 
 export function getSemanticComputeMetrics(): SemanticComputeMetricsSnapshot {
@@ -545,12 +554,22 @@ export function isSemanticComputeWorkerUnavailable(): boolean {
   return !workerEnabled() || inCooldown();
 }
 
+/**
+ * Request paths that cannot pay the cold-start cost use this readiness gate.
+ * App startup owns the asynchronous warmup; callers fall back until it is
+ * complete instead of waiting for the worker's first model load.
+ */
+export function isSemanticComputeWorkerWarm(): boolean {
+  return testDispatcher !== null || workerWarm;
+}
+
 export function setSemanticComputeDispatcherForTests(dispatcher: SemanticComputeDispatcher | null): void {
   testDispatcher = dispatcher;
 }
 
 export function resetSemanticComputeWorkerForTests(): void {
   warmupPromise = null;
+  workerWarm = false;
   resolveAllPending(null);
   stopWorker();
   schedulerGeneration += 1;

@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from "fastify";
 import { normalizeText } from "./desktop-capability-ontology.js";
 import {
   actionPolarityAdjustment,
+  capabilitySafetyAdjustment,
   resolveQueryActionPolarity,
 } from "./capability-action-polarity.js";
 import {
@@ -50,10 +51,11 @@ const QUERY_TIMEOUT_MS = 2_500;
 // zaman ağırlıklar söyledikleri şeyi yapar.
 //
 // Ağırlık ve ceza TAHMİNLE değil, yönlendirme korpusuna karşı süpürülerek
-// seçildi (0.30–0.90 × ceza 0–8). Seçilen nokta: tutulan kümede %73.2,
-// ana korpusta %97.0, kritik ihlal 4. Daha yüksek anlamsal ağırlık tutulan
-// kümeyi düşürüyor (e5 "aç/kapat" kutupluluğunu bulanıklaştırıyor), daha
-// düşüğü ise eşanlamlı köprüsünü kaybediyor.
+// seçildi (0.30–0.90 × ceza 0–8). Genel kullanım/politika metnini vektör
+// pozitiflerinden çıkarmak, tutulan kümeyi %74.5'e taşıdı; yalnızca uygulama
+// aç/kapat ve tarayıcı entity ayrımı için manifest usage'ı koruyoruz. Ağırlık
+// 0.7'de tutulur: e5 eşanlamlı köprüsünü korur, sözcüksel katman da eylem
+// kutbunu düzeltir.
 const EMBEDDING_WEIGHT = 0.7;
 const LEXICAL_WEIGHT = 1 - EMBEDDING_WEIGHT;
 
@@ -93,10 +95,13 @@ let capabilityVectors: CapabilityVectors[] | null = null;
 
 function positiveTextsFor(entry: DesktopCapabilityOntologyEntry): string[] {
   const manifest = entry.manifest;
-  const identity = [manifest.displayName, manifest.description, manifest.usage]
+  const identity = [manifest.displayName, manifest.description]
     .filter((part) => part && part.trim().length > 0)
     .join(". ");
-  return [identity, ...manifest.utterances.slice(0, 6)].filter(
+  const appUsage = ["close_app", "open_app", "browser_control"].includes(entry.canonicalId)
+    ? [manifest.usage]
+    : [];
+  return [identity, ...appUsage, ...manifest.utterances.slice(0, 6)].filter(
     (text) => text.trim().length > 0,
   );
 }
@@ -193,6 +198,8 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
   intent?: string | null;
   sideEffectLevel?: DesktopCapabilitySideEffectClass | null;
   limit?: number;
+  /** Evaluators/startup may opt into warmup; request paths must not wait. */
+  allowWarmup?: boolean;
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
 }): Promise<DesktopCapabilitySemanticMatch[]> {
   const lexical = matchDesktopCapabilitiesSemantically({
@@ -207,7 +214,11 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
     lexical.map((match) => [match.capability, match.score]),
   );
 
-  const vectors = capabilityVectors ?? (await warmDesktopCapabilityVectors(input.logger));
+  const vectors =
+    capabilityVectors ??
+    (input.allowWarmup === true
+      ? await warmDesktopCapabilityVectors(input.logger)
+      : null);
   if (!vectors) return lexical.slice(0, input.limit ?? 8);
 
   const queryVector = await embedQueryForStorage(
@@ -259,6 +270,10 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
       NEGATIVE_MARGIN_WEIGHT * item.margin +
       actionPolarityAdjustment({
         queryPolarity,
+        capabilityId: item.candidate.capability,
+      }) +
+      capabilitySafetyAdjustment({
+        normalizedQuery: normalizeText(input.query),
         capabilityId: item.candidate.capability,
       });
     return {
@@ -354,7 +369,7 @@ export async function evaluateDesktopFastPath(input: {
     reason: "semantics_unavailable",
   };
   if (!String(input.query ?? "").trim()) return empty;
-  if (!isDesktopCapabilityVectorCacheReady() && !(await warmDesktopCapabilityVectors(input.logger))) {
+  if (!isDesktopCapabilityVectorCacheReady()) {
     return empty;
   }
 
@@ -402,7 +417,7 @@ export async function refineDesktopCapabilityHints(input: {
   const current = input.capabilities
     .map((capability) => String(capability ?? "").trim())
     .filter(Boolean);
-  if (!isDesktopCapabilityVectorCacheReady() && !(await warmDesktopCapabilityVectors(input.logger))) {
+  if (!isDesktopCapabilityVectorCacheReady()) {
     return current;
   }
   const ranked = await matchDesktopCapabilitiesWithEmbeddings({

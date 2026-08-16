@@ -98,6 +98,7 @@ import {
   ASSISTANT_TURN_FAILURE_FALLBACK_TR,
 } from "../brain/response-policy.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
+import { evaluateSemanticResponseGate } from "../brain/semantic-response-gate.js";
 import {
   executeAgentTool,
   type AgentToolRequest,
@@ -183,6 +184,13 @@ import {
   persistRollingSummaryToSession,
   listChatSessionMessages,
 } from "../chat/service.js";
+import {
+  buildChatContextSnapshot,
+  readChatContextSnapshot,
+  snapshotConversation,
+  verifyChatContextSnapshot,
+  type ChatContextSnapshot,
+} from "../chat/chat-context-snapshot.js";
 import { applyGoalProgressBlocks } from "../goals/service.js";
 import { startStage } from "../../lib/perf-telemetry.js";
 import {
@@ -5130,6 +5138,17 @@ function isDurableChatGenerationTask(
   return chatGeneration?.queued === true;
 }
 
+function readChatGenerationAttemptId(
+  task: Pick<typeof tasks.$inferSelect, "payload">,
+): string | undefined {
+  const payload = readRecord(task.payload) ?? {};
+  const chatGeneration = readRecord(getPayloadMetadata(payload).chatGeneration);
+  return typeof chatGeneration?.generationAttemptId === "string" &&
+    chatGeneration.generationAttemptId.trim()
+    ? chatGeneration.generationAttemptId.trim()
+    : undefined;
+}
+
 function readAgentRunState(metadata: Record<string, unknown>): string | null {
   return typeof metadata.agentRunState === "string"
     ? metadata.agentRunState
@@ -5494,6 +5513,7 @@ async function completeServerBrainTask(
   input: {
     taskId: string;
     userId: string;
+    generationAttemptId?: string | null;
     chatSessionId?: string | null;
     sessionArtifacts?: Record<string, unknown>[];
     lastVisualArtifact?: Record<string, unknown> | null;
@@ -6017,6 +6037,7 @@ async function completeServerBrainTask(
     promptTokens: input.promptTokens,
     completionTokens: input.completionTokens,
     totalTokens: input.totalTokens,
+    generationAttemptId: input.generationAttemptId ?? null,
     firstDeltaMs: input.firstDeltaMs ?? null,
     completionLatencyMs: input.completionLatencyMs ?? input.latencyMs,
     responseBytes:
@@ -6758,6 +6779,7 @@ async function markServerBrainTaskRunning(
 function extractChatStreamingMetadata(task: typeof tasks.$inferSelect): {
   sessionId: string;
   assistantMessageId: string;
+  userMessageId: string | null;
 } | null {
   const payload = task.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -6781,6 +6803,11 @@ function extractChatStreamingMetadata(task: typeof tasks.$inferSelect): {
     typeof chatRecord.assistantMessageId === "string"
       ? chatRecord.assistantMessageId.trim()
       : "";
+  const userMessageId =
+    typeof chatRecord.userMessageId === "string" &&
+    chatRecord.userMessageId.trim()
+      ? chatRecord.userMessageId.trim()
+      : null;
   if (!sessionId || !assistantMessageId) {
     return null;
   }
@@ -6788,6 +6815,7 @@ function extractChatStreamingMetadata(task: typeof tasks.$inferSelect): {
   return {
     sessionId,
     assistantMessageId,
+    userMessageId,
   };
 }
 
@@ -6869,6 +6897,8 @@ type SharedBrainChatTaskInput = {
   brainProfile?: unknown;
   ephemeralVision?: EphemeralVisionCarrier;
   providerStage?: ChatGenerationProviderStage;
+  generationAttemptId?: string;
+  chatContextSnapshot?: ChatContextSnapshot | null;
   deferTransientFailure?: boolean;
   shouldAbort?: () => boolean | Promise<boolean>;
 };
@@ -6896,6 +6926,7 @@ async function processSharedBrainChatTask(
 ) {
   const resumedQueueAttempt =
     input.providerStage != null && input.currentTask.startedAt != null;
+  let generationAttemptId = input.generationAttemptId ?? randomUUID();
   let hydratedEphemeralVision: EphemeralVisionCarrier | undefined;
   try {
     /* Per-plan in-process rate check — C daemon token bucket, zero DB.
@@ -6987,6 +7018,30 @@ async function processSharedBrainChatTask(
       ? (runningTask.payload as Record<string, unknown>)
       : {};
     const payloadMetadata = getPayloadMetadata(runningPayload);
+    const snapshotCarrierPresent = Object.prototype.hasOwnProperty.call(
+      payloadMetadata,
+      "chatContextSnapshot",
+    );
+    const persistedChatContextSnapshot = readChatContextSnapshot(
+      payloadMetadata.chatContextSnapshot,
+    );
+    const chatContextSnapshot =
+      input.chatContextSnapshot ?? persistedChatContextSnapshot;
+    const chatContextSnapshotVerification =
+      chatContextSnapshot && chatStreaming
+        ? verifyChatContextSnapshot({
+            snapshot: chatContextSnapshot,
+            sessionId: chatStreaming.sessionId,
+            userMessageId:
+              chatStreaming.userMessageId ?? chatContextSnapshot.userMessageId,
+            assistantMessageId: chatStreaming.assistantMessageId,
+            prompt: input.prompt,
+          })
+        : null;
+    const chatContextSnapshotInvalid =
+      snapshotCarrierPresent &&
+      (chatContextSnapshot == null ||
+        chatContextSnapshotVerification?.ok === false);
     const deferredChatContext = readRecord(
       payloadMetadata.chatContextHydration,
     )?.deferred === true;
@@ -7166,10 +7221,31 @@ async function processSharedBrainChatTask(
             ...requestMetadata,
             ...(sessionArtifacts.length > 0 ? { sessionArtifacts } : {}),
             ...(sessionVisualMemory.lastVisualArtifact
-              ? { lastVisualArtifact: sessionVisualMemory.lastVisualArtifact }
-              : {}),
+            ? { lastVisualArtifact: sessionVisualMemory.lastVisualArtifact }
+            : {}),
           }
         : requestMetadata;
+    const turnContextMetadata = {
+      ...visualIntentMetadata,
+      generationAttemptId,
+      chatContextIntegrity: chatContextSnapshotInvalid
+        ? "degraded"
+        : chatContextSnapshot?.integrity ??
+          (snapshotCarrierPresent ? "verified" : "legacy"),
+      chatContextSnapshotRef: chatContextSnapshot
+        ? {
+            version: chatContextSnapshot.version,
+            promptDigest: chatContextSnapshot.promptDigest,
+            historyDigest: chatContextSnapshot.historyDigest,
+            historyRevision: chatContextSnapshot.historyRevision,
+            turnKind: chatContextSnapshot.turnKind,
+            priorAssistantMessageId:
+              chatContextSnapshot.priorAssistant?.messageId ?? null,
+            priorAssistantBlockDigest:
+              chatContextSnapshot.priorAssistant?.blockDigest ?? null,
+          }
+        : null,
+    };
     const visualIntent = buildVisualIntentContract({
       prompt: input.prompt,
       metadata: visualIntentMetadata,
@@ -7248,6 +7324,7 @@ async function processSharedBrainChatTask(
         completedTask = await completeServerBrainTask(app, {
           taskId: input.currentTask.id,
           userId: input.userId,
+          generationAttemptId,
           chatSessionId: chatStreaming?.sessionId ?? null,
           sessionArtifacts,
           lastVisualArtifact: sessionVisualMemory.lastVisualArtifact,
@@ -7330,6 +7407,27 @@ async function processSharedBrainChatTask(
         }).catch(() => undefined);
       }
 
+      const recordStaleImageChatWrite = (types: string[]) => {
+        logBrainDecisionObservation(app, {
+          taskId: runningTask.id,
+          sessionId: chatStreaming?.sessionId ?? null,
+          assistantMessageId: chatStreaming?.assistantMessageId ?? null,
+          generationAttemptId,
+          promptDigest: chatContextSnapshot?.promptDigest ?? null,
+          historyDigest: chatContextSnapshot?.historyDigest ?? null,
+          workload: selectedWorkload,
+          route: "shared_brain",
+          model: "elyan_image",
+          outputContract: "image/png",
+          blockTypes: types,
+          semanticGateResult: "stale_write_rejected",
+          evidenceState: "verified",
+          staleWriteRejected: true,
+          result: "stale_write_rejected",
+          durationMs: Date.now() - startedAtMs,
+        });
+      };
+
       if (chatStreaming) {
         const imageResultBlocks = normalizeAssistantMessageBlocks({
           blocks: completedResultBlocks,
@@ -7343,21 +7441,30 @@ async function processSharedBrainChatTask(
           content: visibleText,
           blocks: imageResultBlocks,
         });
-        // Task lifecycle sync may have won the row CAS before this block. The
-        // terminal SSE event is still required; row state and stream delivery
-        // are separate concerns.
-        await app.db
+        const finalBlockValidation = validateAssistantBlockContract({
+          content: visibleText,
+          blocks: finalBlocks,
+          mode: "normalize",
+        });
+        const canonicalFinalBlocks = finalBlockValidation.blocks;
+        // The assistant row is the final generation fence. A stale worker
+        // stops after a rejected CAS and must not publish an old answer.
+        const finalizationRows = await app.db
           .update(chatMessages)
           .set({
             status: "completed",
+            taskId: completedTask.id,
             content: visibleText,
             preview: compactMessagePreview(visibleText),
             metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
               withAssistantBlocksMetadata(
-                {},
+                {
+                  generationAttemptId,
+                  chatGeneration: { generationAttemptId },
+                },
                 {
                   content: visibleText,
-                  blocks: finalBlocks,
+                  blocks: canonicalFinalBlocks,
                 },
               ),
             )}::jsonb`,
@@ -7368,10 +7475,27 @@ async function processSharedBrainChatTask(
               eq(chatMessages.id, chatStreaming.assistantMessageId),
               eq(chatMessages.sessionId, chatStreaming.sessionId),
               eq(chatMessages.userId, input.userId),
+              // An assistant id is necessary but not sufficient: a stale
+              // worker must never finalize a row that has already been bound
+              // to another task. The NULL branch covers the small acceptance
+              // race before the deferred task-link update lands and binds it
+              // to this task in the same write.
+              or(
+                eq(chatMessages.taskId, completedTask.id),
+                isNull(chatMessages.taskId),
+              ),
               sql`${chatMessages.status} <> 'completed'`,
             ),
           )
           .returning({ id: chatMessages.id });
+        if (finalizationRows.length === 0) {
+          recordStaleImageChatWrite(
+            canonicalFinalBlocks.map((block) =>
+              String((block as { type?: unknown }).type ?? ""),
+            ),
+          );
+          return;
+        }
         // Fence'i publish'ten önce kur: DB'de final yazıldı; bu andan itibaren
         // uçuştaki hiçbir volatile event bu mesajı temsil edemez.
         await publishPersistedChatStreamEvent(app, {
@@ -7397,13 +7521,13 @@ async function processSharedBrainChatTask(
           seq: ++imageStreamSeq,
           payload: {
             content: visibleText,
-            blocks: finalBlocks,
+            blocks: canonicalFinalBlocks,
             assistantMessage: shapeAssistantMessagePayload({
               id: chatStreaming.assistantMessageId,
               role: "assistant",
               status: "completed",
               content: visibleText,
-              blocks: finalBlocks,
+              blocks: canonicalFinalBlocks,
               taskId: completedTask.id,
               createdAt: completedTask.createdAt.toISOString(),
               updatedAt: completedTask.updatedAt.toISOString(),
@@ -7509,13 +7633,18 @@ async function processSharedBrainChatTask(
     // Compact snapshot yoksa geçmişi kısa bir bütçeyle tamamla; provider
     // isteğini uzun bir DB beklemesine bağlama.
     const payloadConversation = extractSharedBrainConversation(runningPayload);
-    let conversationHistory =
-      payloadConversation ?? extractCompactConversation(payloadMetadata);
+    let conversationHistory = chatContextSnapshotInvalid
+      ? []
+      : chatContextSnapshot
+        ? snapshotConversation(chatContextSnapshot)
+        : payloadConversation ?? extractCompactConversation(payloadMetadata);
     // An explicitly supplied empty snapshot is authoritative for a new chat.
     // Falling back to another REST/DB read here added up to the history timeout
     // before the first provider request, even though createChatMessage had just
     // loaded the same session context.
     const conversationSnapshotProvided =
+      chatContextSnapshot != null ||
+      chatContextSnapshotInvalid ||
       readRecord(payloadMetadata.chatContextHydration)
         ?.conversationSnapshotProvided === true;
     if (
@@ -7608,7 +7737,14 @@ async function processSharedBrainChatTask(
           return queuedTaskAbortCached;
         }
       : undefined;
-    const inference = await generateGovernedSharedBrainReply(app, {
+    const semanticGateRequiresBufferedReply =
+      selectedWorkload === "mobile_chat_deep_refine" ||
+      chatContextSnapshot?.turnKind === "correction" ||
+      input.understanding.envelope?.conversation_state.turnKind ===
+        "correction";
+    const governedInferenceRequest: Parameters<
+      typeof generateGovernedSharedBrainReply
+    >[1] = {
       userId: input.userId,
       taskId: runningTask.id,
       prompt: input.prompt,
@@ -7617,7 +7753,7 @@ async function processSharedBrainChatTask(
       attachmentContext,
       clientAttachments:
         clientAttachments.length > 0 ? clientAttachments : null,
-      requestMetadata: visualIntentMetadata,
+      requestMetadata: turnContextMetadata,
       route: "shared_brain",
       routeDecision,
       workload: selectedWorkload,
@@ -7639,7 +7775,7 @@ async function processSharedBrainChatTask(
         : {}),
       shouldAbort: shouldAbortQueuedTask,
       ephemeralVision: inferenceVision,
-      onDelta: chatStreaming
+      onDelta: chatStreaming && !semanticGateRequiresBufferedReply
         ? async (delta) => {
             if (shouldAbortQueuedTask && (await shouldAbortQueuedTask())) {
               throw new AppError(409, "task_canceled", "Görev iptal edildi.", {
@@ -7747,12 +7883,21 @@ async function processSharedBrainChatTask(
             });
           }
         : undefined,
-    }).finally(() => {
+    };
+    let inference = await generateGovernedSharedBrainReply(
+      app,
+      governedInferenceRequest,
+    ).finally(() => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (inferenceVision !== input.ephemeralVision) {
         clearEphemeralVisionCarrier(inferenceVision);
       }
     });
+    inference.metadata.generationAttemptId = generationAttemptId;
+    inference.metadata.chatContextIntegrity = chatContextSnapshotInvalid
+      ? "degraded"
+      : chatContextSnapshot?.integrity ??
+        (snapshotCarrierPresent ? "verified" : "legacy");
     await assertSharedBrainExecutionActive(input);
     endInferenceStage();
     // Grounding sonucu ancak burada kesinleşir. Politikayı güncelle ki nihai
@@ -7768,13 +7913,175 @@ async function processSharedBrainChatTask(
       );
       return;
     }
-    const completionMetadata = readServerBrainCompletionMetadata(
+    let completionMetadata = readServerBrainCompletionMetadata(
       inference.metadata,
     );
-    const assistantResponseText = resolveNonEchoAssistantText({
+    let assistantResponseText = resolveNonEchoAssistantText({
       prompt: input.prompt,
       responseText: inference.text,
       policy: visibleTextPolicy,
+    });
+    let semanticGate = evaluateSemanticResponseGate({
+      prompt: input.prompt,
+      text: assistantResponseText,
+      blocks: completionMetadata.assistantBlocks,
+      workload: selectedWorkload,
+      turnKind:
+        chatContextSnapshot?.turnKind ??
+        input.understanding.envelope?.conversation_state.turnKind ??
+        null,
+      priorAssistant: chatContextSnapshot?.priorAssistant ?? null,
+      understandingEnvelope: input.understanding.envelope,
+      evidence: {
+        webGroundingUsed: completionMetadata.webGroundingUsed,
+        webSourceCount: completionMetadata.webSourceCount,
+        toolCallCount: completionMetadata.toolFlow?.count ?? 0,
+        verifiedEvidenceCount:
+          completionMetadata.verifiedEvidenceCount ?? undefined,
+        artifactEvidence:
+          completionMetadata.assistantBlocks.some((block) => {
+            const type = String(
+              (block as { type?: unknown }).type ?? "",
+            ).toLowerCase();
+            return ["artifact", "document_block", "table", "chart"].includes(
+              type,
+            );
+          }),
+        agentVerified: readAgentRunState(inference.metadata) === "completed",
+      },
+    });
+    let semanticGateWasRepaired = false;
+    if (!semanticGate.accepted) {
+      const repairAttemptId = randomUUID();
+      const repairInference = await generateGovernedSharedBrainReply(
+        app,
+        {
+          ...governedInferenceRequest,
+          requestMetadata: {
+            ...turnContextMetadata,
+            generationAttemptId: repairAttemptId,
+            responseRepair: {
+              reason: semanticGate.reason,
+              outputContract: semanticGate.outputContract,
+              instruction:
+                "Önceki taslak mevcut turla semantik olarak uyuşmadı. Yalnızca mevcut kullanıcı isteğini yanıtla; kaynak, belge, web araması veya tamamlanma iddiası ekleme. Düzeltme turundaysa önceki cevabı aynen tekrarlama.",
+            },
+          },
+          onDelta: undefined,
+        },
+      );
+      repairInference.metadata.generationAttemptId = repairAttemptId;
+      const repairMetadata = readServerBrainCompletionMetadata(
+        repairInference.metadata,
+      );
+      const repairText = resolveNonEchoAssistantText({
+        prompt: input.prompt,
+        responseText: repairInference.text,
+        policy: visibleTextPolicy,
+      });
+      const repairGate = evaluateSemanticResponseGate({
+        prompt: input.prompt,
+        text: repairText,
+        blocks: repairMetadata.assistantBlocks,
+        workload: selectedWorkload,
+        turnKind:
+          chatContextSnapshot?.turnKind ??
+          input.understanding.envelope?.conversation_state.turnKind ??
+          null,
+        priorAssistant: chatContextSnapshot?.priorAssistant ?? null,
+        understandingEnvelope: input.understanding.envelope,
+        evidence: {
+          webGroundingUsed: repairMetadata.webGroundingUsed,
+          webSourceCount: repairMetadata.webSourceCount,
+          toolCallCount: repairMetadata.toolFlow?.count ?? 0,
+          verifiedEvidenceCount: repairMetadata.verifiedEvidenceCount ?? undefined,
+          artifactEvidence: repairMetadata.assistantBlocks.some((block) =>
+            ["artifact", "document_block", "table", "chart"].includes(
+              String((block as { type?: unknown }).type ?? "").toLowerCase(),
+            ),
+          ),
+          agentVerified: readAgentRunState(repairInference.metadata) === "completed",
+        },
+      });
+      if (repairGate.accepted) {
+        inference = repairInference;
+        completionMetadata = repairMetadata;
+        assistantResponseText = repairText;
+        semanticGate = repairGate;
+        semanticGateWasRepaired = true;
+        generationAttemptId = repairAttemptId;
+      } else {
+        throw new AppError(
+          502,
+          "semantic_response_rejected",
+          "Yanıt mevcut isteğinle güvenli biçimde eşleşmedi. Lütfen isteği biraz daha açık yazıp tekrar dene.",
+          {
+            transient: false,
+            retrySuggested: false,
+            failureClass: "invalid_output",
+            semanticGateReason: repairGate.reason,
+          },
+        );
+      }
+    }
+    inference.metadata.semanticGateResult = semanticGateWasRepaired
+      ? "repaired"
+      : semanticGate.accepted
+        ? "accepted"
+        : "rejected";
+    inference.metadata.semanticGateReason = semanticGate.reason;
+    logBrainDecisionObservation(app, {
+      taskId: runningTask.id,
+      sessionId: chatStreaming?.sessionId ?? null,
+      assistantMessageId: chatStreaming?.assistantMessageId ?? null,
+      generationAttemptId,
+      promptDigest: chatContextSnapshot?.promptDigest ?? null,
+      historyDigest: chatContextSnapshot?.historyDigest ?? null,
+      historyRevision: chatContextSnapshot?.historyRevision ?? null,
+      turnKind:
+        chatContextSnapshot?.turnKind ??
+        input.understanding.envelope?.conversation_state.turnKind ??
+        null,
+      understandingSource:
+        input.understanding.envelopeSource ??
+        input.understanding.envelope?.source ??
+        null,
+      understandingConfidence:
+        input.understanding.envelopeConfidence ??
+        input.understanding.envelope?.confidence ??
+        null,
+      workload: selectedWorkload,
+      route: "shared_brain",
+      model: inference.model,
+      reasoningEffort:
+        typeof inference.metadata.reasoningEffort === "string"
+          ? inference.metadata.reasoningEffort
+          : null,
+      outputContract: semanticGate.outputContract,
+      blockTypes: completionMetadata.assistantBlocks.map((block) =>
+        String((block as { type?: unknown }).type ?? ""),
+      ),
+      semanticGateResult: inference.metadata.semanticGateResult as string,
+      evidenceState: semanticGate.evidenceState,
+      firstDeltaMs: inference.metadata.firstDeltaMs as number | null,
+      acceptedMs: Date.now() - inferenceStartedAt,
+      totalMs: Date.now() - inferenceStartedAt,
+      responseFormat: "text",
+      result: "success",
+      durationMs: Date.now() - inferenceStartedAt,
+      semanticContract: routeDecision?.semanticContract,
+      fallbackReason:
+        typeof inference.metadata.fallbackReason === "string"
+          ? inference.metadata.fallbackReason
+          : null,
+      toolSelectionSource:
+        typeof inference.metadata.toolSelectionSource === "string"
+          ? inference.metadata.toolSelectionSource
+          : null,
+      blockSchemaValid:
+        typeof inference.metadata.blockSchemaValid === "boolean"
+          ? inference.metadata.blockSchemaValid
+          : null,
     });
     // "Bu kez düzgün bir yanıt oluşturamadım" bir CEVAP DEĞİLDİR.
     //
@@ -7807,6 +8114,7 @@ async function processSharedBrainChatTask(
     const completedTask = await completeServerBrainTask(app, {
       taskId: input.currentTask.id,
       userId: input.userId,
+      generationAttemptId,
       chatSessionId: chatStreaming?.sessionId ?? null,
       sessionArtifacts,
       responseText: assistantResponseText,
@@ -7863,6 +8171,37 @@ async function processSharedBrainChatTask(
       const completionMetadata = readServerBrainCompletionMetadata(
         inference.metadata,
       );
+      const recordStaleChatWrite = () => {
+        logBrainDecisionObservation(app, {
+          taskId: runningTask.id,
+          sessionId: chatStreaming.sessionId,
+          assistantMessageId: chatStreaming.assistantMessageId,
+          generationAttemptId,
+          promptDigest: chatContextSnapshot?.promptDigest ?? null,
+          historyDigest: chatContextSnapshot?.historyDigest ?? null,
+          historyRevision: chatContextSnapshot?.historyRevision ?? null,
+          turnKind:
+            chatContextSnapshot?.turnKind ??
+            input.understanding.envelope?.conversation_state.turnKind ??
+            null,
+          workload: selectedWorkload,
+          route: "shared_brain",
+          model: inference.model,
+          reasoningEffort:
+            typeof inference.metadata.reasoningEffort === "string"
+              ? inference.metadata.reasoningEffort
+              : null,
+          outputContract: semanticGate.outputContract,
+          blockTypes: completionMetadata.assistantBlocks.map((block) =>
+            String((block as { type?: unknown }).type ?? ""),
+          ),
+          semanticGateResult: "stale_write_rejected",
+          evidenceState: semanticGate.evidenceState,
+          staleWriteRejected: true,
+          result: "stale_write_rejected",
+          durationMs: Date.now() - inferenceStartedAt,
+        });
+      };
       const completedResultRecord = readRecord(
         (completedTask as { result?: unknown }).result,
       );
@@ -7925,13 +8264,15 @@ async function processSharedBrainChatTask(
       const visibleText = ensureUserFacingMessage(
         inferenceResolved.text || completedResultText,
       );
-      const finalBlocks = composeAssistantMessageBlocks({
+      const finalBlockValidation = validateAssistantBlockContract({
         content: visibleText,
         blocks: [
           ...(unifiedTaskTrace ? [unifiedTaskTrace] : []),
           ...visibleInferenceBlocks,
         ],
+        mode: "normalize",
       });
+      const finalBlocks = finalBlockValidation.blocks;
       const revision = buildAssistantRevisionMetadata({
         finalContent: visibleText,
         streamedContent: lastVisibleStreamingContent,
@@ -7944,18 +8285,29 @@ async function processSharedBrainChatTask(
       // Persist final blocks + cleaned content to the chat_messages row so a
       // later GET /messages (user leaves and reopens) returns the same
       // widget-only view, not the duplicated markdown.
-      // Task lifecycle sync may have won the row CAS before this block. The
-      // terminal SSE event is still required; row state and stream delivery
-      // are separate concerns.
-      await app.db
+      // The assistant row is the final generation fence. A stale worker
+      // stops after a rejected CAS and must not publish an old answer.
+      const finalizationRows = await app.db
         .update(chatMessages)
         .set({
           status: "completed",
+          taskId: completedTask.id,
           content: visibleText,
           preview: compactMessagePreview(visibleText),
           metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
             withAssistantBlocksMetadata(
-              { revision },
+              {
+                revision,
+                generationAttemptId,
+                chatGeneration: { generationAttemptId },
+                blockSchemaValid:
+                  finalBlockValidation.blockQuality.metrics
+                    .schemaInvalidBlockCount === 0,
+                chatContextIntegrity: chatContextSnapshotInvalid
+                  ? "degraded"
+                  : chatContextSnapshot?.integrity ??
+                    (snapshotCarrierPresent ? "verified" : "legacy"),
+              },
               {
                 content: visibleText,
                 blocks: finalBlocks,
@@ -7969,10 +8321,18 @@ async function processSharedBrainChatTask(
             eq(chatMessages.id, chatStreaming.assistantMessageId),
             eq(chatMessages.sessionId, chatStreaming.sessionId),
             eq(chatMessages.userId, input.userId),
+            or(
+              eq(chatMessages.taskId, completedTask.id),
+              isNull(chatMessages.taskId),
+            ),
             sql`${chatMessages.status} <> 'completed'`,
           ),
         )
         .returning({ id: chatMessages.id });
+      if (finalizationRows.length === 0) {
+        recordStaleChatWrite();
+        return;
+      }
       // Fence'i publish'ten önce kur: DB'de final yazıldı; bu andan itibaren
       // uçuştaki hiçbir volatile event bu mesajı temsil edemez.
       await publishPersistedChatStreamEvent(app, {
@@ -8379,6 +8739,7 @@ export type QueuedSharedBrainChatTaskSnapshot = {
   workload: SharedBrainWorkload;
   requestId: string;
   understanding: UserUnderstandingResult;
+  chatContextSnapshot: ChatContextSnapshot | null;
   terminal: boolean;
 };
 
@@ -8463,6 +8824,38 @@ function readPersistedTaskUnderstanding(
   };
 }
 
+async function persistLegacyChatContextSnapshot(
+  app: FastifyInstance,
+  input: {
+    task: typeof tasks.$inferSelect;
+    snapshot: ChatContextSnapshot;
+  },
+): Promise<void> {
+  // Blob-backed payloads are immutable from this layer: updating the inline
+  // JSON would make the task appear to have a snapshot while the worker still
+  // hydrates the old blob. Keep reconstruction in-memory for those legacy
+  // rows and only persist when the payload is the authoritative inline value.
+  if (input.task.payloadBlobId) return;
+  await app.db
+    .update(tasks)
+    .set({
+      payload: sql`jsonb_set(
+        coalesce(${tasks.payload}, '{}'::jsonb),
+        '{metadata,chatContextSnapshot}',
+        ${JSON.stringify(input.snapshot)}::jsonb,
+        true
+      )`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(tasks.id, input.task.id),
+        eq(tasks.userId, input.task.userId),
+        inArray(tasks.status, ["queued", "planning", "running"]),
+      ),
+    );
+}
+
 export async function getQueuedSharedBrainChatTask(
   app: FastifyInstance,
   input: { taskId: string; userId: string },
@@ -8482,9 +8875,61 @@ export async function getQueuedSharedBrainChatTask(
     },
   );
   const payload = readRecord(hydratedPayload) ?? {};
-  const task = { ...row, payload };
+  let task = { ...row, payload };
   const prompt = getTaskPrompt(payload);
   const metadata = getPayloadMetadata(payload);
+  const chatStreaming = extractChatStreamingMetadata(task);
+  const snapshotCarrierPresent = Object.prototype.hasOwnProperty.call(
+    metadata,
+    "chatContextSnapshot",
+  );
+  let chatContextSnapshot = readChatContextSnapshot(
+    metadata.chatContextSnapshot,
+  );
+  if (!chatContextSnapshot && !snapshotCarrierPresent && chatStreaming) {
+    const legacyConversation =
+      extractSharedBrainConversation(payload) ??
+      extractCompactConversation(metadata) ??
+      [];
+    chatContextSnapshot = buildChatContextSnapshot({
+      sessionId: chatStreaming.sessionId,
+      userMessageId: chatStreaming.userMessageId ?? `legacy-user-${row.id}`,
+      assistantMessageId: chatStreaming.assistantMessageId,
+      prompt,
+      priorTurns: legacyConversation
+        .filter(
+          (turn): turn is { role: "user" | "assistant"; content: string } =>
+            turn.role === "user" || turn.role === "assistant",
+        )
+        .map((turn, index) => ({
+          messageId: `legacy-${turn.role}-${index + 1}`,
+          role: turn.role,
+          content: turn.content,
+          status: "completed",
+          createdAt: new Date(
+            row.createdAt.getTime() -
+              (legacyConversation.length - index) * 2,
+          ).toISOString(),
+          blockTypes: [],
+          blockDigest: null,
+        })),
+      integrity: "reconstructed",
+    });
+    await persistLegacyChatContextSnapshot(app, {
+      task: row,
+      snapshot: chatContextSnapshot,
+    }).catch(() => undefined);
+    task = {
+      ...task,
+      payload: {
+        ...payload,
+        metadata: {
+          ...metadata,
+          chatContextSnapshot,
+        },
+      },
+    };
+  }
   const routeDecision = extractRouteDecision(payload);
   const persistedUnderstanding = readPersistedTaskUnderstanding(payload);
   const chatGeneration = readRecord(metadata.chatGeneration);
@@ -8534,6 +8979,7 @@ export async function getQueuedSharedBrainChatTask(
     workload,
     requestId,
     understanding,
+    chatContextSnapshot,
     terminal: isChatGenerationSettled(row.status),
   };
 }
@@ -8544,6 +8990,7 @@ export async function processQueuedSharedBrainChatTask(
     taskId: string;
     userId: string;
     providerStage: ChatGenerationProviderStage;
+    generationAttemptId?: string;
     snapshot?: QueuedSharedBrainChatTaskSnapshot;
     usageAccess?: UsageAccessTruth;
     shouldAbort?: () => boolean | Promise<boolean>;
@@ -8580,11 +9027,13 @@ export async function processQueuedSharedBrainChatTask(
     prompt: snapshot.prompt,
     canonicalTitle: snapshot.task.title,
     understanding: snapshot.understanding,
+    chatContextSnapshot: snapshot.chatContextSnapshot,
     planCode: usageAccess.planCode,
     usageAccess,
     brainProfile: usageAccess.brainProfile,
     ephemeralVision: queuedVision,
     providerStage: input.providerStage,
+    generationAttemptId: input.generationAttemptId,
     deferTransientFailure: true,
     shouldAbort: input.shouldAbort,
   });
@@ -8995,6 +9444,7 @@ export async function createTask(
             taskId: existingTask.id,
             userId: input.userId,
             workload: routeDecision?.selectedWorkload,
+            generationAttemptId: readChatGenerationAttemptId(existingTask),
           })
         : false;
     clearEphemeralVisionCarrier(input.ephemeralVision);
@@ -9227,6 +9677,7 @@ export async function createTask(
       ...(useFastSharedBrainFlow
         ? {
             chatGeneration: {
+              ...(readRecord(payloadMetadata.chatGeneration) ?? {}),
               requestId: input.requestId,
               queued: useDurableChatQueue,
             },
@@ -9641,6 +10092,7 @@ export async function createTask(
             taskId: taskResult.task.id,
             userId: input.userId,
             workload: routeDecision?.selectedWorkload,
+            generationAttemptId: readChatGenerationAttemptId(taskResult.task),
           })
         : false;
     clearEphemeralVisionCarrier(input.ephemeralVision);
@@ -9697,6 +10149,7 @@ export async function createTask(
             taskId: currentTask.id,
             userId: input.userId,
             workload: routeDecision?.selectedWorkload,
+            generationAttemptId: readChatGenerationAttemptId(currentTask),
           });
           if (!enqueued) {
             throw createChatQueueUnavailableError();

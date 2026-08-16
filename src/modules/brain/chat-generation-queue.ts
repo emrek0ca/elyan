@@ -9,6 +9,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
 import { getUserUsageAccessTruth } from "../billing/service.js";
+import { reconcileOrphanedChatMessagesBatch } from "../chat/orphan-reconciler.js";
 import {
   chatGenerationAgePhase,
   chatGenerationQueuePriority,
@@ -25,6 +26,7 @@ export type ChatGenerationJobData = {
   taskId: string;
   userId: string;
   workload?: SharedBrainWorkload;
+  generationAttemptId?: string;
 };
 
 export type ChatGenerationQueueFailure = {
@@ -46,6 +48,9 @@ const WORKER_HEARTBEAT_TTL_MS = 15_000;
 const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
 const QUEUE_RECOVERY_INTERVAL_MS = 30_000;
 const QUEUE_DEADLINE_SWEEP_INTERVAL_MS = 5_000;
+const ORPHAN_SWEEP_INTERVAL_MS = 30_000;
+const ORPHAN_SWEEP_LOCK_KEY = "elyan:chat-generation:orphan-sweep-v1";
+const ORPHAN_SWEEP_LOCK_TTL_MS = 25_000;
 const QUEUE_OPERATION_TIMEOUT_MS = 3_000;
 const CHAT_ADMISSION_SLOT_KEY = "chat-generation:admission:active-v1";
 const CHAT_LEASE_RETRY_BASE_MS = 250;
@@ -77,6 +82,7 @@ type WorkerResources = {
   heartbeat: ReturnType<typeof setInterval>;
   recovery: ReturnType<typeof setInterval>;
   deadlineSweep: ReturnType<typeof setInterval>;
+  orphanSweep: ReturnType<typeof setInterval>;
 };
 
 const queues = new WeakMap<FastifyInstance, QueueResources>();
@@ -293,10 +299,18 @@ export async function enqueueSharedBrainChatTask(
         ? resources.primary
         : resources.fallback;
   const jobId = chatGenerationJobId(stage, input.taskId);
+  const jobData: ChatGenerationJobData = {
+    ...input,
+    // Every provider invocation gets a fresh attempt identity. A BullMQ
+    // redelivery of the same job keeps this id, while a provider failover or
+    // a new enqueue receives a new one and cannot reuse the old response
+    // fence.
+    generationAttemptId: input.generationAttemptId ?? randomUUID(),
+  };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       await withQueueTimeout(
-        queue.add("generate", input, {
+        queue.add("generate", jobData, {
           jobId,
           priority: chatGenerationQueuePriority(input.workload),
         }),
@@ -490,7 +504,11 @@ async function enqueueFallback(
     phase: "provider_failover",
     message: "Yanıt yeniden deneniyor.",
   });
-  await enqueueSharedBrainChatTask(app, input, "fallback");
+  await enqueueSharedBrainChatTask(
+    app,
+    { ...input, generationAttemptId: randomUUID() },
+    "fallback",
+  );
 }
 
 async function processGenerationJob(
@@ -939,6 +957,35 @@ async function sweepOverdueQueuedChatTasks(
   return overdue.length;
 }
 
+async function sweepOrphanedChatMessages(app: FastifyInstance): Promise<number> {
+  const store = app.services?.reliability?.store;
+  if (!store) return 0;
+  const lockOwner = randomUUID();
+  const acquired = await store
+    .acquireLock(
+      ORPHAN_SWEEP_LOCK_KEY,
+      lockOwner,
+      ORPHAN_SWEEP_LOCK_TTL_MS,
+      true,
+    )
+    .catch(() => false);
+  if (!acquired) return 0;
+  try {
+    const reconciled = await reconcileOrphanedChatMessagesBatch(app, {
+      limit: 100,
+    });
+    if (reconciled > 0) {
+      app.log.info(
+        { reconciled },
+        "chat orphan sweep reconciled stale assistant messages",
+      );
+    }
+    return reconciled;
+  } finally {
+    await store.releaseLock(ORPHAN_SWEEP_LOCK_KEY, lockOwner).catch(() => undefined);
+  }
+}
+
 export async function ensureChatGenerationWorkers(
   app: FastifyInstance,
 ): Promise<void> {
@@ -1038,6 +1085,12 @@ export async function ensureChatGenerationWorkers(
       "initial chat generation queue recovery failed",
     );
   });
+  void sweepOrphanedChatMessages(app).catch((error) => {
+    app.log.warn(
+      { errorCode: error instanceof Error ? error.name : "unknown" },
+      "initial chat orphan sweep failed",
+    );
+  });
   const heartbeat = setInterval(() => {
     void writeHeartbeat().catch(() => undefined);
   }, WORKER_HEARTBEAT_INTERVAL_MS);
@@ -1057,6 +1110,14 @@ export async function ensureChatGenerationWorkers(
       );
     });
   }, QUEUE_DEADLINE_SWEEP_INTERVAL_MS);
+  const orphanSweep = setInterval(() => {
+    void sweepOrphanedChatMessages(app).catch((error) => {
+      app.log.warn(
+        { errorCode: error instanceof Error ? error.name : "unknown" },
+        "chat orphan sweep failed",
+      );
+    });
+  }, ORPHAN_SWEEP_INTERVAL_MS);
 
   for (const worker of [fastWorker, primaryWorker, fallbackWorker]) {
     worker.on("failed", (job, error) => {
@@ -1083,6 +1144,7 @@ export async function ensureChatGenerationWorkers(
     heartbeat,
     recovery,
     deadlineSweep,
+    orphanSweep,
   };
   workers.set(app, workerResources);
   app.addHook("onClose", async () => {
@@ -1091,6 +1153,7 @@ export async function ensureChatGenerationWorkers(
     clearInterval(heartbeat);
     clearInterval(recovery);
     clearInterval(deadlineSweep);
+    clearInterval(orphanSweep);
     await Promise.all([
       fastWorker.close().catch(() => undefined),
       primaryWorker.close().catch(() => undefined),

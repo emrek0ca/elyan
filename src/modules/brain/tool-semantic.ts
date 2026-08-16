@@ -245,6 +245,10 @@ export async function selectSemanticCoreToolDecision(
       // per text, so the steady-state cost is one query embed (~3 ms) and this
       // ceiling only bounds the cold path.
       transformerTimeoutMs: 1_500,
+      // E5 is warmed asynchronously by app startup. A cold request must not
+      // spend the full embedding timeout before falling into the typed
+      // understanding/planning path.
+      requireWarmWorker: true,
       // The lexical approximation is measurably wrong here (see module header);
       // these thresholds are unreachable, so hash mode never decides.
       hashMinScore: 1.1,

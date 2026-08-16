@@ -3,6 +3,7 @@ import {
   embedQueryForStorage,
   embedTextsForStorage,
 } from "../../modules/brain/semantic-embedder.js";
+import { isSemanticComputeWorkerWarm } from "../../modules/brain/semantic-compute-client.js";
 import type {
   IntentClassification,
   UnderstandingIntent,
@@ -196,6 +197,8 @@ export async function rankSemanticTextCandidates(
     transformerMinScore?: number;
     transformerMinMargin?: number;
     transformerTimeoutMs?: number;
+    /** Do not wait for the asynchronous E5 startup warmup on request paths. */
+    requireWarmWorker?: boolean;
     hashMinScore?: number;
     hashMinMargin?: number;
   } = {},
@@ -205,6 +208,7 @@ export async function rankSemanticTextCandidates(
     (candidate) => candidate.id.trim() && candidate.description.trim(),
   );
   if (!trimmed || usableCandidates.length === 0) return null;
+  if (options.requireWarmWorker && !isSemanticComputeWorkerWarm()) return null;
 
   const [semanticVectors, semanticQuery] = await Promise.all([
     embedTextsForStorage(

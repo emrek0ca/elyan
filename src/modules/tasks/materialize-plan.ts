@@ -2160,23 +2160,25 @@ export async function maybeMaterializeDesktopPlan(
           },
           "desktop plan model output did not satisfy the compiled plan contract",
         );
-        draftSteps = inferenceUsable
-          ? await repairUnusableMaterializedPlan(
-              app,
-              task.userId,
-              task.id,
-              workOrder,
-              parsedPlan,
-              allowed,
-            )
-          : null;
+        // Deterministic normalization has already had the first chance above.
+        // A typed, capability-validated semantic compiler is safer and faster
+        // than spending another provider turn; only if it cannot express the
+        // request do we make one structured transport-repair call.
+        draftSteps = compileValidatedSemanticFallback(workOrder, allowed);
         if (draftSteps) {
-          materializationSource = "model_transport_repair";
+          materializationSource = "semantic_compiler";
         } else {
-          draftSteps = compileValidatedSemanticFallback(workOrder, allowed);
-          if (draftSteps) {
-            materializationSource = "semantic_compiler";
-          }
+          draftSteps = inferenceUsable
+            ? await repairUnusableMaterializedPlan(
+                app,
+                task.userId,
+                task.id,
+                workOrder,
+                parsedPlan,
+                allowed,
+              )
+            : null;
+          if (draftSteps) materializationSource = "model_transport_repair";
         }
         if (!draftSteps) {
           return false;

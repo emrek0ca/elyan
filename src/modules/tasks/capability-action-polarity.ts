@@ -50,8 +50,9 @@ const OPPOSITE: Record<CapabilityActionPolarity, CapabilityActionPolarity> = {
  */
 export const ACTION_CONFLICT_PENALTY = 0.5;
 
-/** Aynı kutup desteği bilinçli olarak KÜÇÜK: sıralamayı semantik katman yapar. */
-export const ACTION_MATCH_BOOST = 0.06;
+/** Aynı kutup desteği bilinçli olarak sınırlı: zıt eylemi veto ederken
+ * semantik katmanın nesne/alan ayrımını korur. */
+export const ACTION_MATCH_BOOST = 0.2;
 
 /**
  * Sorgu tarafı çekim listeleri.
@@ -65,12 +66,15 @@ const QUERY_FORMS: Record<CapabilityActionPolarity, ReadonlySet<string>> = {
     "ac", "acar", "acsana", "acsanize", "acin", "aciniz", "acalim", "acsin",
     "acabilir", "aciver", "acip", "acmak",
     "baslat", "baslatir", "baslatsana", "baslatin",
+    "calistir", "calistirir", "calistirsana", "calistirin", "calistiriver",
+    "gidelim", "sekme", "sekmeye", "sekmesi", "sekmeden",
     "open", "opens", "launch", "start",
   ]),
   close: new Set([
     "kapat", "kapatir", "kapatsana", "kapatsanize", "kapatin", "kapatiniz",
     "kapatalim", "kapatsin", "kapatabilir", "kapativer", "kapatip", "kapatmak",
     "kapa", "kapan", "sonlandir", "sonlandirir",
+    "cik", "ciksana", "ciksanize", "cikin", "cikiver", "cikmak", "ciksin",
     "close", "closes", "quit", "exit", "terminate",
   ]),
   create: new Set([
@@ -101,6 +105,17 @@ const ID_SEGMENT_POLARITY: ReadonlyArray<[string, CapabilityActionPolarity]> = [
   ["generate", "create"],
 ];
 
+// These are safety vetoes, not a replacement router. They stop a clearly
+// incompatible side-effect tool from winning when a typed resource/channel
+// signal is present; the remaining candidates are still ranked normally.
+const WHOLE_MACHINE_TARGETS = new Set([
+  "makine", "makineyi", "bilgisayar", "bilgisayari", "ekran", "ekrani",
+  "sistem", "sistemi",
+]);
+const TERMINAL_TARGETS = new Set(["terminal", "oturum", "shell"]);
+const EXPLANATION_MARKERS = new Set(["fark", "arasindaki", "nedir", "nasil"]);
+const SAFETY_VETO = -0.8;
+
 function segmentsOf(canonicalId: string): string[] {
   return canonicalId.toLowerCase().split(/[._\-\s]+/g).filter(Boolean);
 }
@@ -108,6 +123,13 @@ function segmentsOf(canonicalId: string): string[] {
 export function resolveCapabilityActionPolarity(
   canonicalId: string,
 ): CapabilityActionPolarity | null {
+  // `close` is overloaded in resource/session capabilities. The user-facing
+  // app action is the only close polarity that should compete for a bare
+  // application request; browser/shell session cleanup has its own contract.
+  if (canonicalId === "browser_session.close" || canonicalId === "shell_session_close") {
+    return null;
+  }
+  if (canonicalId === "browser_control") return "open";
   const segments = new Set(segmentsOf(canonicalId));
   for (const [segment, polarity] of ID_SEGMENT_POLARITY) {
     if (segments.has(segment)) return polarity;
@@ -146,6 +168,35 @@ export function actionPolarityAdjustment(input: {
   if (capabilityPolarity === input.queryPolarity) return ACTION_MATCH_BOOST;
   if (OPPOSITE[input.queryPolarity] === capabilityPolarity) {
     return -ACTION_CONFLICT_PENALTY;
+  }
+  return 0;
+}
+
+export function capabilitySafetyAdjustment(input: {
+  normalizedQuery: string;
+  capabilityId: string;
+}): number {
+  const tokens = input.normalizedQuery.split(" ").filter(Boolean);
+  const hasAny = (values: ReadonlySet<string>) => tokens.some((token) => values.has(token));
+  const hasWhatsApp = tokens.some((token) => token === "whatsapp" || token.startsWith("whatsapp"));
+
+  if (
+    input.capabilityId === "close_app" &&
+    (hasAny(WHOLE_MACHINE_TARGETS) || hasAny(TERMINAL_TARGETS))
+  ) {
+    return SAFETY_VETO;
+  }
+  if (
+    input.capabilityId === "email_send" &&
+    (hasWhatsApp || (tokens.includes("once") && tokens.includes("goreyim")))
+  ) {
+    return SAFETY_VETO;
+  }
+  if (
+    input.capabilityId === "spreadsheet_write" &&
+    hasAny(EXPLANATION_MARKERS)
+  ) {
+    return SAFETY_VETO;
   }
   return 0;
 }

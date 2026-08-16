@@ -111,7 +111,7 @@ test("buildInferenceProviderCandidates prefers hosted Groq when configured", () 
   assert.equal(candidates[0]?.provider, "groq");
   assert.equal(candidates[0]?.hosted, true);
   assert.equal(candidates[0]?.baseUrl, "https://api.groq.com/openai/v1");
-  assert.deepEqual(candidates[0]?.preferredModels, ["openai/gpt-reasoning-model", "openai/gpt-fast-model"]);
+  assert.deepEqual(candidates[0]?.preferredModels, ["openai/gpt-fast-model", "openai/gpt-reasoning-model"]);
   assert.equal(candidates[1]?.provider, "ollama");
   assert.equal(candidates[1]?.hosted, false);
 });
@@ -136,17 +136,17 @@ test("buildInferenceProviderCandidates keeps Groq first for normal chat when Gem
   });
 
   assert.equal(candidates[0]?.provider, "groq");
-  // Sohbet workload'ları primary 120b düşerse hızlı+güvenilir 20b'ye iner
-  // (kırılgan qwen ikinci sıraya alındı).
+  // Normal sohbet artık doğrudan hızlı lane'de başlar; reasoning model yalnız
+  // gerçek deep/fallback durumunda aday kalır.
   assert.deepEqual(candidates[0]?.preferredModels, [
-    "openai/gpt-groq-reasoning",
     "openai/gpt-groq-fast",
+    "openai/gpt-groq-reasoning",
   ]);
   assert.equal(candidates[1]?.provider, "gemini");
   assert.deepEqual(candidates[1]?.preferredModels, ["gemini-text", "gemini-fast"]);
 });
 
-test("buildInferenceProviderCandidates uses Groq Compound for planning when enabled", () => {
+test("buildInferenceProviderCandidates keeps planning on the strict JSON lane", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
@@ -163,13 +163,7 @@ test("buildInferenceProviderCandidates uses Groq Compound for planning when enab
   });
 
   assert.equal(candidates[0]?.provider, "groq");
-  // Compound remains the primary planner; the JSON-safe structured lane is
-  // the next candidate instead of a reasoning-only model.
-  assert.deepEqual(candidates[0]?.preferredModels, [
-    "groq/compound",
-    "llama-3.1-8b-instant",
-    "openai/gpt-groq-fallback",
-  ]);
+  assert.deepEqual(candidates[0]?.preferredModels, ["llama-3.1-8b-instant"]);
 });
 
 test("buildInferenceProviderCandidates uses Compound mini for public fresh research", () => {
@@ -312,10 +306,7 @@ test("buildInferenceProviderCandidates does not use Groq Compound for document a
   // reasoning-DIŞI modelle başlar. Canlı ölçüm (2026-08-13, görev a4924a76 —
   // "3.sınıf matematik PDF yaz"): bu iş yükünde gpt-oss-20b ve qwen ikisi de
   // 400 json_validate_failed verdi, zincir tükendi ve PDF hiç üretilemedi.
-  assert.deepEqual(candidates[0]?.preferredModels, [
-    "llama-3.1-8b-instant",
-    "openai/gpt-groq-fast",
-  ]);
+  assert.deepEqual(candidates[0]?.preferredModels, ["llama-3.1-8b-instant"]);
 });
 
 test("buildInferenceProviderCandidates can isolate primary and fallback workers", () => {
@@ -427,7 +418,7 @@ test("buildInferenceProviderCandidates prefers Groq for fast vision profile", ()
   );
 });
 
-test("document analysis uses Gemini Flash-Lite with 3.5 fallback", () => {
+test("document analysis blocks unvalidated Gemini and stays on strict JSON Groq", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_FAST_MODEL: "openai/gpt-groq-fast",
@@ -442,12 +433,33 @@ test("document analysis uses Gemini Flash-Lite with 3.5 fallback", () => {
     localModels: ["local-balanced"],
   });
 
-  assert.equal(candidates[0]?.provider, "gemini");
-  assert.deepEqual(candidates[0]?.preferredModels, [
-    "gemini-fast",
-    "gemini-quality",
-  ]);
-  assert.equal(candidates[1]?.provider, "groq");
+  assert.equal(candidates[0]?.provider, "groq");
+  assert.deepEqual(candidates[0]?.preferredModels, ["llama-3.1-8b-instant"]);
+  assert.equal(candidates.some((candidate) => candidate.provider === "gemini"), false);
+});
+
+test("document analysis admits Gemini only with structured-data eligibility", () => {
+  const app = appWithConfig({
+    GROQ_API_KEY: "groq-key",
+    GEMINI_API_KEY: "gemini-key",
+    GEMINI_FAST_MODEL: "gemini-fast",
+    GEMINI_TEXT_MODEL: "gemini-quality",
+  });
+  const candidates = buildInferenceProviderCandidates({
+    app,
+    workload: "document_analysis",
+    runtime: runtimeSnapshot(),
+    localModels: [],
+    structuredGeminiEligible: true,
+  });
+
+  assert.deepEqual(
+    candidates
+      .filter((candidate) => candidate.hosted)
+      .map((candidate) => candidate.provider),
+    ["gemini", "groq"],
+  );
+  assert.deepEqual(candidates[0]?.preferredModels, ["gemini-fast", "gemini-quality"]);
 });
 
 test("sensitive vision excludes hosted providers without privacy attestation", () => {

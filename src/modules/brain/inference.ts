@@ -3107,6 +3107,10 @@ export function buildStructuredSystemPrompt(
   basePrompt: string,
   input: SharedBrainInferenceInput,
 ): string {
+  const responseRepair = readRecord(input.requestMetadata?.responseRepair);
+  const effectiveBasePrompt = responseRepair
+    ? `${basePrompt}\nREPAIR PASS: The previous draft failed the typed semantic response gate. Answer only the current user request in the already selected output contract. Do not introduce document, web, citation, source-verification, or completion claims unless the current contract and actual evidence require them. If this is a correction, repair the prior answer instead of repeating it.`
+    : basePrompt;
   const semanticRouteOnly = input.requestMetadata?.semanticRouteOnly === true;
   if (semanticRouteOnly) {
     return [
@@ -3126,10 +3130,10 @@ export function buildStructuredSystemPrompt(
   // "Tamamlanacak bir yanıt bulunamadı". The lean prompt keeps identity,
   // language, tone, completion + the user's name, and drops everything else.
   if (isSocialChatPrompt(input.prompt)) {
-    return buildSocialChatSystemPrompt(basePrompt, input);
+    return buildSocialChatSystemPrompt(effectiveBasePrompt, input);
   }
   if (canUseLeanFastChatPrompt(input)) {
-    return buildLeanFastChatSystemPrompt(basePrompt, input);
+    return buildLeanFastChatSystemPrompt(effectiveBasePrompt, input);
   }
   // Kısa takip mesajları için lean profil. Full path'in ~35 policy satırı
   // "devam et" gibi 8 karakterlik bir mesaj için gereksiz — model overload
@@ -3142,7 +3146,7 @@ export function buildStructuredSystemPrompt(
     input.workload !== "image_analyze" &&
     input.workload !== "vision_reasoning"
   ) {
-    return buildShortFollowUpSystemPrompt(basePrompt, input);
+    return buildShortFollowUpSystemPrompt(effectiveBasePrompt, input);
   }
 
   const preferenceBlock = buildPreferencePromptBlock(
@@ -3256,7 +3260,7 @@ export function buildStructuredSystemPrompt(
     );
 
   return [
-    basePrompt,
+    effectiveBasePrompt,
     buildElyanVoiceProfilePromptBlock({
       prompt: input.prompt,
       workload: input.workload ?? "fast_route",
@@ -5712,6 +5716,16 @@ export function resolveEffectiveWorkload(
 ): SharedBrainWorkload {
   const base =
     input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
+  const reasoningMode = input.understandingContext?.taskFrame?.reasoningMode;
+  if (
+    reasoningMode === "deep" &&
+    (base === "mobile_chat_fast" || base === "mobile_chat_balanced")
+  ) {
+    // A deep task-frame signal must change the model lane, not merely raise
+    // reasoning_effort on the 20B fast model. Internal routing calls do not
+    // carry a user task frame, so they remain on their dedicated fast lane.
+    return "mobile_chat_deep_refine";
+  }
   if (
     base === "mobile_chat_fast" &&
     input.understandingContext?.clarificationDiagnostics?.shouldClarify ===
@@ -6115,6 +6129,10 @@ export async function generateSharedBrainReply(
       isAgentEngineV2Enabled(app, input.userId) ||
       isAgentEngineShadowEnabled(app)) &&
     (!fastTextTurn || fastTextToolsExplicitlyRequested);
+  let toolSelectionSource = agentToolProtocolEnabled
+    ? "deterministic"
+    : "not_advertised";
+  let toolSelectionMs: number | null = null;
   const understandingEnvelope =
     input.understandingContext?.understandingEnvelope;
   const typedResearchIntent =
@@ -6142,6 +6160,7 @@ export async function generateSharedBrainReply(
   let semanticWebToolSelected = false;
   let semanticWebToolDenied = false;
   if (agentToolProtocolEnabled) {
+    const toolSelectionStartedAt = Date.now();
     const advertisedConnectorTools = (input.connectorToolContracts ?? [])
       .map((contract) => contract.trim().match(/^([a-z0-9_.-]+)/i)?.[1])
       .filter((name): name is string => Boolean(name));
@@ -6288,6 +6307,9 @@ export async function generateSharedBrainReply(
       semanticDecision.source === "transformer",
     );
     input.agentToolCatalog = catalog;
+    toolSelectionSource =
+      semanticDecision.source === "transformer" ? "semantic" : "deterministic";
+    toolSelectionMs = Date.now() - toolSelectionStartedAt;
   } else {
     input.agentToolCatalog = [];
   }
@@ -6477,6 +6499,19 @@ export async function generateSharedBrainReply(
       !depthRouterInternalWorkload &&
       (shouldUseWebGrounding({ prompt: input.prompt, workload }) ||
         explicitDataArtifactRequest(input.prompt));
+    const structuredOutputRequired =
+      isDesktopPlanMachineJsonRoute(input.route) ||
+      Boolean(input.responseSchemaOverride);
+    const deepTaskFrameUpgrade =
+      input.understandingContext?.taskFrame?.reasoningMode === "deep" &&
+      workload === "mobile_chat_deep_refine";
+    const modelSelectionReason = deepTaskFrameUpgrade
+      ? "deep_task_frame_upgrade"
+      : structuredOutputRequired
+        ? "structured_json_contract"
+        : fastTextTurn
+          ? "fast_chat_default"
+          : "workload_policy";
     let providerCandidates = buildInferenceProviderCandidates({
       app,
       workload,
@@ -6491,9 +6526,10 @@ export async function generateSharedBrainReply(
       allowedProviders: input.providerAllowlist,
       // Plan zarfı ve şema zorunlu turlar katı JSON bekler; araç-ajanı
       // modeller (groq/compound) burada düzyazı döndürüp zinciri harcıyor.
-      structuredOutputRequired:
-        isDesktopPlanMachineJsonRoute(input.route) ||
-        Boolean(input.responseSchemaOverride),
+      structuredOutputRequired,
+      structuredGeminiEligible:
+        app.config.GEMINI_FREE_ONLY === true ||
+        input.providerDataSharingAuthorized === true,
       liveWebSignal,
     });
     const knowledgeQuery = compactText(
@@ -6871,9 +6907,7 @@ export async function generateSharedBrainReply(
         visionProfile: cloudVisionActive
           ? initialVisionMediaDecision.profile
           : undefined,
-        structuredOutputRequired:
-          isDesktopPlanMachineJsonRoute(input.route) ||
-          Boolean(input.responseSchemaOverride),
+        structuredOutputRequired,
       });
     }
     const primaryCandidate = providerCandidates[0] ?? null;
@@ -7341,6 +7375,10 @@ export async function generateSharedBrainReply(
       route: input.route ?? "shared_brain",
       model: baseModel,
       responseFormat,
+      reasoningMode: input.understandingContext?.taskFrame?.reasoningMode,
+      modelSelectionReason,
+      toolSelectionSource,
+      toolSelectionMs,
       result: "running",
       durationMs: Date.now() - startedAt,
       semanticContract: input.routeDecision?.semanticContract,
@@ -8553,6 +8591,11 @@ export async function generateSharedBrainReply(
         route: input.route ?? "shared_brain",
         model: baseModel,
         responseFormat,
+        reasoningMode: input.understandingContext?.taskFrame?.reasoningMode,
+        modelSelectionReason,
+        fallbackReason: attemptFailures.at(-1)?.failureClass ?? fallbackState,
+        toolSelectionSource,
+        toolSelectionMs,
         result: "error",
         durationMs: Date.now() - startedAt,
         semanticContract: input.routeDecision?.semanticContract,
@@ -8904,6 +8947,13 @@ export async function generateSharedBrainReply(
       route: input.route ?? "shared_brain",
       model: successfulModel,
       responseFormat,
+      reasoningMode: input.understandingContext?.taskFrame?.reasoningMode,
+      modelSelectionReason,
+      fallbackReason: fallbackUsed
+        ? attemptFailures.at(-1)?.failureClass ?? fallbackState
+        : null,
+      toolSelectionSource,
+      toolSelectionMs,
       result: fallbackUsed ? "fallback" : "success",
       durationMs: latencyMs,
       semanticContract: input.routeDecision?.semanticContract,

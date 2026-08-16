@@ -15,6 +15,41 @@ x-logging: &default-logging
     max-size: "20m"
     max-file: "5"
 
+# One model catalog for every Node process that can buildApp()/invoke the
+# shared brain. Worker queue/concurrency settings stay in each service below;
+# model names must not silently come from a stale worker-only .env value.
+x-shared-brain-model-environment: &shared-brain-model-environment
+  GROQ_BASE_URL: https://api.groq.com/openai/v1
+  GROQ_REASONING_MODEL: openai/gpt-oss-120b
+  GROQ_FAST_MODEL: openai/gpt-oss-20b
+  GROQ_ROUTING_MODEL: llama-3.1-8b-instant
+  GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
+  GROQ_VISION_MODEL: ${GROQ_VISION_MODEL:-qwen/qwen3.6-27b}
+  GROQ_COMPOUND_MODEL: ${GROQ_COMPOUND_MODEL:-groq/compound}
+  GROQ_COMPOUND_MINI_MODEL: ${GROQ_COMPOUND_MINI_MODEL:-groq/compound-mini}
+  GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+  GEMINI_INTERACTIONS_BASE_URL: ${GEMINI_INTERACTIONS_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
+  GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.6-flash}
+  GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
+  GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.6-flash}
+  GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.6-flash}
+  GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
+  GEMINI_IMAGE_PRO_MODEL: ${GEMINI_IMAGE_PRO_MODEL:-gemini-3-pro-image}
+  GEMINI_IMAGE_SIZE: ${GEMINI_IMAGE_SIZE:-2K}
+  GEMINI_IMAGE_PRO_ENABLED: ${GEMINI_IMAGE_PRO_ENABLED:-true}
+  GEMINI_FREE_ONLY: "false"
+  GEMINI_PAID_FALLBACK_ENABLED: "${GEMINI_PAID_FALLBACK_ENABLED:-true}"
+  GEMINI_PAID_DATA_PROCESSING_ATTESTED: "${GEMINI_PAID_DATA_PROCESSING_ATTESTED:-true}"
+  ELYAN_SHARED_BRAIN_PROVIDER: groq
+  ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
+  ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ${ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER:-}
+  ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ${ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL:-}
+  ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
+  ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
+  ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-20b
+  ELYAN_SHARED_BRAIN_PLANNING_MODEL: openai/gpt-oss-120b
+  ELYAN_SHARED_BRAIN_KEEP_ALIVE: 2h
+
 services:
   postgres:
     logging: *default-logging
@@ -82,6 +117,7 @@ services:
       - ./secrets/apns-private-key.p8:/run/secrets/apns-private-key.p8:ro
       - blob_data:/app/.blob-store
     environment:
+      <<: *shared-brain-model-environment
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 4000
@@ -107,33 +143,6 @@ services:
       ELYAN_GROQ_RPM_LIMIT: ${ELYAN_GROQ_RPM_LIMIT:-30}
       ELYAN_GROQ_TPM_LIMIT: ${ELYAN_GROQ_TPM_LIMIT:-8000}
       ELYAN_GEMINI_RPM_LIMIT: ${ELYAN_GEMINI_RPM_LIMIT:-10}
-      GROQ_BASE_URL: https://api.groq.com/openai/v1
-      GROQ_REASONING_MODEL: openai/gpt-oss-120b
-      GROQ_FAST_MODEL: openai/gpt-oss-20b
-      GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
-      GROQ_VISION_MODEL: ${GROQ_VISION_MODEL:-qwen/qwen3.6-27b}
-      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      GEMINI_INTERACTIONS_BASE_URL: ${GEMINI_INTERACTIONS_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
-      GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.6-flash}
-      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
-      GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.6-flash}
-      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.6-flash}
-      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
-      GEMINI_IMAGE_PRO_MODEL: ${GEMINI_IMAGE_PRO_MODEL:-gemini-3-pro-image}
-      GEMINI_IMAGE_SIZE: ${GEMINI_IMAGE_SIZE:-2K}
-      GEMINI_IMAGE_PRO_ENABLED: ${GEMINI_IMAGE_PRO_ENABLED:-true}
-      GEMINI_FREE_ONLY: "false"
-      GEMINI_PAID_FALLBACK_ENABLED: "${GEMINI_PAID_FALLBACK_ENABLED:-true}"
-      GEMINI_PAID_DATA_PROCESSING_ATTESTED: "${GEMINI_PAID_DATA_PROCESSING_ATTESTED:-true}"
-      ELYAN_SHARED_BRAIN_PROVIDER: groq
-      ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
-      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ${ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER:-}
-      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ${ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL:-}
-      ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
-      ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_PLANNING_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_KEEP_ALIVE: 2h
       ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
       ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: "true"
       ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED: "true"
@@ -177,6 +186,7 @@ services:
     env_file:
       - .env
     environment:
+      <<: *shared-brain-model-environment
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_APP_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       REDIS_URL: redis://redis:6379
@@ -191,30 +201,6 @@ services:
       BRAIN_CIRCUIT_FAILURE_THRESHOLD: 3
       BRAIN_CIRCUIT_OPEN_MS: 30000
       TASK_DISPATCH_LOCK_TTL_MS: 120000
-      GROQ_BASE_URL: https://api.groq.com/openai/v1
-      GROQ_REASONING_MODEL: openai/gpt-oss-120b
-      GROQ_FAST_MODEL: openai/gpt-oss-20b
-      GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
-      GROQ_VISION_MODEL: ${GROQ_VISION_MODEL:-qwen/qwen3.6-27b}
-      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      GEMINI_INTERACTIONS_BASE_URL: ${GEMINI_INTERACTIONS_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
-      GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.6-flash}
-      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
-      GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.6-flash}
-      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.6-flash}
-      GEMINI_IMAGE_MODEL: ${GEMINI_IMAGE_MODEL:-gemini-3.1-flash-image}
-      GEMINI_IMAGE_PRO_MODEL: ${GEMINI_IMAGE_PRO_MODEL:-gemini-3-pro-image}
-      GEMINI_IMAGE_SIZE: ${GEMINI_IMAGE_SIZE:-2K}
-      GEMINI_IMAGE_PRO_ENABLED: ${GEMINI_IMAGE_PRO_ENABLED:-true}
-      ELYAN_SHARED_BRAIN_PROVIDER: groq
-      ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
-      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: ${ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER:-}
-      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: ${ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL:-}
-      ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
-      ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_PLANNING_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_KEEP_ALIVE: 2h
       ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
       NODE_TRAINING_WORKER_ENABLED: "false"
     command: ["sh", "-lc", "echo 'node training worker disabled; ml-worker owns training job execution'; sleep infinity"]
@@ -232,6 +218,7 @@ services:
     env_file:
       - .env
     environment:
+      <<: *shared-brain-model-environment
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_WORKER_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       REDIS_URL: redis://redis:6379
@@ -258,6 +245,7 @@ services:
     volumes:
       - blob_data:/app/.blob-store
     environment:
+      <<: *shared-brain-model-environment
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_WORKER_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       REDIS_URL: redis://redis:6379
@@ -274,27 +262,6 @@ services:
       ELYAN_GROQ_RPM_LIMIT: ${ELYAN_GROQ_RPM_LIMIT:-30}
       ELYAN_GROQ_TPM_LIMIT: ${ELYAN_GROQ_TPM_LIMIT:-8000}
       ELYAN_GEMINI_RPM_LIMIT: ${ELYAN_GEMINI_RPM_LIMIT:-10}
-      GROQ_BASE_URL: https://api.groq.com/openai/v1
-      GROQ_REASONING_MODEL: openai/gpt-oss-120b
-      GROQ_FAST_MODEL: openai/gpt-oss-20b
-      GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
-      GROQ_VISION_MODEL: ${GROQ_VISION_MODEL:-qwen/qwen3.6-27b}
-      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      GEMINI_INTERACTIONS_BASE_URL: ${GEMINI_INTERACTIONS_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}
-      GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.6-flash}
-      GEMINI_FAST_MODEL: ${GEMINI_FAST_MODEL:-gemini-3.5-flash-lite}
-      GEMINI_REASONING_MODEL: ${GEMINI_REASONING_MODEL:-gemini-3.6-flash}
-      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-3.6-flash}
-      GEMINI_FREE_ONLY: "false"
-      GEMINI_PAID_FALLBACK_ENABLED: "${GEMINI_PAID_FALLBACK_ENABLED:-true}"
-      GEMINI_PAID_DATA_PROCESSING_ATTESTED: "${GEMINI_PAID_DATA_PROCESSING_ATTESTED:-true}"
-      ELYAN_SHARED_BRAIN_PROVIDER: groq
-      ELYAN_SHARED_BRAIN_BASE_URL: https://api.groq.com/openai/v1
-      ELYAN_SHARED_BRAIN_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_FAST_MODEL: openai/gpt-oss-20b
-      ELYAN_SHARED_BRAIN_BALANCED_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_PLANNING_MODEL: openai/gpt-oss-120b
-      ELYAN_SHARED_BRAIN_KEEP_ALIVE: 2h
       ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
       ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: "true"
       ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED: "true"
@@ -327,6 +294,7 @@ services:
     env_file:
       - .env
     environment:
+      <<: *shared-brain-model-environment
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_WORKER_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       REDIS_URL: redis://redis:6379
@@ -347,6 +315,7 @@ services:
     env_file:
       - .env
     environment:
+      <<: *shared-brain-model-environment
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_WORKER_URL:-postgres://postgres:postgres@postgres:5432/elyan_backend}
       REDIS_URL: redis://redis:6379

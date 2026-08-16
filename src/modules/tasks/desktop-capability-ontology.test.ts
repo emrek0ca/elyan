@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   getDesktopCapabilityOntology,
   matchDesktopCapabilitiesSemantically,
+  normalizeText,
 } from "./desktop-capability-ontology.js";
 
 test("desktop capability ontology exposes stable metadata for every manifest entry", () => {
@@ -59,4 +60,29 @@ test("desktop capability semantic matcher separates document artifact work from 
   });
 
   assert.equal(match?.capability, "document_write");
+});
+
+test("capability matching keeps incompatible side-effect tools out of top-1", () => {
+  assert.equal(normalizeText("çalıştırı kapat"), "calistiri kapat");
+
+  const cases = [
+    ["terminal oturumunu kapat", "close_app"],
+    ["makineyi tamamen kapatabilir misin", "close_app"],
+    ["ekibe bir yazı gönder ama önce göreyim", "email_send"],
+    ["abime bi selam yolla whatsapptan", "email_send"],
+    ["elektronik tablo programları arasındaki fark ne", "spreadsheet_write"],
+  ] as const;
+
+  for (const [query, forbidden] of cases) {
+    const [match] = matchDesktopCapabilitiesSemantically({
+      query,
+      limit: 1,
+      threshold: 0,
+    });
+    assert.notEqual(
+      match?.capability,
+      forbidden,
+      `${query} → ${match?.capability ?? "(yok)"}`,
+    );
+  }
 });

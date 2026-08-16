@@ -22,6 +22,10 @@ test("brain decision observation keeps queued task ids and route fields content-
     route: "server_brain",
     model: null,
     response_format: "text",
+    reasoning_mode: null,
+    model_selection_reason: null,
+    fallback_reason: null,
+    tool_selection_source: null,
     result: "queued",
     duration_ms: 12,
   });

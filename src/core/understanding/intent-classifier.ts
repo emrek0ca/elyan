@@ -226,9 +226,10 @@ function calculateReasoningMode(input: {
   if (input.requiresToolUse || ["coding", "debugging", "document", "browser", "computer", "automation", "image"].includes(input.primaryIntent)) {
     return "balanced";
   }
-  // Math gets balanced reasoning for step-by-step solutions
+  // Non-trivial math is a deep task: the fast model is useful for short prose,
+  // but not for derivations, proofs, or multi-step calculations.
   if (input.primaryIntent === "math") {
-    return "balanced";
+    return "deep";
   }
   if (input.confidence < 0.45) {
     return "balanced";

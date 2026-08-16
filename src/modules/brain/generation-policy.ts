@@ -11,7 +11,7 @@ import type { SharedBrainWorkload } from "./workloads.js";
  * Reasoning depth dial for gpt-oss models. HARD analytical work gets "high"
  * so answers are thorough instead of shallow. The fast mobile lane stays low
  * so its first visible tokens are not delayed by an unnecessary hidden turn;
- * balanced/deep workloads retain their deeper reasoning budget.
+ * only the explicit deep workload retains the larger hidden reasoning budget.
  */
 export function resolveReasoningEffort(
   workload: SharedBrainWorkload | undefined,
@@ -45,16 +45,14 @@ export function resolveReasoningEffort(
   ) {
     return "high";
   }
-  // Sıradan sohbet: MODEL küçülmüyor (akıl kalitesi gpt-oss-120b'de kalıyor),
-  // yalnız gizli düşünme bütçesi kısalıyor. "Hem hızlı hem akıllı" dengesi
-  // burada: kaliteyi modelden, hızı efordan alıyoruz. Kullanıcı ya da anlama
-  // katmanı turu açıkça derin işaretlerse yukarıdaki `deep` kısa devresi yine
-  // "high"a çıkarıyor — derinlik sinyali kaybolmuyor.
+  // Balanced chat is still the compatibility workload name used by routing,
+  // but it now resolves to the fast model. Only a workload promoted to the
+  // deep lane should pay for hidden reasoning tokens.
   if (workload === "mobile_chat_balanced") {
-    return "medium";
+    return "low";
   }
   if (reasoningMode === "balanced") {
-    return "medium";
+    return "low";
   }
   if (workload === "vision_reasoning" || workload === "image_analyze") {
     return "low";

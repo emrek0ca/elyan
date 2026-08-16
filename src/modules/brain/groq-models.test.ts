@@ -25,7 +25,7 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
     intent: "llama-3.1-8b-instant",
     fast_route: "llama-3.1-8b-instant",
     mobile_chat_fast: "openai/gpt-oss-20b",
-    mobile_chat_balanced: "openai/gpt-oss-120b",
+    mobile_chat_balanced: "openai/gpt-oss-20b",
     mobile_chat_deep_refine: "openai/gpt-oss-120b",
     // KATI-JSON ŞERİDİ. Belge analizi şemaya uyan JSON döndürüyor; canlıda
     // (2026-08-13, görev a4924a76 — "3.sınıf matematik PDF yaz") bu iş yükünde
@@ -82,7 +82,7 @@ test("resolveGroqFallbackModel backs fast chat up with the reasoning model", () 
   assert.equal(fallback, "openai/gpt-oss-120b");
 });
 
-test("resolveGroqFallbackModel prefers the fast Groq model for document analysis failover", () => {
+test("resolveGroqFallbackModel does not cross the structured JSON lane", () => {
   const fallback = resolveGroqFallbackModel(
     {
       GROQ_REASONING_MODEL: "openai/gpt-oss-120b",
@@ -93,5 +93,5 @@ test("resolveGroqFallbackModel prefers the fast Groq model for document analysis
     "document_analysis",
   );
 
-  assert.equal(fallback, "openai/gpt-oss-20b");
+  assert.equal(fallback, null);
 });

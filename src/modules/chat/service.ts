@@ -61,9 +61,22 @@ import { fuseWorldSignalRecordsByKind } from "../../core/understanding/context-p
 import { resolveRemoteMcpRequest } from "../integrations/service.js";
 import {
   type AssistantMessageBlock,
+  normalizeAssistantMessageBlocks,
   shapeAssistantMessagePayload,
   withAssistantBlocksMetadata,
 } from "./message-blocks.js";
+import {
+  buildChatContextSnapshot,
+  resolveChatTurnKind,
+  snapshotConversation,
+  type ChatContextSnapshot,
+  type ChatContextSnapshotTurn,
+} from "./chat-context-snapshot.js";
+import {
+  reconcileOrphanedChatMessagesForSession,
+  terminalizeChatMessageWithoutTask,
+} from "./orphan-reconciler.js";
+export { shouldReconcileOrphanedChatMessage } from "./orphan-reconciler.js";
 import { buildTaskTraceBlock } from "./task-trace.js";
 import { materializeLegacyVisionForDurableQueue } from "../tasks/media-inputs.js";
 
@@ -103,9 +116,6 @@ const CHAT_TURN_ADMISSION_LOCK_TTL_MS = 30_000;
 const CHAT_TURN_ADMISSION_WAIT_MS = 2_500;
 const CHAT_TURN_ADMISSION_POLL_MS = 125;
 const CHAT_MESSAGE_INLINE_CONTENT_MAX_BYTES = 64 * 1024;
-const ORPHANED_CHAT_MESSAGE_GRACE_MS = 90_000;
-const GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE =
-  "Yanıt başlatılamadı. Lütfen tekrar dene.";
 
 type ChatSessionCursor = {
   timestamp: string;
@@ -945,27 +955,6 @@ function shapeChatMessageForResponse<
   return shaped;
 }
 
-export function shouldReconcileOrphanedChatMessage(input: {
-  role: string;
-  status: string;
-  taskId?: string | null;
-  createdAt: Date | string;
-  now?: Date;
-}): boolean {
-  if (input.role !== "assistant" || input.taskId) {
-    return false;
-  }
-  if (input.status !== "queued" && input.status !== "running") {
-    return false;
-  }
-  const createdAt =
-    input.createdAt instanceof Date
-      ? input.createdAt.getTime()
-      : new Date(input.createdAt).getTime();
-  const now = (input.now ?? new Date()).getTime();
-  return Number.isFinite(createdAt) && now - createdAt >= ORPHANED_CHAT_MESSAGE_GRACE_MS;
-}
-
 function resolveChatAcceptanceFailure(error: unknown): {
   code: string;
   message: string;
@@ -973,151 +962,13 @@ function resolveChatAcceptanceFailure(error: unknown): {
   if (error instanceof AppError) {
     return {
       code: error.code,
-      message: error.message || GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE,
+      message: error.message || "Yanıt başlatılamadı. Lütfen tekrar dene.",
     };
   }
   return {
     code: "chat_acceptance_failed",
-    message: GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE,
+    message: "Yanıt başlatılamadı. Lütfen tekrar dene.",
   };
-}
-
-async function terminalizeChatMessageWithoutTask(
-  app: FastifyInstance,
-  input: {
-    userId: string;
-    sessionId: string;
-    assistantMessageId: string;
-    deviceId?: string | null;
-    failure?: { code: string; message: string };
-  },
-) {
-  const failure = input.failure ?? {
-    code: "chat_acceptance_timeout",
-    message: GENERIC_CHAT_ACCEPTANCE_FAILURE_MESSAGE,
-  };
-  const updatedAt = new Date();
-  const rows = await app.db
-    .update(chatMessages)
-    .set({
-      status: "failed",
-      error: failure.message,
-      content: failure.message,
-      contentBlobId: null,
-      preview: compactMessagePreview(failure.message),
-      tokenCount: estimateMessageTokens(failure.message),
-      metadata: withAssistantBlocksMetadata(
-        {
-          failureReason: failure.code,
-          streaming: false,
-          terminal: true,
-        },
-        {
-          content: failure.message,
-          blocks: [],
-          streaming: false,
-        },
-      ),
-      updatedAt,
-    })
-    .where(
-      and(
-        eq(chatMessages.id, input.assistantMessageId),
-        eq(chatMessages.sessionId, input.sessionId),
-        eq(chatMessages.userId, input.userId),
-        eq(chatMessages.role, "assistant"),
-        isNull(chatMessages.taskId),
-        sql`${chatMessages.status} not in ('completed', 'failed', 'canceled')`,
-      ),
-    )
-    .returning();
-
-  const assistantMessage = rows[0];
-  if (!assistantMessage) {
-    return null;
-  }
-
-  await app.db
-    .update(chatSessions)
-    .set({ updatedAt })
-    .where(
-      and(
-        eq(chatSessions.id, input.sessionId),
-        eq(chatSessions.userId, input.userId),
-      ),
-    );
-
-  await app.services.eventBus.publish({
-    topic: "chat.message.updated",
-    userId: input.userId,
-    deviceId: input.deviceId ?? undefined,
-    payload: {
-      sessionId: input.sessionId,
-      assistantMessageId: assistantMessage.id,
-      statusRank: 90,
-      eventRank: 30,
-      messageStatusRank: 90,
-      terminal: true,
-      presentation: "chat",
-      assistantMessage: shapeAssistantMessagePayload(assistantMessage),
-      taskStatus: "failed",
-      task: null,
-    },
-  });
-
-  return assistantMessage;
-}
-
-async function reconcileOrphanedChatMessages(
-  app: FastifyInstance,
-  input: {
-    userId: string;
-    session: typeof chatSessions.$inferSelect;
-  },
-) {
-  // Unit-test doubles and legacy adapters may not have the realtime service;
-  // production always does. Do not add a second DB round trip to those paths.
-  if (!app.services?.eventBus) {
-    return;
-  }
-  const cutoff = new Date(Date.now() - ORPHANED_CHAT_MESSAGE_GRACE_MS);
-  const orphaned = await app.db
-    .select()
-    .from(chatMessages)
-    .where(
-      and(
-        eq(chatMessages.sessionId, input.session.id),
-        eq(chatMessages.userId, input.userId),
-        eq(chatMessages.role, "assistant"),
-        isNull(chatMessages.taskId),
-        inArray(chatMessages.status, ["queued", "running"]),
-        lt(chatMessages.createdAt, cutoff),
-      ),
-    )
-    // Keep history reads bounded when an old client/runtime left many
-    // task-less assistant rows behind. The oldest rows are the ones that can
-    // be terminalized on this pass; later pages will be reconciled on demand.
-    .limit(32);
-
-  for (const message of orphaned) {
-    if (
-      !shouldReconcileOrphanedChatMessage({
-        role: message.role,
-        status: message.status,
-        taskId: message.taskId,
-        createdAt: message.createdAt,
-        now: cutoff,
-      })
-    ) {
-      continue;
-    }
-    await terminalizeChatMessageWithoutTask(app, {
-      userId: input.userId,
-      sessionId: input.session.id,
-      assistantMessageId: message.id,
-      deviceId: input.session.targetDeviceId,
-    });
-  }
 }
 
 function shapeChatSessionForResponse<
@@ -1390,6 +1241,7 @@ type SharedBrainConversationItem = {
 type ChatAttachmentRow = {
   id?: string;
   role: string;
+  status?: string | null;
   content?: string;
   metadata?: unknown;
   createdAt?: Date | string | null;
@@ -1397,6 +1249,7 @@ type ChatAttachmentRow = {
 
 type LoadedChatContext = {
   conversation: SharedBrainConversationItem[];
+  turns: ChatContextSnapshotTurn[];
   attachmentCandidates: AttachmentContextCandidate[];
 };
 
@@ -1575,6 +1428,7 @@ async function loadChatConversation(
       role: chatMessages.role,
       content: chatMessages.content,
       contentBlobId: chatMessages.contentBlobId,
+      status: chatMessages.status,
       metadata: chatMessages.metadata,
       createdAt: chatMessages.createdAt,
     })
@@ -1601,28 +1455,98 @@ async function loadChatConversation(
     })),
   );
   const chronologicalRows = hydratedRows.reverse();
+  const turns = chronologicalRows
+    .filter(
+      (row): row is typeof row & { role: "user" | "assistant" } =>
+        row.role === "user" || row.role === "assistant",
+    )
+    .map((row) => {
+      const metadata = readRecord(row.metadata);
+      const rawBlocks = Array.isArray(metadata?.blocks)
+        ? metadata.blocks
+        : [];
+      const normalizedBlocks =
+        row.role === "assistant"
+          ? normalizeAssistantMessageBlocks({ blocks: rawBlocks })
+          : [];
+      const blockTypes = Array.from(
+        new Set(normalizedBlocks.map((block) => block.type)),
+      );
+      const blockDigest = rawBlocks.length
+        ? createHash("sha256")
+            .update(JSON.stringify(rawBlocks))
+            .digest("hex")
+            .slice(0, 32)
+        : null;
+      const content =
+        row.role === "assistant"
+          ? visibleTextFromStoredAssistantBlocks(normalizedBlocks) || row.content
+          : row.content;
+      return {
+        messageId: row.id,
+        role: row.role,
+        content,
+        status: row.status,
+        createdAt:
+          row.createdAt instanceof Date
+            ? row.createdAt.toISOString()
+            : new Date(row.createdAt).toISOString(),
+        blockDigest,
+        blockTypes,
+      } satisfies ChatContextSnapshotTurn;
+    });
 
   return {
     conversation: trimConversationForSharedBrain(
-      chronologicalRows
-        .map((row) => ({
-          role: row.role,
-          content: row.content,
-        }))
-        .filter(
-          (
-            item,
-          ): item is {
-            role: "system" | "user" | "assistant";
-            content: string;
-          } =>
-            typeof item.content === "string" && item.content.trim().length > 0,
-        ),
+      turns.map((turn) => ({
+        role: turn.role,
+        content: turn.content,
+      })),
     ),
+    turns,
     attachmentCandidates: extractAttachmentCandidatesFromChatRows(
       chronologicalRows as ChatAttachmentRow[],
     ),
   };
+}
+
+function visibleTextFromStoredAssistantBlocks(
+  blocks: AssistantMessageBlock[],
+): string {
+  const visible = blocks
+    .filter(
+      (block) =>
+        (block as { visibility?: unknown }).visibility !==
+        "assistant_internal_by_default",
+    )
+    .map((block) => {
+      const record = block as Record<string, unknown>;
+      const data = readRecord(record.data) ?? record;
+      if (block.type === "text") {
+        return String(record.markdown ?? data.markdown ?? "").trim();
+      }
+      if (block.type === "summary") {
+        return String(data.summary ?? record.summary ?? "").trim();
+      }
+      if (block.type === "status") {
+        return String(data.detail ?? record.detail ?? data.title ?? record.title ?? "").trim();
+      }
+      if (block.type === "next_steps") {
+        const items = Array.isArray(data.items) ? data.items : [];
+        return items.length > 0
+          ? items.map((item) => `• ${String(item)}`).join("\n")
+          : String(data.title ?? record.title ?? "").trim();
+      }
+      return String(
+        data.summary ??
+          data.title ??
+          record.summary ??
+          record.title ??
+          "",
+      ).trim();
+    })
+    .filter(Boolean);
+  return visible.join("\n\n").replace(/\s+/g, " ").trim();
 }
 
 async function assertOwnedChatSession(
@@ -1811,7 +1735,7 @@ export async function listChatSessionMessages(
     input.userId,
     input.sessionId,
   );
-  await reconcileOrphanedChatMessages(app, {
+  await reconcileOrphanedChatMessagesForSession(app, {
     userId: input.userId,
     session,
   });
@@ -2495,10 +2419,11 @@ export async function createChatMessage(
                   chatContextHydration: {
                     mode: "worker",
                     deferred: true,
-                    // A newly created session has no history. Persist that
-                    // fact so the worker does not spend its first-token
-                    // budget re-reading an empty session from Postgres.
-                    conversationSnapshotProvided: !existingSession,
+                    // Conversation history is now snapshotted independently
+                    // below. `deferred` only describes richer mobile/world
+                    // context hydration; it must never authorize a worker
+                    // history reread.
+                    conversationSnapshotProvided: true,
                   },
                 }
               : routingMetadata,
@@ -2510,18 +2435,14 @@ export async function createChatMessage(
           targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
           metadata: routingMetadata,
         }),
-    deferChatContextHydration
-      ? Promise.resolve<LoadedChatContext>({
-          conversation: [],
-          attachmentCandidates: [],
-        })
-      : existingSession
+    existingSession
       ? loadChatConversation(app, {
           userId: input.userId,
           sessionId: session.id,
         })
       : Promise.resolve({
           conversation: [],
+          turns: [],
           attachmentCandidates: [],
         }),
   ]);
@@ -2529,6 +2450,9 @@ export async function createChatMessage(
   // metadata pre-seed an assistant badge before a verified execution occurs.
   const assistantRequestMetadata = {
     ...requestChatMetadata,
+    chatGeneration: {
+      generationAttemptId: randomUUID(),
+    },
     skillUsed: false,
     skillId: null,
     executedSkillId: null,
@@ -2591,6 +2515,19 @@ export async function createChatMessage(
       : "queued";
   const userMessageId = randomUUID();
   const assistantMessageId = randomUUID();
+  const chatContextSnapshot = buildChatContextSnapshot({
+    sessionId: session.id,
+    userMessageId,
+    assistantMessageId,
+    prompt: input.content,
+    priorTurns: priorChatContext.turns,
+    turnKind: resolveChatTurnKind({
+      prompt: input.content,
+      hasPriorAssistant: priorChatContext.turns.some(
+        (turn) => turn.role === "assistant" && turn.status === "completed",
+      ),
+    }),
+  });
   const [userMessageBlob, assistantAckBlob] = await Promise.all([
     shouldStoreChatMessageContentBlob(input.content)
       ? app.services?.blobs?.storeText({
@@ -2697,7 +2634,7 @@ export async function createChatMessage(
         status: assistantAckStatus,
         metadata: sql`${chatMessages.metadata} || ${JSON.stringify(
           {
-            ...withAssistantBlocksMetadata(requestChatMetadata, {
+            ...withAssistantBlocksMetadata(assistantRequestMetadata, {
               content: assistantAckText,
               ...(taskTraceBlock ? { blocks: [taskTraceBlock] } : {}),
               streaming: true,
@@ -2844,6 +2781,14 @@ export async function createChatMessage(
         source: input.source,
         metadata: {
           ...requestChatMetadata,
+          chatGeneration: assistantRequestMetadata.chatGeneration,
+          chatContextHydration: {
+            mode: "snapshot",
+            deferred: deferChatContextHydration,
+            conversationSnapshotProvided: true,
+            snapshotVersion: chatContextSnapshot.version,
+          },
+          chatContextSnapshot,
           // Mark this as a chat-channel task so the fast streaming flow
           // (processSharedBrainChatTask + token-by-token SSE deltas) is used
           // instead of the synchronous REST reply. Without this the answer
@@ -2857,9 +2802,7 @@ export async function createChatMessage(
           },
         },
         brainContext: {
-          ...(deferChatContextHydration
-            ? {}
-            : { conversation: priorChatContext.conversation ?? [] }),
+          conversation: snapshotConversation(chatContextSnapshot),
           ...(priorChatContext.attachmentCandidates.length > 0
             ? { attachmentCandidates: priorChatContext.attachmentCandidates }
             : {}),

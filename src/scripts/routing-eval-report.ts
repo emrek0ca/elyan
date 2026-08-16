@@ -7,7 +7,11 @@ import {
   ROUTING_EVAL_CORPUS,
   ROUTING_EVAL_HELDOUT,
 } from "../modules/tasks/routing-eval-corpus.js";
-import { matchDesktopCapabilitiesWithEmbeddings } from "../modules/tasks/desktop-capability-embedding-match.js";
+import {
+  matchDesktopCapabilitiesWithEmbeddings,
+  warmDesktopCapabilityVectors,
+} from "../modules/tasks/desktop-capability-embedding-match.js";
+import { resetSemanticComputeWorkerForTests } from "../modules/brain/semantic-compute-client.js";
 
 /**
  * YÖNLENDİRME ÖLÇÜM KAPISI.
@@ -65,6 +69,7 @@ async function runFullPipelineEval(corpus: typeof ROUTING_EVAL_CORPUS) {
       intent: testCase.intent ?? null,
       sideEffectLevel: testCase.sideEffectLevel ?? null,
       limit: 3,
+      allowWarmup: false,
     });
     const acceptable = new Set([testCase.expected, ...(testCase.alsoAcceptable ?? [])]);
     if (matches[0] && acceptable.has(matches[0].capability)) {
@@ -109,13 +114,23 @@ if (asJson) {
 }
 
 if (withEmbeddings) {
-  console.log("\n===== TAM BORU HATTI (sözcüksel + e5 yeniden sıralama) =====");
-  for (const [name, corpus] of [
-    ["KORPUS", ROUTING_EVAL_CORPUS],
-    ["TUTULAN", ROUTING_EVAL_HELDOUT],
-  ] as const) {
-    const full = await runFullPipelineEval(corpus);
-    console.log(`${name}: top-1 ${full.top1}/${full.scored} (${(full.rate * 100).toFixed(1)}%)`);
-    for (const miss of full.misses.slice(0, 12)) console.log(miss);
+  try {
+    console.log("\n===== TAM BORU HATTI (sözcüksel + e5 yeniden sıralama) =====");
+    // The production app warms this asynchronously. The evaluator is the
+    // explicit opt-in caller allowed to wait once before scoring the corpus;
+    // every measured request below uses the already-ready cache.
+    await warmDesktopCapabilityVectors();
+    for (const [name, corpus] of [
+      ["KORPUS", ROUTING_EVAL_CORPUS],
+      ["TUTULAN", ROUTING_EVAL_HELDOUT],
+    ] as const) {
+      const full = await runFullPipelineEval(corpus);
+      console.log(`${name}: top-1 ${full.top1}/${full.scored} (${(full.rate * 100).toFixed(1)}%)`);
+      for (const miss of full.misses.slice(0, 12)) console.log(miss);
+    }
+  } finally {
+    // The semantic worker is unref'd, but its pending scheduler/worker state
+    // still kept the old evaluator alive after it had printed its report.
+    resetSemanticComputeWorkerForTests();
   }
 }

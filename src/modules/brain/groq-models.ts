@@ -31,6 +31,22 @@ export type GroqModelCatalog = {
   models: string[];
 };
 
+/**
+ * These workloads are transported as machine JSON. They must never inherit a
+ * reasoning-channel fallback: Groq can return an empty/invalid body when a
+ * reasoning model is combined with a JSON response contract.
+ */
+export function isStructuredGroqWorkload(
+  workload: SharedBrainWorkload | undefined,
+): boolean {
+  return (
+    workload === "intent" ||
+    workload === "fast_route" ||
+    workload === "document_analysis" ||
+    workload === "planning"
+  );
+}
+
 function compactText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -135,17 +151,12 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       // model yeterli, düşük gecikme önemli.
       intent: routingModel,
       fast_route: routingModel,
-      // Ana sohbet yolu artık büyük reasoning modelinde (gpt-oss-120b): cevap
-      // kalitesi ve "yaşıyor" hissi, ilk-token gecikmesinden önceliklidir.
-      // Reasoning effort "medium"da tutulduğu için gizli düşünme turu saniyeler
-      // mertebesinde kalır; token akışı yine kesintisizdir. Hız-kritik yollar
-      // (intent/fast_route/desktop_handoff) hâlâ küçük modelde.
-      // `mobile_chat_fast` adı gereği hız yolu ve yukarıdaki yorum da
-      // "hız-kritik yollar hâlâ küçük modelde" diyor; buna rağmen büyük
-      // reasoning modeline bağlıydı. Kısa/basit turlarda gizli düşünme turu
-      // saniyeler ekliyor ve kalite farkı yaratmıyor.
+      // Normal sohbetin iki mobil workload'u da hızlı modelde kalır. Zor
+      // görevler `mobile_chat_deep_refine`/planning ile açıkça reasoning
+      // kanalına yükseltilir; böylece her orta uzunlukta sohbet gizli 120B
+      // düşünme turunu ödemez.
       mobile_chat_fast: fastModel,
-      mobile_chat_balanced: reasoningModel,
+      mobile_chat_balanced: fastModel,
       mobile_chat_deep_refine: reasoningModel,
       // KATI-JSON ŞERİDİ. Belge analizi şemaya uyan JSON döndürüyor; canlıda
       // (2026-08-13, görev a4924a76) bu iş yükünde önce gpt-oss-20b sonra
@@ -201,10 +212,15 @@ export function resolveGroqFallbackModel(
     workload === "public_quantum_research";
   const visionWorkload =
     workload === "vision_reasoning" || workload === "image_analyze";
+  if (isStructuredGroqWorkload(workload)) {
+    // Structured JSON is a separate compatibility lane. Do not return the
+    // generic gpt/qwen fallbacks here: the caller may use this value to build
+    // a provider candidate list and would otherwise repeat a known-invalid
+    // response_format + reasoning combination.
+    return null;
+  }
   const preferredOrder =
-    workload === "document_analysis"
-      ? [catalog.fastModel, catalog.reasoningModel, catalog.fallbackModel]
-    : workload === "public_deep_research"
+    workload === "public_deep_research"
       ? [catalog.reasoningModel, catalog.fastModel, catalog.fallbackModel]
       : chatWorkload || visionWorkload
         ? [catalog.fastModel, catalog.reasoningModel, catalog.fallbackModel]
