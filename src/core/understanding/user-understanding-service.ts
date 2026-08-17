@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { normalizePersonalName } from "./identity-name.js";
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
@@ -1192,7 +1192,7 @@ export async function recordTaskFeedback(
     ttlDays: 45,
   };
 
-  return persistLearningSignals(app, {
+  const persistedCount = await persistLearningSignals(app, {
     userId: input.userId,
     accountId: input.accountId,
     taskId: input.taskId,
@@ -1201,6 +1201,58 @@ export async function recordTaskFeedback(
     source: input.source,
     metadata: input.metadata,
   });
+
+  // Feedback is a task-scoped state, not an append-only observation. The
+  // existing learning_events unique index gives us an atomic last-value
+  // write for thumbs_up -> thumbs_down (and makes duplicate taps idempotent).
+  // Keep the generic signal path above for the existing memory/audit flow,
+  // then reconcile the durable legacy row with the latest explicit value.
+  if (app.config.ELYAN_LEARNING_EXTRACTION_ENABLED) {
+    const now = new Date();
+    const interaction = resolveInteractionContext({
+      source: input.source,
+      metadata: input.metadata,
+    });
+    const outcomeMetadata = {
+      provenance: buildLearningProvenance({
+        interaction,
+        evidenceBasis: "user_feedback",
+        observedAt: now,
+      }),
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+    };
+    await app.db
+      .insert(learningEvents)
+      .values({
+        userId: input.userId,
+        accountId: input.accountId ?? input.userId,
+        taskId: input.taskId,
+        type: feedbackOutcomeSignal.type,
+        key: feedbackOutcomeSignal.key,
+        value: feedbackOutcomeSignal.value,
+        confidence: Math.round(feedbackOutcomeSignal.confidence * 100),
+        scope: feedbackOutcomeSignal.scope,
+        source: feedbackOutcomeSignal.source,
+        privacyLevel: "safe",
+        metadata: outcomeMetadata,
+        expiresAt: new Date(now.getTime() + 45 * 86_400_000),
+      })
+      .onConflictDoUpdate({
+        target: [learningEvents.taskId, learningEvents.type, learningEvents.key],
+        targetWhere: sql`${learningEvents.taskId} is not null`,
+        set: {
+          value: feedbackOutcomeSignal.value,
+          confidence: Math.round(feedbackOutcomeSignal.confidence * 100),
+          source: feedbackOutcomeSignal.source,
+          privacyLevel: "safe",
+          metadata: outcomeMetadata,
+          expiresAt: new Date(now.getTime() + 45 * 86_400_000),
+          createdAt: now,
+        },
+      });
+  }
+
+  return persistedCount;
 }
 
 export async function recordBridgeLearningSignals(

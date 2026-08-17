@@ -39,13 +39,6 @@ function normalizeAuthorizedLegacyVision(value: unknown): unknown {
   const directVision = input.ephemeralVision;
   if (directVision && typeof directVision === "object" && !Array.isArray(directVision)) {
     const carrier = directVision as Record<string, unknown>;
-    if (carrier.version === 2 && Array.isArray(carrier.inputRefs)) {
-      const metadata = input.metadata && typeof input.metadata === "object" && !Array.isArray(input.metadata)
-        ? { ...(input.metadata as Record<string, unknown>) }
-        : {};
-      metadata.mediaInputRefs = carrier.inputRefs;
-      input.metadata = metadata;
-    }
     return input;
   }
   const metadataValue = input.metadata;
@@ -95,7 +88,7 @@ function normalizeAuthorizedLegacyVision(value: unknown): unknown {
       userAuthorizedCloud: true,
       localSensitivity: "personal",
     },
-    images: images.slice(0, 4),
+    images: images.slice(0, 8),
   };
   return input;
 }

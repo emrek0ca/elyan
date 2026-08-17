@@ -29,7 +29,10 @@ import {
   sanitizeInboundContextText,
 } from "../../lib/context-text-sanitizer.js";
 import { getWorldSignalTtlHours } from "../../core/understanding/context-packets.js";
-import { buildMobileQuickActions } from "./quick-actions.js";
+import {
+  buildMobileQuickActions,
+  buildMobileQuickActionsWithSemanticContext,
+} from "./quick-actions.js";
 
 const MAX_WORLD_SIGNAL_PAYLOAD_BYTES = 24 * 1024;
 const MAX_WORLD_SIGNAL_FUTURE_SKEW_MS = 5 * 60_000;
@@ -258,6 +261,109 @@ async function getMobileHistoryFeed(app: FastifyInstance, userId: string) {
       revision,
     },
   };
+}
+
+async function buildPersonalizedMobileQuickActions(
+  app: FastifyInstance,
+  userId: string,
+  devices: Parameters<typeof buildMobileQuickActions>[0],
+) {
+  const rows = await app.db
+    .select({
+      sessionId: chatSessions.id,
+      sessionTitle: chatSessions.title,
+      messageId: chatMessages.id,
+      messageRole: chatMessages.role,
+      messageTaskId: chatMessages.taskId,
+      messagePreview: chatMessages.preview,
+      createdAt: chatMessages.createdAt,
+    })
+    .from(chatMessages)
+    .innerJoin(chatSessions, eq(chatSessions.id, chatMessages.sessionId))
+    .where(
+      and(
+        eq(chatMessages.userId, userId),
+        eq(chatSessions.userId, userId),
+        eq(chatSessions.status, "active"),
+      ),
+    )
+    .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+    .limit(48);
+
+  type SessionCandidate = {
+    sessionId: string;
+    title: string;
+    userMessage?: { messageId: string; preview: string; createdAt: Date };
+    assistantMessage?: {
+      messageId: string;
+      taskId: string | null;
+      preview: string;
+      createdAt: Date;
+    };
+  };
+  const candidates = new Map<string, SessionCandidate>();
+  for (const row of rows) {
+    const candidate = candidates.get(row.sessionId) ?? {
+      sessionId: row.sessionId,
+      title: row.sessionTitle,
+    };
+    const preview = compactMobileHistoryText(
+      row.messagePreview,
+      row.sessionTitle || "Sohbet",
+    );
+    if (row.messageRole === "user" && !candidate.userMessage) {
+      candidate.userMessage = {
+        messageId: row.messageId,
+        preview,
+        createdAt: row.createdAt,
+      };
+    }
+    if (row.messageRole === "assistant" && !candidate.assistantMessage) {
+      candidate.assistantMessage = {
+        messageId: row.messageId,
+        taskId: row.messageTaskId,
+        preview,
+        createdAt: row.createdAt,
+      };
+    }
+    candidates.set(row.sessionId, candidate);
+    if (candidates.size >= 8 && [...candidates.values()].every(
+      (item) => item.userMessage && item.assistantMessage,
+    )) {
+      break;
+    }
+  }
+
+  const ordered = [...candidates.values()].slice(0, 8);
+  const first = ordered[0];
+  const sourceMessage = first?.assistantMessage ?? first?.userMessage;
+  if (!first || !sourceMessage) {
+    return buildMobileQuickActions(devices);
+  }
+
+  const query = ordered
+    .flatMap((candidate) => [
+      candidate.title,
+      candidate.userMessage?.preview,
+      candidate.assistantMessage?.preview,
+    ])
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join("\n")
+    .slice(0, 1_200);
+  const context = {
+    sessionId: first.sessionId,
+    messageId: sourceMessage.messageId,
+    ...(first.assistantMessage?.taskId
+      ? { taskId: first.assistantMessage.taskId }
+      : {}),
+  };
+
+  return buildMobileQuickActionsWithSemanticContext(devices, {
+    query,
+    context,
+    cacheScope: `mobile-quick-actions-v1:${userId}`,
+    logger: app.log,
+  });
 }
 const BLOCKED_KEY_FRAGMENT_PATTERNS = [
   /(?:^|raw)(?:image|audio|video|file|binary|bytes|payload|sample|content)/u,
@@ -493,6 +599,11 @@ export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
     getBrainProfile(app, userId),
     getMobileHistoryFeed(app, userId),
   ]);
+  const quickActions = await buildPersonalizedMobileQuickActions(
+    app,
+    userId,
+    devices,
+  ).catch(() => buildMobileQuickActions(devices));
 
   return {
     user: userRows[0] ?? null,
@@ -528,7 +639,7 @@ export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
     },
     brain: shapeMobileBootstrapBrain(brain),
     devices,
-    quickActions: buildMobileQuickActions(devices),
+    quickActions,
     recentTasks: [],
     historyFeed: history.historyFeed,
     historyMeta: history.historyMeta,

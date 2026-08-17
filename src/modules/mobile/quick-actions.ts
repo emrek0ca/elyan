@@ -1,3 +1,18 @@
+import type { FastifyBaseLogger } from "fastify";
+import { isSemanticComputeWorkerWarm } from "../brain/semantic-compute-client.js";
+import { rerankSemanticCandidates } from "../brain/semantic-rerank.js";
+import {
+  MOBILE_QUICK_ACTION_IDS,
+  type MobileQuickActionContext,
+  type MobileQuickActionSource,
+} from "../../contracts/mobile-quick-actions.js";
+
+export {
+  MOBILE_QUICK_ACTION_IDS,
+  type MobileQuickActionContext,
+  type MobileQuickActionSource,
+} from "../../contracts/mobile-quick-actions.js";
+
 export const MOBILE_QUICK_ACTION_ICONS = [
   "tray.full",
   "doc.text",
@@ -23,6 +38,8 @@ export type MobileQuickAction = {
   icon: MobileQuickActionIcon;
   prompt: string;
   route: MobileQuickActionRoute;
+  source: MobileQuickActionSource;
+  context?: MobileQuickActionContext;
 };
 
 type QuickActionDevice = {
@@ -42,6 +59,7 @@ const SAFE_QUICK_ACTIONS: readonly MobileQuickAction[] = [
     icon: "doc.text",
     prompt: "Bu içeriği özetle",
     route: "auto",
+    source: "catalog",
   },
   {
     id: "create_image",
@@ -50,6 +68,7 @@ const SAFE_QUICK_ACTIONS: readonly MobileQuickAction[] = [
     icon: "photo",
     prompt: "Yeni bir görsel üret",
     route: "auto",
+    source: "catalog",
   },
   {
     id: "make_a_plan",
@@ -58,6 +77,7 @@ const SAFE_QUICK_ACTIONS: readonly MobileQuickAction[] = [
     icon: "checklist",
     prompt: "Bu hedef için bir plan oluştur",
     route: "server",
+    source: "catalog",
   },
   {
     id: "research_topic",
@@ -66,6 +86,7 @@ const SAFE_QUICK_ACTIONS: readonly MobileQuickAction[] = [
     icon: "globe",
     prompt: "Bu konuyu araştır",
     route: "server",
+    source: "catalog",
   },
 ];
 
@@ -76,6 +97,7 @@ const DESKTOP_QUICK_ACTION: MobileQuickAction = {
   icon: "desktopcomputer",
   prompt: "Bilgisayarımda arama yap",
   route: "desktop",
+  source: "catalog",
 };
 
 function hasReadyDesktop(devices: readonly QuickActionDevice[]): boolean {
@@ -99,4 +121,40 @@ export function buildMobileQuickActions(
   // Mobil sözleşmesi gereği gelecekte katalog büyüse bile istemciye altıdan
   // fazla kart göndermiyoruz. Spread ile her çağrıda yeni nesneler döner.
   return actions.slice(0, 6).map((action) => ({ ...action }));
+}
+
+export async function buildMobileQuickActionsWithSemanticContext(
+  devices: readonly QuickActionDevice[],
+  input: {
+    query: string;
+    context: MobileQuickActionContext;
+    cacheScope?: string;
+    logger?: Pick<FastifyBaseLogger, "warn" | "debug">;
+  },
+): Promise<MobileQuickAction[]> {
+  const catalog = buildMobileQuickActions(devices);
+  const query = input.query.replace(/\s+/gu, " ").trim().slice(0, 1_200);
+  if (!query || !isSemanticComputeWorkerWarm()) return catalog;
+
+  const ranked = await rerankSemanticCandidates({
+    query,
+    candidates: catalog.map((action, index) => ({
+      action,
+      title: action.label,
+      content: `${action.hint}\n${action.prompt}`,
+      score: catalog.length - index,
+    })),
+    enabled: true,
+    windowSize: catalog.length,
+    cacheScope: input.cacheScope ?? "mobile-quick-actions-v1",
+    logger: input.logger,
+  }).catch(() => null);
+  if (!ranked?.used) return catalog;
+
+  return ranked.results.slice(0, 6).map((candidate, index) => ({
+    ...candidate.action,
+    ...(index === 0
+      ? { source: "semantic" as const, context: { ...input.context } }
+      : { source: "catalog" as const }),
+  }));
 }

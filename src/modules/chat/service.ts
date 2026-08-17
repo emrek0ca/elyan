@@ -79,6 +79,7 @@ import {
 export { shouldReconcileOrphanedChatMessage } from "./orphan-reconciler.js";
 import { buildTaskTraceBlock } from "./task-trace.js";
 import { materializeLegacyVisionForDurableQueue } from "../tasks/media-inputs.js";
+import { normalizeComposerContext } from "./composer-context.js";
 
 const SHARED_BRAIN_CONVERSATION_MAX_MESSAGES = 14;
 const SHARED_BRAIN_CONVERSATION_MAX_TOKENS = 3200;
@@ -2213,6 +2214,22 @@ export async function createChatMessage(
       : Promise.resolve(null),
     getUserUsageAccessTruth(app.db, input.userId),
   ]);
+  const composerContext = await normalizeComposerContext({
+    app,
+    userId: input.userId,
+    sessionId: input.sessionId,
+    metadata: input.metadata,
+  });
+  input.metadata = composerContext.metadata;
+  if (composerContext.droppedFields.length > 0) {
+    app.log.info(
+      {
+        userId: input.userId,
+        droppedFields: composerContext.droppedFields,
+      },
+      "composer context fields dropped after ownership validation",
+    );
+  }
   const remoteMcpResolution = await (shouldResolveRemoteMcpForChat({
     requestedCapabilities: input.requestedCapabilities,
     metadata: input.metadata,

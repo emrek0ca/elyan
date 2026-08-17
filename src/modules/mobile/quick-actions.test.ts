@@ -25,11 +25,13 @@ test("mobile quick actions are additive, bounded, and use only supported icons",
       "label",
       "prompt",
       "route",
+      "source",
     ]);
     assert.ok(MOBILE_QUICK_ACTION_ICONS.includes(action.icon));
     assert.ok(action.label.length <= 32);
     assert.ok(action.hint.length <= 64);
     assert.ok(["auto", "server", "desktop"].includes(action.route));
+    assert.equal(action.source, "catalog");
   }
   assert.equal(actions.some((action) => action.route === "desktop"), false);
 });

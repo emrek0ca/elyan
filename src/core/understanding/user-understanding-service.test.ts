@@ -34,8 +34,10 @@ function createLearningMemoryFakeApp() {
           }
           const result = Promise.resolve(undefined) as Promise<undefined> & {
             onConflictDoNothing: () => Promise<undefined>;
+            onConflictDoUpdate: () => Promise<undefined>;
           };
           result.onConflictDoNothing = () => Promise.resolve(undefined);
+          result.onConflictDoUpdate = () => Promise.resolve(undefined);
           return result;
         },
       };
@@ -539,6 +541,7 @@ test("recordBlockQualityLearning stores safe block quality feedback signals", as
 
 test("recordTaskFeedback stores a compact workflow outcome signal", async () => {
   const inserted: unknown[] = [];
+  const upserts: unknown[] = [];
   const app = {
     config: {
       ELYAN_LEARNING_EXTRACTION_ENABLED: true,
@@ -550,11 +553,18 @@ test("recordTaskFeedback stores a compact workflow outcome signal", async () => 
         // (learning_events_task_key_uidx). Fake hem doğrudan await edilebilir
         // hem de o metodu taşır ki testler gerçek API'yi yansıtsın.
         values: (values: unknown[]) => {
-          inserted.push(...values);
           const result = Promise.resolve(undefined) as Promise<undefined> & {
             onConflictDoNothing: () => Promise<undefined>;
+            onConflictDoUpdate: (config: unknown) => Promise<undefined>;
           };
-          result.onConflictDoNothing = () => Promise.resolve(undefined);
+          result.onConflictDoNothing = () => {
+            inserted.push(...values);
+            return Promise.resolve(undefined);
+          };
+          result.onConflictDoUpdate = (config) => {
+            upserts.push({ values, config });
+            return Promise.resolve(undefined);
+          };
           return result;
         },
       }),
@@ -577,6 +587,11 @@ test("recordTaskFeedback stores a compact workflow outcome signal", async () => 
   assert.equal(count, inserted.length);
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "feedback_outcome"));
   assert.ok(inserted.some((item) => (item as { key?: string }).key === "negative_feedback"));
+  assert.equal(upserts.length, 1);
+  assert.equal(
+    (upserts[0] as { values?: { value?: string } }).values?.value,
+    "thumbs_down",
+  );
 });
 
 test("explicit warmth feedback updates synchronous preferred tone memory", async () => {

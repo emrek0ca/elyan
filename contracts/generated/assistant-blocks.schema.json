@@ -148,6 +148,39 @@
               "minLength": 1,
               "type": "string"
             },
+            "contentFamily": {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            "downloadUrl": {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "intrinsicSize": {
+              "additionalProperties": false,
+              "properties": {
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "width",
+                "height"
+              ],
+              "type": "object"
+            },
+            "loadStrategy": {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
             "metadata": {
               "additionalProperties": {},
               "propertyNames": {
@@ -167,6 +200,11 @@
               },
               "type": "object"
             },
+            "sourceArtifactId": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
             "summary": {
               "maxLength": 400,
               "minLength": 1,
@@ -179,6 +217,16 @@
             },
             "url": {
               "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "viewBox": {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            "viewerHint": {
+              "maxLength": 80,
               "minLength": 1,
               "type": "string"
             }
@@ -8247,7 +8295,7 @@
     "web_search": "WebSearchBlock"
   },
   "x-elyan-envelope-version": 1,
-  "x-elyan-schema-digest": "112bc8557edfbffa6eac92faa563a6481b70f3c3f3e08fa28300938301270ffa",
+  "x-elyan-schema-digest": "985ca3f5c3ee053f36268ca29a90a8032621e344663c842ac282bfe9877ed3e7",
   "x-elyan-source-widget-types": [
     "mail_list",
     "mail_detail",

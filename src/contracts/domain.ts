@@ -675,6 +675,15 @@ export const elyanAssistantArtifactBlockSchema =
     artifactId: z.string().min(1).max(255).optional(),
     title: z.string().min(1).max(180).optional(),
     url: z.string().min(1).max(2_000).optional(),
+    downloadUrl: z.string().min(1).max(2_000).optional(),
+    sourceArtifactId: z.string().min(1).max(255).optional(),
+    intrinsicSize: z
+      .object({
+        width: z.number().positive(),
+        height: z.number().positive(),
+      })
+      .optional(),
+    viewBox: z.string().min(1).max(80).optional(),
     mime: z.string().min(1).max(120).optional(),
     viewerHint: z.string().min(1).max(80).optional(),
     contentFamily: z.string().min(1).max(80).optional(),

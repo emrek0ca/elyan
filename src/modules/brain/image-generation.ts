@@ -179,6 +179,8 @@ type CachedImagePayload = {
   mimeType: string;
   revisedPrompt: string | null;
   model: string;
+  width?: number;
+  height?: number;
   brandingVersion?: string;
 };
 
@@ -216,6 +218,7 @@ export type HostedImageArtifactResult = {
   model: string;
   previewText: string;
   revisedPrompt: string | null;
+  intrinsicSize?: { width: number; height: number };
 };
 
 const CREATIVE_IMAGE_REQUEST_PATTERNS = [
@@ -653,6 +656,8 @@ function hasSessionImageArtifact(metadata: Record<string, unknown> | undefined):
 async function validateHostedImageOutput(base64: string): Promise<{
   base64: string;
   mimeType: "image/png" | "image/jpeg" | "image/webp";
+  width: number;
+  height: number;
 }> {
   if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(base64) || base64.length % 4 !== 0) {
     throw new Error("invalid Gemini image encoding");
@@ -676,7 +681,12 @@ async function validateHostedImageOutput(base64: string): Promise<{
   if (!mimeType || !metadata.width || !metadata.height) {
     throw new Error("invalid Gemini image output");
   }
-  return { base64: body.toString("base64"), mimeType };
+  return {
+    base64: body.toString("base64"),
+    mimeType,
+    width: metadata.width,
+    height: metadata.height,
+  };
 }
 
 async function readElyanWatermark(): Promise<Buffer | null> {
@@ -687,9 +697,13 @@ async function readElyanWatermark(): Promise<Buffer | null> {
 async function applyElyanImageBranding(input: {
   base64: string;
   mimeType: "image/png" | "image/jpeg" | "image/webp";
+  width: number;
+  height: number;
 }): Promise<{
   base64: string;
   mimeType: "image/png" | "image/jpeg" | "image/webp";
+  width: number;
+  height: number;
 }> {
   const imageBody = Buffer.from(input.base64, "base64");
   const watermark = await readElyanWatermark();
@@ -744,6 +758,8 @@ async function applyElyanImageBranding(input: {
   return {
     base64: branded.toString("base64"),
     mimeType: input.mimeType,
+    width: input.width,
+    height: input.height,
   };
 }
 
@@ -795,6 +811,15 @@ async function readCachedImage(
     if (parsed.brandingVersion !== IMAGE_BRANDING_VERSION) {
       return null;
     }
+    const cachedWidth = parsed.width;
+    const cachedHeight = parsed.height;
+    const cachedDimensions =
+      typeof cachedWidth === "number" && Number.isInteger(cachedWidth) && cachedWidth > 0 &&
+      typeof cachedHeight === "number" && Number.isInteger(cachedHeight) && cachedHeight > 0
+        ? { width: cachedWidth, height: cachedHeight }
+        : await validateHostedImageOutput(parsed.base64)
+          .then((validated) => ({ width: validated.width, height: validated.height }))
+          .catch(() => undefined);
     return buildImageArtifactResult({
       prompt,
       base64: parsed.base64,
@@ -802,6 +827,7 @@ async function readCachedImage(
       revisedPrompt: parsed.revisedPrompt ?? null,
       model: parsed.model || "",
       visualIntent,
+      intrinsicSize: cachedDimensions,
     });
   } catch {
     return null;
@@ -827,6 +853,12 @@ async function writeCachedImage(
     mimeType: result.mimeType,
     revisedPrompt: result.revisedPrompt,
     model: result.model,
+    ...(result.intrinsicSize
+      ? {
+          width: result.intrinsicSize.width,
+          height: result.intrinsicSize.height,
+        }
+      : {}),
     brandingVersion: IMAGE_BRANDING_VERSION,
   };
   await store.set(cacheKey, JSON.stringify(payload), IMAGE_CACHE_TTL_MS).catch(() => undefined);
@@ -1208,12 +1240,42 @@ function buildImageArtifactResult(params: {
   revisedPrompt: string | null;
   model: string;
   visualIntent?: VisualIntentContract;
+  intrinsicSize?: { width: number; height: number };
 }): HostedImageArtifactResult {
-  const { prompt, base64, mimeType, revisedPrompt, model, visualIntent } = params;
+  const {
+    prompt,
+    base64,
+    mimeType,
+    revisedPrompt,
+    model,
+    visualIntent,
+    intrinsicSize,
+  } = params;
   const previewText = "Görsel hazır.";
   const detectedSubject = visualIntent?.subject ?? [];
   const style = visualIntent?.style ?? null;
   const visualSummary = compactText(revisedPrompt || prompt).slice(0, 900);
+  const sourceArtifactId =
+    visualIntent?.sourceArtifactId && visualIntent.sourceArtifactId !== "last_image"
+      ? visualIntent.sourceArtifactId
+      : null;
+  const intrinsicMetadata = intrinsicSize
+    ? {
+        intrinsicSize,
+        aspectRatio: Number((intrinsicSize.width / intrinsicSize.height).toFixed(6)),
+      }
+    : {};
+  const renderHints = {
+    contentMode: "fit",
+    crop: "none",
+    ...(intrinsicSize
+      ? {
+          width: intrinsicSize.width,
+          height: intrinsicSize.height,
+          aspectRatio: Number((intrinsicSize.width / intrinsicSize.height).toFixed(6)),
+        }
+      : {}),
+  };
   return {
     artifact: {
       kind: "file",
@@ -1229,6 +1291,9 @@ function buildImageArtifactResult(params: {
         detectedSubject,
         style,
         visualIntent,
+        ...(sourceArtifactId ? { sourceArtifactId } : {}),
+        ...intrinsicMetadata,
+        renderHints,
         source: "elyan_image_generation",
       },
       metadata: {
@@ -1240,6 +1305,9 @@ function buildImageArtifactResult(params: {
         detectedSubject,
         style,
         visualIntent,
+        ...(sourceArtifactId ? { sourceArtifactId } : {}),
+        ...intrinsicMetadata,
+        renderHints,
       },
     },
     binaryBody: Buffer.from(base64, "base64"),
@@ -1247,6 +1315,7 @@ function buildImageArtifactResult(params: {
     model,
     previewText,
     revisedPrompt,
+    ...(intrinsicSize ? { intrinsicSize } : {}),
   };
 }
 
@@ -1425,6 +1494,10 @@ async function generateHostedImageArtifactWithPermit(
         revisedPrompt,
         model: providerConfig.model,
         visualIntent,
+        intrinsicSize: {
+          width: brandedImage.width,
+          height: brandedImage.height,
+        },
       });
     } catch (error) {
       failures.push({
