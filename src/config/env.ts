@@ -164,6 +164,17 @@ const envSchema = z.object({
     .max(4)
     .default(1),
   ELYAN_CHAT_QUEUE_ENABLED: booleanFlag(false),
+  // Yönlendirici modelin kabul yolunu bloklayabileceği azami süre (ms).
+  // 0 = sınırsız (eski davranış). Bkz. routing-policy/service.ts.
+  ELYAN_ROUTE_MODEL_ACCEPT_BUDGET_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(10_000)
+    .default(900),
+  // Sade sohbet turları (araç yok, ek yok, görsel yok) dayanıklı kuyruğa
+  // girmeden API sürecinde üretilir. Kuyruk ağır/araçlı işler için kalır.
+  ELYAN_CHAT_INLINE_FAST_PATH_ENABLED: booleanFlag(true),
   ELYAN_CHAT_WORKER_CONCURRENCY: z.coerce
     .number()
     .int()

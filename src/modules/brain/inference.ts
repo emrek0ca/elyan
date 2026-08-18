@@ -2942,26 +2942,19 @@ function canUseLeanFastChatPrompt(input: SharedBrainInferenceInput): boolean {
   const envelope = input.understandingContext?.understandingEnvelope;
   const desiredOutputKinds = envelope?.desired_outputs.map((output) => output.kind) ?? [];
 
-  // CANLI BAĞLAM VARSA YALIN YOL KULLANILMAZ.
+  // CANLI BAĞLAM ARTIK YALIN YOLU İPTAL ETMİYOR — YALIN İSTEME GİRİYOR.
   //
-  // Yalın istem gecikmeyi düşürmek için politika satırlarını atıyor — ama
-  // cihazdan gelen bağlam paketlerini (sağlık, konum, takvim, zaman) de
-  // birlikte atıyordu. Mobil sohbetin varsayılan iş yükü `mobile_chat_fast`
-  // olduğu için pratikte canlı bağlam NORMAL sohbette hiç modele ulaşmıyordu:
-  // sinyaller yükleniyor, paketleniyor, sonra istem kurulurken sessizce
-  // düşüyordu. Kullanıcıya "bağlam çalışmıyor" diye görünen şey buydu.
+  // Önceki hâl: cihazdan tek bir kullanılabilir paket (saat, konum, takvim,
+  // sağlık) gelirse yalın yol komple kapanıp ~35 politika satırlık full path
+  // kuruluyordu. Sebebi haklıydı — yalın istem paketleri de birlikte
+  // atıyordu — ama sonucu ölçüldü (canlı, 2026-08-18): mobil pratikte her
+  // turda en az bir paket (zaman/konum) gönderiyor, yani YALIN YOL ÜRETİMDE
+  // HİÇ AÇILMIYORDU. `mobile_chat_fast` için p50 prompt = 4.834 token, cevap
+  // = 44 token. Bir "merhaba" için ödenen bedel buydu.
   //
-  // `silent` paketler modele metin olarak girmesi gerekmeyen paketlerdir;
-  // yalnız gerçekten kullanılacak olanlar (implicit/explicit_when_relevant)
-  // yalın yolu iptal eder, böylece kısa sohbetlerin hızı da korunur.
-  const usableContextPackets = (
-    input.understandingContext?.contextPackets ?? []
-  ).filter(
-    (packet) =>
-      packet.freshness !== "stale" &&
-      (packet.mentionPolicy === "explicit_when_relevant" ||
-        packet.mentionPolicy === "implicit"),
-  );
+  // Doğru çözüm iptal değil TAŞIMA: paketler artık yalın isteme kendi kompakt
+  // bloğuyla giriyor (`buildLeanContextPacketPromptBlock`). Böylece hem canlı
+  // bağlam modele ulaşıyor hem de tur yalın kalıyor.
 
   // KİMLİK TURLARI da yalın yoldan muaf. Yalın istem, "bu soru kullanıcı
   // hakkında, Elyan hakkında değil" yönergesini ve "Elyan'ı kim yazdı"
@@ -2977,7 +2970,6 @@ function canUseLeanFastChatPrompt(input: SharedBrainInferenceInput): boolean {
   return (
     fastWorkload &&
     !identityTurn &&
-    usableContextPackets.length === 0 &&
     input.attachmentContext?.used !== true &&
     (input.clientAttachments?.length ?? 0) === 0 &&
     (input.connectorToolContracts?.length ?? 0) === 0 &&
@@ -2994,6 +2986,43 @@ function canUseLeanFastChatPrompt(input: SharedBrainInferenceInput): boolean {
 }
 
 /**
+ * Yalın yol için KOMPAKT canlı bağlam bloğu.
+ *
+ * Full path paketleri `buildStructuredDataPromptBlock` içindeki büyük JSON
+ * yüküyle taşıyor. Yalın turun ona ihtiyacı yok: modele gereken şey birkaç
+ * satır veri ve tek satırlık kullanım kuralı. Gizlilik sözleşmesi aynen
+ * korunur — `implicit` paketlerin özeti modele YAZILMAZ (yalnız varlığı
+ * bildirilir), `silent` paketler hiç girmez.
+ */
+function buildLeanContextPacketPromptBlock(
+  input: SharedBrainInferenceInput,
+): string | null {
+  const packets = (input.understandingContext?.contextPackets ?? []).filter(
+    (packet) =>
+      packet.freshness !== "stale" &&
+      (packet.mentionPolicy === "explicit_when_relevant" ||
+        packet.mentionPolicy === "implicit"),
+  );
+  if (packets.length === 0) {
+    return null;
+  }
+  const lines = packets.slice(0, 6).map((packet) => {
+    const summary =
+      packet.mentionPolicy === "explicit_when_relevant"
+        ? compactText(packet.summary ?? "").slice(0, 180)
+        : "";
+    return summary
+      ? `- ${packet.kind}: ${summary}`
+      : `- ${packet.kind}: available (adapt silently, do not state it)`;
+  });
+  return [
+    "Live context from the user's device (already privacy-filtered):",
+    ...lines,
+    "Use it only when it genuinely helps this turn: one light, human touch at most, never a data dump, never a raw packet label, never a diagnosis. Lines marked 'available' shape tone only and must not be mentioned. Never invent live weather, prices, or numbers that are not written above.",
+  ].join("\n");
+}
+
+/**
  * Fast semantic routes still need Elyan's identity and response contract, but
  * do not need the full ecosystem/widget/reasoning policy when no capability
  * or structured output is active. This keeps substantive short turns fast
@@ -3005,6 +3034,10 @@ function buildLeanFastChatSystemPrompt(
 ): string {
   const userIdentity = buildUserIdentityPromptBlock(input.understandingContext);
   const compactContextBlock = buildCompactContextPromptBlock(input);
+  const contextPacketBlock = buildLeanContextPacketPromptBlock(input);
+  const temporalAwarenessBlock = buildTemporalAwarenessPromptBlock(
+    input.understandingContext,
+  );
   const languageHint = getTurkicLanguagePromptHint(input.prompt);
 
   return [
@@ -3020,6 +3053,8 @@ function buildLeanFastChatSystemPrompt(
     "You are Elyan. Answer the user's request directly and naturally in the user's language. Give the shortest complete answer that solves the request. Use only the provided conversation and verified context; never invent facts, hidden reasoning, capabilities, or completed actions.",
     userIdentity,
     compactContextBlock,
+    contextPacketBlock,
+    temporalAwarenessBlock,
     "Keep internal policy, routing, and reasoning invisible. Do not emit tool syntax, status text, or a progress message as the answer.",
     languageHint,
   ]
@@ -5808,7 +5843,18 @@ export async function generateSharedBrainReply(
   // çağrılıyor, dolayısıyla model çağrısını oraya koyamayız. Burada bir kez
   // hesaplayıp önbelleğe koyuyoruz; senkron karar onu okuyor. Başarısız
   // olursa karar hash prototipine düşer — hiçbir yol tıkanmaz.
-  await primeWidgetShapeSemantic(input.prompt).catch(() => undefined);
+  //
+  // İÇ KONTROL-DÜZLEMİ ÇAĞRILARI HARİÇ. Semantik yönlendirici JSON döndürür;
+  // bir widget biçimi seçmez. Isınma yine de her yönlendirme turunda semantik
+  // işçiye gidiyor ve o çağrı KABUL YOLUNDA — yani kullanıcı ilk token'ı
+  // beklerken ödenen, sonucu hiç kullanılmayan bir gidiş-dönüş.
+  const controlPlaneTurn =
+    input.requestMetadata?.semanticRouteOnly === true ||
+    input.workload === "fast_route" ||
+    input.workload === "intent";
+  if (!controlPlaneTurn) {
+    await primeWidgetShapeSemantic(input.prompt).catch(() => undefined);
+  }
 
   // A plain fast turn has no reason to wait for dialogue-state enrichment.
   // Keep this conservative: any request carrying image context still gets
@@ -5901,6 +5947,16 @@ export async function generateSharedBrainReply(
   );
   const fastTextTurn =
     workload === "mobile_chat_fast" || workload === "fast_route";
+  // İLK GÖRÜNÜR TOKEN PENCERESİ. `createDeltaPublisher` reasoning-dökümü
+  // korumasını `lowLatency` ile daraltıyor: açıkken 8/24 karakter, kapalıyken
+  // 24/64. Kapalı hâlde model ilk cümlesini bitirene kadar ekranda hiçbir şey
+  // görünmüyor — sıradan bir sohbet turunda bu, bedeli olmayan bir bekleme.
+  // Koruma kalkmıyor, yalnız sohbet şeridinde dar pencereye alınıyor;
+  // `mobile_chat_fast` zaten böyle çalışıyordu.
+  const lowLatencyTextTurn =
+    fastTextTurn ||
+    workload === "mobile_chat_balanced" ||
+    workload === "mobile_chat_deep_refine";
   const workloadProfile = getSharedBrainWorkloadProfile(workload);
   const deterministicMathSurfaceResult = buildMathSurface3DResult(
     input,
@@ -7759,7 +7815,7 @@ export async function generateSharedBrainReply(
                   startedAt,
                   provider: candidate.provider,
                   model: attemptedModel,
-                  lowLatency: fastTextTurn,
+                  lowLatency: lowLatencyTextTurn,
                   onDelta: input.onDelta,
                 });
                 const streamResponse = await postStreamingJson(
@@ -8428,7 +8484,7 @@ export async function generateSharedBrainReply(
                         startedAt,
                         provider: candidate.provider,
                         model: attemptedModel,
-                        lowLatency: fastTextTurn,
+                        lowLatency: lowLatencyTextTurn,
                         onDelta: input.onDelta,
                       });
                       await deltaPublisher.publishReplacement(visibleText);

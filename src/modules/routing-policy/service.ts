@@ -171,8 +171,29 @@ type ModelRouteOutcome =
         | "admission_rejected"
         | "model_error"
         | "invalid_response"
+        | "budget_exceeded"
         | "no_desktop_route";
     };
+
+/**
+ * Yönlendirici modelin KABUL YOLUNU bloklayabileceği azami süre.
+ *
+ * Ölçüm (canlı, 2026-08-18): `POST /chat/messages` 202 dönmeden önce bu model
+ * çağrısı bekleniyordu ve tek başına 6 sn'ye kadar tutabiliyordu. Kapı
+ * (`shouldConsultRouteModelForClassification`) eşleşmiş masaüstü olan bir
+ * kullanıcıda pratikte HER turda açılıyor — sınıflandırıcı tanımadığı her şeyi
+ * `chat / 0.55` kovasına atıyor ve "kesin sohbet" testi 0.70 istiyor. Yani
+ * "merhaba" bile üretim başlamadan önce bir model turu ödüyordu.
+ *
+ * Kapıyı DARALTMIYORUZ — daraltmak "Chrome'u kapat" sınıfı turları sessizce
+ * sohbete düşürür (2026-08-07 canlı arızası). Bunun yerine BEKLEMEYİ
+ * sınırlıyoruz: bütçe dolduğunda karar `fallbackAllowed: true` ile döner —
+ * bu zaten kodun her yerinde birinci sınıf bir sonuç (deterministik çitler ve
+ * `classifierRequiresReadyDesktop` dalı bu durum için yazılmıştı). Model
+ * çağrısı arka planda SÜRER ve sonucu önbelleğe yazar; aynı oturumdaki sonraki
+ * tur onu bedavaya okur.
+ */
+const ROUTE_MODEL_ACCEPT_BUDGET_MS = 900;
 
 const modelRouteInFlight = new Map<string, Promise<ModelRouteOutcome>>();
 let lastModelRouteCacheSweepAt = 0;
@@ -2205,7 +2226,9 @@ async function resolveAmbiguousTaskRouteFallback(
         };
   }
   const existing = modelRouteInFlight.get(cacheKey);
-  if (existing) return existing;
+  // Aynı turu bekleyen ikinci çağrı da bütçeye tabidir; aksi halde ilk çağrı
+  // korunurken eşzamanlı ikinci istek yine 6 sn bloklanabilirdi.
+  if (existing) return withRouteModelAcceptBudget(app, existing);
 
   const request: Promise<ModelRouteOutcome> = (async () => {
     const release = await reserveModelRouteAdmission(app, input.userId);
@@ -2235,13 +2258,54 @@ async function resolveAmbiguousTaskRouteFallback(
     }
   })();
   modelRouteInFlight.set(cacheKey, request);
-  try {
-    return await request;
-  } finally {
+  const settle = request.finally(() => {
     if (modelRouteInFlight.get(cacheKey) === request) {
       modelRouteInFlight.delete(cacheKey);
     }
+  });
+  return withRouteModelAcceptBudget(app, settle);
+}
+
+/**
+ * Modelin cevabını bekleriz ama kabul yolunu rehin vermeyiz.
+ *
+ * Bütçe dolduğunda karar `fallbackAllowed: true` ile döner — deterministik
+ * çitler devralır — ve asıl çağrı arka planda KOŞMAYA DEVAM EDER; sonucu
+ * önbelleğe düşer, aynı oturumdaki sonraki tur onu bedavaya okur.
+ */
+function withRouteModelAcceptBudget(
+  app: FastifyInstance,
+  pending: Promise<ModelRouteOutcome>,
+): Promise<ModelRouteOutcome> {
+  pending.catch(() => undefined);
+  const budgetMs = resolveRouteModelBudgetMs(app);
+  if (budgetMs <= 0) {
+    return pending;
   }
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<ModelRouteOutcome>((resolve) => {
+    budgetTimer = setTimeout(
+      () =>
+        resolve({
+          route: null,
+          fallbackAllowed: true,
+          failure: "budget_exceeded",
+        }),
+      budgetMs,
+    );
+    budgetTimer.unref?.();
+  });
+  return Promise.race([pending, budget]).finally(() => {
+    if (budgetTimer) clearTimeout(budgetTimer);
+  });
+}
+
+function resolveRouteModelBudgetMs(app: FastifyInstance): number {
+  const configured = app.config?.ELYAN_ROUTE_MODEL_ACCEPT_BUDGET_MS;
+  if (typeof configured === "number" && Number.isFinite(configured)) {
+    return Math.max(0, Math.trunc(configured));
+  }
+  return ROUTE_MODEL_ACCEPT_BUDGET_MS;
 }
 
 /**

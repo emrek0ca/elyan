@@ -157,3 +157,47 @@ export function chatGenerationQueuePriority(
   }
   return 10;
 }
+
+/**
+ * Sade sohbet turu mu — yani dayanıklı kuyruğa hiç girmeden API sürecinde
+ * üretilebilir mi?
+ *
+ * NEDEN: kuyruk sohbeti DURABLE yapıyor ama ücretini ilk token'dan alıyor.
+ * Zincir şu: 202 → Redis publish → BullMQ → worker pickup → task lease +
+ * kullanıcı kilidi → görev satırını yeniden oku → üretim. Bunların hepsi
+ * gerçek işler, ama "merhaba" için hiçbiri gerekli değil: retry, failover ve
+ * çok-adımlı yürütme gibi kuyruğun asıl varlık sebepleri o turda yok.
+ *
+ * Kapsam BİLEREK dar tutuldu. Görsel, ek dosya, açık yetenek isteği, onay
+ * gerektiren ya da masaüstü çalışma zamanı isteyen hiçbir tur buraya girmez —
+ * onların hepsi kuyruğun sunduğu yeniden deneme ve devretme garantilerine
+ * gerçekten muhtaç.
+ *
+ * TAKAS (bilinçli): satır iş görürken süreç çökerse inline tur kurtarma
+ * taramasına yakalanmaz (`listRecoverableSharedBrainChatTasks` yalnız
+ * `chatGeneration.queued = true` satırlarını toplar). Sade bir sohbet turunda
+ * doğru davranış zaten yeniden sormaktır; bunun için saniyeler ödemeye
+ * değmiyor. Bayrakla kapatılabilir: ELYAN_CHAT_INLINE_FAST_PATH_ENABLED.
+ */
+export function isInlineChatFastPathEligible(input: {
+  workload?: SharedBrainWorkload | null;
+  route?: string | null;
+  requestedCapabilities?: string[];
+  hasEphemeralVision: boolean;
+  hasAttachmentContext: boolean;
+  requiresApproval?: boolean;
+  requiresRuntime?: boolean;
+}): boolean {
+  if (input.route !== "server_brain") return false;
+  if (input.hasEphemeralVision || input.hasAttachmentContext) return false;
+  if (input.requiresApproval === true || input.requiresRuntime === true) {
+    return false;
+  }
+  if ((input.requestedCapabilities?.length ?? 0) > 0) return false;
+  const workload = input.workload ?? "mobile_chat_fast";
+  return (
+    workload === "mobile_chat_fast" ||
+    workload === "mobile_chat_balanced" ||
+    workload === "mobile_chat_deep_refine"
+  );
+}

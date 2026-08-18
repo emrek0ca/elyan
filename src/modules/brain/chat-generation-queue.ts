@@ -8,6 +8,7 @@ import {
 } from "bullmq";
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
+import { recordStageDuration } from "../../lib/perf-telemetry.js";
 import { getUserUsageAccessTruth } from "../billing/service.js";
 import { reconcileOrphanedChatMessagesBatch } from "../chat/orphan-reconciler.js";
 import {
@@ -519,6 +520,12 @@ async function processGenerationJob(
   token?: string,
 ) {
   const service = await import("../tasks/service.js");
+  // KUYRUK BEKLEME ÖLÇÜMÜ: job yayınlandığı andan worker'ın onu ele aldığı ana
+  // kadar geçen süre. Sohbeti kuyruğa koymanın gerçek bedeli budur ve şimdiye
+  // kadar hiçbir yerde görünmüyordu.
+  if (typeof job.timestamp === "number" && Number.isFinite(job.timestamp)) {
+    recordStageDuration("chat.queue_wait", Math.max(0, Date.now() - job.timestamp));
+  }
   // Task hydration and the access snapshot are independent reads. Starting
   // them together removes a serial subscription lookup from the first-token
   // path while the worker still uses fresh access truth for this attempt.

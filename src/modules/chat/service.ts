@@ -45,9 +45,11 @@ import { resolveCommandTarget } from "../routing-policy/service.js";
 import {
   createChatQueueUnavailableError,
   createTask,
+  hasChatAttachmentInput,
   resolveSharedBrainChatDispatchPolicy,
   shapeTaskFeedItem,
 } from "../tasks/service.js";
+import { isInlineChatFastPathEligible } from "../brain/chat-generation-policy.js";
 import {
   countDistinctEphemeralImages,
   type EphemeralVisionCarrier,
@@ -56,6 +58,7 @@ import { isDeterministicDesktopFastWorkOrder } from "../tasks/desktop-work-order
 import { sanitizePublicInferenceValue } from "../tasks/service-helpers.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import { sanitizeInboundContextRecord } from "../../lib/context-text-sanitizer.js";
+import { startStage } from "../../lib/perf-telemetry.js";
 import { listFreshWorldSignals } from "../mobile/service.js";
 import { fuseWorldSignalRecordsByKind } from "../../core/understanding/context-packets.js";
 import { resolveRemoteMcpRequest } from "../integrations/service.js";
@@ -2190,23 +2193,41 @@ export async function createChatSession(
   return shapeChatSessionForResponse(session);
 }
 
+type CreateChatMessageInput = {
+  userId: string;
+  sessionId?: string;
+  targetDeviceId?: string;
+  source: ChatSessionSource;
+  title?: string;
+  content: string;
+  requestedCapabilities: string[];
+  metadata?: Record<string, unknown>;
+  ephemeralVision?: EphemeralVisionCarrier;
+  requestId: string;
+  ipAddress?: string;
+  userAgent?: string;
+  idempotencyKey?: string;
+};
+
 export async function createChatMessage(
   app: FastifyInstance,
-  input: {
-    userId: string;
-    sessionId?: string;
-    targetDeviceId?: string;
-    source: ChatSessionSource;
-    title?: string;
-    content: string;
-    requestedCapabilities: string[];
-    metadata?: Record<string, unknown>;
-    ephemeralVision?: EphemeralVisionCarrier;
-    requestId: string;
-    ipAddress?: string;
-    userAgent?: string;
-    idempotencyKey?: string;
-  },
+  input: CreateChatMessageInput,
+) {
+  // KABUL YOLU ÖLÇÜMÜ. Bu yol 202 dönene kadar SENKRON çalışıyor ve şimdiye
+  // kadar hiç ölçülmemişti (`/internal/perf` API sürecinde `stages: {}`
+  // döndürüyordu). Kullanıcının gördüğü gecikmenin ilk parçası burasıdır;
+  // ölçülmeyen bir aşama optimize edilemez.
+  const endAcceptStage = startStage("chat.accept_total");
+  try {
+    return await createChatMessageInner(app, input);
+  } finally {
+    endAcceptStage();
+  }
+}
+
+async function createChatMessageInner(
+  app: FastifyInstance,
+  input: CreateChatMessageInput,
 ) {
   const [existingSession, usageAccess] = await Promise.all([
     input.sessionId
@@ -2248,6 +2269,7 @@ export async function createChatMessage(
   const effectiveRequestedCapabilities =
     remoteMcpResolution.requestedCapabilities;
   const routeStartedAt = Date.now();
+  const endRouteStage = startStage("chat.route_model");
   const routeDecision = await routeChatTurn(app, {
     userId: input.userId,
     message: input.content,
@@ -2262,6 +2284,7 @@ export async function createChatMessage(
     brainProfile: usageAccess.brainProfile,
     quota: undefined,
   });
+  endRouteStage();
   logBrainDecisionObservation(app, {
     taskId: null,
     workload: routeDecision.selectedWorkload,
@@ -2301,10 +2324,26 @@ export async function createChatMessage(
   // history screen then rendered that task-less row as an endless spinner.
   const trialQuotaPromise = getTrialQuotaUsage(app.db, input.userId);
   if (routeDecision.route === "server_brain") {
+    // Kabul kapısı ile `createTask` içindeki dağıtım kararı AYNI ölçütü
+    // kullanmak zorunda: burada kuyruk yokluğu yüzünden reddedilen bir tur
+    // aşağıda kuyruksuz üretilebilecekken reddedilmiş olurdu.
     const dispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
       isSharedBrain: true,
       useFastSharedBrainFlow: true,
       ephemeralVision: input.ephemeralVision,
+      inlineFastPathEligible: isInlineChatFastPathEligible({
+        workload: routeDecision.selectedWorkload,
+        route: routeDecision.route,
+        requestedCapabilities: effectiveRequestedCapabilities,
+        hasEphemeralVision:
+          countDistinctEphemeralImages(input.ephemeralVision) > 0,
+        hasAttachmentContext: hasChatAttachmentInput(
+          input.metadata ?? {},
+          input.ephemeralVision,
+        ),
+        requiresApproval: routeDecision.requiresApproval === true,
+        requiresRuntime: routeDecision.requiredRuntime != null,
+      }),
     });
     if (dispatchPolicy === "reject_queue_unavailable") {
       throw createChatQueueUnavailableError();

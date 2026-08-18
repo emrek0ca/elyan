@@ -142,6 +142,7 @@ import {
   chatGenerationProviderForStage,
   decideChatQueueAdmission,
   getChatGenerationQueueLimits,
+  isInlineChatFastPathEligible,
   type ChatGenerationProviderStage,
 } from "../brain/chat-generation-policy.js";
 import {
@@ -193,7 +194,7 @@ import {
   type ChatContextSnapshot,
 } from "../chat/chat-context-snapshot.js";
 import { applyGoalProgressBlocks } from "../goals/service.js";
-import { startStage } from "../../lib/perf-telemetry.js";
+import { recordStageDuration, startStage } from "../../lib/perf-telemetry.js";
 import {
   getUserDevice,
   RUNTIME_CONNECTION_STALE_AFTER_MS,
@@ -851,12 +852,22 @@ export function resolveSharedBrainChatDispatchPolicy(
     isSharedBrain: boolean;
     useFastSharedBrainFlow: boolean;
     ephemeralVision?: EphemeralVisionCarrier;
+    /** Sade sohbet turu: kuyruğa girmeden API sürecinde üretilebilir. */
+    inlineFastPathEligible?: boolean;
   },
 ): SharedBrainChatDispatchPolicy {
   if (!input.isSharedBrain || !input.useFastSharedBrainFlow) {
     return "not_applicable";
   }
   if (app.config.ELYAN_CHAT_QUEUE_ENABLED !== true) {
+    return "direct";
+  }
+  // Sade sohbet kuyruğu atlar. Yan fayda: kuyruk düşse bile bu turlar
+  // `reject_queue_unavailable` ile reddedilmez — sohbet ayakta kalır.
+  if (
+    input.inlineFastPathEligible === true &&
+    app.config.ELYAN_CHAT_INLINE_FAST_PATH_ENABLED !== false
+  ) {
     return "direct";
   }
   if (!isChatGenerationQueueEnabled(app)) return "reject_queue_unavailable";
@@ -2689,6 +2700,31 @@ async function storeTaskJsonBlob(
   });
 }
 
+/**
+ * Bu turda modele gidecek herhangi bir görsel/ek var mı?
+ *
+ * İki karar bunu aynı ölçütle sormak zorunda: yükü satır içinde tutmak
+ * (`canKeepChatTaskPayloadInline`) ve turu kuyruksuz üretmek
+ * (`isInlineChatFastPathEligible`). Ayrı ayrı yazılırlarsa er ya da geç
+ * ayrışırlar; tek kaynak burada.
+ */
+export function hasChatAttachmentInput(
+  metadata: Record<string, unknown>,
+  ephemeralVision?: EphemeralVisionCarrier,
+): boolean {
+  if (countDistinctEphemeralImages(ephemeralVision) > 0) return true;
+  if (
+    Array.isArray(metadata.mediaInputRefs) &&
+    metadata.mediaInputRefs.length > 0
+  ) {
+    return true;
+  }
+  return (
+    extractAttachmentMetadataCarrier(metadata) != null ||
+    extractClientAttachments(metadata).length > 0
+  );
+}
+
 function canKeepChatTaskPayloadInline(
   payload: Record<string, unknown>,
   ephemeralVision?: EphemeralVisionCarrier,
@@ -2697,19 +2733,7 @@ function canKeepChatTaskPayloadInline(
   if (metadata.channel !== "chat") {
     return false;
   }
-  if (countDistinctEphemeralImages(ephemeralVision) > 0) {
-    return false;
-  }
-  if (
-    Array.isArray(metadata.mediaInputRefs) &&
-    metadata.mediaInputRefs.length > 0
-  ) {
-    return false;
-  }
-  if (
-    extractAttachmentMetadataCarrier(metadata) != null ||
-    extractClientAttachments(metadata).length > 0
-  ) {
+  if (hasChatAttachmentInput(metadata, ephemeralVision)) {
     return false;
   }
 
@@ -8058,6 +8082,18 @@ async function processSharedBrainChatTask(
         (snapshotCarrierPresent ? "verified" : "legacy");
     await assertSharedBrainExecutionActive(input);
     endInferenceStage();
+    // İLK GÖRÜNÜR TOKEN. Ürünün gerçek gecikme metriği budur; `inference_total`
+    // yalnız turun tamamını ölçüyordu. Sağlayıcı isteği başladıktan sonrasını
+    // kapsar — kabul yolu ve kuyruk bekleyişi ayrı aşamalarda ölçülür.
+    {
+      const observedFirstDelta = inference.metadata.firstDeltaMs;
+      if (
+        typeof observedFirstDelta === "number" &&
+        Number.isFinite(observedFirstDelta)
+      ) {
+        recordStageDuration("chat.provider_ttft", observedFirstDelta);
+      }
+    }
     // Grounding sonucu ancak burada kesinleşir. Politikayı güncelle ki nihai
     // metin ile akış metni aynı kurallardan geçsin.
     visibleTextPolicy.allowPublicProviderReferences =
@@ -9547,10 +9583,24 @@ export async function createTask(
   const selectedDesktopOnline = isSharedBrain
     ? true
     : Boolean(targetDevice.device.isOnline);
+  const inlineChatFastPathEligible = isInlineChatFastPathEligible({
+    workload: routeDecision?.selectedWorkload,
+    route: routeDecision?.route,
+    requestedCapabilities: routeCapabilities,
+    hasEphemeralVision:
+      countDistinctEphemeralImages(input.ephemeralVision) > 0,
+    hasAttachmentContext: hasChatAttachmentInput(
+      payloadMetadata,
+      input.ephemeralVision,
+    ),
+    requiresApproval: routeDecision?.requiresApproval === true,
+    requiresRuntime: routeDecision?.requiredRuntime != null,
+  });
   let chatDispatchPolicy = resolveSharedBrainChatDispatchPolicy(app, {
     isSharedBrain,
     useFastSharedBrainFlow,
     ephemeralVision: input.ephemeralVision,
+    inlineFastPathEligible: inlineChatFastPathEligible,
   });
   if (chatDispatchPolicy === "reject_legacy_inline_vision") {
     input.ephemeralVision = await materializeLegacyVisionForDurableQueue(
@@ -9563,6 +9613,7 @@ export async function createTask(
       isSharedBrain,
       useFastSharedBrainFlow,
       ephemeralVision: input.ephemeralVision,
+      inlineFastPathEligible: inlineChatFastPathEligible,
     });
   }
   if (chatDispatchPolicy === "reject_queue_unavailable") {
