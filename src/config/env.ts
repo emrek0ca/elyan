@@ -175,6 +175,13 @@ const envSchema = z.object({
   // Sade sohbet turları (araç yok, ek yok, görsel yok) dayanıklı kuyruğa
   // girmeden API sürecinde üretilir. Kuyruk ağır/araçlı işler için kalır.
   ELYAN_CHAT_INLINE_FAST_PATH_ENABLED: booleanFlag(true),
+  // Tipli olgu sağlayıcıları (hava, hava kalitesi, kur, kripto, yerel saat,
+  // deprem, resmî tatil). Kapatıldığında tüm bu turlar web aramasına düşer.
+  ELYAN_FACT_PROVIDERS_ENABLED: booleanFlag(true),
+  // SIFIR-TOKEN ŞERİDİ: sağlayıcı tipli ve tam bir cevap döndürdüğünde yanıt
+  // model çağrılmadan, deterministik cümleyle basılır. Sesi şablonlaştırdığı
+  // için varsayılan KAPALI; gecikme tabanı temizlendikten sonra açılmalı.
+  ELYAN_FACT_DIRECT_ANSWER_ENABLED: booleanFlag(false),
   ELYAN_CHAT_WORKER_CONCURRENCY: z.coerce
     .number()
     .int()

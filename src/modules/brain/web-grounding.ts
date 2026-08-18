@@ -32,6 +32,8 @@ import {
   type FreshDataPolicy,
   type FreshDataStatus,
 } from "./fresh-data-policy.js";
+import { resolveFactAnswer } from "../facts/service.js";
+import type { FactAnswer, FactProviderId } from "../facts/types.js";
 
 export type WebGroundingSearchResult = {
   title: string;
@@ -46,7 +48,7 @@ export type WebGroundingSearchResult = {
   publishedAt?: string;
   observedAt: string;
   freshnessStatus: FreshDataStatus;
-  searchProvider?: "duckduckgo_html" | "brave" | "searxng" | "open_meteo" | "frankfurter" | "coingecko";
+  searchProvider?: "duckduckgo_html" | "brave" | "searxng" | FactProviderId;
   pageContent?: string;
 };
 
@@ -60,13 +62,19 @@ export type WebGroundingResult = {
   used: boolean;
   query: string;
   queries: string[];
-  source: "duckduckgo_html" | "brave" | "searxng" | "open_meteo" | "frankfurter" | "coingecko";
+  source: "duckduckgo_html" | "brave" | "searxng" | FactProviderId;
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
   confidence: "high" | "medium" | "low";
   retrievedAt?: string;
   decisionReasons?: string[];
   freshData: FreshDataEnvelope;
+  /**
+   * Tipli olgu cevabı — yalnız sağlayıcı katmanından gelen turlarda dolu olur.
+   * Sıfır-token şeridi ve kart üretimi bunu okur; `results` içindeki metin
+   * kanıt, bu alan ise YAPILANDIRILMIŞ gerçektir.
+   */
+  factAnswer?: FactAnswer;
 };
 
 const WEB_RESEARCH_PATTERNS = [
@@ -854,7 +862,11 @@ function applyDomainEvidenceGuards(result: WebGroundingResult): WebGroundingResu
   if (result.freshData.domain !== "market" || !result.used) {
     return result;
   }
-  if (result.source === "frankfurter" || result.source === "coingecko") {
+  // Tipli olgu sağlayıcısından gelen sayı, tanımı gereği yetkili ve tekildir;
+  // arama sonuçlarına özgü "bağımsız ikinci kaynak" kuralı ona uygulanmaz.
+  // Sağlayıcı adlarını burada TEKRAR listelemiyoruz — kayıt defterine yeni bir
+  // piyasa sağlayıcısı eklendiğinde bu dal sessizce dışarıda kalırdı.
+  if (result.factAnswer) {
     result.freshData.evidence.numericCorroborated = true;
     result.freshData.reasons = uniqueStrings([
       ...result.freshData.reasons,
@@ -1498,351 +1510,14 @@ async function fetchSearchQuery(
   };
 }
 
-type OpenMeteoPlace = {
-  name?: string;
-  admin1?: string;
-  admin2?: string;
-  country?: string;
-  latitude?: number;
-  longitude?: number;
-  timezone?: string;
-};
-
-const WEATHER_QUERY_NOISE_PATTERN =
-  /(?<!\p{L})(hava durumu|hava nasıl|hava nasil|kaç derece|kac derece|yağmur yağacak mı|yagmur yagacak mi|yağmur|yagmur|kar yağacak mı|kar yagacak mi|rüzgar|ruzgar|weather|forecast|bugün|bugun|yarın|yarin|şu an|su an|güncel|guncel|current|today|tomorrow|now|için|icin)(?!\p{L})/giu;
-
-function weatherLocationCandidates(prompt: string): string[] {
-  const location = compactText(prompt)
-    .replace(WEATHER_QUERY_NOISE_PATTERN, " ")
-    .replace(/[^\p{L}\p{N}\s.'’-]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!location) return [];
-  const words = location
-    .split(/\s+/u)
-    .map((word) => word.replace(/[’'](?:da|de|ta|te)$/iu, ""))
-    .filter(Boolean);
-  const normalizedLocation = words.join(" ");
-  return uniqueStrings([
-    normalizedLocation,
-    words.length > 1 ? words.slice(-2).join(" ") : "",
-    words.at(-1) ?? "",
-  ]).filter(Boolean).slice(0, 3);
-}
-
-function normalizeWeatherLookupText(value: string): string {
-  return value
-    .toLocaleLowerCase("tr-TR")
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .replace(/[^a-z0-9çğıöşü]+/giu, " ")
-    .trim();
-}
-
-function selectWeatherPlace(prompt: string, places: OpenMeteoPlace[]): OpenMeteoPlace | null {
-  const promptTokens = new Set(normalizeWeatherLookupText(prompt).split(/\s+/u).filter(Boolean));
-  return places
-    .filter((place) =>
-      typeof place.latitude === "number" &&
-      Number.isFinite(place.latitude) &&
-      typeof place.longitude === "number" &&
-      Number.isFinite(place.longitude),
-    )
-    .map((place, index) => {
-      const haystack = normalizeWeatherLookupText(
-        [place.name, place.admin1, place.admin2, place.country].filter(Boolean).join(" "),
-      );
-      const overlap = [...promptTokens].filter((token) => haystack.includes(token)).length;
-      return { place, score: overlap * 10 - index };
-    })
-    .sort((left, right) => right.score - left.score)[0]?.place ?? null;
-}
-
-function weatherCodeDescription(code: number): string {
-  if (code === 0) return "açık";
-  if ([1, 2].includes(code)) return "az bulutlu";
-  if (code === 3) return "kapalı";
-  if ([45, 48].includes(code)) return "sisli";
-  if ([51, 53, 55, 56, 57].includes(code)) return "çiseli";
-  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "yağmurlu";
-  if ([71, 73, 75, 77, 85, 86].includes(code)) return "kar yağışlı";
-  if ([95, 96, 99].includes(code)) return "gök gürültülü fırtınalı";
-  return "değişken";
-}
+/* Hava / kur / kripto sağlayıcıları buradan `modules/facts/` altına taşındı.
+ * Seçimleri artık regex değil e5; katalog ve devre kesici orada yaşıyor.
+ * Bu dosya yalnız ARAMA temellendirmesinin sahibidir. */
 
 function finiteWeatherNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-async function fetchOpenMeteoWeather(
-  app: FastifyInstance,
-  prompt: string,
-  policy: FreshDataPolicy,
-): Promise<{
-  result: WebGroundingSearchResult | null;
-  degradedReason: string | null;
-}> {
-  const candidates = weatherLocationCandidates(prompt);
-  if (candidates.length === 0) {
-    return { result: null, degradedReason: "weather_location_missing" };
-  }
-
-  const timeoutMs = Math.max(1_500, Math.min(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 5_000));
-  let place: OpenMeteoPlace | null = null;
-  try {
-    for (const candidate of candidates) {
-      const geocodingUrl = new URL("https://geocoding-api.open-meteo.com/v1/search");
-      geocodingUrl.searchParams.set("name", candidate);
-      geocodingUrl.searchParams.set("count", "8");
-      geocodingUrl.searchParams.set("language", "tr");
-      geocodingUrl.searchParams.set("format", "json");
-      const response = await fetchTextWithTimeout(geocodingUrl.toString(), timeoutMs, {
-        accept: "application/json",
-        "user-agent": "Elyan/1.0",
-      });
-      if (!response.ok) continue;
-      const payload = await readBoundedJsonObject(response, 200_000);
-      const places = Array.isArray(payload?.results) ? payload.results as OpenMeteoPlace[] : [];
-      place = selectWeatherPlace(prompt, places);
-      if (place) break;
-    }
-    if (!place) {
-      return { result: null, degradedReason: "weather_location_not_found" };
-    }
-
-    const forecastUrl = new URL("https://api.open-meteo.com/v1/forecast");
-    forecastUrl.searchParams.set("latitude", String(place.latitude));
-    forecastUrl.searchParams.set("longitude", String(place.longitude));
-    forecastUrl.searchParams.set(
-      "current",
-      "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,cloud_cover,wind_speed_10m",
-    );
-    forecastUrl.searchParams.set("hourly", "precipitation_probability");
-    forecastUrl.searchParams.set("daily", "temperature_2m_max,temperature_2m_min,precipitation_probability_max");
-    forecastUrl.searchParams.set("forecast_days", "2");
-    forecastUrl.searchParams.set("timezone", place.timezone || "auto");
-
-    const response = await fetchTextWithTimeout(forecastUrl.toString(), timeoutMs, {
-      accept: "application/json",
-      "user-agent": "Elyan/1.0",
-    });
-    if (!response.ok) {
-      return { result: null, degradedReason: `open_meteo_http_${response.status}` };
-    }
-    const payload = await readBoundedJsonObject(response, 500_000);
-    const current = payload?.current && typeof payload.current === "object" && !Array.isArray(payload.current)
-      ? payload.current as Record<string, unknown>
-      : null;
-    const hourly = payload?.hourly && typeof payload.hourly === "object" && !Array.isArray(payload.hourly)
-      ? payload.hourly as Record<string, unknown>
-      : null;
-    const daily = payload?.daily && typeof payload.daily === "object" && !Array.isArray(payload.daily)
-      ? payload.daily as Record<string, unknown>
-      : null;
-    const temperature = finiteWeatherNumber(current?.temperature_2m);
-    const observedAt = typeof current?.time === "string" ? current.time : null;
-    if (temperature === null || !observedAt) {
-      return { result: null, degradedReason: "open_meteo_invalid_payload" };
-    }
-
-    const weatherCode = finiteWeatherNumber(current?.weather_code) ?? -1;
-    const apparent = finiteWeatherNumber(current?.apparent_temperature);
-    const humidity = finiteWeatherNumber(current?.relative_humidity_2m);
-    const precipitation = finiteWeatherNumber(current?.precipitation);
-    const wind = finiteWeatherNumber(current?.wind_speed_10m);
-    const cloudCover = finiteWeatherNumber(current?.cloud_cover);
-    const hourlyTimes = Array.isArray(hourly?.time) ? hourly.time : [];
-    const rainProbabilities = Array.isArray(hourly?.precipitation_probability)
-      ? hourly.precipitation_probability
-      : [];
-    const currentHourIndex = hourlyTimes.findIndex((time) => time === observedAt);
-    const rainProbability = finiteWeatherNumber(
-      rainProbabilities[currentHourIndex >= 0 ? currentHourIndex : 0],
-    );
-    const maxTemperature = finiteWeatherNumber(Array.isArray(daily?.temperature_2m_max) ? daily.temperature_2m_max[0] : null);
-    const minTemperature = finiteWeatherNumber(Array.isArray(daily?.temperature_2m_min) ? daily.temperature_2m_min[0] : null);
-    const maxRainProbability = finiteWeatherNumber(
-      Array.isArray(daily?.precipitation_probability_max) ? daily.precipitation_probability_max[0] : null,
-    );
-    const label = [place.name, place.admin1, place.country].filter(Boolean).join(", ");
-    const details = [
-      `${label} gözlemi (${observedAt})`,
-      `sıcaklık ${temperature} °C`,
-      apparent === null ? null : `hissedilen ${apparent} °C`,
-      `durum ${weatherCodeDescription(weatherCode)}`,
-      humidity === null ? null : `nem %${humidity}`,
-      wind === null ? null : `rüzgar ${wind} km/sa`,
-      precipitation === null ? null : `anlık yağış ${precipitation} mm`,
-      rainProbability === null ? null : `şu saat yağış olasılığı %${rainProbability}`,
-      maxTemperature === null || minTemperature === null
-        ? null
-        : `bugün en düşük ${minTemperature} °C, en yüksek ${maxTemperature} °C`,
-      maxRainProbability === null ? null : `bugün en yüksek yağış olasılığı %${maxRainProbability}`,
-      cloudCover === null ? null : `bulutluluk %${cloudCover}`,
-    ].filter((value): value is string => Boolean(value));
-    const retrievedAt = new Date().toISOString();
-    return {
-      result: withSourceAuthority({
-        title: `${label} canlı hava durumu`,
-        url: forecastUrl.toString(),
-        snippet: details.join("; ").slice(0, 700),
-        pageContent: details.join("; ").slice(0, 1_200),
-        sourceHost: "api.open-meteo.com",
-        searchProvider: "open_meteo",
-        publishedAt: retrievedAt,
-        verificationState: "verified",
-        queryHits: 1,
-        score: 2.4,
-      }, policy, retrievedAt),
-      degradedReason: null,
-    };
-  } catch (error) {
-    return {
-      result: null,
-      degradedReason: error instanceof Error && error.name === "AbortError"
-        ? "open_meteo_timeout"
-        : "open_meteo_failed",
-    };
-  }
-}
-
-type StructuredMarketResult = {
-  result: WebGroundingSearchResult | null;
-  source: "frankfurter" | "coingecko" | null;
-  degradedReason: string | null;
-};
-
-function requestedFiatCurrency(prompt: string): "USD" | "EUR" | "GBP" | null {
-  if (/(?<!\p{L})(dolar|usd|\$)(?!\p{L})/iu.test(prompt)) return "USD";
-  if (/(?<!\p{L})(euro|avro|eur|€)(?!\p{L})/iu.test(prompt)) return "EUR";
-  if (/(?<!\p{L})(sterlin|gbp|£)(?!\p{L})/iu.test(prompt)) return "GBP";
-  return null;
-}
-
-function requestedCryptoAsset(prompt: string): { id: string; symbol: string } | null {
-  if (/(?<!\p{L})(bitcoin|btc)(?!\p{L})/iu.test(prompt)) {
-    return { id: "bitcoin", symbol: "BTC" };
-  }
-  if (/(?<!\p{L})(ethereum|ether|eth)(?!\p{L})/iu.test(prompt)) {
-    return { id: "ethereum", symbol: "ETH" };
-  }
-  return null;
-}
-
-async function fetchStructuredMarketData(
-  app: FastifyInstance,
-  prompt: string,
-  policy: FreshDataPolicy,
-): Promise<StructuredMarketResult> {
-  const timeoutMs = Math.max(1_500, Math.min(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 4_000));
-  const crypto = requestedCryptoAsset(prompt);
-  const fiat = requestedFiatCurrency(prompt);
-  try {
-    if (crypto) {
-      const url = new URL("https://api.coingecko.com/api/v3/simple/price");
-      url.searchParams.set("ids", crypto.id);
-      url.searchParams.set("vs_currencies", "try,usd");
-      url.searchParams.set("include_last_updated_at", "true");
-      const response = await fetchTextWithTimeout(url.toString(), timeoutMs, {
-        accept: "application/json",
-        "user-agent": "Elyan/1.0",
-      });
-      if (!response.ok) {
-        return { result: null, source: "coingecko", degradedReason: `coingecko_http_${response.status}` };
-      }
-      const payload = await readBoundedJsonObject(response, 100_000);
-      const quote = payload?.[crypto.id];
-      if (!quote || typeof quote !== "object" || Array.isArray(quote)) {
-        return { result: null, source: "coingecko", degradedReason: "coingecko_invalid_payload" };
-      }
-      const record = quote as Record<string, unknown>;
-      const tryValue = finiteWeatherNumber(record.try);
-      const usdValue = finiteWeatherNumber(record.usd);
-      const updatedSeconds = finiteWeatherNumber(record.last_updated_at);
-      const nowSeconds = Math.floor(Date.now() / 1_000);
-      if (
-        tryValue === null ||
-        tryValue <= 0 ||
-        updatedSeconds === null ||
-        updatedSeconds < 1_500_000_000 ||
-        updatedSeconds > nowSeconds + 300
-      ) {
-        return { result: null, source: "coingecko", degradedReason: "coingecko_quote_missing" };
-      }
-      const observedAt = new Date(updatedSeconds * 1_000).toISOString();
-      const snippet = [
-        `${crypto.symbol}/TRY ${tryValue}`,
-        usdValue === null ? null : `${crypto.symbol}/USD ${usdValue}`,
-        `sağlayıcı zamanı ${observedAt}`,
-      ].filter((value): value is string => Boolean(value)).join("; ");
-      return {
-        result: withSourceAuthority({
-          title: `${crypto.symbol} yapılandırılmış piyasa verisi`,
-          url: url.toString(),
-          snippet,
-          pageContent: snippet,
-          sourceHost: "api.coingecko.com",
-          searchProvider: "coingecko",
-          publishedAt: observedAt,
-          verificationState: "verified",
-          queryHits: 1,
-          score: 2.5,
-        }, policy, observedAt),
-        source: "coingecko",
-        degradedReason: null,
-      };
-    }
-
-    if (fiat) {
-      const url = new URL("https://api.frankfurter.app/latest");
-      url.searchParams.set("from", fiat);
-      url.searchParams.set("to", "TRY");
-      const response = await fetchTextWithTimeout(url.toString(), timeoutMs, {
-        accept: "application/json",
-        "user-agent": "Elyan/1.0",
-      });
-      if (!response.ok) {
-        return { result: null, source: "frankfurter", degradedReason: `frankfurter_http_${response.status}` };
-      }
-      const payload = await readBoundedJsonObject(response, 100_000);
-      const rates = payload?.rates;
-      const rate = rates && typeof rates === "object" && !Array.isArray(rates)
-        ? finiteWeatherNumber((rates as Record<string, unknown>).TRY)
-        : null;
-      const publishedDate = typeof payload?.date === "string" ? payload.date : null;
-      if (rate === null || rate <= 0 || !publishedDate || !/^\d{4}-\d{2}-\d{2}$/u.test(publishedDate)) {
-        return { result: null, source: "frankfurter", degradedReason: "frankfurter_invalid_payload" };
-      }
-      const retrievedAt = new Date().toISOString();
-      const snippet = `1 ${fiat} = ${rate} TRY; referans tarihi ${publishedDate}; alınma zamanı ${retrievedAt}`;
-      return {
-        result: withSourceAuthority({
-          title: `${fiat}/TRY yapılandırılmış referans kuru`,
-          url: url.toString(),
-          snippet,
-          pageContent: snippet,
-          sourceHost: "api.frankfurter.app",
-          searchProvider: "frankfurter",
-          publishedAt: `${publishedDate}T23:59:59.000Z`,
-          verificationState: "verified",
-          queryHits: 1,
-          score: 2.4,
-        }, policy, retrievedAt),
-        source: "frankfurter",
-        degradedReason: null,
-      };
-    }
-  } catch (error) {
-    return {
-      result: null,
-      source: crypto ? "coingecko" : fiat ? "frankfurter" : null,
-      degradedReason: error instanceof Error && error.name === "AbortError"
-        ? "structured_market_timeout"
-        : "structured_market_failed",
-    };
-  }
-  return { result: null, source: null, degradedReason: "structured_market_unsupported_asset" };
-}
 
 async function verifyResult(
   app: FastifyInstance,
@@ -2537,106 +2212,97 @@ export async function searchPublicWebGrounding(
     return cloneWebGroundingResult(sharedCache.fresh);
   }
 
-  if (freshDataPolicy.domain === "weather") {
-    const weather = await withStructuredApiInflight(
-      app,
-      `weather:${cacheKey}`,
-      () => fetchOpenMeteoWeather(app, query, freshDataPolicy),
+  // ── TİPLİ OLGU KATMANI ──────────────────────────────────────────────
+  //
+  // Hava, hava kalitesi, kur, kripto, yerel saat, deprem ve resmî tatil
+  // turları buradan cevaplanır: tek HTTP çağrısı, sıfır model token'ı.
+  // Sağlayıcı seçimi `modules/facts/select.ts` içinde e5 ile yapılır;
+  // eskiden burada gömülü duran `/bitcoin|btc/` sınıfı regex'ler kaldırıldı.
+  //
+  // Katman `null` dönerse hiçbir şey değişmez — tur normal aramaya devam eder.
+  const factResolution = await withStructuredApiInflight(
+    app,
+    `facts:${cacheKey}`,
+    () =>
+      resolveFactAnswer(app, {
+        prompt: query,
+        domain: freshDataPolicy.domain,
+        bypassCache: input.bypassCache === true,
+      }),
+  );
+  if (factResolution) {
+    const answer = factResolution.answer;
+    // Piyasa/olgu turlarında tek yetkili kaynak yeterlidir: sayı sağlayıcının
+    // kendisinden gelir, çoklu kaynak mutabakatı aramaya özgü bir gerekliliktir.
+    const factPolicy: FreshDataPolicy = {
+      ...freshDataPolicy,
+      minimumSources: 1,
+      minimumVerifiedSources: 1,
+      minimumDatedSources: 1,
+    };
+    const retrievedAt = new Date().toISOString();
+    const normalized = normalizeResultForFreshDataPolicy(
+      withSourceAuthority(
+        {
+          title: answer.citation.title,
+          url: answer.citation.url,
+          snippet: answer.snippet.slice(0, 700),
+          pageContent: answer.snippet.slice(0, 1_200),
+          sourceHost: answer.citation.sourceHost,
+          searchProvider: answer.providerId,
+          publishedAt: answer.citation.observedAt,
+          verificationState: "verified",
+          queryHits: 1,
+          score: 2.4,
+        },
+        factPolicy,
+        answer.citation.observedAt,
+      ),
+      factPolicy,
+      retrievedAt,
     );
-    if (weather.result) {
-      const retrievedAt = new Date().toISOString();
-      const normalized = normalizeResultForFreshDataPolicy(
-        weather.result,
-        freshDataPolicy,
-        retrievedAt,
-      );
-      const freshData = freshDataEnvelopeForResult({
-        policy: freshDataPolicy,
-        requestedAt,
-        retrievedAt,
-        results: [normalized],
-        cacheState: "miss",
-        reasons: ["structured_api", "open_meteo"],
-      });
-      const result: WebGroundingResult = {
-        enabled: true,
-        used: true,
-        query,
-        queries: [query],
-        source: "open_meteo",
-        results: [normalized],
-        degradedReason: null,
-        confidence: "high",
-        retrievedAt,
-        decisionReasons: uniqueStrings([...decisionReasons, "structured_api:open_meteo"]),
-        freshData,
-      };
+    const freshData = freshDataEnvelopeForResult({
+      policy: factPolicy,
+      requestedAt,
+      retrievedAt,
+      results: [normalized],
+      cacheState:
+        factResolution.cacheState === "miss"
+          ? "miss"
+          : factResolution.cacheState === "fresh"
+            ? "fresh_hit"
+            : "stale_fallback",
+      reasons: ["structured_api", answer.providerId, `select:${factResolution.selection}`],
+    });
+    const result: WebGroundingResult = {
+      enabled: true,
+      used: freshData.evidence.sufficient,
+      query,
+      queries: [query],
+      source: answer.providerId,
+      results: [normalized],
+      degradedReason: freshData.evidence.sufficient ? null : "structured_fact_not_fresh_enough",
+      confidence: freshData.evidence.sufficient ? "high" : "low",
+      retrievedAt,
+      decisionReasons: uniqueStrings([
+        ...decisionReasons,
+        `structured_api:${answer.providerId}`,
+      ]),
+      freshData,
+      factAnswer: answer,
+    };
+    applyDomainEvidenceGuards(result);
+    if (freshData.evidence.sufficient) {
       if (cache && cacheTtlMs > 0) {
         cache.set(cacheKey, result, { ttl: cacheTtlMs });
       }
       void writeSharedWebGroundingCache({
         app,
         cacheKey,
-        policy: freshDataPolicy,
+        policy: factPolicy,
         result,
       });
       return cloneWebGroundingResult(result);
-    }
-  }
-
-  if (freshDataPolicy.domain === "market") {
-    const structuredPolicy: FreshDataPolicy = {
-      ...freshDataPolicy,
-      minimumSources: 1,
-      minimumVerifiedSources: 1,
-      minimumDatedSources: 1,
-    };
-    const market = await withStructuredApiInflight(
-      app,
-      `market:${cacheKey}`,
-      () => fetchStructuredMarketData(app, query, structuredPolicy),
-    );
-    if (market.result && market.source) {
-      const retrievedAt = new Date().toISOString();
-      const normalized = normalizeResultForFreshDataPolicy(
-        market.result,
-        structuredPolicy,
-        retrievedAt,
-      );
-      const freshData = freshDataEnvelopeForResult({
-        policy: structuredPolicy,
-        requestedAt,
-        retrievedAt,
-        results: [normalized],
-        cacheState: "miss",
-        reasons: ["structured_api", market.source],
-      });
-      const result: WebGroundingResult = {
-        enabled: true,
-        used: freshData.evidence.sufficient,
-        query,
-        queries: [query],
-        source: market.source,
-        results: [normalized],
-        degradedReason: freshData.evidence.sufficient ? null : "structured_market_not_fresh_enough",
-        confidence: freshData.evidence.sufficient ? "high" : "low",
-        retrievedAt,
-        decisionReasons: uniqueStrings([...decisionReasons, `structured_api:${market.source}`]),
-        freshData,
-      };
-      applyDomainEvidenceGuards(result);
-      if (freshData.evidence.sufficient) {
-        if (cache && cacheTtlMs > 0) {
-          cache.set(cacheKey, result, { ttl: cacheTtlMs });
-        }
-        void writeSharedWebGroundingCache({
-          app,
-          cacheKey,
-          policy: structuredPolicy,
-          result,
-        });
-        return cloneWebGroundingResult(result);
-      }
     }
   }
 
