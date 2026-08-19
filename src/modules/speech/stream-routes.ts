@@ -86,6 +86,15 @@ export const clientMessageSchema = z.union([
     b64: z.string().min(1).max(MAX_AUDIO_MESSAGE_BYTES),
   }),
   z.object({ type: z.literal("stop") }),
+  /**
+   * Sessize alınmış mikrofon ses göndermez, ama oturum hâlâ açıktır. Boşta
+   * kalma sayacı (`IDLE_TIMEOUT_MS`) her mesajda kurulduğu için sessize alma
+   * iki dakikada oturumu `idle_timeout` ile öldürüyordu — kullanıcı hiçbir şey
+   * yapmamışken bağlantı düşüyordu. WS ping/pong kontrol çerçevesi Fastify'ın
+   * `message` kancasına gelmediği için sayacı kurmuyor; bu yüzden protokole
+   * ait, ölçülebilir bir `ping` gerekiyor. Ses saniyesi harcamaz.
+   */
+  z.object({ type: z.literal("ping") }),
 ]);
 
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
@@ -100,6 +109,7 @@ export type ServerMessage =
   | { type: "partial"; text: string; seq: number }
   | { type: "final"; text: string; segmentId: number }
   | { type: "intent"; ready: true; taskId?: string }
+  | { type: "pong" }
   | { type: "error"; code: string };
 
 export function toServerMessage(event: StreamingEvent): ServerMessage {
@@ -349,6 +359,13 @@ export function buildSpeechStreamRoutes(
           preferredDeviceId = parsed.deviceId;
           started = true;
           send({ type: "ready", sessionId: activeSessionId });
+          return;
+        }
+
+        if (parsed.type === "ping") {
+          // `armIdleTimer()` yukarıda zaten çalıştı; asıl iş oydu. Yanıt,
+          // istemcinin soketin gerçekten canlı olduğunu görmesi için.
+          send({ type: "pong" });
           return;
         }
 

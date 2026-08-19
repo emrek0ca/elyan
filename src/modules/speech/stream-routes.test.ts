@@ -187,8 +187,34 @@ test("clientMessageSchema rejects unknown and malformed frames", () => {
       .success,
   );
   assert.ok(!clientMessageSchema.safeParse({ type: "audio", seq: -1, b64: "A" }).success);
+  assert.ok(clientMessageSchema.safeParse({ type: "ping" }).success);
   assert.ok(!clientMessageSchema.safeParse({ type: "bogus" }).success);
   assert.ok(!clientMessageSchema.safeParse({ type: "start", locale: "turkish" }).success);
+});
+
+test("speech stream: ping keeps a muted session open and is acked", async (t) => {
+  // Sessize alınmış mikrofon ses göndermez; boşta kalma sayacı yalnız
+  // mesajlarla kuruluyor. `ping` olmadan kullanıcı hiçbir şey yapmadan
+  // oturumunu kaybediyordu.
+  const harness = await startStreamApp();
+  t.after(async () => harness.close());
+
+  const client = connect(harness.url);
+  await new Promise((resolve) => client.socket.once("open", resolve));
+  client.socket.send(JSON.stringify({ type: "start", locale: "tr" }));
+  await client.waitFor("ready");
+
+  client.socket.send(JSON.stringify({ type: "ping" }));
+  const pong = await client.waitFor("pong");
+
+  assert.deepEqual(pong, { type: "pong" });
+  assert.equal(client.socket.readyState, WebSocket.OPEN);
+  assert.equal(
+    client.messages.some((message) => message.type === "error"),
+    false,
+    "ping must not be treated as an unknown frame",
+  );
+  client.socket.close();
 });
 
 test("speech stream: start acks, speech yields a partial, pause yields a final", async (t) => {
