@@ -636,6 +636,20 @@ export async function getMobileBootstrap(app: FastifyInstance, userId: string) {
     realtime: {
       path: "/v1/realtime/stream",
       sseEnabled: true,
+      /**
+       * Canlı ses bayrağı SUNUCUDA yaşıyor, ama istemcide de derleme zamanı
+       * bir aynası vardı (Flutter `--dart-define`). İki bayrak sessizce
+       * ayrışabiliyor: 2026-08-19'da sunucuda kapalıydı, istemci açık
+       * sanıp soketi açmaya çalıştı ve kullanıcı "Bağlantı kurulamadı"
+       * ekranında kaldı. Tek kaynak burası; istemci artık soruyor.
+       *
+       * Alan yoksa istemci bugünkü davranışı sürdürür (dener, olmazsa cihaz
+       * üstü diktafona düşer) — eski sunucularla uyum için additive.
+       */
+      liveVoice: {
+        enabled: app.config.ELYAN_VOICE_STREAMING_ENABLED === true,
+        path: "/v1/speech/stream",
+      },
     },
     brain: shapeMobileBootstrapBrain(brain),
     devices,
