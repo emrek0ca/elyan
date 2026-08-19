@@ -47,6 +47,8 @@ const SHORTLIST_MAX = 2;
  * yapılamaz, domain yedeği devralır.
  */
 const SELECTION_EMBED_TIMEOUT_MS = 2_500;
+/** Isıtma yolunun bütçesi: model yüklemesi dahil, kimseyi bekletmiyor. */
+const WARMUP_EMBED_TIMEOUT_MS = 60_000;
 
 let intentVectors: Array<{ provider: FactProvider<unknown>; vectors: number[][] }> | null = null;
 let intentVectorsPromise: Promise<void> | null = null;
@@ -61,6 +63,7 @@ function cosine(left: number[], right: number[]): number {
 
 async function ensureIntentVectors(
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
+  embedTimeoutMs: number = SELECTION_EMBED_TIMEOUT_MS,
 ): Promise<void> {
   if (intentVectors) return;
   if (!intentVectorsPromise) {
@@ -71,7 +74,7 @@ async function ensureIntentVectors(
           provider.intents,
           logger,
           `facts:intents:${provider.id}`,
-          SELECTION_EMBED_TIMEOUT_MS,
+          embedTimeoutMs,
         );
         if (!vectors) {
           // Tek bir sağlayıcı gömülemezse katalog EKSİK olur; yarım katalogla
@@ -123,14 +126,36 @@ export async function selectFactProviders(input: {
 }
 
 /**
- * Açılışta çağrılır. Beklenmez (`void`): ısıtma turu kimseyi geciktirmez,
- * yalnız ilk kullanıcı turundan önce katalogun hazır olmasını sağlar.
+ * Açılışta çağrılır. Beklenmez (`void`): ısıtma turu kimseyi geciktirmez.
+ *
+ * ISITMAYA İSTEK YOLUNUN ZAMAN AŞIMI UYGULANMAZ. İlk denemede uygulandı ve
+ * canlıda `ready:false` döndü: açılışta ONNX oturumu henüz kurulmamış oluyor,
+ * 2.5 sn yetmiyor, katalog kurulamıyor ve bedeli yine ilk KULLANICI turu
+ * ödüyordu — yani ısıtma hiçbir işe yaramıyordu. Aynı ders
+ * `primeSemanticComputeWorker` yorumunda zaten yazılı: "ısıtmanın çağıran
+ * zaman aşımı YOK".
+ *
+ * Model gerçekten hazır olana kadar birkaç kez, artan aralıklarla denenir.
+ * Hepsi tutmazsa hiçbir yol kötüleşmez: seçim yapılamaz, domain yedeği
+ * devralır ve istek yolu kendi sıkı bütçesiyle çalışmaya devam eder.
  */
 export async function primeFactSelection(
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
 ): Promise<boolean> {
-  await ensureIntentVectors(logger).catch(() => undefined);
-  return intentVectors !== null;
+  const backoffMs = [0, 5_000, 15_000, 30_000];
+  for (const delay of backoffMs) {
+    if (delay > 0) {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, delay);
+        timer.unref?.();
+      });
+    }
+    await ensureIntentVectors(logger, WARMUP_EMBED_TIMEOUT_MS).catch(() => undefined);
+    if (intentVectors) return true;
+    // Başarısız deneme, sıradakinin yeniden kurmasına izin vermeli.
+    intentVectorsPromise = null;
+  }
+  return false;
 }
 
 export function resetFactSelectionForTests(): void {
