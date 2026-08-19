@@ -184,3 +184,24 @@ test("machine-facing workloads are identified so chat rules never touch them", (
     assert.equal(isMachineOutputWorkload(workload), false, String(workload));
   }
 });
+
+test("casual turns get a shape rule instead of a brevity rule", () => {
+  // Canlı gözlem (2026-08-19): "Merhaba" turuna gelen cevap "Merhaba." idi.
+  // Yirmiden fazla karakter satırının yanındaki ölçülebilir kısalık kuralı
+  // onları eziyordu; kural biçime çevrildi.
+  const block = buildElyanVoiceProfilePromptBlock({
+    prompt: "Merhaba",
+    workload: "mobile_chat_fast",
+  });
+  assert.match(block, /at least one of them a reaction/u);
+  assert.doesNotMatch(block, /shortest complete form/u);
+  assert.doesNotMatch(block, /Keep it short/u);
+});
+
+test("substantive turns keep their length discipline", () => {
+  const block = buildElyanVoiceProfilePromptBlock({
+    prompt: "React'te useEffect sonsuz döngüsünü nasıl kırarım?",
+    workload: "mobile_chat_balanced",
+  });
+  assert.match(block, /shortest complete form|Keep it short|be complete/u);
+});

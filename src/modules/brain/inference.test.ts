@@ -7221,6 +7221,37 @@ test("fact evidence never orders an unconditional source citation", () => {
   assert.match(prompt, /only if your answer actually rests on the numbers above/u);
 });
 
+test("fast path memory reaches the default mobile chat prompt", () => {
+  // Yapısal arıza: mobil sohbetin varsayılan iş yükü hızlı şerit ve o şeritte
+  // kalıcı hafıza hiç yüklenmiyordu — "beni tanımıyor" hissinin kaynağı.
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({
+      prompt: "Bugün ne yapsam bilemedim",
+      fastPathMemory: ["Elyan adında kişisel bir yapay zekâ ürünü geliştiriyor."],
+    }),
+  );
+  assert.match(prompt, /What you actually know about this person/u);
+  assert.match(prompt, /Elyan adında kişisel bir yapay zekâ ürünü/u);
+});
+
+test("fast path memory never instructs the model to announce recall", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "Selam", fastPathMemory: ["Kayseri'de yaşıyor."] }),
+  );
+  assert.match(prompt, /Do not announce that you remember/u);
+});
+
+test("greeting policy allows shared history but still bans sensor context", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "Selam nasılsın?" }),
+  );
+  assert.match(prompt, /Shared history is fair game/u);
+  assert.match(prompt, /never mention health, steps, battery/u);
+});
+
 test("prompt gating: greeting turns get the lean social profile", () => {
   const prompt = buildStructuredSystemPrompt(
     "BASE",

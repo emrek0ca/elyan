@@ -182,6 +182,9 @@ const envSchema = z.object({
   // model çağrılmadan, deterministik cümleyle basılır. Sesi şablonlaştırdığı
   // için varsayılan KAPALI; gecikme tabanı temizlendikten sonra açılmalı.
   ELYAN_FACT_DIRECT_ANSWER_ENABLED: booleanFlag(false),
+  // Hızlı mobil sohbet turunda semantik olarak alakalı kalıcı hafızayı isteme
+  // taşır. Kapatıldığında hızlı turlar eskisi gibi hafızasız çalışır.
+  ELYAN_FAST_PATH_MEMORY_ENABLED: booleanFlag(true),
   ELYAN_CHAT_WORKER_CONCURRENCY: z.coerce
     .number()
     .int()
