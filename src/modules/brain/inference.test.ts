@@ -7173,6 +7173,54 @@ function baseInput(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const factEvidenceFixture = {
+  providerId: "open_meteo" as const,
+  dataClass: "hourly" as const,
+  snippet: "Antakya, Hatay gözlemi (2026-08-19T10:45); sıcaklık 30.3 °C; nem %61",
+  directAnswer: "Hatay için şu an 30.3 °C, az bulutlu.",
+  citation: {
+    title: "Hatay canlı hava durumu",
+    url: "https://api.open-meteo.com/v1/forecast",
+    sourceHost: "api.open-meteo.com",
+    observedAt: "2026-08-19T07:45:00.000Z",
+  },
+  values: { temperatureC: 30.3 },
+  confidence: 0.95,
+  ttlMs: 600_000,
+};
+
+test("fact evidence leads with the direct answer instead of a bag of fields", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "Hatay hava durumu", factEvidence: factEvidenceFixture }),
+  );
+  assert.match(prompt, /Verified live data \(api\.open-meteo\.com/u);
+  // Canlı arıza: cevap o anki sıcaklığı atlayıp min/max ile açılıyordu.
+  assert.match(prompt, /Lead with the direct answer: Hatay için şu an 30\.3 °C/u);
+});
+
+test("fact evidence is not repeated when web grounding already carries it", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({
+      prompt: "Hatay hava durumu",
+      factEvidence: factEvidenceFixture,
+      webGroundingFactProviderId: "open_meteo",
+    }),
+  );
+  assert.doesNotMatch(prompt, /Verified live data/u);
+});
+
+test("fact evidence never orders an unconditional source citation", () => {
+  const prompt = buildStructuredSystemPrompt(
+    "BASE",
+    baseInput({ prompt: "Hatay hava durumu", factEvidence: factEvidenceFixture }),
+  );
+  // Canlı arıza: tur MGM/Wikipedia sonuçlarından cevaplandığı hâlde model
+  // "Kaynak: api.open-meteo.com" dedi. Atıf koşullu olmak zorunda.
+  assert.match(prompt, /only if your answer actually rests on the numbers above/u);
+});
+
 test("prompt gating: greeting turns get the lean social profile", () => {
   const prompt = buildStructuredSystemPrompt(
     "BASE",

@@ -520,6 +520,8 @@ type SharedBrainInferenceInput = {
   connectorToolContracts?: string[];
   /** Tipli olgu kanıtı — erken katmanda çözülür, istem kurucuları okur. */
   factEvidence?: FactAnswer | null;
+  /** Web temellendirmesi hangi olgu sağlayıcısını taşıdı — çift kanıt kapısı. */
+  webGroundingFactProviderId?: string | null;
   /** Live MCP declarations and the request-scoped semantic selection. */
   mcpToolDeclarations?: McpToolDeclaration[];
   mcpToolSelection?: McpToolSelection | null;
@@ -3002,10 +3004,21 @@ function buildFactEvidencePromptBlock(
 ): string | null {
   const answer = input.factEvidence;
   if (!answer) return null;
+  // ÇİFT KANIT YASAK. Web temellendirmesi aynı sağlayıcının sonucunu zaten
+  // taşıyorsa bu blok aynı sayıları ikinci kez basar; küçük modelde bu,
+  // "fazladan bilgiyi özetle" sinyaline dönüşüp asıl sorunun cevabını
+  // (canlıda: o anki sıcaklık) cevabın dışında bırakıyordu.
+  if (input.webGroundingFactProviderId === answer.providerId) return null;
   return [
     `Verified live data (${answer.citation.sourceHost}, observed ${answer.citation.observedAt}):`,
     answer.snippet,
-    "This is authoritative for this turn. Use these exact numbers, never round or invent alternatives, and cite the source host once in your reply. If the user asked for something this data does not cover, say so instead of guessing.",
+    `Lead with the direct answer: ${answer.directAnswer}`,
+    // ATIF TALİMATI KOŞULLUDUR. Canlı arıza (2026-08-19): bu blok kaynak adını
+    // yazmayı koşulsuz istiyordu; tur MGM/Wikipedia arama sonuçlarından
+    // cevaplandığı hâlde model "Kaynak: api.open-meteo.com" dedi — yani veri
+    // bir yerden, atıf başka yerden geldi. Kaynak adı ancak bu veri gerçekten
+    // kullanıldığında ve YALNIZ bu veriden söylenir.
+    `Use these exact numbers; never round or substitute them. Name ${answer.citation.sourceHost} only if your answer actually rests on the numbers above — if you answer from other evidence, cite that evidence instead. If the user asked for something this data does not cover, say so instead of guessing.`,
   ].join("\n");
 }
 
@@ -6847,6 +6860,9 @@ export async function generateSharedBrainReply(
             }).catch(() => null),
           )
         : null;
+    // Aynı sağlayıcının sonucu hem web temellendirmesinde hem de erken olgu
+    // kanıtında duruyorsa ikinci kopya istemden düşer.
+    input.webGroundingFactProviderId = webGrounding.factAnswer?.providerId ?? null;
     const webGroundingBlock =
       [
         webSynthesisBlock,

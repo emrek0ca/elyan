@@ -63,6 +63,7 @@ import {
 import { createMobilePushDispatcher } from "../modules/mobile/push.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
 import { getPerfSnapshot, startPerfTelemetry } from "../lib/perf-telemetry.js";
+import { primeFactSelection } from "../modules/facts/select.js";
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -379,6 +380,12 @@ export async function buildApp(envInput?: AppEnv) {
     info: (msg) => app.log.info(msg),
     warn: (msg) => app.log.warn(msg),
   });
+
+  /* Olgu sağlayıcı niyet kataloğunu ısıt. Tembel kurulumda ilk olgu turu
+   * canlıda 4.614 ms ödüyordu ve tur sessizce web aramasına düşüyordu. */
+  void primeFactSelection(app.log).then((ready) => {
+    app.log.info({ ready }, "fact selection catalog warmed");
+  }).catch(() => undefined);
 
   /* Event loop lag + stage p95 telemetrisi. 60sn'de bir snapshot loglanır;
    * p95 lag > 50ms sürekli görülüyorsa bir şey event loop'u blokluyordur —

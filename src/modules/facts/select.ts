@@ -32,6 +32,22 @@ const ABSOLUTE_THRESHOLD = 0.82;
 const SHORTLIST_WINDOW = 0.03;
 const SHORTLIST_MAX = 2;
 
+/**
+ * NİYET KATALOĞU AÇILIŞTA ISITILIR.
+ *
+ * Ölçüm (canlı konteyner, 2026-08-19): katalog tembel kurulduğunda İLK olgu
+ * turu 4.614 ms ödüyordu — 7 sağlayıcının 35 niyet cümlesi o turun içinde
+ * gömülüyor. Tur bu bütçeyi karşılayamayınca sağlayıcı seçilemiyor ve istek
+ * sessizce tam web aramasına düşüyor: kullanıcı "Hatay hava durumu" sorusuna
+ * MGM/Wikipedia sonuçlarından derlenmiş bir cevap alıyor.
+ *
+ * Aynı hata sınıfı bu kod tabanında daha önce `primeSemanticComputeWorker`
+ * ile çözülmüştü ("ilk KULLANICI turu ödüyordu"); burada tekrarlanmış. Isıtma
+ * açılışta bir kez denenir, başarısız olursa hiçbir yol kötüleşmez — seçim
+ * yapılamaz, domain yedeği devralır.
+ */
+const SELECTION_EMBED_TIMEOUT_MS = 2_500;
+
 let intentVectors: Array<{ provider: FactProvider<unknown>; vectors: number[][] }> | null = null;
 let intentVectorsPromise: Promise<void> | null = null;
 
@@ -55,6 +71,7 @@ async function ensureIntentVectors(
           provider.intents,
           logger,
           `facts:intents:${provider.id}`,
+          SELECTION_EMBED_TIMEOUT_MS,
         );
         if (!vectors) {
           // Tek bir sağlayıcı gömülemezse katalog EKSİK olur; yarım katalogla
@@ -81,7 +98,14 @@ export async function selectFactProviders(input: {
 }): Promise<FactSelection[]> {
   await ensureIntentVectors(input.logger);
   if (!intentVectors) return [];
-  const queryVector = await embedQueryForStorage(input.prompt, input.logger, "facts:query");
+  // Sorgu gömme KRİTİK YOLDADIR; sınırsız beklemesi turu rehin alır.
+  // Zaman aşımında seçim yapılmaz ve domain yedeği devralır.
+  const queryVector = await embedQueryForStorage(
+    input.prompt,
+    input.logger,
+    "facts:query",
+    SELECTION_EMBED_TIMEOUT_MS,
+  );
   if (!queryVector) return [];
 
   const scored = intentVectors
@@ -96,6 +120,17 @@ export async function selectFactProviders(input: {
   return scored
     .filter((entry) => entry.score >= top.score - SHORTLIST_WINDOW)
     .slice(0, SHORTLIST_MAX);
+}
+
+/**
+ * Açılışta çağrılır. Beklenmez (`void`): ısıtma turu kimseyi geciktirmez,
+ * yalnız ilk kullanıcı turundan önce katalogun hazır olmasını sağlar.
+ */
+export async function primeFactSelection(
+  logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
+): Promise<boolean> {
+  await ensureIntentVectors(logger).catch(() => undefined);
+  return intentVectors !== null;
 }
 
 export function resetFactSelectionForTests(): void {
