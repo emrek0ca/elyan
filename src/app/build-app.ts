@@ -381,12 +381,6 @@ export async function buildApp(envInput?: AppEnv) {
     warn: (msg) => app.log.warn(msg),
   });
 
-  /* Olgu sağlayıcı niyet kataloğunu ısıt. Tembel kurulumda ilk olgu turu
-   * canlıda 4.614 ms ödüyordu ve tur sessizce web aramasına düşüyordu. */
-  void primeFactSelection(app.log).then((ready) => {
-    app.log.info({ ready }, "fact selection catalog warmed");
-  }).catch(() => undefined);
-
   /* Event loop lag + stage p95 telemetrisi. 60sn'de bir snapshot loglanır;
    * p95 lag > 50ms sürekli görülüyorsa bir şey event loop'u blokluyordur —
    * tahminle değil bu metrikle optimize edilir. */
@@ -552,9 +546,18 @@ export async function buildApp(envInput?: AppEnv) {
     modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
     logger: app.log,
   })
-    .then((warmed) => {
+    .then(async (warmed) => {
       app.log.info({ warmed }, "semantic compute model warmup finished");
-      return warmDesktopCapabilityVectors(app.log);
+      await warmDesktopCapabilityVectors(app.log);
+      // Olgu sağlayıcı niyet kataloğu da BU zincirin parçası.
+      //
+      // Önce ayrı bir `void primeFactSelection(...)` olarak eklenmişti ve
+      // canlıda `ready:false` döndü: model yüklenmeden 7 sağlayıcı arka arkaya
+      // denenince gömücünün kendi devre kesicisi (5 hata → 60 sn cooldown)
+      // açılıyor ve tüm yeniden denemeler o cooldown'ın içine düşüyordu.
+      // Yukarıdaki yorumun uyardığı hata: ısıtma sırası tek sahipli olmalı.
+      const factCatalogReady = await primeFactSelection(app.log);
+      app.log.info({ ready: factCatalogReady }, "fact selection catalog warmed");
     })
     .catch(() => null);
 
