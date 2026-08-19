@@ -62,6 +62,19 @@ const SLOT_TOUCH_INTERVAL_MS = 20_000;
 /** An idle socket is a billable open mic. Close it. */
 const IDLE_TIMEOUT_MS = 120_000;
 
+/**
+ * Araya giren ters vekiller soketi upstream'den veri akmadığında kesiyor
+ * (canlıda nginx `proxy_read_timeout 120s`). Kullanıcı mikrofonu açık tutup
+ * susarsa sunucu hiçbir şey göndermez — ne `partial` ne `final` — ve bağlantı
+ * kimse bir şey yapmadan düşer. İstemcinin gördüğü şey "bağlantı kesildi"dir.
+ *
+ * Bu yüzden sessiz oturumda da düzenli bir çerçeve gidiyor. `pong` seçildi:
+ * istemcilerde zaten no-op, yeni tip tanıtmıyor. Boşta kalma sayacını
+ * KURMUYOR — o sayaç istemci mesajlarına bakar ve açık mikrofonu kapatma
+ * politikası olarak kalmalı.
+ */
+const HEARTBEAT_INTERVAL_MS = 25_000;
+
 export const clientMessageSchema = z.union([
   z.object({
     type: z.literal("start"),
@@ -168,6 +181,7 @@ export function buildSpeechStreamRoutes(
     let session: StreamingSpeechSession | null = null;
     let touchTimer: NodeJS.Timeout | undefined;
     let idleTimer: NodeJS.Timeout | undefined;
+    let heartbeatTimer: NodeJS.Timeout | undefined;
     let closed = false;
     let started = false;
     let language: string | undefined;
@@ -193,6 +207,7 @@ export function buildSpeechStreamRoutes(
       closed = true;
       if (touchTimer) clearInterval(touchTimer);
       if (idleTimer) clearTimeout(idleTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       void admission?.release().catch(() => undefined);
       admission = null;
       try {
@@ -341,6 +356,11 @@ export function buildSpeechStreamRoutes(
 
       armIdleTimer();
 
+      heartbeatTimer = setInterval(() => {
+        send({ type: "pong" });
+      }, HEARTBEAT_INTERVAL_MS);
+      heartbeatTimer.unref?.();
+
       socket.on("message", async (raw: RawData) => {
         if (closed) return;
         let parsed: ClientMessage;
@@ -422,11 +442,13 @@ export function buildSpeechStreamRoutes(
         closed = true;
         if (touchTimer) clearInterval(touchTimer);
         if (idleTimer) clearTimeout(idleTimer);
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         void activeAdmission.release().catch(() => undefined);
       });
     } catch (error) {
       if (touchTimer) clearInterval(touchTimer);
       if (idleTimer) clearTimeout(idleTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       void admission?.release().catch(() => undefined);
       if (error instanceof AppError) {
         send({ type: "error", code: error.code });
