@@ -124,7 +124,7 @@ test("desktop dispatch materializes and publishes the plan before lease and send
   assert.deepEqual(order, ["materialize", "prepare", "sync", "lease", "send"]);
 });
 
-test("desktop dispatch fails closed before lease when model planning is unavailable", async () => {
+test("desktop dispatch delegates planning to the desktop when the server cannot materialize a plan", async () => {
   const order: string[] = [];
   const task = {
     id: "task-fallback-dispatch",
@@ -182,8 +182,20 @@ test("desktop dispatch fails closed before lease when model planning is unavaila
     },
   );
 
-  assert.equal(dispatched, "planning_failed");
-  assert.deepEqual(order, ["materialize", "prepare", "fail"]);
+  // SÖZLEŞME DEĞİŞTİ (2026-08-20). Eskiden sunucu plan üretemeyince görev
+  // burada ÖLÜYORDU ve kullanıcı "Görevin güvenilir yürütme planı
+  // hazırlanamadı" görüyordu — canlı örnek: "Bilgisayarımda arama yap chrome
+  // açık mı" (yönlendirme doğruydu, iş masaüstüne HİÇ ULAŞMADAN düştü).
+  //
+  // Masaüstü bunu 2026-08-04'te zaten çözmüştü: plansız görevi kabul edip
+  // yerel çok-turlu ajan döngüsüne delege ediyor. Backend hiç göndermiyordu —
+  // yarım kalmış göç. Artık gönderiyor.
+  //
+  // Onay kaybolmuyor, yeri değişiyor: sunucu planı yokken sunucu onay kapısı
+  // atlanır ama masaüstü ajan döngüsü `require_approval` ile ilk yan etkide
+  // durur ve `safety_policy` her adımda çalışır.
+  assert.equal(dispatched, "dispatched");
+  assert.deepEqual(order, ["materialize", "prepare", "lease", "send"]);
 });
 
 test("desktop dispatch releases an unaccepted lease when runtime send fails", async () => {

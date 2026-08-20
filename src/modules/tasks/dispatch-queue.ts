@@ -74,13 +74,39 @@ export async function dispatchClaimedTask(
 > {
   const materialized = await operations.materialize(app, task);
   await operations.markPrepared(app, task, materialized);
+
+  // ── PLAN ÜRETİLEMEDİ: GÖREVİ ÖLDÜRME, MASAÜSTÜNE DEVRET ─────────────────
+  //
+  // Eskiden burada `failPlanning` çağrılıyor ve kullanıcı "Görevin güvenilir
+  // yürütme planı hazırlanamadı" görüyordu. Canlı örnek (2026-08-20):
+  // "Bilgisayarımda arama yap chrome açık mı" — yönlendirme DOĞRU çalışmış,
+  // görev desktop_runtime'a gitmiş, ama sunucu plan üretemediği için iş
+  // masaüstüne HİÇ ULAŞMADAN öldü.
+  //
+  // Oysa masaüstü bunu 2026-08-04'te zaten çözmüştü: plan yoksa fail-closed
+  // ETMİYOR, görevi YERELDE planlayan çok-turlu ajan döngüsüne delege ediyor
+  // (`_runtime_task_preflight_error` → `delegate_to_agent_loop`). Yani
+  // masaüstü plansız görevi kabul etmeye HAZIRDI; backend hiç göndermiyordu.
+  // Yarım kalmış göç: bir uç güncellendi, diğeri değil.
+  //
+  // GÜVENLİK AÇILMIYOR: sunucu planı olmadığında sunucu onay kapısı
+  // (`gatePlanApproval`) atlanır, ama onay masaüstünde ZATEN uygulanır —
+  // ajan döngüsü `require_approval` ile ilk yan etkide durur ve
+  // `safety_policy` her adımda çalışır. Onay kaybolmuyor, yeri değişiyor.
+  //
+  // Görev yalnız GERÇEKTEN gidecek yer yoksa düşer (aşağıdaki lease/sendToRuntime
+  // yolları `not_dispatched` döndürür ve çağıran onu ele alır).
   if (!materialized) {
-    await operations.failPlanning(app, { task });
-    return "planning_failed";
+    app.log.warn(
+      { taskId: task.id, targetDeviceId: task.targetDeviceId },
+      "desktop plan not materialized; delegating planning to the desktop agent loop",
+    );
   }
-  const approvalTask = operations.gatePlanApproval
-    ? await operations.gatePlanApproval(app, task)
-    : null;
+
+  const approvalTask =
+    materialized && operations.gatePlanApproval
+      ? await operations.gatePlanApproval(app, task)
+      : null;
   if (approvalTask) {
     await operations
       .syncLifecycle(app, {
