@@ -424,16 +424,41 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     // Yeni kural: çıplak konu ismi TEK BAŞINA yerel kanıt DEĞİLDİR. Yerel
     // çalışma zamanı ancak bir yerel NESNE bir EYLEM FİİLİYLE eşleştiğinde
     // gerekir — iki yönlü (İSİM…FİİL ve FİİL…İSİM) ve ek toleranslı.
+    // ⚠ SEMANTİK OTORİTE DENENDİ VE ÖLÇÜMLE GERİ ALINDI (2026-08-20).
+    //
+    // `intent-semantic.ts`'in prototip mekanizmasıyla bu soruya ayrı bir
+    // semantik karar katmanı yazıldı ve TUTULAN KÜMEDE ölçüldü (15 cümle,
+    // hiçbiri tohum listesinde yok):
+    //
+    //   eski desen     9/15   yanlış-YEREL: 0   kaçırılan-yerel: 6
+    //   bu desen       9/15   yanlış-YEREL: 0   kaçırılan-yerel: 6
+    //   hash-semantik  9/15   yanlış-YEREL: 3   kaçırılan-yerel: 3
+    //
+    // Skor aynı ama hata SINIFI daha kötü: hash katmanı "migren için ne
+    // önerirsin" gibi düz sohbeti masaüstü çalışma zamanına yolluyordu.
+    // Sebep: `buildHashedKnowledgeEmbedding` gerçek bir anlam modeli değil,
+    // hash'lenmiş sözcük torbasıdır — tohumla kelime paylaşmayan cümlede
+    // anlamı değil sözcük örtüşmesini ölçer. "Semantik" adını taşıyan bu
+    // SENKRON katman bu kararı veremez.
+    //
+    // GERÇEK ÇÖZÜM (yapılmadı, ayrı iş): karar `classifyIntent`in senkron
+    // yolundan çıkıp anlama zarfına (gerçek model ya da e5 transformer yolu)
+    // taşınmalı; aşağıdaki desenler yalnız model erişilemezken devreye giren
+    // bozuk-mod yedeği olmalı. Buradaki hâliyle o yedek en azından TERS
+    // çalışmıyor — düzeltmeden önce çalışıyordu.
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
       secondaryIntents.includes("computer") ||
-      // Yalnız CİHAZA ÖZGÜ eylemler tek başına kanıttır. `terminal`, `browser`,
-      // `shell`, `desktop`, `local` KONU ismidir ("terminal hızı nasıl
-      // ölçülür", "browser pazar payı") — Türkçe tarafta düzeltilen hatanın
-      // aynısı buradaydı. Onlar aşağıdaki eşleşme desenine taşındı.
-      /\b(file system|screenshot|hotkey|keyboard shortcut|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text) ||
+      // Cihazda var, bulutta yok — konu olarak geçse bile cihaz ister.
       LOCAL_DEVICE_ONLY_PATTERN.test(text) ||
-      localActionOnLocalObject(text);
+      // Yerel NESNE + EYLEM eşleşmesi (iki yönlü, ek toleranslı).
+      localActionOnLocalObject(text) ||
+      // Tartışmasız İngilizce CİHAZ EYLEMLERİ. `terminal`, `browser`, `shell`,
+      // `desktop`, `local` buradan ÇIKARILDI: onlar konu ismidir ("terminal
+      // hızı nasıl ölçülür", "browser market share") ve tek başına kanıt
+      // sayılınca Türkçe tarafla aynı yanlış-YEREL hatasını üretiyorlardı.
+      // Artık yukarıdaki nesne+eylem eşleşmesinden geçiyorlar.
+      /\b(file system|screenshot|hotkey|keyboard shortcut|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text);
     const requiresRetrieval =
       currentUserIdentityQuery ||
       primaryIntent === "research" ||
