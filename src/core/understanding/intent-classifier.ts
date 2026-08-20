@@ -132,6 +132,45 @@ function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
 }
 
+// Yerel çalışma zamanı KANITI — ayrıntılı gerekçe `requiresLocalRuntime`
+// tanımının başında.
+//
+// `LOCAL_OBJECT`: kullanıcının bilgisayarındaki somut nesneler.
+// `LOCAL_ACTION`: o nesneye uygulanabilen eylem fiilleri.
+// `TURKISH_SUFFIX`: eklemeli dil toleransı (`dosya` → `dosyayı`,
+// `masaüstü` → `masaüstüne`). Türkçe ek zincirleri kısadır; 8 harf yeter.
+const LOCAL_OBJECT =
+  "masaüstü|masaustu|dosya|klasör|klasor|terminal|tarayıcı|tarayici|pencere|uygulama|safari|chrome|firefox|finder|ekran görüntüsü|ekran goruntusu|ekran kaydı|ekran kaydi" +
+  // Belirsiz İngilizce konu isimleri: tek başına kanıt değil, eşleşme şart.
+  "|desktop|folder|terminal|shell|browser";
+const LOCAL_ACTION =
+  "aç|ac|kapat|çalıştır|calistir|başlat|baslat|indir|kaydet|taşı|tasi|sil|kopyala|oluştur|olustur|yaz|ekle|yeniden adlandır|yeniden adlandir" +
+  "|open|close|run|launch|download|save|move|delete|copy|create|rename";
+const TURKISH_SUFFIX = String.raw`\p{L}{0,8}`;
+
+/**
+ * Yerel bir nesne + eylem fiili eşleşmesi. İKİ YÖNLÜ: Türkçe fiil-sonda
+ * olduğu için asıl sıra `İSİM … FİİL`, ama emir kipi `FİİL … İSİM` de gelir.
+ * Araya en fazla bir cümlecik girebilir; cümle sonu işaretleri sınırdır ki
+ * "dosya nedir? sonra safariyi aç" gibi iki ayrı cümle birleşmesin.
+ */
+const LOCAL_ACTION_TARGET_PATTERN = new RegExp(
+  `(?<!\\p{L})(?:${LOCAL_OBJECT})${TURKISH_SUFFIX}(?!\\p{L})[^.!?]{0,40}?(?<!\\p{L})(?:${LOCAL_ACTION})${TURKISH_SUFFIX}(?!\\p{L})` +
+    `|(?<!\\p{L})(?:${LOCAL_ACTION})${TURKISH_SUFFIX}(?!\\p{L})[^.!?]{0,40}?(?<!\\p{L})(?:${LOCAL_OBJECT})${TURKISH_SUFFIX}(?!\\p{L})`,
+  "iu",
+);
+
+/**
+ * Yalnız cihazda bulunabilen şeyler. Bunlar konu olarak geçse bile yerel
+ * çalışma zamanı ister; bulutta karşılığı YOKTUR.
+ */
+const LOCAL_DEVICE_ONLY_PATTERN =
+  /(?<!\p{L})(tuş kısayolu|tus kisayolu|ses kayıt|ses kayit|kamera|mikrofon|bildirim gönder|bildirim gonder)\p{L}{0,8}(?!\p{L})/iu;
+
+function localActionOnLocalObject(text: string): boolean {
+  return LOCAL_ACTION_TARGET_PATTERN.test(text);
+}
+
 function calculateRoutingHints(intent: UnderstandingIntent, requiresLocalRuntime: boolean, requiresCitation: boolean): RoutingHints {
   if (requiresLocalRuntime) {
     return {
@@ -361,12 +400,40 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     // semantic secondary intent carries the actual computer surface. Treat
     // that typed signal as local evidence instead of depending on one exact
     // spelling or suffix in the raw message.
+    // YEREL ÇALIŞMA ZAMANI KANITI — konu değil, HEDEF.
+    //
+    // Eski sürüm iki katmerli hatayla TERS çalışıyordu (ölçüldü 2026-08-20):
+    //
+    //   "masaüstüne rapor kaydet"          → bulut   (YANLIŞ)
+    //   "dosyayı sil" / "safariyi aç"       → bulut   (YANLIŞ)
+    //   "pencere yalıtımı hakkında bilgi"   → yerel   (YANLIŞ)
+    //   "ekran kartı fiyatları ne alemde"   → yerel   (YANLIŞ)
+    //
+    // Sebep 1 — SÖZ DİZİMİ: eylem-hedef deseni `FİİL … İSİM` sırası
+    // bekliyordu. Türkçe fiil-sonda bir dildir; asıl sıra `İSİM … FİİL`.
+    // Dolayısıyla desen en açık yerel komutların HİÇBİRİNE uymuyordu ve
+    // pratikte ölüydü.
+    //
+    // Sebep 2 — EK TOLERANSI: `(?!\p{L})` sınırı eklemeli dilde çöküyor.
+    // `dosyayı`, `masaüstüne`, `klasörü`, `safariyi` — hepsi kaçıyordu.
+    //
+    // Sonuç: tek çalışan sinyal ÇIPLAK KONU İSMİ listesiydi ("dosya", "ekran",
+    // "pencere" cümlede geçsin yeter). O da konu ile hedefi ayırt edemediği
+    // için sohbet sorularını yerel çalışma zamanına sürüyordu.
+    //
+    // Yeni kural: çıplak konu ismi TEK BAŞINA yerel kanıt DEĞİLDİR. Yerel
+    // çalışma zamanı ancak bir yerel NESNE bir EYLEM FİİLİYLE eşleştiğinde
+    // gerekir — iki yönlü (İSİM…FİİL ve FİİL…İSİM) ve ek toleranslı.
     const requiresLocalRuntime =
       ["automation", "browser", "computer"].includes(primaryIntent) ||
       secondaryIntents.includes("computer") ||
-      /\b(local(?!-first)|desktop|file system|screenshot|click|type|hotkey|browser|terminal|shell|keyboard shortcut|mouse|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text) ||
-      Boolean(/(?<!\p{L})(yerel|masaustu|masaüstü|dosya|klasör|klasor|terminal|tarayıcı|tarayici|ekran|pencere|uygulama aç|safari|chrome|firefox|finder|tuş kısayolu|tus kisayolu|ekran görüntüsü|ekran goruntusu|ekran kaydı|ekran kaydi|ses kayıt|ses kayit|bildirim gönder|takvim aç|kamera|mikrofon)(?!\p{L})/iu.test(text)) ||
-      Boolean(/(?<!\p{L})(aç|ac|kapat|çalıştır|calistir|başlat|indir|kaydet|taşı|tasi|sil|kopyala)(?!\p{L}).{0,60}(?<!\p{L})(dosya|klasör|klasor|uygulama|safari|chrome|firefox|finder|terminal|masaüstü|masaustu)(?!\p{L})/iu.test(text));
+      // Yalnız CİHAZA ÖZGÜ eylemler tek başına kanıttır. `terminal`, `browser`,
+      // `shell`, `desktop`, `local` KONU ismidir ("terminal hızı nasıl
+      // ölçülür", "browser pazar payı") — Türkçe tarafta düzeltilen hatanın
+      // aynısı buradaydı. Onlar aşağıdaki eşleşme desenine taşındı.
+      /\b(file system|screenshot|hotkey|keyboard shortcut|window management|screen record|screen capture|open app|launch app|quit app|close app|finder|dock)\b/i.test(text) ||
+      LOCAL_DEVICE_ONLY_PATTERN.test(text) ||
+      localActionOnLocalObject(text);
     const requiresRetrieval =
       currentUserIdentityQuery ||
       primaryIntent === "research" ||
