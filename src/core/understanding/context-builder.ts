@@ -1653,6 +1653,29 @@ export function buildUserContextFromMemory(input: {
     pushBounded(safetyHints, "Keep private local runtime data local unless the user explicitly allows sharing.", state);
   }
 
+  // UYDURMA YASAĞI — bu tur kullanıcının bilgisayarını gerektiriyor ama
+  // SOHBET olarak cevaplanıyor.
+  //
+  // CANLI ARIZA (2026-08-20 13:22): kullanıcı "Chrome u kapat" yazdı, asistan
+  // "Tamam, Chrome'u kapatıyorum." dedi ve HİÇBİR ŞEY OLMADI. Ne görev
+  // oluştu, ne masaüstünde iz kaldı. Sınıflandırıcı turu DOĞRU okumuştu
+  // (`requiresLocalRuntime: true`, `intent: automation`) ama mobil
+  // `metadata.desktopDispatch = false` gönderdiği için rota modeli hiç
+  // sorulmadı; tur `mobile_chat_fast` olarak buluta düştü ve model yapmadığı
+  // işi yaptım diye anlattı.
+  //
+  // Rota kararı ne olursa olsun MODEL YALAN SÖYLEMEMELİ. Yönlendirme
+  // kapalıysa doğru davranış yapamadığını söylemektir; kullanıcı o zaman
+  // masaüstü gönderimini açabilir. Sessiz uydurma, kullanıcının işi
+  // yapıldığını sanıp devam etmesine yol açar — en pahalı hata sınıfı.
+  if (input.intent.requiresLocalRuntime) {
+    pushBounded(
+      safetyHints,
+      "This turn needs the user's own computer. If no local execution actually ran in this turn, DO NOT claim you did it, are doing it, or have started it. Never say things like \"okay, closing it now\". State plainly and briefly that you could not act on their computer this turn and why (desktop dispatch is off or no desktop is connected), then stop.",
+      state,
+    );
+  }
+
   if (input.intent.requiresCitation) {
     pushBounded(personalizationHints, "Prefer cited, source-grounded answers for this request.", state);
   }
