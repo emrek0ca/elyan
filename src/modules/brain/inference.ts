@@ -3317,6 +3317,9 @@ export function buildStructuredSystemPrompt(
   const hasAttachmentContent = Boolean(
     attachmentContextBlock || attachmentInsightBlock || resolvedIntentBlock,
   );
+  const planIntent =
+    input.workload === "planning" ||
+    input.understandingContext?.understandingEnvelope?.intent.action === "plan";
   // Widget/structured output sinyalleri: bu turda gerçekten bir chart/table/
   // math/doc yayınlanabilir mi? Değilse ~7KB'lık widget matrisi gereksiz.
   const structuredOutputSignals =
@@ -3325,7 +3328,7 @@ export function buildStructuredSystemPrompt(
     input.workload === "table_generate" ||
     input.workload === "image_analyze" ||
     input.workload === "vision_reasoning" ||
-    input.workload === "planning" ||
+    planIntent ||
     input.workload === "mobile_chat_balanced" ||
     isExplicitTableRequest(input.prompt) ||
     isExplicitChartRequest(input.prompt) ||
@@ -3368,6 +3371,7 @@ export function buildStructuredSystemPrompt(
     buildElyanResponseContractPromptBlock({
       prompt: input.prompt,
       workload: input.workload ?? "fast_route",
+      planIntent,
     }),
     structuredDataBlock,
     compactContextBlock,

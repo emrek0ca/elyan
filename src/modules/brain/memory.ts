@@ -57,7 +57,7 @@ const MEMORY_IMPORTANCE_VERIFIED_BOOST = 3;
 type ExecuteRow = Record<string, unknown>;
 type MemoryRunKind = "memory_extraction" | "memory_consolidation" | "memory_reconsolidation" | "memory_index";
 type MemoryLifecycleStatus = "active" | "contested" | "superseded" | "soft_deleted" | "stale";
-type MemorySearchHit = {
+export type MemorySearchHit = {
   id: string;
   memorySource: "episodic_memory" | "semantic_memory" | "self_model_memory" | "reflective_memory";
   memoryType: string;
@@ -475,22 +475,22 @@ function deriveLifecycleFromState(input: {
   return "active";
 }
 
-function agePenalty(updatedAt: string): number {
+function recencyScore(updatedAt: string): number {
   const timestamp = Date.parse(updatedAt);
   if (!Number.isFinite(timestamp)) {
-    return 0;
+    return 0.25;
   }
   const ageDays = Math.max(0, (Date.now() - timestamp) / 86_400_000);
   if (ageDays <= 7) {
-    return 0.14;
+    return 1;
   }
   if (ageDays <= 30) {
-    return 0.06;
+    return 0.82;
   }
   if (ageDays <= 90) {
-    return 0;
+    return 0.58;
   }
-  return -0.08;
+  return 0.28;
 }
 
 function verificationFreshnessScore(lastVerifiedAt: string | null | undefined): number {
@@ -535,24 +535,27 @@ export function scoreMemoryRecallCandidate(input: MemoryRecallCandidate): number
   const semanticComponent = Math.min(1, Math.max(0, input.semanticScore ?? 0));
   const confidenceComponent = Math.min(1, Math.max(0, input.confidence / 100));
   const importanceComponent = Math.min(1, Math.max(0, input.importanceScore / 100));
-  const sourcePriority = getMemorySourcePriority(input);
+  const sourceTrust = Math.min(1, Math.max(0, getMemorySourcePriority(input)));
   const stalenessPenalty = input.staleness === "contested" ? -0.8 : input.staleness === "stale" ? -0.35 : 0.12;
   const conflictPenalty =
     input.conflictStatus === "contested" ? -0.68 : input.conflictStatus === "superseded" ? -0.86 : 0.06;
-  const pinBoost = input.isPinned ? 0.36 : 0;
-  const recencyComponent = agePenalty(input.updatedAt);
-  const verifiedBoost = verificationFreshnessScore(input.lastVerifiedAt);
+  const pinBoost = input.isPinned ? 0.05 : 0;
+  const recencyComponent = recencyScore(input.updatedAt);
+  const verifiedBoost = Math.min(0.04, verificationFreshnessScore(input.lastVerifiedAt) * 0.16);
 
   return Number(
     (
-      sourcePriority +
-      semanticComponent * 0.32 +
-      lexicalComponent * 0.22 +
-      confidenceComponent * 0.18 +
-      importanceComponent * 0.14 +
+      // Initial retrieval contract: semantic 35%, lexical 25%, confidence
+      // 15%, importance 10%, recency 10%, source trust 5%. Lifecycle and
+      // conflict penalties remain explicit safety gates below the rank score.
+      semanticComponent * 0.35 +
+      lexicalComponent * 0.25 +
+      confidenceComponent * 0.15 +
+      importanceComponent * 0.10 +
+      recencyComponent * 0.10 +
+      sourceTrust * 0.05 +
       pinBoost +
       verifiedBoost +
-      recencyComponent +
       stalenessPenalty +
       conflictPenalty
     ).toFixed(4),
@@ -684,19 +687,50 @@ export async function readCanonicalMemoryState(
     .orderBy(desc(brainMemoryFacts.updatedAt))
     .limit(16);
 
-  return rows.map((row) =>
-    buildMemoryHit({
-      ...row,
-      memorySource: normalizeMemorySource(row.memoryType),
-      staleness: "fresh",
-      isPinned: true,
-      conflictStatus: "active",
-      lifecycleStatus: "active",
-      lexicalScore: 12,
-      semanticScore: 1,
-      deletedAt: null,
-      deletedReason: null,
-    }),
+  return rows
+    .map((row) =>
+      buildMemoryHit({
+        ...row,
+        memorySource: normalizeMemorySource(row.memoryType),
+        staleness: "fresh",
+        isPinned: true,
+        conflictStatus: "active",
+        lifecycleStatus: "active",
+        lexicalScore: 12,
+        semanticScore: 1,
+        deletedAt: null,
+        deletedReason: null,
+      }),
+    )
+    .filter(isMemoryRetrievalAdmitted);
+}
+
+/**
+ * Tek retrieval admission kuralı.
+ *
+ * SQL sorguları active/deleted filtrelerini uygular; bu ek sınır cached veya
+ * reranked adayların da aynı yaşam döngüsü ve kullanıcı izinleriyle
+ * değerlendirilmesini sağlar. Böylece `memory.query`, legacy context ve
+ * cognitive context farklı güvenlik kararlarına ayrışmaz.
+ */
+export function isMemoryRetrievalAdmitted(
+  hit: Pick<
+    MemorySearchHit,
+    | "conflictStatus"
+    | "lifecycleStatus"
+    | "staleness"
+    | "deletedAt"
+    | "metadata"
+  >,
+): boolean {
+  const metadata = safeMetadata(hit.metadata);
+  return (
+    hit.conflictStatus === "active" &&
+    hit.lifecycleStatus === "active" &&
+    hit.staleness === "fresh" &&
+    hit.deletedAt == null &&
+    metadata.retrievalAllowed !== false &&
+    metadata.approved !== false
   );
 }
 
@@ -714,7 +748,8 @@ export async function readCachedCanonicalMemoryState(
             !Array.isArray(item) &&
             typeof (item as MemorySearchHit).id === "string" &&
             typeof (item as MemorySearchHit).title === "string" &&
-            typeof (item as MemorySearchHit).content === "string",
+            typeof (item as MemorySearchHit).content === "string" &&
+            isMemoryRetrievalAdmitted(item as MemorySearchHit),
         ),
     );
     if (rows.length === cached.length) {
@@ -729,7 +764,11 @@ export async function readCachedCanonicalMemoryState(
 function dedupeMemoryHits(results: MemorySearchHit[]): MemorySearchHit[] {
   const bestByKey = new Map<string, MemorySearchHit>();
   for (const result of results) {
-    const key = `${result.memorySource}:${result.id}`;
+    // The same row can arrive through lexical, pgvector and reranker paths.
+    // Deduplicate by durable identity first, not by retrieval source, so one
+    // memory cannot consume the context budget three times.
+    const normalizedContent = result.content.replace(/\s+/g, " ").trim().toLocaleLowerCase("tr-TR");
+    const key = result.id || `${result.memoryType}:${result.title}:${normalizedContent}`;
     const current = bestByKey.get(key);
     if (!current || result.score > current.score) {
       bestByKey.set(key, result);
@@ -742,7 +781,7 @@ export function prioritizeCanonicalMemoryState(
   results: MemorySearchHit[],
   limit: number,
 ): MemorySearchHit[] {
-  const deduped = dedupeMemoryHits(results);
+  const deduped = dedupeMemoryHits(results.filter(isMemoryRetrievalAdmitted));
   const canonical = deduped
     .filter(
       (result) =>

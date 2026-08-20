@@ -690,8 +690,8 @@ function scoreContinuityCandidate(input: {
  *                doğru olması gereken sabitler).
  *
  * scoreMemoryRecallCandidate (memory.ts) blended score dönüyor: semantic
- * (weight 0.32) + lexical (0.22) + confidence (0.18) + importance (0.14)
- * + pin/verified/recency bonuslar. Alakasız bir fact intrinsik özellikleri
+ * (weight 0.35) + lexical (0.25) + confidence (0.15) + importance (0.10)
+ * + recency (0.10) + source trust (0.05). Alakasız bir fact intrinsik özellikleri
  * ile ~0.4-0.6 puan alabilir; RELEVANCE_MODERATE=0.7 bu seviyeyi biraz
  * geçiyor, gerçek query overlap'i olmadan geçemez.
  */

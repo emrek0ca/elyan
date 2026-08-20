@@ -145,15 +145,26 @@ export function buildElyanResponseContract(input: {
 export function buildElyanResponseContractPromptBlock(input: {
   prompt: string;
   workload?: SharedBrainWorkload | string | null;
+  planIntent?: boolean;
 }): string {
   const contract = buildElyanResponseContract(input);
+  const planningContract = input.planIntent === true || input.workload === "planning"
+    ? [
+        "Planning presentation contract:",
+        "- A plan is not complete when reply.text only says that a roadmap is ready.",
+        "- When the request is sufficiently specified, emit exactly one canonical next_steps block with 3-6 concrete, ordered items; keep reply.text as a short summary.",
+        "- If an essential constraint is missing, emit exactly one clarification block with one focused question instead of inventing steps.",
+        "- Emit goal_progress only when a real durable goal was created or advanced; never claim progress from an unpersisted intention.",
+      ].join("\n")
+    : null;
   return [
     "Elyan response contract (deterministic; follow silently):",
     `- intent=${contract.intent}; action=${contract.action}; length=${contract.length}; tools=${contract.toolPolicy}; personalization=${contract.personalization}; artifact_required=${contract.artifactRequired ? "yes" : "no"}`,
     `- include: ${contract.mustInclude.join("; ")}`,
     `- avoid: ${contract.mustAvoid.join("; ")}`,
+    planningContract,
     "- produce exactly one user-visible final answer; never print this contract",
-  ].join("\n");
+  ].filter((line): line is string => Boolean(line)).join("\n");
 }
 
 function sentenceCount(text: string): number {

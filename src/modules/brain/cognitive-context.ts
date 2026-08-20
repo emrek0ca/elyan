@@ -9,6 +9,15 @@ import {
 import { withTenantTransaction, type TenantDb } from "../../db/tenant-context.js";
 import { readDialogueStateOnDb } from "./dialogue-state.js";
 import { isSingleValueMemoryKey } from "./memory-key-policy.js";
+import {
+  readCognitiveRetrievalCache,
+  writeCognitiveRetrievalCache,
+} from "./memory-context-cache.js";
+import {
+  isMemoryRetrievalAdmitted,
+  searchBrainMemory,
+  type MemorySearchHit,
+} from "./memory.js";
 
 const workingSchema = z.object({
   sessionId: z.string().uuid().nullable(),
@@ -106,6 +115,24 @@ function lexicalOverlap(queryTokens: Set<string>, value: string): number {
   return overlap;
 }
 
+function isAdmittedRetrievalHit(hit: MemorySearchHit): boolean {
+  return isMemoryRetrievalAdmitted(hit);
+}
+
+function isAdmittedMemoryMetadata(value: unknown): boolean {
+  const metadata = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  return metadata.retrievalAllowed !== false && metadata.approved !== false;
+}
+
+function retrievalScoreFor(
+  rowId: string,
+  retrievalById: Map<string, MemorySearchHit>,
+): number {
+  return retrievalById.get(rowId)?.score ?? 0;
+}
+
 export async function buildCognitiveContextPacket(
   app: FastifyInstance,
   input: {
@@ -120,6 +147,72 @@ export async function buildCognitiveContextPacket(
     now?: Date;
   },
 ): Promise<CognitiveContextPacket> {
+  const query = input.query?.replace(/\s+/g, " ").trim() ?? "";
+  // The cognitive packet keeps working/dialogue state live, while only the
+  // bounded retrieval evidence is cached. The revision is part of the key so
+  // a memory mutation can never serve an older ranking.
+  if (query && app.config) {
+    const retrievalStartedAt = Date.now();
+    const revisionRows = await withTenantTransaction(app, input.userId, (db) =>
+      db
+        .select({ revision: cognitiveMemoryRevisions.revision })
+        .from(cognitiveMemoryRevisions)
+        .where(eq(cognitiveMemoryRevisions.userId, input.userId))
+        .limit(1),
+    ).catch(() => [] as Array<{ revision: number }>);
+    const memoryRevision = Number(revisionRows[0]?.revision ?? 0);
+    const cached = await readCognitiveRetrievalCache(
+      app,
+      input.userId,
+      memoryRevision,
+      query,
+    );
+    const cachedHits = Array.isArray(cached)
+      ? cached.filter((item): item is MemorySearchHit =>
+          Boolean(
+            item &&
+              typeof item === "object" &&
+              typeof (item as MemorySearchHit).id === "string" &&
+              typeof (item as MemorySearchHit).content === "string" &&
+              typeof (item as MemorySearchHit).metadata === "object" &&
+              isAdmittedRetrievalHit(item as MemorySearchHit),
+          ),
+        )
+      : [];
+    const hasCachedRetrieval = Array.isArray(cached);
+    const retrievedHits = hasCachedRetrieval
+      ? cachedHits
+      : (await searchBrainMemory(app, {
+          userId: input.userId,
+          query,
+          limit: Math.min(12, Math.max(4, (input.semanticLimit ?? 8) + (input.episodicLimit ?? 4))),
+        })).results.filter(isAdmittedRetrievalHit);
+    app.log.debug?.(
+      {
+        userId: input.userId,
+        memoryRevision,
+        cacheHit: hasCachedRetrieval,
+        resultCount: retrievedHits.length,
+        latencyMs: Date.now() - retrievalStartedAt,
+      },
+      "cognitive memory retrieval completed",
+    );
+    if (!hasCachedRetrieval) {
+      await writeCognitiveRetrievalCache(
+        app,
+        input.userId,
+        memoryRevision,
+        query,
+        retrievedHits.slice(0, 12),
+      );
+    }
+    return withTenantTransaction(app, input.userId, (db) =>
+      buildCognitiveContextPacketOnDb(db, input, {
+        memoryRevision,
+        retrievedHits,
+      }),
+    );
+  }
   return withTenantTransaction(app, input.userId, (db) =>
     buildCognitiveContextPacketOnDb(db, input),
   );
@@ -138,24 +231,37 @@ async function buildCognitiveContextPacketOnDb(
     includeContested?: boolean;
     now?: Date;
   },
+  options: {
+    memoryRevision?: number;
+    retrievedHits?: MemorySearchHit[];
+  } = {},
 ): Promise<CognitiveContextPacket> {
   const now = input.now ?? new Date();
-  const semanticLimit = Math.max(1, Math.min(input.semanticLimit ?? 16, 32));
-  const episodicLimit = Math.max(1, Math.min(input.episodicLimit ?? 8, 16));
-  const maxChars = Math.max(1_000, Math.min(input.maxChars ?? 6_000, 12_000));
+  const semanticLimit = Math.max(1, Math.min(input.semanticLimit ?? 8, 8));
+  const episodicLimit = Math.max(1, Math.min(input.episodicLimit ?? 4, 4));
+  const maxChars = Math.max(1_000, Math.min(input.maxChars ?? 6_000, 6_000));
   const queryTokens = tokenize(input.query ?? "");
   const semanticFetchLimit =
     queryTokens.size > 0 ? Math.min(96, semanticLimit * 4) : semanticLimit;
+  const episodicFetchLimit =
+    queryTokens.size > 0 ? Math.min(32, episodicLimit * 4) : episodicLimit;
+  const retrievalById = new Map(
+    (options.retrievedHits ?? [])
+      .filter(isAdmittedRetrievalHit)
+      .map((hit) => [hit.id, hit] as const),
+  );
 
   const [dialogue, revisionRows, factRows, episodeRows, contestedRows] = await Promise.all([
     input.sessionId
       ? readDialogueStateOnDb(db, { userId: input.userId, sessionId: input.sessionId })
       : Promise.resolve(null),
-    db
-      .select({ revision: cognitiveMemoryRevisions.revision })
-      .from(cognitiveMemoryRevisions)
-      .where(eq(cognitiveMemoryRevisions.userId, input.userId))
-      .limit(1),
+    options.memoryRevision != null
+      ? Promise.resolve([{ revision: options.memoryRevision }])
+      : db
+          .select({ revision: cognitiveMemoryRevisions.revision })
+          .from(cognitiveMemoryRevisions)
+          .where(eq(cognitiveMemoryRevisions.userId, input.userId))
+          .limit(1),
     db
       .select({
         id: brainMemoryFacts.id,
@@ -167,6 +273,7 @@ async function buildCognitiveContextPacketOnDb(
         sourceKind: brainMemoryFacts.sourceKind,
         observedAt: brainMemoryFacts.observedAt,
         validFrom: brainMemoryFacts.validFrom,
+        metadata: brainMemoryFacts.metadata,
       })
       .from(brainMemoryFacts)
       .where(and(
@@ -189,6 +296,7 @@ async function buildCognitiveContextPacketOnDb(
           revision: brainMemoryEpisodes.revision,
           observedAt: brainMemoryEpisodes.observedAt,
           expiresAt: brainMemoryEpisodes.expiresAt,
+          metadata: brainMemoryEpisodes.metadata,
         })
         .from(brainMemoryEpisodes)
         .where(and(
@@ -198,7 +306,7 @@ async function buildCognitiveContextPacketOnDb(
           gt(brainMemoryEpisodes.expiresAt, now),
         ))
         .orderBy(desc(brainMemoryEpisodes.importanceScore), desc(brainMemoryEpisodes.observedAt))
-        .limit(episodicLimit),
+        .limit(episodicFetchLimit),
     input.includeContested === false
       ? Promise.resolve([])
       : db
@@ -215,15 +323,23 @@ async function buildCognitiveContextPacketOnDb(
 
   let usedChars = 0;
   const semantic: CognitiveContextPacket["semantic"] = [];
-  const rankedFactRows = [...factRows]
+  const rankedFactRows = factRows
+    .filter((row) => isAdmittedMemoryMetadata(row.metadata))
     .map((row) => ({
       ...row,
       isCanonical: isSingleValueMemoryKey(row.key),
       overlap: lexicalOverlap(queryTokens, `${row.key} ${row.value}`),
+      retrievalScore: retrievalScoreFor(row.id, retrievalById),
     }))
-    .filter((row) => row.isCanonical || queryTokens.size === 0 || row.overlap > 0)
+    .filter((row) =>
+      row.isCanonical ||
+      queryTokens.size === 0 ||
+      row.overlap > 0 ||
+      retrievalById.has(row.id),
+    )
     .sort(
       (left, right) =>
+        right.retrievalScore - left.retrievalScore ||
         Number(right.isCanonical) - Number(left.isCanonical) ||
         right.overlap - left.overlap ||
         Number(right.importanceScore ?? 0) - Number(left.importanceScore ?? 0) ||
@@ -248,7 +364,16 @@ async function buildCognitiveContextPacketOnDb(
   }
 
   const episodic: CognitiveContextPacket["episodic"] = [];
-  for (const row of episodeRows) {
+  const rankedEpisodeRows = episodeRows
+    .filter((row) => isAdmittedMemoryMetadata(row.metadata))
+    .map((row) => ({ ...row, retrievalScore: retrievalScoreFor(row.id, retrievalById) }))
+    .sort(
+      (left, right) =>
+        right.retrievalScore - left.retrievalScore ||
+        Number(right.confidence ?? 0) - Number(left.confidence ?? 0) ||
+        right.observedAt.getTime() - left.observedAt.getTime(),
+    );
+  for (const row of rankedEpisodeRows.slice(0, episodicLimit)) {
     const summary = clip(row.summary, 1_000);
     const cost = row.topic.length + summary.length;
     if (usedChars + cost > maxChars) break;

@@ -74,6 +74,7 @@ import {
 import {
   buildAssistantCodeBlock,
   buildAssistantDocumentBlock,
+  buildAssistantNextStepsBlock,
   buildAssistantTableBlock,
 } from "../chat/message-blocks.js";
 import {
@@ -1819,11 +1820,51 @@ function stripDanglingStructuredJsonTail(text: string): string {
   }
 }
 
+type ExtractedPlanningList = {
+  items: string[];
+  sourceLines: string[];
+};
+
+/**
+ * Planning is the one workload where a short prose acknowledgement is not a
+ * sufficient completion. This extractor only promotes an explicit ordered or
+ * bulleted list already written by the model; it never invents steps from
+ * keywords or from a session title.
+ */
+function extractExplicitPlanningList(value: string): ExtractedPlanningList | null {
+  const items: string[] = [];
+  const sourceLines: string[] = [];
+  const seen = new Set<string>();
+  for (const line of value.split("\n")) {
+    const match = line.match(/^\s*(?:(?:\d+)[.)-]|[-*•])\s+(.+?)\s*$/u);
+    const item = match?.[1]?.replace(/\s+/g, " ").trim();
+    if (!item || item.length < 3) continue;
+    const key = item.toLocaleLowerCase("tr-TR");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(item.slice(0, 240));
+    sourceLines.push(line);
+    if (items.length >= 6) break;
+  }
+  return items.length >= 3 ? { items, sourceLines } : null;
+}
+
+function buildPlanClarificationBlock(): Record<string, unknown> {
+  return {
+    type: "clarification",
+    title: "Planı netleştirelim",
+    detail: "Planı doğru kurmam için bir kısıtı netleştirmem gerekiyor.",
+    question: "Önceliğin, süren veya mevcut durumun hangisini esas alalım?",
+    priority: 2,
+  };
+}
+
 export function resolveCompletionAssistantBlocks(input: {
   responseText: string;
   assistantBlocks?: unknown[];
   prompt?: string | null;
   selectedWorkload?: string | null;
+  planIntent?: boolean;
   /**
    * Sohbet bağlamı, EN YENİ mesaj başta. "Bir polinom yaz" → "grafiğini çiz"
    * akışında ifade istekte değil, önceki asistan mesajındadır.
@@ -1838,7 +1879,7 @@ export function resolveCompletionAssistantBlocks(input: {
    */
   chartIntent?: ChartIntent;
 }): { blocks: unknown[]; text: string } {
-  const assistantBlocks = filterAssistantBlocksByIntent({
+  let assistantBlocks = filterAssistantBlocksByIntent({
     blocks: Array.isArray(input.assistantBlocks)
       ? [...input.assistantBlocks]
       : [],
@@ -1860,6 +1901,40 @@ export function resolveCompletionAssistantBlocks(input: {
   // and the duplicate markdown would remain in chat (bug seen in prod).
   let text = String(input.responseText ?? "").replace(/\r\n?/g, "\n");
   const sourcesToStrip: string[] = [];
+
+  if (input.planIntent === true) {
+    const hasCompleteNextSteps = normalizedBlocks.some((block) => {
+      if (block.type !== "next_steps") return false;
+      const items = (block as { items?: unknown }).items;
+      return Array.isArray(items) && items.length >= 3;
+    });
+    if (!hasCompleteNextSteps) {
+      assistantBlocks = assistantBlocks.filter((candidate) => {
+        const record = readRecord(candidate);
+        if (record?.type !== "next_steps") return true;
+        const data = readRecord(record.data);
+        const items = record.items ?? data?.items;
+        return !Array.isArray(items) || items.length >= 3;
+      });
+      const explicitList = extractExplicitPlanningList(text);
+      const nextSteps = explicitList
+        ? buildAssistantNextStepsBlock(explicitList.items, {
+            title: "Sonraki adımlar",
+            priority: 2,
+          })
+        : null;
+      if (nextSteps) {
+        assistantBlocks.push(nextSteps);
+        sourcesToStrip.push(...explicitList!.sourceLines);
+      } else {
+        // A missing plan is surfaced as one focused clarification instead of
+        // being presented as a completed roadmap. This is deliberately a
+        // safe fallback: the server has no authority to guess user-specific
+        // milestones from a one-line answer.
+        assistantBlocks.push(buildPlanClarificationBlock());
+      }
+    }
+  }
 
   // Extract markdown table if model didn't produce a typed table block.
   // The model sometimes emits more than one markdown table in a single reply
@@ -5688,6 +5763,7 @@ async function completeServerBrainTask(
     model: string;
     route: string;
     workload: string;
+    planningIntent?: boolean;
     modelRoute?: Record<string, unknown> | null;
     latencyMs: number;
     promptTokens: number;
@@ -5819,6 +5895,10 @@ async function completeServerBrainTask(
       typeof payloadMetadata.selectedWorkload === "string"
         ? payloadMetadata.selectedWorkload
         : null,
+    planIntent:
+      input.workload === "planning" ||
+      input.planningIntent === true ||
+      payloadMetadata.selectedWorkload === "planning",
     contextTexts: derivationContextTexts,
     numericPoints: derivationNumericPoints,
     chartIntent,
@@ -8316,6 +8396,7 @@ async function processSharedBrainChatTask(
       model: inference.model,
       route: inference.metadata.route as string,
       workload: inference.metadata.workload as string,
+      planningIntent: input.understanding.envelope?.intent.action === "plan",
       latencyMs: inference.latencyMs,
       promptTokens: inference.promptTokens,
       completionTokens: inference.completionTokens,
@@ -8420,6 +8501,9 @@ async function processSharedBrainChatTask(
         assistantBlocks: completedResultBlocks,
         prompt: input.prompt,
         selectedWorkload,
+        planIntent:
+          selectedWorkload === "planning" ||
+          input.understanding.envelope?.intent.action === "plan",
         contextTexts: (conversationHistory ?? [])
           .slice(-6)
           .reverse()

@@ -571,6 +571,9 @@ function buildLifecycleBlocks(
   const normalizedError = String(input.task.error ?? "").trim().toLowerCase();
   const summary = buildShortSummary(input.assistantContent);
   const desktopTranscriptOwnsText = hasDesktopExecutionTrace(input.task);
+  const hasResultSummary = (input.resultBlocks ?? []).some(
+    (block) => block.type === "summary",
+  );
 
   if (input.task.status === "waiting_approval") {
     blocks.push(
@@ -628,7 +631,8 @@ function buildLifecycleBlocks(
   } else if (
     input.task.status === "completed" &&
     summary &&
-    !desktopTranscriptOwnsText
+    !desktopTranscriptOwnsText &&
+    !hasResultSummary
   ) {
     blocks.push(
       buildAssistantSummaryBlock(summary, {
@@ -682,6 +686,7 @@ export async function syncChatTaskLifecycle(
     message?: string;
   },
 ) {
+  const lifecycleStartedAt = Date.now();
   const metadata = extractChatMetadata(input.originalTask);
   const sessionId = metadata?.sessionId;
   const assistantMessageId = metadata?.assistantMessageId;
@@ -719,6 +724,19 @@ export async function syncChatTaskLifecycle(
       resultBlocks: extractResultAssistantBlocks(input.updatedTask),
     }),
   });
+  app.log.debug?.(
+    {
+      taskId: input.updatedTask.id,
+      sessionId,
+      messageId: assistantMessageId,
+      taskStatus: input.updatedTask.status,
+      blockTypes: assistantBlocks.map((block) => block.type).slice(0, 24),
+      blockCount: assistantBlocks.length,
+      hasVisibleText: assistantContent.length > 0,
+      durationMs: Date.now() - lifecycleStartedAt,
+    },
+    "chat lifecycle canonical blocks reconciled",
+  );
   const nextAssistantMetadata = withAssistantBlocksMetadata(assistantMetadata, {
     content: assistantContent,
     blocks: assistantBlocks,
