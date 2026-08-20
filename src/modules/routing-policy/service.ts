@@ -2594,13 +2594,36 @@ export async function decideCommandRoute(
     classification.requiresLocalRuntime !== true
       ? undefined
       : input.routeContinuity;
+  // ANAHTAR NET BİR YEREL KOMUTU SESSİZCE YUTMASIN.
+  //
+  // CANLI ARIZA (2026-08-20 13:22): "Chrome u kapat" → sınıflandırıcı DOĞRU
+  // okudu (`requiresLocalRuntime: true`, `intent: automation`) ama mobil
+  // `desktopDispatch: false` gönderdiği için rota modeli HİÇ SORULMADI; tur
+  // `mobile_chat_fast` olarak buluta düştü ve model "Tamam, Chrome'u
+  // kapatıyorum" deyip hiçbir şey yapmadı.
+  //
+  // `desktopDispatchEnabled` mobilde UserDefaults varsayılanı FALSE ve
+  // sohbet ekranında görünmüyordu — yani kullanıcıların çoğu için HER yerel
+  // komut sessizce sohbete düşüyordu. Bir UI anahtarının, doğru çalışan
+  // anlama katmanını veto etmesi "bir karar, beş sahip" hata sınıfıdır.
+  //
+  // Anahtar hâlâ anlamlı: BELİRSİZ turlarda kullanıcının tercihi geçerli.
+  // Ama tur açıkça yerel çalışma zamanı istiyorsa VE bağlı bir masaüstü
+  // varsa, karar en azından rota modeline sorulur. Model yine "sohbet"
+  // diyebilir — otorite ondan alınmıyor, yalnız soru sorulması sağlanıyor.
+  const unambiguousLocalTurn =
+    classification.requiresLocalRuntime === true &&
+    hasLiveDesktopRuntime &&
+    !isDesktopAdviceOnlyRequest(message);
+
   const shouldConsultRouteModel =
     !runtimeMcpRequested &&
-    !desktopDispatchDisabled &&
+    (!desktopDispatchDisabled || unambiguousLocalTurn) &&
     explicitRequestedCapabilities.length === 0 &&
     (input.source === "mobile" ||
       input.source === "desktop" ||
-      desktopDispatchRequested) &&
+      desktopDispatchRequested ||
+      unambiguousLocalTurn) &&
     shouldConsultRouteModelForClassification({
       classification,
       message,
