@@ -27,6 +27,10 @@ import {
   issueTaskDispatchLease,
   updateTaskFromRuntime,
 } from "../tasks/service.js";
+import {
+  enqueueTaskDispatch,
+  sendPendingDesktopPlanStatus,
+} from "../tasks/dispatch-queue.js";
 import { runtimeSocketMessageSchema } from "../runtime/schemas.js";
 import {
   disconnectRuntime,
@@ -114,6 +118,9 @@ export function shouldDispatchAssignedRuntimeTask(
   task: Awaited<ReturnType<typeof listAssignedRuntimeTasks>>[number],
   connectionId: string,
 ): boolean {
+  if (task.planPreparationPending === true) {
+    return false;
+  }
   if (task.status === "queued" || task.status === "planning") {
     return true;
   }
@@ -817,9 +824,44 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         });
       await markRuntimeConnected(app, payload, socketSessionId);
 
-      const queuedTasks = await listAssignedRuntimeTasks(app, payload);
+      const queuedTasks = await listAssignedRuntimeTasks(app, payload, {
+        includePlanPending: true,
+      });
 
       for (const task of queuedTasks) {
+        if (task.planPreparationPending === true) {
+          // Runtime bağlantı kurulduğunda plan bekleyen görev için ilk
+          // görünürlük bildirimi doğrudan bu socket üzerinden gönderilir.
+          // Görev oluşturulurken socket kısa süreli kapalıysa yalnız queue
+          // requeue etmek paneli "Aktif görev yok" bırakabiliyordu; bu frame
+          // çalıştırılabilir task değildir, sadece yerel panel durumudur.
+          await sendPendingDesktopPlanStatus(
+            app,
+            task,
+            (_deviceId, message) => {
+              try {
+                if (socket.readyState !== 1) return false;
+                socket.send(JSON.stringify(message));
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          );
+          await enqueueTaskDispatch(app, task.id, {
+            jobId: `runtime-plan-${task.id}-${payload.connectionId}`,
+          }).catch((error) => {
+            app.log.warn(
+              {
+                taskId: task.id,
+                connectionId: payload.connectionId,
+                error,
+              },
+              "pending runtime task was not requeued for plan materialization",
+            );
+          });
+          continue;
+        }
         if (!shouldDispatchAssignedRuntimeTask(task, payload.connectionId)) {
           continue;
         }

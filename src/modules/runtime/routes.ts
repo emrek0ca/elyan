@@ -102,7 +102,14 @@ export const runtimeRoutes: FastifyPluginAsync = async (app) => {
 
     const auth = getRuntimeAuth(request);
 
-    const tasks = await listAssignedRuntimeTasks(app, auth);
+    // Planı bekleyen görevler çalıştırılabilir değildir; fakat runtime'ın
+    // yerel görev paneli bunları "planlanıyor" olarak gösterebilmelidir.
+    // `listAssignedRuntimeTasks` bu seçenekle satırı lease etmeden döndürür;
+    // desktop scheduler da marker'ı görünürlük için kullanıp çalıştırmayı
+    // atlar.
+    const tasks = await listAssignedRuntimeTasks(app, auth, {
+      includePlanPending: true,
+    });
     return {
       // Authenticated runtime channel binding: desktop WorkOrder v2 seals this
       // backend-owned identity into its device-local execution ledger.

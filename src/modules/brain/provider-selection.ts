@@ -236,7 +236,17 @@ function buildHostedProviderCandidates(
   const groqCompoundModel = compoundEligible
     ? resolveGroqCompoundModel(app.config, workload)
     : "";
-  const structuredFallbackModel = "";
+  // Machine-json routes normally start on the workload's configured OSS
+  // model. For routing/planning we still keep one compatibility fallback so a
+  // malformed/unsupported JSON response does not collapse the whole task.
+  // Document-analysis keeps its isolated lane until its provider contract is
+  // migrated, so it deliberately has no cross-model fallback here.
+  const structuredFallbackModel =
+    workload === "intent" ||
+    workload === "fast_route" ||
+    workload === "planning"
+      ? groqFallbackModel
+      : "";
   if (groqApiKey && groqBaseUrl && groqPrimaryModel) {
     hostedCandidates.push({
       provider: "groq",
@@ -245,7 +255,7 @@ function buildHostedProviderCandidates(
         groqCompoundModel,
         groqPrimaryModel,
         ...(strictStructuredOutput
-          ? []
+          ? [structuredFallbackModel]
           : [structuredFallbackModel, groqFallbackModel]),
       ].filter(
         (model, index, values): model is string =>

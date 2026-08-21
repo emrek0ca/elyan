@@ -271,9 +271,40 @@ function describeRoute(
   return "Uygun yol seçildi.";
 }
 
+type DesktopPlanPreparationStatus = "pending" | "ready" | "failed";
+
+function desktopPlanPreparationStatus(
+  task: TaskTraceSource,
+): DesktopPlanPreparationStatus | null {
+  const payload = readRecord(task.payload);
+  const workOrder = readRecord(payload?.desktopWorkOrder);
+  const planPreview = readRecord(workOrder?.planPreview);
+  const preparation = readRecord(planPreview?.planPreparation);
+  const status = readString(preparation, "status")?.toLowerCase();
+
+  if (status === "pending" || status === "ready" || status === "failed") {
+    return status;
+  }
+
+  // Eski görevlerde hazırlık durumu ayrı alanda yoktur. Heuristic kaynak,
+  // planın henüz desktop'a çalıştırılabilir olmadığını ifade eder.
+  return readString(planPreview, "planSource")?.toLowerCase() === "heuristic"
+    ? "pending"
+    : null;
+}
+
 function describePlan(
+  task: TaskTraceSource,
   routeDecision: ReturnType<typeof extractTaskRouteDecision>,
 ): string | undefined {
+  const preparationStatus = desktopPlanPreparationStatus(task);
+  if (preparationStatus === "pending") {
+    return "Plan hazırlanıyor; masaüstü yürütmesi beklemede.";
+  }
+  if (preparationStatus === "failed") {
+    return "Plan hazırlanamadı.";
+  }
+
   const executionPlan = routeDecision?.taskRoute?.executionPlan ?? [];
   if (executionPlan.length > 0) {
     return "Plan hazır.";
@@ -855,7 +886,13 @@ export function buildTaskTraceBlock(input: {
     routeDecision?.intent ??
     readString(intentRecord, "primaryIntent") ??
     readString(intentRecord, "intent");
-  const planDetail = describePlan(routeDecision);
+  const planPreparationStatus = desktopPlanPreparationStatus(input.task);
+  const planDetail = describePlan(input.task, routeDecision);
+  const planReady =
+    planPreparationStatus === "ready" ||
+    (planPreparationStatus === null &&
+      ((routeDecision?.taskRoute?.executionPlan?.length ?? 0) > 0 ||
+        Boolean(routeDecision?.selectedWorkload)));
   const context = describeContext(input.task);
   const tool = describeTool(input.task);
   const verify = describeVerify(input.task);
@@ -937,7 +974,7 @@ export function buildTaskTraceBlock(input: {
           ? "skipped"
           : failureStep === "plan"
             ? "failed"
-            : planDetail != null || terminalSuccess
+            : planReady
               ? "completed"
               : input.task.status === "planning" ||
                   input.task.status === "queued"
@@ -953,7 +990,7 @@ export function buildTaskTraceBlock(input: {
             })),
       task: input.task,
       completedAt:
-        planDetail != null || terminalSuccess ? input.task.updatedAt : null,
+        planReady ? input.task.updatedAt : null,
     }),
     buildStep({
       id: "delivery",

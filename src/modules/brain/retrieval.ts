@@ -189,7 +189,10 @@ export async function backfillSemanticV2Embeddings(
       .from(knowledgeChunks)
       .where(
         and(
-          sql`${knowledgeChunks.embeddingModel} is not null`,
+          // Older indexed chunks may have a vector but no model marker. The
+          // vector columns are the durable source of truth; requiring only
+          // embedding_model silently made those rows invisible to backfill.
+          sql`(embedding is not null or embedding_v2 is not null)`,
           sql`embedding_v2 is null`,
         ),
       )
@@ -296,20 +299,28 @@ async function ensureSemanticV2Column(app: FastifyInstance): Promise<boolean> {
 export async function getRetrievalStatus(app: FastifyInstance, userId: string) {
   const hybridReady = await canUseHybridRetrieval(app);
   try {
+    // /readyz uses a synthetic identity to report infrastructure readiness.
+    // Applying a user-scoped visibility filter there made a healthy private
+    // corpus look empty (and therefore reported lexical_fallback/0), even
+    // though the actual user's retrieval path could use its embeddings. The
+    // health aggregate contains counts only, never chunk content, so it may
+    // inspect all ready documents; normal callers remain user/session scoped.
+    const visibility =
+      userId === "__health__"
+        ? eq(knowledgeDocuments.status, "ready")
+        : and(
+            eq(knowledgeDocuments.status, "ready"),
+            or(eq(knowledgeChunks.scope, "shared"), eq(knowledgeChunks.ownerUserId, userId)),
+          );
     const counts = await app.db
       .select({
         totalChunks: sql<number>`count(*)`,
-        embeddedChunks: sql<number>`count(*) filter (where ${knowledgeChunks.embeddingModel} is not null)`,
-        lastIndexedAt: sql<Date | null>`max(${knowledgeChunks.createdAt}) filter (where ${knowledgeChunks.embeddingModel} is not null)`,
+        embeddedChunks: sql<number>`count(*) filter (where embedding is not null or embedding_v2 is not null)`,
+        lastIndexedAt: sql<Date | null>`max(${knowledgeChunks.createdAt}) filter (where embedding is not null or embedding_v2 is not null)`,
       })
       .from(knowledgeChunks)
-      .leftJoin(knowledgeDocuments, eq(knowledgeDocuments.id, knowledgeChunks.documentId))
-      .where(
-        and(
-          eq(knowledgeDocuments.status, "ready"),
-          or(eq(knowledgeChunks.scope, "shared"), eq(knowledgeChunks.ownerUserId, userId)),
-        ),
-      );
+      .innerJoin(knowledgeDocuments, eq(knowledgeDocuments.id, knowledgeChunks.documentId))
+      .where(visibility);
 
     const pendingJobs = await app.db
       .select({
@@ -322,13 +333,23 @@ export async function getRetrievalStatus(app: FastifyInstance, userId: string) {
     const embeddedChunks = Number(counts[0]?.embeddedChunks ?? 0);
     const embeddingCoverage =
       totalChunks <= 0 ? 0 : Number(((embeddedChunks / totalChunks) * 100).toFixed(1));
+    const rawLastIndexedAt = counts[0]?.lastIndexedAt;
+    let lastIndexedAt: string | null = null;
+    if (rawLastIndexedAt) {
+      const parsed = rawLastIndexedAt instanceof Date
+        ? rawLastIndexedAt
+        : new Date(String(rawLastIndexedAt));
+      if (!Number.isNaN(parsed.getTime())) {
+        lastIndexedAt = parsed.toISOString();
+      }
+    }
 
     return {
       mode: hybridReady && embeddedChunks > 0 ? ("hybrid" as const) : ("lexical_fallback" as const),
       hybridReady,
       embeddingCoverage,
       pendingIndexJobs: Number(pendingJobs[0]?.pending ?? 0),
-      lastIndexedAt: counts[0]?.lastIndexedAt?.toISOString() ?? null,
+      lastIndexedAt,
     };
   } catch {
     return {
@@ -465,7 +486,7 @@ async function searchKnowledgeHybrid(
       inner join knowledge_documents kd on kd.id = kc.document_id
       where kd.status = 'ready'
         and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
-        and kc.embedding_model is not null
+        and (kc.embedding is not null or kc.embedding_v2 is not null)
       order by
         case
           when kc.embedding_v2 is not null then kc.embedding_v2 <=> ${v2QueryVector}
@@ -493,7 +514,7 @@ async function searchKnowledgeHybrid(
       inner join knowledge_documents kd on kd.id = kc.document_id
       where kd.status = 'ready'
         and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
-        and kc.embedding_model is not null
+        and (kc.embedding is not null or kc.embedding_v2 is not null)
       order by kc.embedding <=> ${hashVector}
       limit ${candidateLimit}
     `);

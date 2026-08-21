@@ -724,7 +724,7 @@ export async function syncChatTaskLifecycle(
       resultBlocks: extractResultAssistantBlocks(input.updatedTask),
     }),
   });
-  app.log.debug?.(
+  app.log?.debug?.(
     {
       taskId: input.updatedTask.id,
       sessionId,

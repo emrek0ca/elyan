@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Queue, Worker, type Job } from "bullmq";
+import { asc, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { tasks } from "../../db/schema.js";
 import { recordBridgeLearningSignals } from "../../core/understanding/user-understanding-service.js";
 import { syncChatTaskLifecycle } from "../chat/task-sync.js";
 import { activeTaskStatuses } from "./queue.js";
@@ -9,12 +11,14 @@ import {
   maybeMaterializeDesktopPlan,
   maybePauseForDesktopPlanApproval,
 } from "./materialize-plan.js";
+import { isDesktopPlanPreparationPending } from "./desktop-work-order.js";
 import {
   failQueuedDesktopPlanTask,
   issueTaskDispatchLease,
   getTaskById,
   releaseUnacceptedTaskDispatchLease,
 } from "./service.js";
+import { extractTaskRouteDecision } from "./service-helpers.js";
 
 export type TaskDispatchJobData = {
   taskId: string;
@@ -26,10 +30,47 @@ type TaskDispatchResources = {
 };
 
 const TASK_DISPATCH_QUEUE_NAME = "elyan-task-dispatch";
+const MAX_PLAN_MATERIALIZATION_ATTEMPTS = 3;
+const LOCAL_DISPATCH_RETRY_DELAYS_MS = [5_000, 10_000] as const;
+const QUEUED_DISPATCH_RECOVERY_LIMIT = 100;
 const dispatchResources = new WeakMap<FastifyInstance, TaskDispatchResources>();
 const localDispatches = new WeakMap<FastifyInstance, Set<string>>();
 
 type DispatchTask = NonNullable<Awaited<ReturnType<typeof getTaskById>>>;
+
+export async function sendPendingDesktopPlanStatus(
+  app: FastifyInstance,
+  task: Pick<DispatchTask, "id" | "title" | "status" | "updatedAt" | "targetDeviceId">,
+  sendToRuntime: (
+    deviceId: string,
+    message: unknown,
+  ) => boolean | Promise<boolean> =
+    app.services.realtimeHub.sendToRuntimeDistributed.bind(
+      app.services.realtimeHub,
+    ),
+): Promise<boolean> {
+  return Promise.resolve(
+    sendToRuntime(task.targetDeviceId, {
+      type: "task.plan_pending",
+      task: {
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        summary: "Görev planlanıyor; masaüstü yürütmesi plan hazır olunca başlayacak.",
+        updatedAt: task.updatedAt?.toISOString?.() ?? null,
+        planPreparationPending: true,
+      },
+    }),
+  )
+    .then((sent) => sent === true)
+    .catch((error) => {
+      app.log.debug?.(
+        { taskId: task.id, error },
+        "pending plan status was not delivered to runtime",
+      );
+      return false;
+    });
+}
 
 type ClaimedDispatchOperations = {
   materialize: typeof maybeMaterializeDesktopPlan;
@@ -43,6 +84,10 @@ type ClaimedDispatchOperations = {
     deviceId: string,
     message: unknown,
   ) => boolean | Promise<boolean>;
+};
+
+type DispatchAttemptOptions = {
+  planningAttempt?: number;
 };
 
 function createRedisConnectionOptions(redisUrl: string) {
@@ -69,44 +114,59 @@ export async function dispatchClaimedTask(
       app.services.realtimeHub,
     ),
   },
+  options: DispatchAttemptOptions = {},
 ): Promise<
   "dispatched" | "awaiting_approval" | "planning_failed" | "not_dispatched"
 > {
+  let planPendingStatusAttempted = false;
+  const announcePlanPending = async (): Promise<void> => {
+    if (planPendingStatusAttempted) return;
+    planPendingStatusAttempted = true;
+    // Bu bir dispatch değildir: lease üretmeden yalnızca paired runtime'ın
+    // görev paneline planlama durumunu taşır. Böylece kullanıcı desktop'ta
+    // "Aktif görev yok" görmez; runtime bu frame'i çalıştırılabilir iş olarak
+    // kabul etmez ve backend planını beklemeye devam eder.
+    await sendPendingDesktopPlanStatus(app, task, operations.sendToRuntime);
+  };
+
+  // Plan zaten pending olarak işaretliyse, yavaş model materyalizasyonu
+  // başlamadan önce tray'e görünür durum gönder. Bu frame çalıştırılabilir
+  // iş değildir; scheduler yine yalnız hazır planı kabul eder.
+  if (isDesktopPlanPreparationPending(task.payload)) {
+    await announcePlanPending();
+  }
+
   const materialized = await operations.materialize(app, task);
   await operations.markPrepared(app, task, materialized);
 
-  // ── PLAN ÜRETİLEMEDİ: GÖREVİ ÖLDÜRME, MASAÜSTÜNE DEVRET ─────────────────
-  //
-  // Eskiden burada `failPlanning` çağrılıyor ve kullanıcı "Görevin güvenilir
-  // yürütme planı hazırlanamadı" görüyordu. Canlı örnek (2026-08-20):
-  // "Bilgisayarımda arama yap chrome açık mı" — yönlendirme DOĞRU çalışmış,
-  // görev desktop_runtime'a gitmiş, ama sunucu plan üretemediği için iş
-  // masaüstüne HİÇ ULAŞMADAN öldü.
-  //
-  // Oysa masaüstü bunu 2026-08-04'te zaten çözmüştü: plan yoksa fail-closed
-  // ETMİYOR, görevi YERELDE planlayan çok-turlu ajan döngüsüne delege ediyor
-  // (`_runtime_task_preflight_error` → `delegate_to_agent_loop`). Yani
-  // masaüstü plansız görevi kabul etmeye HAZIRDI; backend hiç göndermiyordu.
-  // Yarım kalmış göç: bir uç güncellendi, diğeri değil.
-  //
-  // GÜVENLİK AÇILMIYOR: sunucu planı olmadığında sunucu onay kapısı
-  // (`gatePlanApproval`) atlanır, ama onay masaüstünde ZATEN uygulanır —
-  // ajan döngüsü `require_approval` ile ilk yan etkide durur ve
-  // `safety_policy` her adımda çalışır. Onay kaybolmuyor, yeri değişiyor.
-  //
-  // Görev yalnız GERÇEKTEN gidecek yer yoksa düşer (aşağıdaki lease/sendToRuntime
-  // yolları `not_dispatched` döndürür ve çağıran onu ele alır).
+  // Sunucu planı hazır değilse desktop'a çalıştırılabilir step gönderme.
+  // Queue retry'si plan materyalizasyonunu yeniden dener; task terminal hata
+  // durumuna geçirilmez ve runtime preflight'ına ulaşmadan bekler.
   if (!materialized) {
-    app.log.warn(
-      { taskId: task.id, targetDeviceId: task.targetDeviceId },
-      "desktop plan not materialized; delegating planning to the desktop agent loop",
-    );
+    await announcePlanPending();
+    const planningAttempt = Math.max(0, Math.floor(options.planningAttempt ?? 0));
+    if (planningAttempt + 1 >= MAX_PLAN_MATERIALIZATION_ATTEMPTS) {
+      const failedTask = await operations.failPlanning(app, { task });
+      if (failedTask) return "planning_failed";
+    }
+    await operations
+      .syncLifecycle(app, {
+        originalTask: task,
+        updatedTask: task,
+        message: "Görev planlanıyor; masaüstü yürütmesi plan hazır olunca başlayacak.",
+      })
+      .catch((error) => {
+        app.log.warn(
+          { taskId: task.id, error },
+          "pending desktop plan could not be synced to chat",
+        );
+      });
+    return "not_dispatched";
   }
 
-  const approvalTask =
-    materialized && operations.gatePlanApproval
-      ? await operations.gatePlanApproval(app, task)
-      : null;
+  const approvalTask = operations.gatePlanApproval
+    ? await operations.gatePlanApproval(app, task)
+    : null;
   if (approvalTask) {
     await operations
       .syncLifecycle(app, {
@@ -169,6 +229,7 @@ async function processTaskDispatch(
   app: FastifyInstance,
   taskId: string,
   claimOwner: string,
+  planningAttempt = 0,
 ): Promise<void> {
   const task = await getTaskById(app, taskId);
   if (
@@ -192,7 +253,9 @@ async function processTaskDispatch(
     // Tek dispatch sahibi: plan önce model tarafından kalıcılaştırılır, canlı
     // chat izi güncellenir, lease bundan sonra üretilir. Böylece çevrimiçi
     // runtime bile başlangıç/heuristik planı yarışla alamaz.
-    const outcome = await dispatchClaimedTask(app, task);
+    const outcome = await dispatchClaimedTask(app, task, undefined, {
+      planningAttempt,
+    });
     keepClaim = outcome === "dispatched";
     if (outcome === "dispatched") {
       await recordBridgeLearningSignals(app, {
@@ -231,6 +294,7 @@ async function processTaskDispatchJob(
     app,
     job.data.taskId,
     `bullmq:${job.id ?? job.data.taskId}:${randomUUID()}`,
+    job.attemptsMade,
   );
 }
 
@@ -244,22 +308,79 @@ function scheduleLocalTaskDispatch(
   }
   pending.add(taskId);
   localDispatches.set(app, pending);
-  setImmediate(() => {
-    void processTaskDispatch(app, taskId, `local:${taskId}:${randomUUID()}`)
-      .catch((error) => {
+  const finish = () => {
+    pending.delete(taskId);
+    if (pending.size === 0) {
+      localDispatches.delete(app);
+    }
+  };
+  const run = async (planningAttempt: number): Promise<void> => {
+    try {
+      await processTaskDispatch(
+        app,
+        taskId,
+        `local:${taskId}:${randomUUID()}`,
+        planningAttempt,
+      );
+      finish();
+    } catch (error) {
+      const nextAttempt = planningAttempt + 1;
+      const delay = LOCAL_DISPATCH_RETRY_DELAYS_MS[planningAttempt];
+      if (delay !== undefined && nextAttempt < MAX_PLAN_MATERIALIZATION_ATTEMPTS) {
         app.log.warn(
-          { taskId, error },
-          "local task dispatch attempt failed; runtime polling remains available",
+          { taskId, planningAttempt, nextAttempt, retryInMs: delay, error },
+          "local task dispatch attempt failed; scheduling bounded retry",
         );
-      })
-      .finally(() => {
-        pending.delete(taskId);
-        if (pending.size === 0) {
-          localDispatches.delete(app);
-        }
-      });
+        const timer = setTimeout(() => {
+          void run(nextAttempt);
+        }, delay);
+        timer.unref?.();
+        return;
+      }
+      app.log.warn(
+        { taskId, planningAttempt, error },
+        "local task dispatch attempts exhausted; runtime polling remains available",
+      );
+      finish();
+    }
+  };
+  setImmediate(() => {
+    void run(0);
   });
   return true;
+}
+
+async function recoverQueuedDesktopDispatches(
+  app: FastifyInstance,
+  queue: Queue<TaskDispatchJobData>,
+): Promise<void> {
+  const queued = await app.db
+    .select({ id: tasks.id, payload: tasks.payload })
+    .from(tasks)
+    .where(eq(tasks.status, "queued"))
+    .orderBy(asc(tasks.createdAt))
+    .limit(QUEUED_DISPATCH_RECOVERY_LIMIT);
+  let recovered = 0;
+  for (const row of queued) {
+    const route = extractTaskRouteDecision(row.payload);
+    const desktopRequired =
+      route?.requiredRuntime === "desktop" ||
+      route?.taskRoute?.needsDesktop === true ||
+      route?.route === "desktop_runtime";
+    if (!desktopRequired) continue;
+    await queue.add(
+      TASK_DISPATCH_QUEUE_NAME,
+      { taskId: row.id },
+      { jobId: row.id },
+    );
+    recovered += 1;
+  }
+  if (recovered > 0) {
+    app.log.info(
+      { recovered, scanned: queued.length },
+      "queued desktop dispatches recovered after worker startup",
+    );
+  }
 }
 
 export async function ensureTaskDispatchWorker(
@@ -351,6 +472,13 @@ export async function ensureTaskDispatchWorker(
 
     await resources.worker.close().catch(() => undefined);
     await resources.queue.close().catch(() => undefined);
+  });
+
+  await recoverQueuedDesktopDispatches(app, queue).catch((error) => {
+    app.log.warn(
+      { error },
+      "queued desktop dispatch recovery failed; new dispatches remain available",
+    );
   });
 }
 

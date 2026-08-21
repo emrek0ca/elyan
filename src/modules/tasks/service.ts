@@ -33,10 +33,12 @@ import {
 } from "../../core/understanding/user-understanding-service.js";
 import type {
   FeedbackType,
+  TaskUnderstandingInput,
   UnderstandingEnvelope,
   UserUnderstandingResult,
 } from "../../core/understanding/types.js";
 import {
+  buildTypedUnderstandingEnvelope,
   envelopeTelemetrySummary,
   preferredWorkloadFromUnderstandingEnvelope,
 } from "../../core/understanding/understanding-envelope.js";
@@ -201,11 +203,16 @@ import {
   RUNTIME_CONNECTION_STALE_AFTER_MS,
 } from "../devices/service.js";
 import {
+  buildCommandTurnContract,
   decideCommandRoute,
+  readCommandTurnContract,
   resolveCommandTarget,
   resolvePendingDesktopQueueTarget,
 } from "../routing-policy/service.js";
-import type { CommandRouteDecision } from "../routing-policy/service.js";
+import type {
+  CommandRouteDecision,
+  CommandTurnContract,
+} from "../routing-policy/service.js";
 import {
   recordUsageLedgerEntry,
   BILLING_USAGE_METRICS,
@@ -270,9 +277,12 @@ import {
   buildDesktopPlanningEvidenceFromMetadata,
   buildDesktopWorkOrder,
   isDeterministicDesktopFastWorkOrder,
+  isDesktopPlanPreparationPending,
   MAX_WORK_ORDER_STEPS,
   readAutonomyEnvelope,
 } from "./desktop-work-order.js";
+import { buildTaskExecutionContract } from "./task-execution-contract.js";
+import { buildTaskExecutionEvent } from "./task-execution-events.js";
 import { verifyTaskGoal } from "./goal-verification.js";
 import {
   assignLoopCredit,
@@ -288,7 +298,10 @@ import {
   evaluateDesktopFastPath,
   refineDesktopCapabilityHints,
 } from "./desktop-capability-embedding-match.js";
-import { enqueueTaskDispatch } from "./dispatch-queue.js";
+import {
+  enqueueTaskDispatch,
+  sendPendingDesktopPlanStatus,
+} from "./dispatch-queue.js";
 import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
 import { canUseDesktopConnections } from "../billing/catalog.js";
 import {
@@ -314,6 +327,14 @@ export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 type ShapedTaskFeedItem = ReturnType<typeof shapeTaskFeedItem>;
 
 const STALE_RUNTIME_TASK_AFTER_MS = 120_000;
+/**
+ * Pending server plans are not ordinary offline queue entries. They need a
+ * short recovery window so a transient queue/worker restart can re-enqueue
+ * materialization before the normal ten-minute delivery TTL is considered.
+ */
+export const DESKTOP_PLAN_PENDING_RECOVERY_AFTER_MS = 90_000;
+const DESKTOP_PLAN_PENDING_SUMMARY =
+  "Görev planlanıyor; masaüstü yürütmesi plan hazır olunca başlayacak.";
 
 function visibleTextFromAssistantBlocks(
   blocks: AssistantMessageBlock[] | undefined,
@@ -2367,6 +2388,8 @@ function extractRouteDecision(
       typeof typedRoutingDecision.selectedWorkload === "string"
         ? (typedRoutingDecision.selectedWorkload as CommandRouteDecision["selectedWorkload"])
         : "mobile_chat_fast",
+    turnContract:
+      readCommandTurnContract(typedRoutingDecision.turnContract) ?? undefined,
   };
 }
 
@@ -5379,6 +5402,93 @@ function isDurableChatGenerationTask(
   return chatGeneration?.queued === true;
 }
 
+export async function recoverPendingDesktopPlan(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  input: {
+    now: Date;
+    enqueue?: typeof enqueueTaskDispatch;
+  },
+): Promise<boolean> {
+  if (
+    task.status !== "queued" ||
+    !isDesktopPlanPreparationPending(task.payload)
+  ) {
+    return false;
+  }
+
+  const recoveryBucket = Math.floor(
+    input.now.getTime() / DESKTOP_PLAN_PENDING_RECOVERY_AFTER_MS,
+  );
+  const enqueue = input.enqueue ?? enqueueTaskDispatch;
+  const accepted = await enqueue(app, task.id, {
+    // A failed BullMQ job keeps its original id. Bucketed recovery ids allow a
+    // later sweep to retry it without creating a duplicate job every 30s.
+    jobId: `desktop-plan-recovery-${task.id}-${recoveryBucket}`,
+  }).catch((error) => {
+    app.log.warn(
+      { taskId: task.id, error },
+      "pending desktop plan could not be requeued",
+    );
+    return false;
+  });
+
+  if (!accepted) {
+    // Keep the pending state visible and let the next sweep retry. It must
+    // not become a misleading queue-expired failure while the plan worker is
+    // recovering.
+    return true;
+  }
+
+  const pendingRows = await app.db
+    .update(tasks)
+    .set({
+      summary: DESKTOP_PLAN_PENDING_SUMMARY,
+      error: null,
+      updatedAt: input.now,
+    })
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        eq(tasks.status, "queued" as TaskStatus),
+      ),
+    )
+    .returning();
+  const pendingTask = pendingRows[0] ?? {
+    ...task,
+    summary: DESKTOP_PLAN_PENDING_SUMMARY,
+    error: null,
+    updatedAt: input.now,
+  };
+
+  if (
+    task.summary !== DESKTOP_PLAN_PENDING_SUMMARY ||
+    task.error !== null
+  ) {
+    await insertTaskEvent(app, {
+      taskId: pendingTask.id,
+      userId: pendingTask.userId,
+      status: "queued",
+      message: DESKTOP_PLAN_PENDING_SUMMARY,
+      payload: {
+        reconciled: true,
+        reason: "desktop_plan_pending_requeued",
+      },
+    });
+    await publishTaskEvent(app, pendingTask, "task.updated", {
+      task: shapeTaskFeedItem(pendingTask),
+      reconciled: true,
+      reason: "desktop_plan_pending_requeued",
+    });
+    await syncChatTaskLifecycle(app, {
+      originalTask: task,
+      updatedTask: pendingTask,
+      message: DESKTOP_PLAN_PENDING_SUMMARY,
+    });
+  }
+  return true;
+}
+
 function readChatGenerationAttemptId(
   task: Pick<typeof tasks.$inferSelect, "payload">,
 ): string | undefined {
@@ -5441,6 +5551,18 @@ export async function reconcileStaleRuntimeTasks(
           eq(tasks.status, "waiting_approval" as TaskStatus),
           lt(tasks.updatedAt, new Date(now.getTime() - TASK_APPROVAL_TTL_MS)),
         ),
+        // A pending server plan is a recoverable dispatch state, not an
+        // offline task. If the dispatch worker restarted or the initial
+        // enqueue was lost, requeue plan materialization before the ordinary
+        // queue TTL can cancel the task.
+        and(
+          eq(tasks.status, "queued" as TaskStatus),
+          sql`(${tasks.payload} #>> '{desktopWorkOrder,planPreview,planPreparation,status}') = 'pending'`,
+          lt(
+            tasks.updatedAt,
+            new Date(now.getTime() - DESKTOP_PLAN_PENDING_RECOVERY_AFTER_MS),
+          ),
+        ),
         // Masaüstüne hiç teslim edilemeden kuyrukta kalanlar.
         and(
           eq(tasks.status, "queued" as TaskStatus),
@@ -5481,8 +5603,12 @@ export async function reconcileStaleRuntimeTasks(
           : task.status === "waiting_approval"
             ? "approval_expired"
             : task.status === "queued"
-              ? "queue_expired"
-              : "dispatch_lease_expired";
+            ? "queue_expired"
+            : "dispatch_lease_expired";
+
+      if (await recoverPendingDesktopPlan(app, task, { now })) {
+        continue;
+      }
 
       if (task.status === "waiting_approval" || task.status === "queued") {
         const message =
@@ -5763,6 +5889,7 @@ async function completeServerBrainTask(
     model: string;
     route: string;
     workload: string;
+    turnContract?: CommandTurnContract | null;
     planningIntent?: boolean;
     modelRoute?: Record<string, unknown> | null;
     latencyMs: number;
@@ -5849,6 +5976,9 @@ async function completeServerBrainTask(
       ? (task.payload as Record<string, unknown>)
       : {};
   const basePayloadMetadata = getPayloadMetadata(payload);
+  const persistedTurnContract =
+    readCommandTurnContract(readRecord(basePayloadMetadata.routeDecision)?.turnContract) ??
+    readCommandTurnContract(basePayloadMetadata.turnContract);
   const payloadMetadata =
     (input.sessionArtifacts && input.sessionArtifacts.length > 0) ||
     input.lastVisualArtifact
@@ -5897,8 +6027,10 @@ async function completeServerBrainTask(
         : null,
     planIntent:
       input.workload === "planning" ||
+      input.turnContract?.planIntent === true ||
       input.planningIntent === true ||
-      payloadMetadata.selectedWorkload === "planning",
+      payloadMetadata.selectedWorkload === "planning" ||
+      persistedTurnContract?.planIntent === true,
     contextTexts: derivationContextTexts,
     numericPoints: derivationNumericPoints,
     chartIntent,
@@ -7095,6 +7227,49 @@ function buildUnderstandingMetadataForTask(
   };
 }
 
+/**
+ * Route decisions are authoritative even on the fast chat path.  The old
+ * path intentionally used `emptyUnderstanding()` for latency, but that also
+ * erased the only plan signal before inference and completion saw the task.
+ * Keep the fast path light while restoring the route-owned typed envelope.
+ */
+function applyCommandTurnContractToUnderstanding(
+  understanding: UserUnderstandingResult,
+  understandingInput: TaskUnderstandingInput,
+  turnContract: CommandTurnContract,
+): UserUnderstandingResult {
+  const intent = turnContract.intentClassification;
+  const baseEnvelope =
+    understanding.envelope ??
+    buildTypedUnderstandingEnvelope({
+      ...understandingInput,
+      intent,
+      source: "typed_extractor",
+    });
+  const envelope = turnContract.planIntent
+    ? {
+        ...baseEnvelope,
+        intent: {
+          ...baseEnvelope.intent,
+          name: "planning" as const,
+          action: "plan" as const,
+        },
+      }
+    : baseEnvelope;
+  return {
+    ...understanding,
+    intent,
+    context: {
+      ...understanding.context,
+      intent: intent.primaryIntent,
+      understandingEnvelope: envelope,
+    },
+    envelope,
+    envelopeSource: "typed_extractor",
+    envelopeConfidence: envelope.confidence,
+  };
+}
+
 function summarizeUnderstandingForSafeTelemetry(
   understanding: UserUnderstandingResult,
 ) {
@@ -7148,6 +7323,7 @@ type SharedBrainChatTaskInput = {
   prompt: string;
   canonicalTitle: string;
   understanding: Awaited<ReturnType<typeof buildTaskUnderstanding>>;
+  turnContract?: CommandTurnContract;
   planCode?: string | null;
   usageAccess?: UsageAccessTruth;
   brainProfile?: unknown;
@@ -7274,6 +7450,17 @@ async function processSharedBrainChatTask(
       ? (runningTask.payload as Record<string, unknown>)
       : {};
     const payloadMetadata = getPayloadMetadata(runningPayload);
+    const turnContract =
+      input.turnContract ??
+      routeDecision?.turnContract ??
+      readCommandTurnContract(payloadMetadata.turnContract) ??
+      (routeDecision
+        ? buildCommandTurnContract({
+            routeDecision,
+            message: input.prompt,
+            userId: input.userId,
+          })
+        : null);
     const snapshotCarrierPresent = Object.prototype.hasOwnProperty.call(
       payloadMetadata,
       "chatContextSnapshot",
@@ -8019,6 +8206,7 @@ async function processSharedBrainChatTask(
       route: "shared_brain",
       routeDecision,
       workload: selectedWorkload,
+      turnContract,
       meteringSurface: "chat",
       planCode: input.planCode,
       usageAccess: input.usageAccess,
@@ -8397,6 +8585,7 @@ async function processSharedBrainChatTask(
       route: inference.metadata.route as string,
       workload: inference.metadata.workload as string,
       planningIntent: input.understanding.envelope?.intent.action === "plan",
+      turnContract,
       latencyMs: inference.latencyMs,
       promptTokens: inference.promptTokens,
       completionTokens: inference.completionTokens,
@@ -8503,6 +8692,7 @@ async function processSharedBrainChatTask(
         selectedWorkload,
         planIntent:
           selectedWorkload === "planning" ||
+          turnContract?.planIntent === true ||
           input.understanding.envelope?.intent.action === "plan",
         contextTexts: (conversationHistory ?? [])
           .slice(-6)
@@ -9017,6 +9207,7 @@ export type QueuedSharedBrainChatTaskSnapshot = {
   workload: SharedBrainWorkload;
   requestId: string;
   understanding: UserUnderstandingResult;
+  turnContract?: CommandTurnContract;
   chatContextSnapshot: ChatContextSnapshot | null;
   terminal: boolean;
 };
@@ -9209,37 +9400,47 @@ export async function getQueuedSharedBrainChatTask(
     };
   }
   const routeDecision = extractRouteDecision(payload);
+  const turnContract =
+    routeDecision?.turnContract ??
+    readCommandTurnContract(metadata.turnContract) ??
+    (routeDecision
+      ? buildCommandTurnContract({
+          routeDecision,
+          message: prompt,
+          userId: row.userId,
+        })
+      : undefined);
   const persistedUnderstanding = readPersistedTaskUnderstanding(payload);
   const chatGeneration = readRecord(metadata.chatGeneration);
   const isDurableChatGeneration = chatGeneration?.queued === true;
-  const emptyQueuedUnderstanding = () =>
-    emptyUnderstanding({
-      userId: row.userId,
-      accountId: row.userId,
-      taskId: row.id,
-      title: row.title,
-      message: prompt,
-      routeContext: "tasks.chat_queue",
-      source: typeof payload.source === "string" ? payload.source : undefined,
-      deviceId: row.targetDeviceId,
-      metadata,
-    });
-  const understanding =
+  const understandingInput: TaskUnderstandingInput = {
+    userId: row.userId,
+    accountId: row.userId,
+    taskId: row.id,
+    title: row.title,
+    message: prompt,
+    routeContext: "tasks.chat_queue",
+    source: typeof payload.source === "string" ? payload.source : undefined,
+    deviceId: row.targetDeviceId,
+    metadata: {
+      ...metadata,
+      ...(turnContract ? { turnContract } : {}),
+    },
+  };
+  const baseUnderstanding =
     persistedUnderstanding ??
     (isDurableChatGeneration
-      ? emptyQueuedUnderstanding()
-      : await buildTaskUnderstanding(app, {
-          userId: row.userId,
-          accountId: row.userId,
-          taskId: row.id,
-          title: row.title,
-          message: prompt,
-          routeContext: "tasks.chat_queue",
-          source:
-            typeof payload.source === "string" ? payload.source : undefined,
-          deviceId: row.targetDeviceId,
-          metadata,
-        }).catch(() => emptyQueuedUnderstanding()));
+      ? emptyUnderstanding(understandingInput)
+      : await buildTaskUnderstanding(app, understandingInput).catch(() =>
+          emptyUnderstanding(understandingInput),
+        ));
+  const understanding = turnContract
+    ? applyCommandTurnContractToUnderstanding(
+        baseUnderstanding,
+        understandingInput,
+        turnContract,
+      )
+    : baseUnderstanding;
   const workload = resolveSharedBrainWorkloadForUnderstanding({
     routeDecision,
     prompt,
@@ -9257,6 +9458,7 @@ export async function getQueuedSharedBrainChatTask(
     workload,
     requestId,
     understanding,
+    ...(turnContract ? { turnContract } : {}),
     chatContextSnapshot,
     terminal: isChatGenerationSettled(row.status),
   };
@@ -9305,6 +9507,7 @@ export async function processQueuedSharedBrainChatTask(
     prompt: snapshot.prompt,
     canonicalTitle: snapshot.task.title,
     understanding: snapshot.understanding,
+    turnContract: snapshot.turnContract,
     chatContextSnapshot: snapshot.chatContextSnapshot,
     planCode: usageAccess.planCode,
     usageAccess,
@@ -9819,6 +10022,13 @@ export async function createTask(
         sessionId: activeChatSessionId,
       })
     : null;
+  const turnContract =
+    routeDecision.turnContract ??
+    buildCommandTurnContract({
+      routeDecision,
+      message: planningPrompt,
+      userId: input.userId,
+    });
   const understandingInput = {
     userId: input.userId,
     accountId: input.userId,
@@ -9838,15 +10048,21 @@ export async function createTask(
         : {}),
       routeDecision,
       requestId: input.requestId,
+      turnContract,
       ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
     },
   };
-  const understanding = useFastSharedBrainFlow || useDirectDesktopFastPath
+  const baseUnderstanding = useFastSharedBrainFlow || useDirectDesktopFastPath
     ? emptyUnderstanding(understandingInput)
     : await buildTaskUnderstanding(app, understandingInput).catch(() =>
         emptyUnderstanding(understandingInput),
       );
-  const desktopWorkOrder = isDesktopRoute
+  const understanding = applyCommandTurnContractToUnderstanding(
+    baseUnderstanding,
+    understandingInput,
+    turnContract,
+  );
+  const desktopWorkOrderBase = isDesktopRoute
     ? buildDesktopWorkOrder({
         message: planningPrompt,
         title: canonicalTitle,
@@ -9875,8 +10091,14 @@ export async function createTask(
           typeof payloadMetadata.chat === "object" &&
           payloadMetadata.chat !== null
             ? "mobile_chat_dispatch"
-            : "backend_task_route",
+          : "backend_task_route",
       })
+    : null;
+  const desktopWorkOrder = desktopWorkOrderBase
+    ? {
+        ...desktopWorkOrderBase,
+        turnContract,
+      }
     : null;
   if (desktopWorkOrder) {
     // Yetenek ipuçlarını gerçek anlamsal sıralamayla düzelt. Sezgisel katman
@@ -9946,6 +10168,9 @@ export async function createTask(
     metadata: {
       ...payloadMetadata,
       routeDecision,
+      turnContract,
+      selectedWorkload: turnContract.selectedWorkload,
+      planIntent: turnContract.planIntent,
       ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
       ...(dispatchOptimization ? { dispatchOptimization } : {}),
       ...(responsiveExecution ? { responsiveExecution } : {}),
@@ -9978,6 +10203,38 @@ export async function createTask(
         : {}),
       ...(geminiExecutionValidation ? { geminiExecutionValidation } : {}),
     },
+  };
+  // Task id ancak aşağıdaki transaction içinde üretildiği için contract'ı
+  // payload hazırlanırken değil, gerçek id bilindiğinde materialize ediyoruz.
+  // Böylece route, task ve desktop aynı taskId/planRevision snapshot'ını taşır;
+  // eski payload alanları additive uyumluluk için korunur.
+  const buildTaskPayloadForId = (taskId: string) => {
+    const rawPlanRevision =
+      typeof payloadMetadata.planRevision === "number"
+        ? payloadMetadata.planRevision
+        : Number(payloadMetadata.planRevision ?? 1);
+    const taskExecutionContract = buildTaskExecutionContract({
+      taskId,
+      turnId: input.requestId,
+      goalId:
+        typeof payloadMetadata.goalId === "string" && payloadMetadata.goalId.trim()
+          ? payloadMetadata.goalId
+          : null,
+      message: planningPrompt,
+      routeDecision,
+      turnContract,
+      understandingEnvelope: understanding.envelope ?? null,
+      workOrder: desktopWorkOrder,
+      planRevision: Number.isFinite(rawPlanRevision) ? rawPlanRevision : 1,
+    });
+    return {
+      ...enrichedPayload,
+      taskExecutionContract,
+      metadata: {
+        ...enrichedPayload.metadata,
+        taskExecutionContract,
+      },
+    };
   };
   if (routeBlocked) {
     const blockedReason =
@@ -10016,10 +10273,11 @@ export async function createTask(
 
         const queuePosition = Number(activeCounts[0]?.count ?? 0) + 1;
         const blockedTaskId = randomUUID();
+        const blockedTaskPayload = buildTaskPayloadForId(blockedTaskId);
         const blockedPayload = {
-          ...enrichedPayload,
+          ...blockedTaskPayload,
           metadata: {
-            ...enrichedPayload.metadata,
+            ...blockedTaskPayload.metadata,
             routeDecision,
             blocked: true,
           },
@@ -10094,6 +10352,11 @@ export async function createTask(
     }
 
     const blockedTask = taskResult.task;
+    const blockedContract =
+      readRecord(blockedTask.payload)?.taskExecutionContract;
+    const blockedPlanRevision = Number(
+      readRecord(blockedContract)?.planRevision ?? 1,
+    );
     await notifyTaskReady(input.onTaskReady, {
       rawTask: blockedTask,
       reused: false,
@@ -10109,6 +10372,15 @@ export async function createTask(
       payload: {
         route: routeDecision.route,
         reason: routeDecision.reason,
+        executionEvent: buildTaskExecutionEvent({
+          type: "task.accepted",
+          taskId: blockedTask.id,
+          turnId: input.requestId,
+          planRevision: Number.isFinite(blockedPlanRevision)
+            ? blockedPlanRevision
+            : 1,
+          payload: { blocked: true },
+        }),
       },
     });
     await syncChatTaskLifecycle(app, {
@@ -10305,6 +10577,7 @@ export async function createTask(
       }
 
       const queuePosition = activeTargetTaskCount + 1;
+      const taskPayload = buildTaskPayloadForId(createdTaskId);
       const payloadBlob = keepChatTaskPayloadInline
         ? null
         : await storeTaskJsonBlob(app, {
@@ -10312,7 +10585,7 @@ export async function createTask(
             userId: input.userId,
             slot: "payload",
             scope: "task_payload",
-            value: enrichedPayload,
+            value: taskPayload,
           });
       const rows = await tx
         .insert(tasks)
@@ -10321,7 +10594,7 @@ export async function createTask(
           userId: input.userId,
           targetDeviceId,
           title: taskTitle,
-          payload: enrichedPayload,
+          payload: taskPayload,
           payloadBlobId: payloadBlob?.blobId ?? null,
           requestedCapabilities: routeCapabilities,
           idempotencyKey: input.idempotencyKey,
@@ -10480,6 +10753,7 @@ export async function createTask(
         prompt,
         canonicalTitle,
         understanding,
+        turnContract,
         planCode: usageAccess.planCode,
         usageAccess,
         brainProfile: usageAccess.brainProfile,
@@ -10561,6 +10835,16 @@ export async function createTask(
     message: "Task queued",
     payload: {
       understanding: summarizeUnderstandingForSafeTelemetry(understanding),
+      executionEvent: buildTaskExecutionEvent({
+        type: "task.accepted",
+        taskId: currentTask.id,
+        turnId: input.requestId,
+        planRevision: (() => {
+          const raw = Number(payloadMetadata.planRevision ?? 1);
+          return Number.isFinite(raw) ? raw : 1;
+        })(),
+        payload: { route: routeDecision.route },
+      }),
       ...(interventionContext
         ? {
             intervention: {
@@ -10711,6 +10995,7 @@ export async function createTask(
         route: "shared_brain",
         routeDecision,
         workload: selectedWorkload,
+        turnContract,
         meteringSurface: runningMetadata.channel === "chat" ? "chat" : "task",
         planCode: usageAccess.planCode,
         understandingContext: understanding.context,
@@ -10741,6 +11026,8 @@ export async function createTask(
         model: inference.model,
         route: inference.metadata.route as string,
         workload: inference.metadata.workload as string,
+        turnContract,
+        planningIntent: turnContract?.planIntent === true,
         latencyMs: inference.latencyMs,
         promptTokens: inference.promptTokens,
         completionTokens: inference.completionTokens,
@@ -10867,6 +11154,14 @@ export async function createTask(
 
   // Desktop dispatch never receives the cloud-only ephemeral carrier.
   clearEphemeralVisionCarrier(input.ephemeralVision);
+
+  // Show the non-executable planning state immediately. This keeps the
+  // desktop panel truthful even if BullMQ/worker startup is slower than the
+  // HTTP task-accept response; the actual lease still waits for a validated
+  // compiled plan in the dispatch queue.
+  if (isDesktopPlanPreparationPending(currentTask.payload)) {
+    await sendPendingDesktopPlanStatus(app, currentTask);
+  }
 
   // HTTP create yolu yalnız görevi kabul eder. Model planı, chat trace ve
   // runtime lease aynı asenkron dispatch sahibi tarafından sırayla üretilir;

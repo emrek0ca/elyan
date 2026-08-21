@@ -133,6 +133,39 @@ test("decideCommandRoute keeps public chat on the shared brain", async () => {
   assert.equal(decision.requiredRuntime, "server");
 });
 
+test("decideCommandRoute carries one planning contract for compound subject requests", async () => {
+  const decision = await decideCommandRoute(createApp([]) as never, {
+    userId: "user-1",
+    message: "Bu hedef için bir plan oluştur, doktor olmak istiyorum ama matematik bölümündeyim",
+    source: "mobile",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.intent, "planning_request");
+  assert.equal(decision.selectedWorkload, "planning");
+  assert.equal(decision.turnContract?.version, "elyan.turn_contract.v1");
+  assert.equal(decision.turnContract?.planIntent, true);
+  assert.equal(decision.turnContract?.understandingEnvelope.intent.name, "planning");
+  assert.equal(decision.turnContract?.routeDecision.selectedWorkload, "planning");
+  assert.equal("message" in (decision.turnContract ?? {}), false);
+  assert.equal(
+    JSON.stringify(decision.turnContract).includes("doktor olmak istiyorum"),
+    false,
+  );
+});
+
+test("decideCommandRoute keeps a direct math request on the math workload", async () => {
+  const decision = await decideCommandRoute(createApp([]) as never, {
+    userId: "user-1",
+    message: "Bu matematik sorusunu çöz",
+    source: "mobile",
+  });
+
+  assert.notEqual(decision.intent, "planning_request");
+  assert.notEqual(decision.selectedWorkload, "planning");
+  assert.equal(decision.turnContract?.planIntent, false);
+});
+
 test("decideCommandRoute keeps the objective's ordinary Turkish prompts on chat workloads", async () => {
   const cases = [
     ["Bana anlatır mısın Atatürk'ün gençliğini", "mobile_chat_balanced"],
@@ -1629,7 +1662,7 @@ test("decideCommandRoute routes desktop action to the desktop when dispatch is o
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
-test("decideCommandRoute keeps desktop actions on the server when dispatch is explicitly off", async () => {
+test("decideCommandRoute does not let dispatch preference veto an explicit browser action", async () => {
   const app = createDesktopReadyApp(["browser_control"]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -1639,11 +1672,26 @@ test("decideCommandRoute keeps desktop actions on the server when dispatch is ex
     requestedCapabilities: ["browser_control"],
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.targetDeviceId, undefined);
-  assert.equal(decision.mode, "chat");
-  assert.equal(decision.taskRoute?.target, "server_brain");
-  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.mode, "executable_task");
+  assert.equal(decision.taskRoute?.target, "desktop_runtime");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
+});
+
+test("decideCommandRoute routes a terse local close command with dispatch preference off", async () => {
+  const app = createDesktopReadyApp(["close_app"]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "local-command-user",
+    message: "Chrome u kapat",
+    source: "mobile",
+    metadata: { desktopDispatch: false },
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.requiredRuntime, "desktop");
+  assert.equal(decision.turnContract?.understandingConsensus?.targetSurface, "desktop");
 });
 
 test("decideCommandRoute ignores legacy routePreference/desktopDispatchOnce signals", async () => {
@@ -1701,6 +1749,34 @@ test("decideCommandRoute honors explicit desktop capabilities from mobile", asyn
   assert.equal(decision.route, "desktop_runtime");
   assert.equal(decision.mode, "executable_task");
   assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
+});
+
+test("decideCommandRoute sends explicit runtime tools and skills to the desktop", async () => {
+  const requestedCapabilities = [
+    "sys_info",
+    "retrieve_context",
+    "run_skill",
+    "desktop_operator.run",
+  ];
+  const app = createDesktopReadyApp(requestedCapabilities);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "mobile-tool-skill-user",
+    message: "Masaüstü bağlamını ve sistem durumunu kontrol et.",
+    source: "mobile",
+    requestedCapabilities,
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.mode, "executable_task");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.deepEqual(decision.capabilities, [
+    "sys_info",
+    "retrieve_context",
+    "run_skill",
+    "desktop_operator_run",
+  ]);
+  assert.equal(decision.requiredRuntime, "desktop");
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 

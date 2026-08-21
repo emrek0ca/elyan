@@ -33,6 +33,39 @@ test("resolveCompletionAssistantBlocks promotes markdown tables into typed table
   assert.ok(result.text.includes("Asagidaki tablo"));
 });
 
+test("resolveCompletionAssistantBlocks never presents a one-line plan as complete", () => {
+  const result = resolveCompletionAssistantBlocks({
+    prompt: "Bu hedef için bir plan oluştur",
+    responseText: "Doktorluk hedefi için yol haritası hazırlandı.",
+    assistantBlocks: [],
+    selectedWorkload: "planning",
+    planIntent: true,
+  });
+
+  const blocks = result.blocks as Array<Record<string, unknown>>;
+  assert.ok(blocks.some((block) => block.type === "clarification"));
+  assert.ok(!blocks.some((block) => block.type === "next_steps"));
+});
+
+test("resolveCompletionAssistantBlocks preserves explicit plan steps", () => {
+  const result = resolveCompletionAssistantBlocks({
+    prompt: "Doktorluk hedefim için bir plan oluştur",
+    responseText: [
+      "1. Mevcut ders seviyeni belirle",
+      "2. Haftalık çalışma programı kur",
+      "3. Deneme sonuçlarını her hafta değerlendir",
+    ].join("\n"),
+    assistantBlocks: [],
+    selectedWorkload: "planning",
+    planIntent: true,
+  });
+
+  const blocks = result.blocks as Array<Record<string, unknown>>;
+  const nextSteps = blocks.find((block) => block.type === "next_steps");
+  assert.ok(nextSteps);
+  assert.equal((nextSteps?.items as unknown[]).length, 3);
+});
+
 test("resolveCompletionAssistantBlocks promotes a leading status JSON and keeps trailing prose", () => {
   // Exact prod regression: model emits status block + reply in one turn. The
   // raw JSON used to leak into chat because the old extractor required the

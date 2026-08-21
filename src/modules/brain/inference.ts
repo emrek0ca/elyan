@@ -33,7 +33,10 @@ import {
   type AdaptiveInferenceBudget,
   type TokenMeteringSurface,
 } from "../billing/token-metering.js";
-import type { CommandRouteDecision } from "../routing-policy/service.js";
+import type {
+  CommandRouteDecision,
+  CommandTurnContract,
+} from "../routing-policy/service.js";
 import {
   ELYAN_CONSTITUTION_VERSION,
   ELYAN_PROMPT_PROFILE_VERSION,
@@ -540,6 +543,8 @@ type SharedBrainInferenceInput = {
   requestMetadata?: Record<string, unknown>;
   route?: string;
   routeDecision?: CommandRouteDecision | null;
+  /** Backend-owned semantic contract shared by route, task and finalizer. */
+  turnContract?: CommandTurnContract | null;
   workload?: SharedBrainWorkload;
   meteringSurface?: TokenMeteringSurface;
   /** Stable per-task phase used to meter nested model calls idempotently. */
@@ -3318,6 +3323,7 @@ export function buildStructuredSystemPrompt(
     attachmentContextBlock || attachmentInsightBlock || resolvedIntentBlock,
   );
   const planIntent =
+    input.turnContract?.planIntent === true ||
     input.workload === "planning" ||
     input.understandingContext?.understandingEnvelope?.intent.action === "plan";
   // Widget/structured output sinyalleri: bu turda gerçekten bir chart/table/
@@ -6317,6 +6323,26 @@ export async function generateSharedBrainReply(
       mailOpenBlockAction ? undefined : input.connectorReadToolHint?.tool,
     );
   }
+  const understandingEnvelope =
+    input.understandingContext?.understandingEnvelope;
+  // Fast text is a generation policy, not a semantic blind spot. Previously
+  // the fast lane deliberately hid the server tool catalogue unless a UI
+  // action had already named a connector/tool. A natural request such as
+  // "bugünün haberlerini araştır" therefore reached the model with zero
+  // eligible tools even though the semantic envelope had already selected a
+  // research capability. Advertise tools only for typed semantic turns; plain
+  // conversation still keeps the short, low-latency prompt.
+  const typedToolTurn =
+    (understandingEnvelope?.required_capabilities.length ?? 0) > 0 ||
+    (input.routeDecision?.capabilities.length ?? 0) > 0 ||
+    (input.routeDecision?.taskRoute?.requiredCapabilities.length ?? 0) > 0 ||
+    understandingEnvelope?.intent.name === "research" ||
+    understandingEnvelope?.intent.action === "research" ||
+    input.routeDecision?.capabilities.includes("web_research") === true ||
+    workload === "public_research" ||
+    workload === "public_deep_research" ||
+    workload === "public_quantum_research" ||
+    input.skillWebGroundingRequired === true;
   const fastTextToolsExplicitlyRequested =
     mailOpenBlockAction != null ||
     requestedToolName != null ||
@@ -6331,16 +6357,14 @@ export async function generateSharedBrainReply(
       app.config?.ELYAN_CONNECTOR_TOOLS_ENABLED === true ||
       // Core tools alone are reason enough to speak the tool protocol; without
       // this the catalogue would be empty whenever connectors are disabled.
-      app.config?.ELYAN_CORE_TOOLS_ENABLED !== false ||
+    app.config?.ELYAN_CORE_TOOLS_ENABLED !== false ||
       isAgentEngineV2Enabled(app, input.userId) ||
       isAgentEngineShadowEnabled(app)) &&
-    (!fastTextTurn || fastTextToolsExplicitlyRequested);
+    (!fastTextTurn || fastTextToolsExplicitlyRequested || typedToolTurn);
   let toolSelectionSource = agentToolProtocolEnabled
     ? "deterministic"
     : "not_advertised";
   let toolSelectionMs: number | null = null;
-  const understandingEnvelope =
-    input.understandingContext?.understandingEnvelope;
   const typedResearchIntent =
     understandingEnvelope?.intent.name === "research" ||
     understandingEnvelope?.intent.action === "research" ||
@@ -6519,6 +6543,14 @@ export async function generateSharedBrainReply(
   } else {
     input.agentToolCatalog = [];
   }
+  // Keep the semantic tool boundary observable without storing prompts or
+  // private arguments. This makes it possible to distinguish "the model
+  // chose the wrong tool" from "the model never received a tool" in live
+  // latency/task traces.
+  const eligibleToolIds = (input.agentToolCatalog ?? [])
+    .map((tool) => tool.name)
+    .filter(Boolean)
+    .slice(0, 64);
   const planBrainProfile = normalizePlanBrainProfile(input.brainProfile);
   const cacheable =
     mailOpenBlockAction == null && shouldUseResponseCache(input, workload);
@@ -8831,6 +8863,10 @@ export async function generateSharedBrainReply(
             attemptedModels: providerCandidates.flatMap(
               (candidate) => candidate.preferredModels,
             ),
+            toolCatalogVisible: agentToolProtocolEnabled,
+            eligibleToolIds,
+            toolSelectionSource,
+            toolSelectionMs,
             runtimeProvider: runtime.provider,
             reason: "provider_request_failed",
             lastError: describeProviderFailure(lastError),
@@ -9226,6 +9262,10 @@ export async function generateSharedBrainReply(
               firstDeltaMs,
               completionLatencyMs: latencyMs,
               responseBytes,
+              toolCatalogVisible: agentToolProtocolEnabled,
+              eligibleToolIds,
+              toolSelectionSource,
+              toolSelectionMs,
               cached: false,
               ...buildContextPacketMetadata(input.understandingContext),
               fallbackUsed,
@@ -9528,6 +9568,10 @@ export async function generateSharedBrainReply(
         turnEnvelopeParseOk,
         legacyTextMode:
           !successfulTurnEnvelopeMode || turnEnvelopeParseOk !== true,
+        toolCatalogVisible: agentToolProtocolEnabled,
+        eligibleToolIds,
+        toolSelectionSource,
+        toolSelectionMs,
         memoryOpsCount: turnEnvelope?.memory_ops.length ?? 0,
         memoryForgetCount:
           turnEnvelope?.memory_ops.filter((op) => op.op === "forget").length ??

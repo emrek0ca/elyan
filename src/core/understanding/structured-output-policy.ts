@@ -35,6 +35,11 @@ const PLAN_OR_STEP_REQUEST_PATTERNS = [
   /\b(\d+\s*(adım|adim|günlük|gunluk|haftalık|haftalik|aşamalı|asamali)|adım adım|adim adim)\b.{0,80}\b(plan|program|çıkar|cikar|hazırla|hazirla|oluştur|olustur)\b/i,
 ];
 
+const NEGATED_PLAN_REQUEST_PATTERNS = [
+  /\b(plan|program|roadmap|yol haritası|yol haritasi|takvim|rutin)\b.{0,48}\b(istemiyorum|isteme|olmas[ıi]n|kullanma|ekleme|yapma|kurma|no|without)\b/iu,
+  /\b(istemiyorum|isteme|olmas[ıi]n|kullanma|ekleme|yapma|kurma|no|without)\b.{0,48}\b(plan|program|roadmap|yol haritası|yol haritasi|takvim|rutin)\b/iu,
+];
+
 const EXPLICIT_CHART_REQUEST_PATTERNS = [
   /(?<!\p{L})(grafik|grafiği|grafiğini|grafigi|grafigini|chart|graph|plot|çiz|ciz|çizim|cizim|visualize|visualise|görselleştir|gorsellestir)(?!\p{L})/iu,
   /(?<!\p{L})(fonksiyon grafiği|fonksiyon grafigi|function graph|function plot|scatter|line chart|bar chart|pie chart)(?!\p{L})/iu,
@@ -135,7 +140,11 @@ export function shouldPreferPlainListOrProse(prompt: string): boolean {
 
 export function isPlanOrStepRequest(prompt: string): boolean {
   const normalized = compactText(prompt);
-  if (!normalized || isExplicitTableRequest(normalized)) {
+  if (
+    !normalized ||
+    isExplicitTableRequest(normalized) ||
+    NEGATED_PLAN_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized))
+  ) {
     return false;
   }
   return PLAN_OR_STEP_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));

@@ -34,7 +34,11 @@ import {
  */
 
 const CAPABILITY_CACHE_SCOPE = "desktop_capability_ontology_v2";
-const WARMUP_TIMEOUT_MS = 20_000;
+// This is startup-only and never blocks a request. The previous 20s budget
+// was shorter than the single-process ~490-text catalogue on a cold ONNX
+// session, so the cache was consistently discarded even after model warmup.
+// Keep it bounded, but give the API authority enough time to build it once.
+const WARMUP_TIMEOUT_MS = 120_000;
 const QUERY_TIMEOUT_MS = 2_500;
 
 // Karışım ağırlığı. Anlamsal skor eşanlamlıyı yakalar; sözcüksel skor tam

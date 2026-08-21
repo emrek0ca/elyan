@@ -180,6 +180,46 @@ test("buildTaskTraceBlock never exposes protected internal route metadata", () =
   assert.doesNotMatch(JSON.stringify(block), /openai|gpt|internal routing/i);
 });
 
+test("buildTaskTraceBlock keeps a pending desktop plan visibly pending", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-pending-desktop-plan",
+      status: "queued",
+      payload: {
+        metadata: {
+          routeDecision: {
+            route: "desktop_runtime",
+            taskRoute: {
+              target: "desktop_runtime",
+              operationalRoute: "desktop_runtime",
+              needsDesktop: true,
+              executionPlan: ["desktop_runtime"],
+            },
+          },
+        },
+        desktopWorkOrder: {
+          planPreview: {
+            planSource: "heuristic",
+            planPreparation: {
+              status: "pending",
+            },
+          },
+        },
+      },
+      updatedAt: new Date("2026-08-20T17:34:55.000Z"),
+    },
+    assistantContent: "Görev planlanıyor.",
+  });
+
+  const planStep = block.steps.find((step) => step.id === "plan");
+  assert.equal(planStep?.status, "running");
+  assert.equal(
+    planStep?.detail,
+    "Plan hazırlanıyor; masaüstü yürütmesi beklemede.",
+  );
+  assert.equal(planStep?.completedAt, undefined);
+});
+
 test("buildTaskTraceBlock fails closed for an unknown route", () => {
   const block = buildTaskTraceBlock({
     task: {

@@ -141,6 +141,37 @@ test("classifyIntent recognizes Turkish step program requests as planning", () =
   assert.equal(result.primaryIntent, "planning");
 });
 
+test("classifyIntent gives a compound roadmap request a planning primary intent", () => {
+  const result = classifyIntent({
+    userId: "user_1",
+    message: "Bu hedef için bir plan oluştur, doktor olmak istiyorum ama matematik bölümündeyim",
+  });
+
+  assert.equal(result.primaryIntent, "planning");
+  assert.equal(result.secondaryIntents.includes("math"), true);
+  assert.equal(result.requiresToolUse, false);
+});
+
+test("classifyIntent keeps a direct math solve out of planning", () => {
+  const result = classifyIntent({
+    userId: "user_1",
+    message: "Bu matematik sorusunu çöz",
+  });
+
+  assert.equal(result.primaryIntent, "math");
+  assert.equal(result.secondaryIntents.includes("planning"), false);
+});
+
+test("classifyIntent recognizes a subject-specific weekly plan", () => {
+  const result = classifyIntent({
+    userId: "user_1",
+    message: "Matematik çalışmak için haftalık plan çıkar",
+  });
+
+  assert.equal(result.primaryIntent, "planning");
+  assert.equal(result.secondaryIntents.includes("math"), true);
+});
+
 test("classifyIntent keeps brief architecture explanations out of local planning", () => {
   const result = classifyIntent({
     userId: "user_1",

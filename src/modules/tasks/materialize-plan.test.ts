@@ -82,6 +82,105 @@ test("an already materialized server plan remains dispatchable on retry", async 
   assert.equal(materialized, true);
 });
 
+test("a deterministic registry plan skips model materialization", async () => {
+  const order = workOrder("Chrome'u kapat", ["close_app"]);
+  order.planPreview = {
+    ...order.planPreview,
+    planSource: "deterministic_registry",
+    materializationSource: "deterministic_registry",
+    contract: "elyan.compiled_plan.v1",
+    planPreparation: {
+      status: "ready",
+      outcome: "deterministic_materialized",
+    },
+    steps: [
+      {
+        id: "close-app",
+        capability: "close_app",
+        description: "Chrome'u kapat",
+        args: { app_name: "Chrome" },
+        dependsOn: [],
+      },
+    ],
+  };
+  order.materializedCapabilityScope = ["close_app"];
+
+  const materialized = await maybeMaterializeDesktopPlan(
+    { log: { warn() { throw new Error("deterministic plans must not invoke planning"); } } } as never,
+    { id: "task-deterministic-plan", payload: { desktopWorkOrder: order } } as never,
+  );
+
+  assert.equal(materialized, true);
+});
+
+test("a legacy heuristic Chrome command is upgraded to a ready deterministic plan", async () => {
+  let persistedPayload: unknown = null;
+  const order = workOrder("Chrome u kapat", ["close_app"]);
+  order.planPreview = {
+    ...order.planPreview,
+    planSource: "heuristic",
+    planPreparation: { status: "pending" },
+    steps: [
+      {
+        id: "step_close_app",
+        capability: "close_app",
+        description: "Chrome u kapatılacak.",
+        args: { app_name: "Chrome u" },
+      },
+    ],
+  };
+
+  const app = {
+    log: { info() {}, warn() {} },
+    db: {
+      update() {
+        return {
+          set(values: { payload: unknown }) {
+            persistedPayload = values.payload;
+            return { where: async () => undefined };
+          },
+        };
+      },
+    },
+  };
+
+  const materialized = await maybeMaterializeDesktopPlan(
+    app as never,
+    {
+      id: "task-legacy-chrome-command",
+      userId: "user-1",
+      title: "Chrome u kapat",
+      payload: {
+        prompt: "Chrome u kapat",
+        desktopWorkOrder: order,
+      },
+    } as never,
+  );
+
+  assert.equal(materialized, true);
+  const payload = persistedPayload as {
+    desktopWorkOrder: DesktopWorkOrder;
+  };
+  assert.equal(
+    payload.desktopWorkOrder.planPreview.planSource,
+    "deterministic_registry",
+  );
+  assert.deepEqual(payload.desktopWorkOrder.planPreview.planPreparation, {
+    status: "ready",
+    outcome: "deterministic_materialized",
+    preparedAt: (payload.desktopWorkOrder.planPreview.planPreparation as {
+      preparedAt?: string;
+    }).preparedAt,
+  });
+  assert.equal(
+    payload.desktopWorkOrder.planPreview.steps?.[0]?.capability,
+    "close_app",
+  );
+  assert.deepEqual(payload.desktopWorkOrder.planPreview.steps?.[0]?.args, {
+    app_name: "Chrome",
+  });
+});
+
 test("a semantic server plan without a current binding is rematerialized", async () => {
   const order = workOrder("Masaüstünü listele", ["directory_tree"]);
   order.semanticGoal = {
@@ -1127,7 +1226,7 @@ test("a plan with no usable capability still returns nothing", () => {
   );
 });
 
-test("desktop preparation marker persists safe readiness after planning settles", async () => {
+test("desktop preparation marker fails closed without a fresh validation", async () => {
   let writtenPayload: unknown = null;
   let storedPayload: unknown = null;
   const deletedBlobIds: string[] = [];
@@ -1194,8 +1293,8 @@ test("desktop preparation marker persists safe readiness after planning settles"
     },
   };
 
-  // A retry may observe an already-persisted server plan even when this worker
-  // did not perform the original model call.
+  // Provenance alone is not validation. A retry must first call
+  // maybeMaterializeDesktopPlan and pass its true result into this marker.
   await markDesktopPlanPrepared(app as never, task as never, false);
 
   const payload = writtenPayload as {
@@ -1213,8 +1312,8 @@ test("desktop preparation marker persists safe readiness after planning settles"
   assert.deepEqual(
     payload.desktopWorkOrder.planPreview.planPreparation,
     {
-      status: "ready",
-      outcome: "materialized",
+      status: "failed",
+      outcome: "model_plan_unavailable",
       preparedAt:
         payload.desktopWorkOrder.planPreview.planPreparation.preparedAt,
     },
@@ -1233,7 +1332,7 @@ test("desktop preparation marker persists safe readiness after planning settles"
   assert.deepEqual(deletedBlobIds, ["blob-old"]);
 });
 
-test("desktop preparation marker fails closed when no model plan is available", async () => {
+test("desktop preparation marker keeps an initial planner miss pending", async () => {
   let writtenPayload: unknown = null;
   const task = {
     id: "task-prepare-failed",
@@ -1291,8 +1390,67 @@ test("desktop preparation marker fails closed when no model plan is available", 
       };
     }
   ).desktopWorkOrder.planPreview.planPreparation;
-  assert.equal(preparation.status, "failed");
-  assert.equal(preparation.outcome, "model_plan_unavailable");
+  assert.equal(preparation.status, "pending");
+  assert.equal(preparation.outcome, "planning");
+});
+
+test("deterministic preparation keeps its registry trust marker on retry", async () => {
+  let writtenPayload: unknown = null;
+  const task = {
+    id: "task-deterministic-marker",
+    userId: "user-1",
+    payloadBlobId: null,
+    payload: {
+      desktopWorkOrder: {
+        planPreview: {
+          planSource: "deterministic_registry",
+          contract: "elyan.compiled_plan.v1",
+          planPreparation: { status: "ready", outcome: "deterministic_materialized" },
+          steps: [{ id: "close", capability: "close_app", args: { app_name: "Chrome" } }],
+        },
+      },
+    },
+  };
+  const app = {
+    db: {
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return { limit: async () => [task] };
+              },
+            };
+          },
+        };
+      },
+      update() {
+        return {
+          set(values: { payload: unknown }) {
+            writtenPayload = values.payload;
+            return { where: async () => undefined };
+          },
+        };
+      },
+    },
+    services: {
+      blobs: {
+        async storeJson() {
+          return null;
+        },
+      },
+    },
+  };
+
+  await markDesktopPlanPrepared(app as never, task as never, true);
+
+  const preparation = (
+    writtenPayload as {
+      desktopWorkOrder: { planPreview: { planPreparation: Record<string, unknown> } };
+    }
+  ).desktopWorkOrder.planPreview.planPreparation;
+  assert.equal(preparation.status, "ready");
+  assert.equal(preparation.outcome, "deterministic_materialized");
 });
 
 test("plan contract validation rejects invented enum values and names the valid ones", () => {

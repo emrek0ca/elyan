@@ -168,6 +168,20 @@ test("runtime websocket redelivers stale running tasks after reconnect", () => {
   );
 });
 
+test("runtime reconnect never bypasses a pending server plan", () => {
+  const pendingPlanTask = {
+    id: "task-pending-plan",
+    status: "queued",
+    planPreparationPending: true,
+    runtimeConnectionId: null,
+  } as Parameters<typeof shouldDispatchAssignedRuntimeTask>[0];
+
+  assert.equal(
+    shouldDispatchAssignedRuntimeTask(pendingPlanTask, "new-connection"),
+    false,
+  );
+});
+
 test("realtime stream rejects unowned task scopes", async () => {
   class FakeQuery<T> {
     constructor(private readonly result: T) {}

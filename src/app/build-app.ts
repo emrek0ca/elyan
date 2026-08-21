@@ -387,7 +387,10 @@ export async function buildApp(envInput?: AppEnv) {
   startPerfTelemetry();
   const perfLogTimer = setInterval(() => {
     const snapshot = getPerfSnapshot({ resetLoop: true });
-    if (snapshot.eventLoop && snapshot.eventLoop.p95Ms > 20) {
+    // monitorEventLoopDelay resolution is 20ms. Treating every sample above
+    // that resolution as a warning made a healthy ~20ms baseline look like a
+    // freeze and drowned the actionable signals in production logs.
+    if (snapshot.eventLoop && snapshot.eventLoop.p95Ms > 50) {
       app.log.warn({ perf: snapshot }, "event loop lag yüksek");
     } else {
       app.log.info({ perf: snapshot }, "perf snapshot");
@@ -542,13 +545,25 @@ export async function buildApp(envInput?: AppEnv) {
   //
   // Tek yerde duruyor: süreç başına kopyalamak bu projenin baskın hata sınıfı
   // ("aynı karar iki sahip") — her yeni worker bunu unutmadan kazanmalı.
+  // buildApp() API'nin yanında chat/brain/document/proactive worker'larında da
+  // çalışır. Capability kataloğu yalnızca task-routing otoritesi olan API
+  // sürecinde ısıtılmalı; her worker'ın aynı ~490 metni eşzamanlı gömmeye
+  // çalışması startup CPU'sunu boğuyor. Worker'lar yine modelin küçük warmup'ını
+  // yapar; gerektiğinde request yolu güvenli lexical fallback kullanır.
+  const capabilityWarmupEnabled =
+    process.env.ELYAN_SEMANTIC_CAPABILITY_WARMUP_ENABLED !== "false";
+  const factSelectionWarmupEnabled =
+    process.env.ELYAN_FACT_SELECTION_WARMUP_ENABLED !== "false";
+
   void primeSemanticComputeWorker({
     modelName: app.config.ELYAN_RAG_SEMANTIC_RERANK_MODEL,
     logger: app.log,
   })
     .then(async (warmed) => {
       app.log.info({ warmed }, "semantic compute model warmup finished");
-      await warmDesktopCapabilityVectors(app.log);
+      if (capabilityWarmupEnabled) {
+        await warmDesktopCapabilityVectors(app.log);
+      }
       // Olgu sağlayıcı niyet kataloğu da BU zincirin parçası.
       //
       // Önce ayrı bir `void primeFactSelection(...)` olarak eklenmişti ve
@@ -556,8 +571,10 @@ export async function buildApp(envInput?: AppEnv) {
       // denenince gömücünün kendi devre kesicisi (5 hata → 60 sn cooldown)
       // açılıyor ve tüm yeniden denemeler o cooldown'ın içine düşüyordu.
       // Yukarıdaki yorumun uyardığı hata: ısıtma sırası tek sahipli olmalı.
-      const factCatalogReady = await primeFactSelection(app.log);
-      app.log.info({ ready: factCatalogReady }, "fact selection catalog warmed");
+      if (factSelectionWarmupEnabled) {
+        const factCatalogReady = await primeFactSelection(app.log);
+        app.log.info({ ready: factCatalogReady }, "fact selection catalog warmed");
+      }
     })
     .catch(() => null);
 

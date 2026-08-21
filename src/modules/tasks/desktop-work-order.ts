@@ -230,25 +230,30 @@ export type DesktopWorkOrder = {
       metric: "responsive_execution_liveness";
     };
     /**
-     * Planın kaynağı ve güven sınıfı. "heuristic" (varsayılan) = regex/keyword
-     * work-order sentezi; desktop bu plana güvenmeyip kendi katalog+doğrulamalı
-     * planlayıcısına delege eder. "server_materialized" = sunucu beyni (120b
-     * planning workload) tam bağımlılık-graflı plan derledi; desktop bu güvenilir
-     * plana GÜVENİR ve ekstra beyin round-trip'i olmadan yürütür. Alan yoksa
-     * desktop tarafı mevcut (heuristik) davranışı korur → geriye dönük uyumlu.
+     * Planın kaynağı ve güven sınıfı. `heuristic` yalnız eski uyumluluk için
+     * tutulur; yeni desktop işi ya server planner tarafından materialize edilir
+     * ya da registry'nin doğrudan-güvenli tek adımlı planı olarak işaretlenir.
      */
-    planSource?: "heuristic" | "server_materialized";
+    planSource?:
+      | "heuristic"
+      | "server_materialized"
+      | "deterministic_registry";
     materializationSource?:
       | "model"
       | "model_transport_repair"
-      | "semantic_compiler";
+      | "semantic_compiler"
+      | "deterministic_registry";
     /**
      * New tasks are not deliverable while model planning is pending. Older
      * work orders without this field remain ready for backward compatibility.
      */
     planPreparation?: {
       status: "pending" | "ready" | "failed";
-      outcome?: "materialized" | "model_plan_unavailable";
+      outcome?:
+        | "materialized"
+        | "deterministic_materialized"
+        | "planning"
+        | "model_plan_unavailable";
       preparedAt?: string;
     };
     planCache?: {
@@ -308,7 +313,7 @@ export type DirectImageFetchCommand = {
 export function parseDirectDesktopAppCommand(message: string): DirectDesktopAppCommand | null {
   const compact = compactText(message, 240);
   const match = compact.match(
-    /^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)*(?<app>[\p{L}\p{N}][\p{L}\p{N} ._'’+-]{0,79}?)\s+(?:(?:uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+)?(?<verb>aç|ac|başlat|baslat|çalıştır|calistir|kapat|durdur|sonlandır|sonlandir)[.!?]*$/iu,
+    /^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)*(?<app>[\p{L}\p{N}][\p{L}\p{N} ._'’+-]{0,79}?)\s+(?:(?:uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+)?(?<verb>aç|ac|başlat|baslat|çalıştır|calistir|kapat|durdur|sonlandır|sonlandir)(?:(?:abilir|ebilir)|(?:ır|ir|ur|ür|ar|er))?(?:\s+(?:mı|mi|mu|mü)(?:sın|sin|sun|sün|sınız|siniz|sunuz|sünüz)?)?(?:\s+(?:lütfen|lutfen))?[.!?]*$/iu,
   );
   const rawApp = match?.groups?.app?.trim() ?? "";
   const verb = match?.groups?.verb?.toLocaleLowerCase("tr-TR") ?? "";
@@ -319,6 +324,10 @@ export function parseDirectDesktopAppCommand(message: string): DirectDesktopAppC
       "",
     )
     .replace(/['’](?:y?[ıiuü])$/iu, "")
+    // Turkish accusative/possessive suffixes are sometimes dictated or typed
+    // without the apostrophe ("Chrome u kapat").  Keep this normalization
+    // narrow so a real multi-word app name is not rewritten.
+    .replace(/\s+(?:y?[ıiuü])$/iu, "")
     .trim();
   if (!appName) return null;
   return {
@@ -1420,6 +1429,7 @@ function explicitResourceRoot(value: string): string | null {
 }
 
 function buildSteps(input: {
+  message: string;
   title: string;
   summary: string;
   kind: string;
@@ -1432,6 +1442,14 @@ function buildSteps(input: {
   const url = input.entities.find((entity) => entity.type === "url")?.value;
   const fileHint = input.entities.find((entity) => entity.type === "file_hint")?.value;
   const appHint = input.entities.find((entity) => entity.type === "app_hint")?.value;
+  // The direct registry parser is a deliberately narrow degraded fallback
+  // for one-step app lifecycle commands. The semantic route remains the
+  // authority for general tasks, but once this exact command is accepted its
+  // normalized app name must reach the concrete step; otherwise
+  // `Chrome u kapat` becomes `close_app` with `{}` and is incorrectly marked
+  // as a pending heuristic plan.
+  const directAppCommand = parseDirectDesktopAppCommand(input.message);
+  const resolvedAppHint = directAppCommand?.appName || appHint;
   const topic = input.entities.find((entity) => entity.type === "topic")?.value ?? "";
   const directImageFetch = parseDirectImageFetchCommand(topic);
   const directFolderCreate = parseDirectFolderCreateCommand(topic || input.title);
@@ -1466,15 +1484,40 @@ function buildSteps(input: {
       .map((constraint) => `${constraint.kind}: ${JSON.stringify(constraint.value)}`),
     ...(input.envelope?.success_criteria ?? []).map((criterion) => criterion.description),
   ].filter(Boolean).join("\n"), 3_000) || topic || input.summary;
+  // Explicit read-only runtime capabilities are already an authoritative
+  // selection from the mobile manifest. Materialize them as concrete steps so
+  // a desktop task does not become an empty pending plan when the semantic
+  // planner or local agent model is unavailable. `run_skill` stays deferred
+  // until a validated skillId is present; inventing one here would be less
+  // safe than letting the planner select from the runtime skill catalog.
+  if (input.capabilities.includes("retrieve_context")) {
+    steps.push({
+      id: "step_retrieve_context",
+      capability: "retrieve_context",
+      description: "İzinli yerel bağlam görevin amacıyla eşleştirilecek.",
+      args: {
+        query: semanticBrief,
+        limit: 6,
+      },
+    });
+  }
+  if (input.capabilities.includes("sys_info")) {
+    steps.push({
+      id: "step_sys_info",
+      capability: "sys_info",
+      description: "Masaüstü sistem durumu salt-okunur olarak alınacak.",
+      args: { query: "all" },
+    });
+  }
   for (const capability of ["open_app", "close_app"] as const) {
     if (!input.capabilities.includes(capability)) continue;
     steps.push({
       id: `step_${capability}`,
       capability,
-      description: appHint
-        ? `${appHint} ${capability === "open_app" ? "açılacak" : "kapatılacak"}.`
+      description: resolvedAppHint
+        ? `${resolvedAppHint} ${capability === "open_app" ? "açılacak" : "kapatılacak"}.`
         : `Uygulama ${capability === "open_app" ? "açma" : "kapatma"} isteği yerelde çözümlenecek.`,
-      args: appHint ? { app_name: appHint } : {},
+      args: resolvedAppHint ? { app_name: resolvedAppHint } : {},
     });
   }
   if (input.capabilities.includes("image_fetch") && directImageFetch) {
@@ -1719,18 +1762,28 @@ export function buildDesktopWorkOrder(input: {
   >["desktopPlanningEvidence"];
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
+  const directRegistryCommand = parseDirectDesktopAppCommand(message);
   const semanticDesktopContract = semanticDesktopContractFromRoute(
     input.routeDecision,
   );
   const kind = inferKind(input.routeDecision, message);
-  const capabilities = inferCapabilities(
-    {
-      ...input.routeDecision,
-      capabilities: [...input.routeDecision.capabilities, ...input.requestedCapabilities],
-    },
-    message,
-    input.understandingEnvelope,
-  );
+  const capabilities = [
+    ...new Set([
+      ...inferCapabilities(
+        {
+          ...input.routeDecision,
+          capabilities: [...input.routeDecision.capabilities, ...input.requestedCapabilities],
+        },
+        message,
+        input.understandingEnvelope,
+      ),
+      // A successfully parsed direct command is a bounded registry fallback,
+      // not a free-form model decision. It prevents a low-confidence semantic
+      // envelope from dropping the one capability needed for the exact local
+      // action while leaving advice/questions outside this path.
+      ...(directRegistryCommand ? [directRegistryCommand.capability] : []),
+    ]),
+  ];
   const summary = compactText(
     [
       kind === "remote_mcp"
@@ -1823,6 +1876,7 @@ export function buildDesktopWorkOrder(input: {
     envelope: input.understandingEnvelope,
   });
   const steps = buildSteps({
+    message,
     title: input.title,
     summary,
     kind,
@@ -1835,6 +1889,17 @@ export function buildDesktopWorkOrder(input: {
     if (!capabilities.includes(step.capability)) capabilities.push(step.capability);
   }
   const sourceReference = input.understandingEnvelope?.source_reference ?? "current_prompt";
+  const deterministicReadOnlyStep =
+    steps.length === 1 &&
+    steps[0]?.capability === "sys_info" &&
+    steps[0]?.args?.query === "all";
+  const deterministicRegistryPlan =
+    (directRegistryCommand !== null &&
+      steps.length === 1 &&
+      steps[0]?.capability === directRegistryCommand.capability &&
+      Object.keys(steps[0]?.args ?? {}).length === 1 &&
+      typeof steps[0]?.args.app_name === "string") ||
+    deterministicReadOnlyStep;
   const basePrivacyRouting = executionEnvelope?.privacy_routing ?? {
     mode: localContextNeeded.length > 0 ? "desktop_private" : "server",
     mayUseHostedModels: localContextNeeded.length === 0,
@@ -2063,10 +2128,26 @@ export function buildDesktopWorkOrder(input: {
           ? "local_private"
           : "public_text",
       steps,
-      // Varsayılan: heuristik sentez. Dispatch worker karmaşık görevlerde bunu
-      // "server_materialized" ile üzerine yazar (materialize-plan.ts).
-      planSource: "heuristic",
-      planPreparation: { status: "pending" },
+      // Tek adımlı open/close app planları capability registry tarafından
+      // doğrudan doğrulanır. Bunlar model planı beklemeden çalışabilir; safety
+      // policy ve state readback kapıları yine desktop runtime'da kalır.
+      ...(deterministicRegistryPlan
+        ? {
+            planSource: "deterministic_registry" as const,
+            contract: "elyan.compiled_plan.v1" as const,
+            materializationSource: "deterministic_registry" as const,
+            planPreparation: {
+              status: "ready" as const,
+              outcome: "deterministic_materialized" as const,
+              preparedAt: new Date().toISOString(),
+            },
+          }
+        : {
+            // Varsayılan: heuristik sentez. Dispatch worker karmaşık görevlerde
+            // bunu server_materialized ile üzerine yazar.
+            planSource: "heuristic" as const,
+            planPreparation: { status: "pending" as const },
+          }),
       ...(input.dispatchOptimization
         ? { dispatchOptimization: input.dispatchOptimization }
         : {}),

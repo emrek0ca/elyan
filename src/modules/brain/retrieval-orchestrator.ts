@@ -4,6 +4,10 @@ import {
   searchKnowledge as searchKnowledgeCore,
   type RetrievalSearchResult,
 } from "./retrieval.js";
+import {
+  retrievalResultsToEvidencePacket,
+  type EvidencePacket,
+} from "./evidence-packet.js";
 
 /**
  * RAG orkestratörü — Elyan beyninin gelişmiş retrieval katmanı.
@@ -36,6 +40,7 @@ export type RetrievalStrategy = "hybrid" | "keyword_heavy" | "multi_hop";
 export type OrchestratedRetrieval = {
   retrievalMode: string;
   results: RetrievalSearchResult[];
+  evidencePacket: EvidencePacket;
   retrievalResultCount: number;
   degradedReason: string | null;
   /** Orkestratör telemetrisi — prompt'a girmez, teşhis içindir. */
@@ -483,6 +488,17 @@ export async function searchKnowledge(
   return {
     retrievalMode: primaryCore?.retrievalMode ?? "lexical_fallback",
     results: top,
+    evidencePacket: retrievalResultsToEvidencePacket({
+      userId: input.userId,
+      query: input.query,
+      results: top.map((result) => ({
+        ...result,
+        metadata:
+          result.metadata && typeof result.metadata === "object" && !Array.isArray(result.metadata)
+            ? (result.metadata as Record<string, unknown>)
+            : {},
+      })),
+    }),
     retrievalResultCount: top.length,
     degradedReason: primaryCore?.degradedReason ?? (coreCandidates === 0 && keywordCandidates === 0 ? "retrieval_unavailable" : null),
     orchestration: {

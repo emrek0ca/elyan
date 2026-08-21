@@ -56,26 +56,46 @@ function routingHints(intent: UnderstandingIntent, requiresCitation: boolean) {
 
 export async function enhanceIntentWithGeminiFree(
   app: FastifyInstance,
-  input: { userId: string; message: string; current: IntentClassification },
+  input: {
+    userId: string;
+    message: string;
+    current: IntentClassification;
+    /**
+     * Risk/uncertainty gate from the semantic route. This does not bypass the
+     * public-operation/privacy guard; it only allows the second candidate to
+     * verify a local or otherwise high-impact interpretation.
+     */
+    forceVerification?: boolean;
+  },
 ): Promise<IntentClassification> {
   const message = input.message.replace(/\s+/g, " ").trim();
   const publicOperationFrame = buildGeminiFreePublicOperationFrame(message);
+  const typedConflict = input.current.secondaryIntents.length > 0;
+  // An explicit plan/roadmap request is an operational contract, not a weak
+  // topic guess. Keep it authoritative even when an optional provider sees a
+  // subject such as math, medicine, or coding and proposes that topic as the
+  // primary intent. Artifact requests are reconciled later from the typed
+  // output contract, so this guard does not turn PDF/document work into a
+  // planning workload.
+  if (input.current.primaryIntent === "planning" && !input.forceVerification) return input.current;
   if (
     !publicOperationFrame ||
     message.length < 12 ||
     message.length > 2_000 ||
-    input.current.confidence >= 0.58 ||
-    input.current.privacyRisk !== "low" ||
-    input.current.requiresLocalRuntime
+    (!input.forceVerification && input.current.confidence >= 0.58 && !typedConflict) ||
+    (!input.forceVerification && input.current.privacyRisk !== "low") ||
+    (!input.forceVerification && input.current.requiresLocalRuntime)
   ) return input.current;
 
   const routed = await callGeminiFreeStructured(app, {
     feature: "intent_route",
     userId: input.userId,
-    system: "Classify the user's operational intent. Return JSON only. Never infer private facts or invent a requested action.",
+    system:
+      "Classify the user's operational intent. Return JSON only. When a request combines a subject with an explicit request for a plan, roadmap, program, or ordered steps, classify the operational intent as planning and keep the subject as secondary context. Never infer private facts or invent a requested action.",
     payload: {
       publicOperationFrame,
       deterministicIntent: input.current.primaryIntent,
+      typedSecondaryIntents: input.current.secondaryIntents,
       allowedIntents: intents,
     },
     schema: routeSchema,

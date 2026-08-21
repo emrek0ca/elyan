@@ -60,6 +60,7 @@ type SemanticComputeDispatcher = (input: {
 }) => Promise<number[][] | null>;
 
 const DEFAULT_TIMEOUT_MS = 8_000;
+const MODEL_WARMUP_TIMEOUT_MS = 120_000;
 const FAILURE_THRESHOLD = 5;
 const COOLDOWN_MS = 60_000;
 const BATCH_WAIT_MS = 2;
@@ -498,15 +499,35 @@ export function primeSemanticComputeWorker(input: {
 
   workerWarm = false;
   warmupPromise = new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (warmed: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (!warmed) warmupPromise = null;
+      resolve(warmed);
+    };
     const activeWorker = getWorker(input.logger);
     if (!activeWorker) {
-      resolve(false);
+      finish(false);
       return;
     }
     const id = nextRequestId;
     nextRequestId += 1;
-    // Isıtma için zamanlayıcı kurulmuyor; `pending` girdisi yanıt gelince
-    // temizleniyor. Yanıt hiç gelmezse süreç zaten hash yolunda çalışır.
+    // Warmup is outside the request path, but it must still be bounded. A
+    // wedged ONNX session must not leave the startup chain pending forever.
+    timer = setTimeout(() => {
+      pending.delete(id);
+      workerWarm = false;
+      input.logger?.warn?.(
+        { modelName: input.modelName, timeoutMs: MODEL_WARMUP_TIMEOUT_MS },
+        "semantic compute model warmup timed out",
+      );
+      stopWorker();
+      finish(false);
+    }, MODEL_WARMUP_TIMEOUT_MS);
+    timer.unref?.();
     pending.set(id, {
       resolve: (vectors) => {
         // Isıtma başarısı cooldown'u SIFIRLAR: soğuk başlangıçta birikmiş
@@ -516,16 +537,23 @@ export function primeSemanticComputeWorker(input: {
           recordSuccess();
           workerWarm = true;
         }
-        resolve(warmed);
+        finish(warmed);
       },
-      timer: setTimeout(() => undefined, 0),
+      timer,
     });
-    activeWorker.postMessage({
-      id,
-      task: "warmup",
-      modelName: input.modelName,
-      texts: [],
-    });
+    try {
+      activeWorker.postMessage({
+        id,
+        task: "warmup",
+        modelName: input.modelName,
+        texts: [],
+      });
+    } catch (error) {
+      pending.delete(id);
+      input.logger?.warn?.({ error }, "semantic compute model warmup unavailable");
+      stopWorker();
+      finish(false);
+    }
   });
   return warmupPromise;
 }

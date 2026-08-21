@@ -447,7 +447,11 @@ export async function disconnectRuntime(
   });
 }
 
-export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: RuntimeAuthTokenPayload) {
+export async function listAssignedRuntimeTasks(
+  app: FastifyInstance,
+  auth: RuntimeAuthTokenPayload,
+  options: { includePlanPending?: boolean } = {},
+) {
   const connection = await getRuntimeConnectionByAuth(app, auth);
 
   const rows = await app.db
@@ -482,11 +486,16 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
     .orderBy(tasks.queuePosition, tasks.createdAt);
 
   const claimOwner = `runtime:${auth.connectionId}:poll`;
-  const claimable = [];
+  const claimable: Array<(typeof rows)[number] & { planPreparationPending?: boolean }> = [];
   for (const row of rows) {
     // Only v1.7 tasks carry this gate. Legacy rows remain claimable. Pending
-    // model plans are never executable, even after a backend restart.
+    // model plans are never executable, even after a backend restart. The
+    // websocket reconnect path may ask for these rows explicitly so it can
+    // enqueue plan materialization instead of silently leaving them queued.
     if (isDesktopPlanPreparationPending(row.payload)) {
+      if (options.includePlanPending === true) {
+        claimable.push({ ...row, planPreparationPending: true });
+      }
       continue;
     }
     if (row.status !== "queued") {
@@ -512,6 +521,9 @@ export async function listAssignedRuntimeTasks(app: FastifyInstance, auth: Runti
     });
     return {
       ...row,
+      ...(row.planPreparationPending
+        ? { planPreparationPending: true }
+        : {}),
       routeDecision: extractTaskRouteDecision(row.payload),
       deliveryState: deriveTaskDeliveryState(row),
       deliveryAttemptCount: row.dispatchAttemptCount ?? 0,

@@ -22,7 +22,7 @@ x-shared-brain-model-environment: &shared-brain-model-environment
   GROQ_BASE_URL: https://api.groq.com/openai/v1
   GROQ_REASONING_MODEL: openai/gpt-oss-120b
   GROQ_FAST_MODEL: openai/gpt-oss-20b
-  GROQ_ROUTING_MODEL: llama-3.1-8b-instant
+  GROQ_ROUTING_MODEL: qwen/qwen3.6-27b
   GROQ_FALLBACK_MODEL: qwen/qwen3.6-27b
   GROQ_VISION_MODEL: ${GROQ_VISION_MODEL:-qwen/qwen3.6-27b}
   GROQ_COMPOUND_MODEL: ${GROQ_COMPOUND_MODEL:-groq/compound}
@@ -146,6 +146,8 @@ services:
       ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
       ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: "true"
       ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED: "true"
+      ELYAN_SEMANTIC_CAPABILITY_WARMUP_ENABLED: "true"
+      ELYAN_FACT_SELECTION_WARMUP_ENABLED: "true"
       ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED: "true"
       ELYAN_TURN_ENVELOPE_ENABLED: "true"
       ELYAN_DIALOGUE_STATE_ENABLED: "true"
@@ -225,6 +227,8 @@ services:
       RELIABILITY_REDIS_REQUIRED: "true"
       ELYAN_MEMORY_WORKER_DISABLED: "true"
       ELYAN_PROACTIVE_ENGINE_ENABLED: "false"
+      ELYAN_SEMANTIC_CAPABILITY_WARMUP_ENABLED: "false"
+      ELYAN_FACT_SELECTION_WARMUP_ENABLED: "false"
     command: ["node", "dist/workers/brain-worker.js"]
 
   chat-worker:
@@ -265,6 +269,8 @@ services:
       ELYAN_WORLD_CONTEXT_PACKETS_ENABLED: "true"
       ELYAN_UNDERSTANDING_ENVELOPE_V2_ENABLED: "true"
       ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED: "true"
+      ELYAN_SEMANTIC_CAPABILITY_WARMUP_ENABLED: "false"
+      ELYAN_FACT_SELECTION_WARMUP_ENABLED: "true"
       ELYAN_SEMANTIC_TOOL_SELECTION_ENABLED: "true"
       ELYAN_TURN_ENVELOPE_ENABLED: "true"
       ELYAN_DIALOGUE_STATE_ENABLED: "true"
@@ -300,6 +306,8 @@ services:
       REDIS_URL: redis://redis:6379
       RELIABILITY_REDIS_REQUIRED: "true"
       ELYAN_MEMORY_WORKER_DISABLED: "true"
+      ELYAN_SEMANTIC_CAPABILITY_WARMUP_ENABLED: "false"
+      ELYAN_FACT_SELECTION_WARMUP_ENABLED: "false"
     command: ["node", "dist/workers/document-worker.js"]
 
   proactive-scheduler:
@@ -322,6 +330,8 @@ services:
       RELIABILITY_REDIS_REQUIRED: "true"
       ELYAN_MEMORY_WORKER_DISABLED: "true"
       ELYAN_PROACTIVE_ENGINE_ENABLED: "true"
+      ELYAN_SEMANTIC_CAPABILITY_WARMUP_ENABLED: "false"
+      ELYAN_FACT_SELECTION_WARMUP_ENABLED: "false"
       # Night watch and the observer default to off and are turned on from
       # .env once push delivery has been verified end to end. Speaking
       # unprompted before the delivery channel is proven would mean the user

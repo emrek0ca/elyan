@@ -18,6 +18,10 @@ import {
   searchBrainMemory,
   type MemorySearchHit,
 } from "./memory.js";
+import {
+  memoryHitsToEvidencePackets,
+  type EvidencePacket,
+} from "./evidence-packet.js";
 
 const workingSchema = z.object({
   sessionId: z.string().uuid().nullable(),
@@ -85,6 +89,18 @@ export const cognitiveContextPacketSchema = z.object({
     semanticLimit: z.number().int().positive(),
     episodicLimit: z.number().int().positive(),
   }),
+  evidencePackets: z.array(z.object({
+    contract: z.literal("elyan.evidence_packet.v1"),
+    userId: z.string(),
+    sessionId: z.string().nullable(),
+    taskId: z.string().nullable(),
+    goalId: z.string().nullable(),
+    namespace: z.string(),
+    queryHash: z.string(),
+    memoryRevision: z.number().int().nonnegative().nullable(),
+    entries: z.array(z.record(z.string(), z.unknown())),
+    usedChars: z.number().int().nonnegative(),
+  })).max(8).default([]),
 });
 
 export type CognitiveContextPacket = z.output<typeof cognitiveContextPacketSchema>;
@@ -166,6 +182,7 @@ export async function buildCognitiveContextPacket(
       input.userId,
       memoryRevision,
       query,
+      "memory",
     );
     const cachedHits = Array.isArray(cached)
       ? cached.filter((item): item is MemorySearchHit =>
@@ -204,6 +221,7 @@ export async function buildCognitiveContextPacket(
         memoryRevision,
         query,
         retrievedHits.slice(0, 12),
+        "memory",
       );
     }
     return withTenantTransaction(app, input.userId, (db) =>
@@ -392,6 +410,15 @@ async function buildCognitiveContextPacketOnDb(
   const memoryRevision = revisionRows[0]?.revision ?? 0;
   const contestedFactCount = contestedRows.reduce((sum, row) => sum + Number(row.count), 0);
   const evidenceCount = semantic.length + episodic.length;
+  const evidencePackets: EvidencePacket[] = options.retrievedHits?.length
+    ? memoryHitsToEvidencePackets({
+        userId: input.userId,
+        sessionId: input.sessionId,
+        query: input.query ?? "",
+        memoryRevision,
+        hits: options.retrievedHits,
+      })
+    : [];
   return cognitiveContextPacketSchema.parse({
     version: "cognitive_context.v2",
     userId: input.userId,
@@ -433,6 +460,7 @@ async function buildCognitiveContextPacketOnDb(
           : Math.max(0, Math.min(1, semantic.reduce((sum, item) => sum + item.confidence, 0) / Math.max(1, semantic.length))),
     },
     budget: { maxChars, usedChars, semanticLimit, episodicLimit },
+    evidencePackets,
   });
 }
 

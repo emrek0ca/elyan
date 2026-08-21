@@ -2,7 +2,10 @@ import { and, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { runtimeConnections, tasks } from "../../db/schema.js";
 import { RUNTIME_CONNECTION_STALE_AFTER_MS } from "../devices/service.js";
-import { reconcileStaleRuntimeTasks } from "./service.js";
+import {
+  DESKTOP_PLAN_PENDING_RECOVERY_AFTER_MS,
+  reconcileStaleRuntimeTasks,
+} from "./service.js";
 import {
   TASK_APPROVAL_TTL_MS,
   TASK_QUEUE_TTL_MS,
@@ -61,6 +64,9 @@ async function collectStaleRuntimeTaskScopes(app: FastifyInstance, now: Date) {
   const cutoff = new Date(now.getTime() - STALE_RUNTIME_TASK_AFTER_MS);
   const runtimeCutoff = new Date(now.getTime() - RUNTIME_CONNECTION_STALE_AFTER_MS);
   const approvalCutoff = new Date(now.getTime() - TASK_APPROVAL_TTL_MS);
+  const pendingPlanRecoveryCutoff = new Date(
+    now.getTime() - DESKTOP_PLAN_PENDING_RECOVERY_AFTER_MS,
+  );
   const queueCutoff = new Date(now.getTime() - TASK_QUEUE_TTL_MS);
   return app.db
     .select({
@@ -105,6 +111,14 @@ async function collectStaleRuntimeTaskScopes(app: FastifyInstance, now: Date) {
           and(
             eq(tasks.status, "waiting_approval"),
             lt(tasks.updatedAt, approvalCutoff),
+          ),
+          // A lost dispatch enqueue must be recovered while the plan is
+          // still pending, not after the ordinary queue TTL has already
+          // expired and canceled the task.
+          and(
+            eq(tasks.status, "queued"),
+            sql`(${tasks.payload} #>> '{desktopWorkOrder,planPreview,planPreparation,status}') = 'pending'`,
+            lt(tasks.updatedAt, pendingPlanRecoveryCutoff),
           ),
           // Teslim edilemeden kuyrukta kalan görevler (bkz. TASK_QUEUE_TTL_MS).
           and(eq(tasks.status, "queued"), lt(tasks.updatedAt, queueCutoff)),

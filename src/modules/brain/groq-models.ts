@@ -19,6 +19,13 @@ export type GroqModelConfigSource = {
 export type GroqModelCatalog = {
   reasoningModel: string;
   fastModel: string;
+  /**
+   * Compatibility fallback for machine-json calls. This is deliberately not
+   * the primary model for routing or planning: those workloads should use the
+   * configured OSS fast/deep model and only fall back here after a provider
+   * rejection or malformed JSON response.
+   */
+  structuredJsonModel: string;
   fallbackModel: string;
   visionModel: string;
   frontierModel: string;
@@ -32,9 +39,10 @@ export type GroqModelCatalog = {
 };
 
 /**
- * These workloads are transported as machine JSON. They must never inherit a
- * reasoning-channel fallback: Groq can return an empty/invalid body when a
- * reasoning model is combined with a JSON response contract.
+ * These workloads are transported as machine JSON. Their response is always
+ * parsed and validated by the typed caller. Routing and planning may start on
+ * the configured OSS models; the provider-selection layer keeps one bounded
+ * compatibility fallback for malformed JSON or provider rejection.
  */
 export function isStructuredGroqWorkload(
   workload: SharedBrainWorkload | undefined,
@@ -46,6 +54,9 @@ export function isStructuredGroqWorkload(
     workload === "planning"
   );
 }
+
+const DEFAULT_STRUCTURED_JSON_MODEL = "qwen/qwen3.6-27b";
+const RETIRED_STRUCTURED_JSON_MODELS = new Set(["llama-3.1-8b-instant"]);
 
 function compactText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -93,7 +104,7 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       compactText(config.ELYAN_SHARED_BRAIN_FAST_MODEL),
     "openai/gpt-oss-20b",
   );
-  // KATI-JSON ŞERİDİ — gpt-only politikasının BİLİNÇLİ İSTİSNASI.
+  // KATI-JSON UYUMLULUK ŞERİDİ — gpt-only politikasının BİLİNÇLİ İSTİSNASI.
   //
   // Bu şerit modelden şemaya birebir uyan JSON ister. gpt-oss ailesi cevaptan
   // önce gizli bir düşünme turu yapar ve o turun token'ları bütçeye sayılır;
@@ -111,15 +122,29 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
   //     → server_brain_unavailable → kullanıcı "Bu turda yanıt oluşturulamadı"
   //       gördü ve PDF hiç üretilmedi.
   //
-  // `reasoning_effort: "low"` panzehir DEĞİL: ikinci ölçümde efor zaten
-  // düşüktü ve yine 400 geldi. Bu yüzden şerit reasoning-DIŞI bir modele
-  // sabitlenir; `gptOnlyModel` filtresinden bilerek geçirilmez.
+  // `reasoning_effort: "low"` tek başına panzehir değildir. Bu model yalnız
+  // gpt-oss plan/routing çağrısı geçersiz dönerse fallback olarak kullanılır;
+  // baştan tüm sistemi bu hatta kilitlemek kaliteyi ve modeli saklar.
   //
-  // Kapsam dar: sohbet, akıl yürütme, planlama ve belge ÜRETİMİ tamamen gpt
-  // kalır. Burada değişen yalnız "şemaya uyan JSON döndür" çağrıları.
+  // Kapsam dar: sohbet, akıl yürütme ve karmaşık planlama gpt-oss'ta kalır;
+  // belge analizi gibi provider-şema hassas işleri bu uyumluluk modeli taşır.
+  const configuredStructuredJsonModel = compactText(config.GROQ_ROUTING_MODEL);
   const structuredJsonModel =
-    compactText(config.GROQ_ROUTING_MODEL) || "llama-3.1-8b-instant";
-  const routingModel = structuredJsonModel;
+    !configuredStructuredJsonModel ||
+    RETIRED_STRUCTURED_JSON_MODELS.has(configuredStructuredJsonModel.toLowerCase())
+      ? DEFAULT_STRUCTURED_JSON_MODEL
+      : configuredStructuredJsonModel;
+  // `GROQ_ROUTING_MODEL` is retained as the compatibility model, not as the
+  // authoritative model selection. The previous implementation used it for
+  // both routing and planning, so an old qwen value silently replaced the
+  // configured gpt-oss-20b/120b pair. Fast routing is intentionally cheap;
+  // complex desktop planning gets the deep model and has the compatibility
+  // model as a bounded fallback.
+  const routingModel = fastModel;
+  const planningModel = gptOnlyModel(
+    config.ELYAN_SHARED_BRAIN_PLANNING_MODEL,
+    reasoningModel,
+  );
   const fallbackModel = gptOnlyModel(
     config.GROQ_FALLBACK_MODEL,
     "openai/gpt-oss-120b",
@@ -141,22 +166,27 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
   return {
     reasoningModel,
     fastModel,
+    structuredJsonModel,
     fallbackModel,
     visionModel,
     frontierModel,
     compoundModel,
     compoundMiniModel,
     defaultModelByWorkload: {
-      // intent/routing sınıflandırması hız-kritik ve kaliteye duyarsız: küçük
-      // model yeterli, düşük gecikme önemli.
+      // intent/routing sınıflandırması hız-kritik: gpt-oss-20b ile çalışır.
+      // JSON geçersiz olursa resolveGroqFallbackModel() compatibility
+      // modeline tek kez düşürür; yönlendirme qwen'e kalıcı olarak kilitli
+      // değildir.
       intent: routingModel,
       fast_route: routingModel,
-      // Normal sohbetin iki mobil workload'u da hızlı modelde kalır. Zor
-      // görevler `mobile_chat_deep_refine`/planning ile açıkça reasoning
-      // kanalına yükseltilir; böylece her orta uzunlukta sohbet gizli 120B
-      // düşünme turunu ödemez.
+      // Sıradan kısa sohbet hızlı modelde kalır. `mobile_chat_balanced`,
+      // routing-policy'nin matematik/eğitim/debug ve belirsizlik gibi kalite
+      // sinyalleriyle seçtiği hattır; bunu da 20B'ye indirmek, istek doğru
+      // sınıflandırıldığı halde cevabı yine yüzeysel modele vermek demekti.
+      // Derin/planlama hatlarıyla aynı 120B reasoning modelini kullanır;
+      // yalnız gerçekten kısa/casual tur 20B'de kalır.
       mobile_chat_fast: fastModel,
-      mobile_chat_balanced: fastModel,
+      mobile_chat_balanced: reasoningModel,
       mobile_chat_deep_refine: reasoningModel,
       // KATI-JSON ŞERİDİ. Belge analizi şemaya uyan JSON döndürüyor; canlıda
       // (2026-08-13, görev a4924a76) bu iş yükünde önce gpt-oss-20b sonra
@@ -165,14 +195,11 @@ export function buildGroqModelCatalog(config: GroqModelConfigSource): GroqModelC
       document_generate: reasoningModel,
       table_generate: reasoningModel,
       image_analyze: visionModel,
-      // KATI-JSON ŞERİDİ. Masaüstü plan materyalizasyonu ve eleştirisi
-      // `response_format: json_schema` kullanıyor. Canlı 2026-08-14 görsel
-      // poster görevinde planning → gpt-oss adayları Groq'ta 400
-      // `json_validate_failed` verdi; Gemini adayı da veri paylaşımı izni
-      // olmadan policy tarafından bloklandı. Mevcut reasoning/Gemini/Compound
-      // modelleri korunur; yalnız bu şemalı iş yükü güvenilir JSON şeridine
-      // alınır.
-      planning: structuredJsonModel,
+      // Karmaşık planlama 120B'ye gider. Makine JSON sözleşmesi provider
+      // response_format'a değil, plan prompt'u + typed validator'a dayanır;
+      // bu nedenle gpt-oss'un kalite avantajını kullanabiliriz. Sağlayıcı
+      // reddederse structuredJsonModel yedeklenir.
+      planning: planningModel,
       public_research: reasoningModel,
       public_deep_research: reasoningModel,
       public_quantum_research: reasoningModel,
@@ -212,11 +239,32 @@ export function resolveGroqFallbackModel(
     workload === "public_quantum_research";
   const visionWorkload =
     workload === "vision_reasoning" || workload === "image_analyze";
+  const primary = compactText(primaryModel).toLowerCase();
+  if (workload === "intent" || workload === "fast_route") {
+    // Fast semantic routing must not fall through to the 120B model. If the
+    // 20B output is rejected, use the known JSON-compatible model once.
+    const fastStructuredOrder = [
+      catalog.structuredJsonModel,
+      catalog.reasoningModel,
+    ];
+    for (const model of fastStructuredOrder) {
+      if (compactText(model).toLowerCase() !== primary) return model;
+    }
+    return null;
+  }
+  if (workload === "planning") {
+    // Planning is quality-first. Keep the compatibility model as a bounded
+    // fallback, but do not start every request on it.
+    if (
+      compactText(catalog.structuredJsonModel).toLowerCase() !== primary
+    ) {
+      return catalog.structuredJsonModel;
+    }
+    return null;
+  }
   if (isStructuredGroqWorkload(workload)) {
-    // Structured JSON is a separate compatibility lane. Do not return the
-    // generic gpt/qwen fallbacks here: the caller may use this value to build
-    // a provider candidate list and would otherwise repeat a known-invalid
-    // response_format + reasoning combination.
+    // Document/other strict JSON workloads retain their isolated
+    // compatibility lane until their provider contract is migrated.
     return null;
   }
   const preferredOrder =
@@ -225,8 +273,6 @@ export function resolveGroqFallbackModel(
       : chatWorkload || visionWorkload
         ? [catalog.fastModel, catalog.reasoningModel, catalog.fallbackModel]
         : [catalog.fallbackModel, catalog.reasoningModel, catalog.fastModel];
-  const primary = compactText(primaryModel).toLowerCase();
-
   for (const model of preferredOrder) {
     if (!model) {
       continue;

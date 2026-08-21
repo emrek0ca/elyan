@@ -38,12 +38,17 @@ export function cognitiveRetrievalCacheKey(
   userId: string,
   memoryRevision: number,
   query: string,
+  namespace = "memory",
 ): string {
   const queryHash = createHash("sha256")
     .update(normalizeRetrievalQuery(query))
     .digest("hex")
     .slice(0, 32);
-  return `understanding:cognitive-retrieval:v2:${userId}:${memoryRevision}:${queryHash}`;
+  const normalizedNamespace = namespace
+    .normalize("NFKC")
+    .replace(/[^a-zA-Z0-9_.-]+/g, "_")
+    .slice(0, 80) || "memory";
+  return `understanding:cognitive-retrieval:v3:${userId}:${memoryRevision}:${normalizedNamespace}:${queryHash}`;
 }
 
 export async function readCognitiveRetrievalCache(
@@ -51,11 +56,12 @@ export async function readCognitiveRetrievalCache(
   userId: string,
   memoryRevision: number,
   query: string,
+  namespace = "memory",
 ): Promise<unknown | undefined> {
   const store = cacheStore(app);
   if (!store || !normalizeRetrievalQuery(query)) return undefined;
   const raw = await store
-    .get(cognitiveRetrievalCacheKey(userId, memoryRevision, query))
+    .get(cognitiveRetrievalCacheKey(userId, memoryRevision, query, namespace))
     .catch(() => null);
   if (!raw) return undefined;
   try {
@@ -72,12 +78,13 @@ export async function writeCognitiveRetrievalCache(
   memoryRevision: number,
   query: string,
   value: unknown,
+  namespace = "memory",
 ): Promise<void> {
   const store = cacheStore(app);
   if (!store || !normalizeRetrievalQuery(query)) return;
   await store
     .set(
-      cognitiveRetrievalCacheKey(userId, memoryRevision, query),
+      cognitiveRetrievalCacheKey(userId, memoryRevision, query, namespace),
       JSON.stringify({ version: 2, value }),
       COGNITIVE_RETRIEVAL_CACHE_TTL_MS,
     )

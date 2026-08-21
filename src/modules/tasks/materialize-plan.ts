@@ -21,9 +21,11 @@ import {
 import { DESKTOP_SKILL_MANIFEST } from "./desktop-skill-manifest.js";
 import {
   MAX_WORK_ORDER_STEPS,
+  parseDirectDesktopAppCommand,
   type DesktopWorkOrder,
   type DesktopWorkOrderStep,
 } from "./desktop-work-order.js";
+import { syncTaskExecutionContractWithWorkOrder } from "./task-execution-contract.js";
 import {
   acquireDesktopPlanMaterializationLock,
   readDesktopPlanCache,
@@ -140,12 +142,49 @@ function renderPlanningCatalogs(
     planningCatalogCache.set(key, cached);
     return cached;
   }
+  const detailedCatalog = renderCapabilityCatalog(detailed, detailed);
+  const exactCapabilityIds = DESKTOP_CAPABILITY_MANIFEST
+    .filter((entry) => allowed.has(entry.name))
+    .map((entry) => entry.name)
+    .join(", ");
+  const compactCapabilityRegistry = DESKTOP_CAPABILITY_MANIFEST
+    .filter((entry) => allowed.has(entry.name))
+    .map((entry) =>
+      JSON.stringify({
+        id: entry.name,
+        required: entry.requiredArgs,
+        approval: entry.requiresApproval,
+        privacy: entry.privacyClass,
+        use: compactCatalogValue(entry.usage, 180),
+        avoid: compactCatalogValue(entry.whenNotToUse, 180),
+        skills: entry.skillAffinity,
+      }),
+    )
+    .join("\n");
+  const exactSkillIds = DESKTOP_SKILL_MANIFEST.map((entry) => entry.id).join(", ");
   return rememberPlanningCatalog(key, {
     capabilityCatalog: limitUtf8Lines(
-      renderCapabilityCatalog(allowed, detailed),
-      18 * 1024,
+      [
+        `EXACT CAPABILITY IDS (choose only one of these): ${exactCapabilityIds}`,
+        detailedCatalog
+          ? `PRIORITIZED DETAILED CONTRACTS:\n${detailedCatalog}`
+          : "PRIORITIZED DETAILED CONTRACTS: (none; use the registry lines below)",
+        "COMPACT CAPABILITY REGISTRY (one JSON object per line):",
+        compactCapabilityRegistry,
+      ].join("\n\n"),
+      // Keep the full exact-id line at the top while bounding the prose and
+      // registry payload. The previous 18KB + 8KB catalog left the final
+      // planning request just over the 40KB transport budget, which increased
+      // latency and could truncate the actionable rules.
+      13 * 1024,
     ),
-    skillCatalog: limitUtf8Lines(renderSkillCatalog(allowed, detailed), 8 * 1024),
+    skillCatalog: limitUtf8Lines(
+      [
+        `EXACT SKILL IDS (use only through run_skill): ${exactSkillIds}`,
+        renderSkillCatalog(allowed, detailed),
+      ].join("\n\n"),
+      4 * 1024,
+    ),
     hits: 0,
   });
 }
@@ -190,6 +229,27 @@ async function persistTaskPayload(
   task: TaskRow,
   payload: Record<string, unknown>,
 ): Promise<void> {
+  let persistedPayload = payload;
+  const workOrder = asRecord(payload.desktopWorkOrder) as DesktopWorkOrder | null;
+  const existingContract = payload.taskExecutionContract;
+  if (workOrder && existingContract !== undefined) {
+    const syncedContract = syncTaskExecutionContractWithWorkOrder({
+      contract: existingContract,
+      workOrder,
+    });
+    if (!syncedContract) {
+      throw new Error("task_execution_contract_plan_mismatch");
+    }
+    const metadata = asRecord(payload.metadata) ?? {};
+    persistedPayload = {
+      ...payload,
+      taskExecutionContract: syncedContract,
+      metadata: {
+        ...metadata,
+        taskExecutionContract: syncedContract,
+      },
+    };
+  }
   const previousPayloadBlobId = task.payloadBlobId;
   const payloadBlob = await app.services?.blobs?.storeJson({
     ownerType: "task",
@@ -197,17 +257,17 @@ async function persistTaskPayload(
     userId: task.userId,
     slot: "payload",
     scope: "task_payload",
-    value: payload,
+    value: persistedPayload,
   });
   await app.db
     .update(tasks)
     .set({
-      payload,
+      payload: persistedPayload,
       ...(payloadBlob?.blobId ? { payloadBlobId: payloadBlob.blobId } : {}),
       updatedAt: new Date(),
     })
     .where(eq(tasks.id, task.id));
-  task.payload = payload as TaskRow["payload"];
+  task.payload = persistedPayload as TaskRow["payload"];
   if (payloadBlob?.blobId) {
     task.payloadBlobId = payloadBlob.blobId;
     if (previousPayloadBlobId && previousPayloadBlobId !== payloadBlob.blobId) {
@@ -1026,7 +1086,7 @@ export function buildPlanningPrompt(
     "UNDERSTANDING CONTEXT (machine-readable; use it to resolve follow-ups and choose the correct tool/skill):",
     renderWorkOrderContextPack(workOrder),
     "",
-    "TOOL CAPABILITY CATALOG (use ONLY these exact capability names; each line: name: what it does — when to use [required args][needs approval]):",
+    "TOOL CAPABILITY CATALOG (use ONLY exact IDs from the registry; prioritized contracts are prose, compact registry lines are JSONL):",
     catalogs.capabilityCatalog,
     "",
     "SKILL CATALOG (prepared local workflows; execute them ONLY through capability run_skill with args.skillId and args.payload):",
@@ -1063,7 +1123,7 @@ export function buildPlanningPrompt(
     "- Goal loop contract: gather evidence after each meaningful side effect, feed prior outputs into verification/writer steps, and ensure the final visible answer can cite tool_result, artifact, or state_readback evidence.",
     "- Always provide every listed required arg for a capability; put concrete values, use {{steps.<id>.output}} to consume a previous step's result.",
     '- When a skill is a better fit than manually chaining primitive tools, create a step with capability "run_skill", args.skillId set to the exact skill id, and args.payload containing the skill\'s required payload fields. Do not invent capability names from skill ids.',
-    '- Skill example: {"id":"s2","capability":"run_skill","args":{"skillId":"document.docx_from_context","payload":{"title":"Profesyonel Rapor","text":"{{steps.s1.output}}","outputPath":"workspace/Profesyonel Rapor.docx"}},"dependsOn":["s1"],"description":"Analiz sonucunu hazır DOCX workflow ile yaz"}',
+    '- Skill example: {"id":"s2","capability":"run_skill","args":"{\\"skillId\\":\\"document.docx_from_context\\",\\"payload\\":{\\"title\\":\\"Profesyonel Rapor\\",\\"text\\":\\"{{steps.s1.output}}\\",\\"outputPath\\":\\"workspace/Profesyonel Rapor.docx\\"}}","dependsOn":["s1"],"description":"Analiz sonucunu hazır DOCX workflow ile yaz"}',
     "- Choose between primitive tools and skills deliberately: use primitive tools when you need fine-grained research/read/analyze/write dependencies; use run_skill when the skill catalog describes the exact prepared workflow or artifact creation.",
     '- Args must contain executable data, not vague descriptions. Do not write placeholders such as "the invoice total", "the research result", or "the user\'s file" when a concrete value or dependency reference is available.',
     '- math_solve.args.expression MUST be a numeric/symbolic expression such as "12000+8500" or "(12000+8500)*1.20". Never pass an explanation like "faturaların toplamı" as expression.',
@@ -1857,8 +1917,9 @@ export async function maybeMaterializeDesktopPlan(
       buildAllowedCapabilities(workOrder),
     );
     let existingPlanBindingStale = false;
-    // İdempotent retry: existing server plan is already a successful
-    // materialization only when its complete compiled contract still validates.
+    // Idempotent retry: an existing server plan, or a registry-owned direct
+    // plan, is deliverable only when its complete compiled contract still
+    // validates. Deterministic plans must not take the model planner path.
     if (planPreview.planSource === "server_materialized") {
       existingPlanBindingStale = isStoredPlanBindingStale({
         workOrder,
@@ -1872,10 +1933,10 @@ export async function maybeMaterializeDesktopPlan(
         );
       }
     }
-    if (
-      planPreview.planSource === "server_materialized" &&
-      !existingPlanBindingStale
-    ) {
+    const precompiledPlan =
+      planPreview.planSource === "server_materialized" ||
+      planPreview.planSource === "deterministic_registry";
+    if (precompiledPlan && !existingPlanBindingStale) {
       if (planPreview.contract !== "elyan.compiled_plan.v1") return false;
       const existingSteps = normalizeMaterializedSteps(
         { steps: planPreview.steps },
@@ -1905,6 +1966,75 @@ export async function maybeMaterializeDesktopPlan(
       }
       return true;
     }
+
+    // Eski görevler deploy öncesi `heuristic/pending` work order olarak
+    // kalabilir. Yeni görevlerdeki deterministic registry kuralını burada da
+    // uygula; böylece bu görevler tekrar provider planlayıcısına takılıp
+    // sonsuza kadar queued kalmaz. Kaynak yalnızca task payload/title'daki
+    // mevcut kullanıcı komutudur; bilinmeyen komutlar bu dalı geçemez.
+    const directCommand = [
+      typeof payload.prompt === "string" ? payload.prompt : "",
+      typeof payload.message === "string" ? payload.message : "",
+      task.title,
+    ]
+      .map((candidate) => parseDirectDesktopAppCommand(candidate))
+      .find((candidate) => candidate !== null);
+    if (directCommand) {
+      const directSteps = normalizeMaterializedSteps(
+        {
+          steps: [
+            {
+              id: `direct_${directCommand.capability}`,
+              capability: directCommand.capability,
+              description: `${directCommand.appName} uygulaması için doğrudan komut`,
+              args: { app_name: directCommand.appName },
+            },
+          ],
+        },
+        allowed,
+      );
+      if (
+        directSteps &&
+        validateMaterializedPlanAgainstWorkOrder(directSteps, workOrder)
+          .length === 0
+      ) {
+        const materializedCapabilityScope = [
+          ...new Set(directSteps.map((step) => step.capability)),
+        ];
+        await persistTaskPayload(app, task, {
+          ...payload,
+          desktopWorkOrder: {
+            ...workOrder,
+            materializedCapabilityScope,
+            planPreview: {
+              ...planPreview,
+              steps: directSteps,
+              planSource: "deterministic_registry" as const,
+              contract: "elyan.compiled_plan.v1" as const,
+              materializationSource: "deterministic_registry" as const,
+              planPreparation: {
+                status: "ready" as const,
+                outcome: "deterministic_materialized" as const,
+                preparedAt: new Date().toISOString(),
+              },
+              contextPackConsumption: buildContextPackConsumption(
+                workOrder,
+                directSteps,
+              ),
+            },
+          },
+        });
+        app.log.info?.(
+          {
+            taskId: task.id,
+            capability: directCommand.capability,
+          },
+          "legacy desktop task upgraded to deterministic registry plan",
+        );
+        return true;
+      }
+    }
+
     const cachedPlan = await readDesktopPlanCache(workOrder, allowed, app);
     const recordAvoidedPlannerCost = () => {
       const promptBytes = Buffer.byteLength(
@@ -2313,8 +2443,13 @@ export async function maybeMaterializeDesktopPlan(
   }
 }
 
-/** Opens the runtime delivery gate only for a validated model plan. A failed
- * planning attempt is persisted as failed and is never runtime-deliverable. */
+/** Opens the runtime delivery gate only for a validated plan.
+ *
+ * A transient planner miss is kept in `pending` so the task can be retried by
+ * the dispatch queue. It is never runtime-deliverable until a compiled plan
+ * exists; a terminal planning failure is still represented as `failed` by the
+ * caller that exhausts its bounded retry budget.
+ */
 export async function markDesktopPlanPrepared(
   app: FastifyInstance,
   task: TaskRow,
@@ -2336,6 +2471,29 @@ export async function markDesktopPlanPrepared(
   if (!payload || !workOrder || !planPreview) {
     return;
   }
+  const existingPreparation = asRecord(planPreview.planPreparation);
+  // `planSource` is provenance, not proof. The caller must have just passed
+  // the compiled plan through `maybeMaterializeDesktopPlan`; otherwise a
+  // stale or tampered `server_materialized` marker must never reopen the
+  // runtime delivery gate.
+  const isTrustedPlan =
+    planPreview.planSource === "server_materialized" ||
+    planPreview.planSource === "deterministic_registry";
+  const keepPlanning = !materialized &&
+    !isTrustedPlan &&
+    existingPreparation?.status === "pending";
+  const preparationStatus = materialized
+    ? ("ready" as const)
+    : keepPlanning
+      ? ("pending" as const)
+      : ("failed" as const);
+  const preparationOutcome = materialized
+    ? (planPreview.planSource === "deterministic_registry"
+      ? ("deterministic_materialized" as const)
+      : ("materialized" as const))
+    : keepPlanning
+      ? ("planning" as const)
+      : ("model_plan_unavailable" as const);
   const updatedPayload = {
     ...payload,
     desktopWorkOrder: {
@@ -2343,15 +2501,11 @@ export async function markDesktopPlanPrepared(
       planPreview: {
         ...planPreview,
         planPreparation: {
-          status:
-            materialized || planPreview.planSource === "server_materialized"
-              ? ("ready" as const)
-              : ("failed" as const),
-          outcome:
-            materialized || planPreview.planSource === "server_materialized"
-              ? ("materialized" as const)
-              : ("model_plan_unavailable" as const),
-          preparedAt: new Date().toISOString(),
+          status: preparationStatus,
+          outcome: preparationOutcome,
+          ...(preparationStatus === "pending"
+            ? { preparedAt: existingPreparation?.preparedAt }
+            : { preparedAt: new Date().toISOString() }),
         },
       },
     },

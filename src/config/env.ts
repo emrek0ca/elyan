@@ -303,7 +303,7 @@ const envSchema = z.object({
   GROQ_FALLBACK_MODEL: z.string().default("qwen/qwen3.6-27b"),
   // Yönlendirme/niyet iş yükleri: KATI JSON üretmeli, bu yüzden bilinçli
   // olarak reasoning-DIŞI bir model (gizli düşünme turu JSON'u boş bırakıyor).
-  GROQ_ROUTING_MODEL: z.string().default("llama-3.1-8b-instant"),
+  GROQ_ROUTING_MODEL: z.string().default("qwen/qwen3.6-27b"),
   GROQ_VISION_MODEL: z
     .string()
     .default("qwen/qwen3.6-27b"),

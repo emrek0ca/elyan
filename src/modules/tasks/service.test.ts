@@ -21,6 +21,7 @@ import {
   resolveNonEchoAssistantText,
   stripPromptEchoFromAssistantText,
   reconcileStaleRuntimeTasks,
+  recoverPendingDesktopPlan,
   extractRuntimeDispatchPolicyFeedback,
   extractRuntimeQuantumBenchmarkAttestation,
   summarizeToolFlowForTrace,
@@ -979,6 +980,64 @@ class ReadOnlyTaskDb {
     throw new Error("duplicate terminal runtime update should not insert");
   }
 }
+
+test("recoverPendingDesktopPlan requeues a stale plan without expiring it", async () => {
+  const now = new Date("2030-01-01T00:03:00.000Z");
+  const task = {
+    id: "task-plan-pending-1",
+    userId: "user-1",
+    targetDeviceId: "desktop-1",
+    title: "Desktop task",
+    payload: {
+      desktopWorkOrder: {
+        planPreview: {
+          planPreparation: { status: "pending" },
+        },
+      },
+    },
+    requestedCapabilities: [],
+    status: "queued",
+    queuePosition: 1,
+    summary: "Görev planlanıyor; masaüstü yürütmesi plan hazır olunca başlayacak.",
+    error: null,
+    approvalRequest: null,
+    result: null,
+    createdAt: new Date("2030-01-01T00:00:00.000Z"),
+    startedAt: null,
+    completedAt: null,
+    canceledAt: null,
+    updatedAt: new Date("2030-01-01T00:00:00.000Z"),
+  };
+  const db = new SequenceDb([]);
+  const enqueued: Array<{ taskId: string; jobId?: string }> = [];
+  const handled = await recoverPendingDesktopPlan(
+    {
+      db,
+      log: { warn() {} },
+    } as never,
+    task as never,
+    {
+      now,
+      enqueue: async (_app, taskId, options) => {
+        enqueued.push({ taskId, jobId: options?.jobId });
+        return true;
+      },
+    },
+  );
+
+  assert.equal(handled, true);
+  assert.deepEqual(enqueued, [
+    {
+      taskId: "task-plan-pending-1",
+      jobId: `desktop-plan-recovery-task-plan-pending-1-${Math.floor(
+        now.getTime() / 90_000,
+      )}`,
+    },
+  ]);
+  assert.equal(db.updates[0]?.summary, "Görev planlanıyor; masaüstü yürütmesi plan hazır olunca başlayacak.");
+  assert.equal(db.updates[0]?.error, null);
+  assert.equal(db.updates[0]?.updatedAt, now);
+});
 
 test("createTask materializes pairing-required chat tasks without dispatching to server brain execution", async () => {
   const now = new Date("2030-01-01T00:00:00.000Z");

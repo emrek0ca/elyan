@@ -6,6 +6,7 @@ import {
 } from "./intent-semantic.js";
 import { explicitMobileContextKindsForPrompt } from "./context-packets.js";
 import { trStemPattern } from "../../lib/tr-word-boundary.js";
+import { isPlanOrStepRequest } from "./structured-output-policy.js";
 
 const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = [
   {
@@ -346,6 +347,8 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     const currentUserIdentityQuery = isCurrentUserIdentityQuery(text);
     const explicitMobileContextKinds =
       explicitMobileContextKindsForPrompt(input.message);
+    const explicitPlanRequest =
+      explicitMobileContextKinds.length === 0 && isPlanOrStepRequest(text);
 
     if (architecturePrompt && (!briefProseRequest || isExplicitPlanningRequest(text))) {
       matched.push("planning");
@@ -394,6 +397,8 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
     const primaryIntent =
       explicitMobileContextKinds.length > 0
         ? "chat"
+        : explicitPlanRequest
+          ? "planning"
         : semanticIntent ?? matched[0] ?? (text.trim().length > 0 ? "chat" : "unknown");
     const secondaryIntents = unique(matched.filter((intent) => intent !== primaryIntent));
     // A compound request can be ordered by a generic intent first while the
@@ -599,15 +604,23 @@ export function classifyIntent(input: TaskUnderstandingInput): IntentClassificat
 export async function enhanceIntentWithTransformer(
   text: string,
   current: IntentClassification,
+  options: { resolveConflicts?: boolean } = {},
 ): Promise<IntentClassification> {
   const normalizedText = text.replace(/\s+/g, " ").trim();
-  if (normalizedText.length <= 96 && current.primaryIntent === "chat") {
+  if (
+    normalizedText.length <= 96 &&
+    current.primaryIntent === "chat" &&
+    !options.resolveConflicts
+  ) {
     return current;
   }
   // Only re-classify when the sync path was unsure: "chat", "unknown", or
-  // confidence below 0.6. Otherwise the regex match is already definitive
-  // and a transformer disagreement is more often a false positive.
+  // confidence below 0.6. A typed compound turn is the exception: the
+  // synchronous classifier has already told us that more than one intent is
+  // present, so a semantic model must resolve the precedence instead of
+  // letting the first lexical rule become the route authority.
   if (
+    !options.resolveConflicts &&
     current.primaryIntent !== "chat" &&
     current.primaryIntent !== "unknown" &&
     current.confidence >= 0.6

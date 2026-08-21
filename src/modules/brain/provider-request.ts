@@ -291,6 +291,13 @@ export function buildRequestBody(
     );
   }
 
+  // Groq'un güncel JSON uyumlu modelleri (özellikle qwen/qwen3.6-27b)
+  // makine rotasında response_format gönderildiğinde 400 dönebiliyor. Plan
+  // prompt'u zaten tam JSON sözleşmesini içeriyor; bu özel rotada biçim
+  // bayrağını kaldırıp çıktıyı backend parser + typed validator'a bırakıyoruz.
+  // Normal sohbet/TurnEnvelope yolu bu korumadan etkilenmez.
+  const suppressGroqMachineJsonResponseFormat =
+    provider === "groq" && jsonObjectMode;
   const outMessages = buildOpenAiMessagesWithVision(provider, messages, visionImages);
   return {
     model,
@@ -317,7 +324,8 @@ export function buildRequestBody(
     // Desteklemeyen modelde `json_object`e düşüyoruz: biçim yine JSON'a
     // zorlanır, şema ise prompt'ta anlatılır. Cevapsız kalmaktansa şemasız
     // ama GEÇERLİ bir JSON almak her zaman iyidir.
-    ...(!(tools && tools.length > 0) &&
+    ...(!suppressGroqMachineJsonResponseFormat &&
+    !(tools && tools.length > 0) &&
     responseSchema &&
     ["gemini", "groq", "openai", "openrouter"].includes(provider)
       ? modelSupportsJsonSchemaFormat(provider, model)
@@ -332,7 +340,8 @@ export function buildRequestBody(
             },
           }
         : { response_format: { type: "json_object" } }
-      : !(tools && tools.length > 0) &&
+      : !suppressGroqMachineJsonResponseFormat &&
+          !(tools && tools.length > 0) &&
           jsonObjectMode &&
           ["gemini", "groq", "openai", "openrouter"].includes(provider)
         ? { response_format: { type: "json_object" } }
@@ -385,10 +394,12 @@ function supportsTurnEnvelopeResponseFormat(
 
 /**
  * Groq'ta `json_schema` yalnız yapılandırılmış çıktı destekleyen modellerde
- * çalışır; qwen gibi modeller isteği 400 "does not support response format
- * json_schema" ile reddeder (canlıda tüm sağlayıcı zincirini düşürüyordu).
- * Desteklemeyen modeller `json_object` moduna düşer — şema anayasası prompt'a
- * taşınır, otoriter doğrulama zaten Zod parser'dadır.
+ * çalışır. gpt-oss ailesi JSON üretebilir ama canlı reasoning + şema zorlaması
+ * kombinasyonunda `json_validate_failed`/boş çıktı üretebildi; bu da normal
+ * sohbet zarfında araç/skill seçiminin hiç ulaşmamasına ve gereksiz provider
+ * fallback gecikmesine yol açtı. Bu modellerde `json_object` kullanılır:
+ * zarf sözleşmesi system prompt'a taşınır, otoriter doğrulama typed parser'da
+ * kalır. qwen gibi diğer desteklenmeyen modeller de aynı fallback'i kullanır.
  */
 function modelSupportsJsonSchemaFormat(
   provider: SharedBrainProvider,
@@ -396,7 +407,11 @@ function modelSupportsJsonSchemaFormat(
 ): boolean {
   if (provider !== "groq") return true;
   const name = String(model ?? "").toLowerCase();
-  return name.includes("gpt-oss") || name.startsWith("moonshotai/kimi-k2");
+  // gpt-oss'un normal cevaplarda JSON üretmesini kullanıyoruz; reasoning
+  // kanalını provider-level json_schema ile kilitlemiyoruz. Kimi K2'nin
+  // şema desteği korunur. Bilinmeyen Groq modelleri fail-safe olarak
+  // json_object yoluna düşer.
+  return name.startsWith("moonshotai/kimi-k2");
 }
 
 function withTurnEnvelopeResponseFormat(

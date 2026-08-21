@@ -47,19 +47,20 @@ export type DesktopPlanResult = {
 };
 
 /**
- * Metinden ilk dengeli JSON nesnesini çıkarır. Model markdown çiti veya kısa
- * önsöz eklese bile planı kurtarır; string içi kaçışlara saygılıdır.
+ * Metinden planı taşıyan dengeli JSON nesnesini çıkarır. Modelin reasoning
+ * bölümünde veya kısa önsözünde başka JSON nesneleri bulunabilir; ilk nesneye
+ * körü körüne güvenmek yerine plan şekline uyan nesneyi seçer.
  */
 export function extractFirstJsonObject(
   text: string,
 ): Record<string, unknown> | null {
   const source = String(text ?? "");
-  const start = source.indexOf("{");
-  if (start < 0) return null;
+  const candidates: Record<string, unknown>[] = [];
   let depth = 0;
+  let start = -1;
   let inString = false;
   let escaped = false;
-  for (let index = start; index < source.length; index += 1) {
+  for (let index = 0; index < source.length; index += 1) {
     const char = source[index];
     if (inString) {
       if (escaped) {
@@ -74,8 +75,10 @@ export function extractFirstJsonObject(
     if (char === '"') {
       inString = true;
     } else if (char === "{") {
+      if (depth === 0) start = index;
       depth += 1;
     } else if (char === "}") {
+      if (depth === 0) continue;
       depth -= 1;
       if (depth === 0) {
         const candidate = source.slice(start, index + 1);
@@ -86,16 +89,26 @@ export function extractFirstJsonObject(
             typeof parsed === "object" &&
             !Array.isArray(parsed)
           ) {
-            return parsed as Record<string, unknown>;
+            candidates.push(parsed as Record<string, unknown>);
           }
-          return null;
         } catch {
-          return null;
+          // Prose/reasoning içindeki bozuk bir nesne sonraki gerçek planı
+          // gölgelememeli; tarama devam eder.
         }
+        start = -1;
       }
     }
   }
-  return null;
+  return (
+    candidates.find(
+      (candidate) =>
+        typeof candidate.contract === "string" &&
+        Array.isArray(candidate.steps),
+    ) ??
+    candidates.find((candidate) => Array.isArray(candidate.steps)) ??
+    candidates[0] ??
+    null
+  );
 }
 
 const PLANNER_SYSTEM_PREFIX = [

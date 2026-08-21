@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { classifyIntent } from "../../core/understanding/intent-classifier.js";
+import {
+  classifyIntent,
+  enhanceIntentWithTransformer,
+} from "../../core/understanding/intent-classifier.js";
 import {
   buildSemanticContract,
   finalizeSemanticContractForRoute,
@@ -27,6 +30,7 @@ import {
 } from "../billing/catalog.js";
 import type { SharedBrainWorkload } from "../brain/workloads.js";
 import { generateSharedBrainReply } from "../brain/inference.js";
+import { enhanceIntentWithGeminiFree } from "../brain/gemini-intent-router.js";
 import { responsePolicyForPrompt } from "../brain/response-policy.js";
 import { resolveVisualIntentContract } from "../brain/visual-intent-semantic.js";
 import {
@@ -43,6 +47,10 @@ import {
   normalizeRuntimeCapabilities,
   preflightRequestedRuntimeCapabilities,
 } from "../runtime/capabilities.js";
+import {
+  buildUnderstandingConsensus,
+  type UnderstandingConsensus,
+} from "./understanding-consensus.js";
 
 export type RoutingPurpose = "task" | "chat";
 
@@ -101,6 +109,41 @@ export type NormalizedCommandIntent =
   | "ambiguous_request"
   | "unsupported_request";
 
+/**
+ * The one typed interpretation of a turn shared by routing, task admission,
+ * inference and completion.  It deliberately contains no raw user text.
+ * Older persisted tasks may omit this additive field and are reconstructed
+ * through `buildCommandTurnContract` when they are hydrated.
+ */
+export type CommandTurnContract = {
+  version: "elyan.turn_contract.v1";
+  normalizedIntent: NormalizedCommandIntent;
+  primaryIntent: UnderstandingIntent;
+  secondaryIntents: UnderstandingIntent[];
+  intentClassification: IntentClassification;
+  selectedWorkload: SharedBrainWorkload;
+  planIntent: boolean;
+  outputContract: ReturnType<typeof compileOutputContract>;
+  understandingEnvelope: {
+    source: "typed_extractor";
+    confidence: number;
+    intent: {
+      name: UnderstandingIntent;
+      action: "plan" | "reply";
+    };
+  };
+  routeDecision: {
+    route: CommandRoute;
+    mode: CommandMode;
+    intent: NormalizedCommandIntent;
+    selectedWorkload: SharedBrainWorkload;
+    requiredRuntime: CommandRequiredRuntime;
+    targetDeviceId?: string;
+    requiresApproval: boolean;
+  };
+  understandingConsensus?: UnderstandingConsensus;
+};
+
 export type CommandRequiredRuntime = "server" | "desktop" | "both";
 
 export type CommandRouteDecision = {
@@ -123,6 +166,7 @@ export type CommandRouteDecision = {
   // Kept optional for additive compatibility with persisted/manual route fixtures;
   // fresh decisions always populate the contract before workload selection.
   semanticContract?: SemanticContract;
+  turnContract?: CommandTurnContract;
   qualityGuard?: {
     strategy: "quantum_quality_guard_v1";
     source: "runtime_quantum_liveness_feedback";
@@ -1003,6 +1047,13 @@ const DESKTOP_ONLY_CAPABILITIES = new Set<string>([
   "add_calendar_event",
   "add_reminder",
   "email_send",
+  // These are selectable runtime tools/skills from the mobile capability
+  // manifest. They are executed against the paired desktop's private state;
+  // treating them as generic server capabilities silently bypasses dispatch.
+  "sys_info",
+  "retrieve_context",
+  "run_skill",
+  "desktop_operator_run",
 ]);
 
 function isDesktopOnlyCapability(capability: string): boolean {
@@ -1166,6 +1217,7 @@ function deriveNormalizedIntent(input: {
   capabilities: string[];
   message: string;
   confidence: number;
+  planIntent: boolean;
 }): NormalizedCommandIntent {
   if (
     isMateriallyAmbiguousUserPrompt(input.message) ||
@@ -1189,7 +1241,7 @@ function deriveNormalizedIntent(input: {
     }
     return "desktop_cowork";
   }
-  if (input.primaryIntent === "planning") {
+  if (input.planIntent) {
     return "planning_request";
   }
   if (input.route === "unavailable") {
@@ -1278,6 +1330,7 @@ function deriveSelectedWorkloadWithGuard(input: {
   confidence: number;
   semanticContract: SemanticContract;
   outputContract: ReturnType<typeof compileOutputContract>;
+  planIntent: boolean;
 }): {
   selectedWorkload: SharedBrainWorkload;
   qualityGuard?: CommandRouteDecision["qualityGuard"];
@@ -1288,6 +1341,13 @@ function deriveSelectedWorkloadWithGuard(input: {
     input.route === "unavailable"
   ) {
     return { selectedWorkload: "desktop_handoff" };
+  }
+  // An explicit roadmap/program/step request is a planning workload even
+  // when its subject also matches a topic classifier such as math or coding.
+  // This check must precede output-shape and chat heuristics so those layers
+  // cannot silently turn a plan into a one-line answer.
+  if (input.planIntent) {
+    return { selectedWorkload: "planning" };
   }
   const responsePolicy = responsePolicyForPrompt(input.message);
   const contractWorkload = workloadFromOutputContract(input.outputContract);
@@ -1423,6 +1483,14 @@ function deriveSelectedWorkload(
   return deriveSelectedWorkloadWithGuard(input).selectedWorkload;
 }
 
+function isArtifactOutputContract(
+  outputContract: ReturnType<typeof compileOutputContract>,
+): boolean {
+  return (
+    outputContract.requiresArtifact && outputContract.outputKind !== "chat_reply"
+  );
+}
+
 function buildDecision(input: {
   route: CommandRoute;
   targetDeviceId?: string;
@@ -1442,7 +1510,21 @@ function buildDecision(input: {
   selectedWorkloadOverride?: SharedBrainWorkload;
   semanticContract: SemanticContract;
   outputContract: ReturnType<typeof compileOutputContract>;
+  classification: IntentClassification;
+  understandingConsensus?: UnderstandingConsensus;
+  clarificationOverride?: boolean;
 }): CommandRouteDecision {
+  // The classification has already passed through the semantic/model resolver
+  // in decideCommandRoute. Do not reinterpret raw text here: route, workload
+  // and the persisted contract must all consume the same typed decision.
+  // A planning noun can describe the subject of an artifact request (for
+  // example, "yatırım planı için PDF hazırla"). The output contract is the
+  // typed source of truth for that distinction: only a conversational plan
+  // request owns the planning workload; an explicitly requested artifact
+  // remains document/table/image generation.
+  const planIntent =
+    input.classification.primaryIntent === "planning" &&
+    !isArtifactOutputContract(input.outputContract);
   const intent = deriveNormalizedIntent({
     primaryIntent: input.primaryIntent,
     route: input.route,
@@ -1450,6 +1532,7 @@ function buildDecision(input: {
     capabilities: input.capabilities,
     message: input.message,
     confidence: input.confidence,
+    planIntent,
   });
   const routedSemanticContract = finalizeSemanticContractForRoute({
     contract: input.semanticContract,
@@ -1472,6 +1555,7 @@ function buildDecision(input: {
         confidence: input.confidence,
         semanticContract: routedSemanticContract,
         outputContract: input.outputContract,
+        planIntent,
       });
   const publicResearchWorkload =
     workloadDecision.selectedWorkload === "public_research" ||
@@ -1481,7 +1565,7 @@ function buildDecision(input: {
     ? uniqueSemanticCapabilities([...input.capabilities, "web_research"])
     : input.capabilities;
 
-  return {
+  const decision: CommandRouteDecision = {
     route: input.route,
     targetDeviceId: input.targetDeviceId,
     taskRoute: input.taskRoute ?? undefined,
@@ -1505,7 +1589,8 @@ function buildDecision(input: {
         : input.privacyClass === "side_effect"
           ? "medium"
           : "low",
-    shouldAskClarification: intent === "ambiguous_request",
+    shouldAskClarification:
+      input.clarificationOverride ?? intent === "ambiguous_request",
     failClosedReason:
       input.failClosedReason ??
       (input.route === "pairing_required" || input.route === "unavailable"
@@ -1517,6 +1602,125 @@ function buildDecision(input: {
       ? { qualityGuard: workloadDecision.qualityGuard }
       : {}),
   };
+  return {
+    ...decision,
+    turnContract: buildCommandTurnContract({
+      routeDecision: decision,
+      message: input.message,
+      classification: input.classification,
+      outputContract: input.outputContract,
+      understandingConsensus: input.understandingConsensus,
+    }),
+  };
+}
+
+export function buildCommandTurnContract(input: {
+  routeDecision: CommandRouteDecision;
+  message: string;
+  classification?: IntentClassification;
+  outputContract?: ReturnType<typeof compileOutputContract>;
+  userId?: string;
+  understandingConsensus?: UnderstandingConsensus;
+}): CommandTurnContract {
+  const classification =
+    input.classification ??
+    classifyIntent({
+      userId: input.userId ?? "route-contract",
+      accountId: input.userId ?? "route-contract",
+      message: input.message,
+      routeContext: "command_route_contract",
+    });
+  const outputContract =
+    input.outputContract ??
+    compileOutputContract({
+      message: input.message,
+    });
+  const planIntent =
+    input.routeDecision.intent === "planning_request" ||
+    (classification.primaryIntent === "planning" &&
+      !isArtifactOutputContract(outputContract));
+  const routeSurface =
+    input.routeDecision.route === "desktop_runtime" ||
+    input.routeDecision.route === "pairing_required"
+      ? "desktop"
+      : input.routeDecision.requiredRuntime === "both"
+        ? "hybrid"
+        : "server";
+  const consensus = input.understandingConsensus
+    ? {
+        ...input.understandingConsensus,
+        selectedCapabilities: [
+          ...new Set([
+            ...input.understandingConsensus.selectedCapabilities,
+            ...input.routeDecision.capabilities,
+          ]),
+        ],
+        targetSurface:
+          input.understandingConsensus.status === "clarification_required"
+            ? input.understandingConsensus.targetSurface
+            : routeSurface,
+        intent: {
+          ...input.understandingConsensus.intent,
+          normalized: planIntent ? "planning_request" : input.routeDecision.intent,
+        },
+      }
+    : undefined;
+  return {
+    version: "elyan.turn_contract.v1",
+    normalizedIntent: planIntent
+      ? "planning_request"
+      : input.routeDecision.intent,
+    primaryIntent: classification.primaryIntent,
+    secondaryIntents: classification.secondaryIntents,
+    intentClassification: classification,
+    selectedWorkload: input.routeDecision.selectedWorkload,
+    planIntent,
+    outputContract,
+    understandingEnvelope: {
+      source: "typed_extractor",
+      confidence: Number(classification.confidence.toFixed(3)),
+      intent: {
+        name: planIntent ? "planning" : classification.primaryIntent,
+        action: planIntent ? "plan" : "reply",
+      },
+    },
+    routeDecision: {
+      route: input.routeDecision.route,
+      mode: input.routeDecision.mode,
+      intent: input.routeDecision.intent,
+      selectedWorkload: input.routeDecision.selectedWorkload,
+      requiredRuntime: input.routeDecision.requiredRuntime,
+      ...(input.routeDecision.targetDeviceId
+        ? { targetDeviceId: input.routeDecision.targetDeviceId }
+        : {}),
+      requiresApproval: input.routeDecision.requiresApproval,
+    },
+    ...(consensus ? { understandingConsensus: consensus } : {}),
+  };
+}
+
+export function readCommandTurnContract(value: unknown): CommandTurnContract | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const routeDecision = record.routeDecision;
+  const classification = record.intentClassification;
+  if (
+    record.version !== "elyan.turn_contract.v1" ||
+    typeof record.normalizedIntent !== "string" ||
+    typeof record.selectedWorkload !== "string" ||
+    typeof record.planIntent !== "boolean" ||
+    !routeDecision ||
+    typeof routeDecision !== "object" ||
+    Array.isArray(routeDecision) ||
+    !classification ||
+    typeof classification !== "object" ||
+    Array.isArray(classification)
+  ) {
+    return null;
+  }
+  return record as unknown as CommandTurnContract;
 }
 
 function intentToCapabilities(
@@ -2507,7 +2711,7 @@ export async function decideCommandRoute(
   const message = normalizeMessage(stripDocumentPayload(input.message));
   const metadata = readRecord(input.metadata) ?? {};
   const desktopAllowed = input.desktopAllowed ?? true;
-  const classification = classifyIntent({
+  const deterministicClassification = classifyIntent({
     userId: input.userId,
     accountId: input.userId,
     message: input.message,
@@ -2517,6 +2721,46 @@ export async function decideCommandRoute(
       selectedDeviceId: input.selectedDeviceId,
       requestedCapabilities: input.requestedCapabilities ?? [],
     },
+  });
+  // The synchronous classifier is a bounded degraded-mode fallback. When it
+  // reports a compound turn, use the warm semantic model and (when permitted)
+  // the structured route model to decide which intent owns the turn. This is
+  // the only model-first interpretation boundary; later layers consume the
+  // resulting typed contract and never scan the prompt again.
+  const semanticClassification = await enhanceIntentWithTransformer(
+    message,
+    deterministicClassification,
+    {
+      // A synchronous planning decision is the safe degraded fallback for an
+      // explicit roadmap request. Let the model confirm/override it, but do
+      // not let a generic subject prototype replace it before that decision.
+      resolveConflicts:
+        deterministicClassification.secondaryIntents.length > 0 &&
+        deterministicClassification.primaryIntent !== "planning",
+    },
+  );
+  const semanticVerificationRequired =
+    semanticClassification.requiresLocalRuntime === true ||
+    semanticClassification.requiresToolUse === true ||
+    semanticClassification.privacyRisk !== "low" ||
+    semanticClassification.confidence < 0.72 ||
+    semanticClassification.secondaryIntents.length > 0 ||
+    semanticClassification.primaryIntent === "unknown";
+  const classification = await enhanceIntentWithGeminiFree(app, {
+    userId: input.userId,
+    message,
+    current: semanticClassification,
+    forceVerification: semanticVerificationRequired,
+  }).catch(() => semanticClassification);
+  const verifierInvoked = classification !== semanticClassification;
+  const understandingConsensus = buildUnderstandingConsensus({
+    message,
+    primary: semanticClassification,
+    verifier: verifierInvoked ? classification : null,
+    verifierInvoked,
+    sideEffect:
+      classification.privacyRisk === "high" &&
+      hasDesktopWriteSideEffectSignal(message),
   });
   // This is the only route-stage interpretation of the raw turn. The typed
   // contract is carried through workload selection, task persistence, and the
@@ -2537,6 +2781,40 @@ export async function decideCommandRoute(
         : []),
     ],
   });
+  if (understandingConsensus.status === "clarification_required") {
+    const clarificationReason =
+      "Anlama katmanları bu isteğin sunucu mu masaüstü mü çalışması gerektiğinde ayrıştı.";
+    return buildDecision({
+      route: "server_brain",
+      taskRoute: buildTaskRoute({
+        target: "server_brain",
+        operationalRoute: "server_brain",
+        executionPlan: ["server_brain"],
+        reason: clarificationReason,
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+      }),
+      mode: "chat",
+      capabilities: [],
+      privacyClass: "public_text",
+      requiresApproval: false,
+      reason: clarificationReason,
+      userFacingMessage: "Bunu güvenle yapabilmem için hedef yüzeyi netleştirelim: masaüstünde mi çalıştırayım?",
+      primaryIntent: classification.primaryIntent,
+      confidence: understandingConsensus.confidence,
+      requiresLocalRuntime: false,
+      message,
+      brainProfile: input.brainProfile,
+      failClosedReason: "semantic_model_disagreement",
+      semanticContract,
+      outputContract,
+      classification,
+      understandingConsensus,
+      clarificationOverride: true,
+    });
+  }
   const explicitRequestedCapabilities = uniqueSemanticCapabilities(
     input.requestedCapabilities ?? [],
   );
@@ -2769,12 +3047,22 @@ export async function decideCommandRoute(
     hasLiveDesktopRuntime &&
     !isDesktopAdviceOnlyRequest(message);
 
+  // A real local request is an execution requirement, not a UI preference.
+  // This remains semantic-first: the classifier must require local runtime
+  // and the turn must not be an advice question. The desktopDispatch toggle
+  // can still suppress ambiguous/ordinary desktop preferences.
+  const validatedLocalExecutionRequest =
+    classification.requiresLocalRuntime === true &&
+    !isDesktopAdviceOnlyRequest(message) &&
+    (understandingConsensus.targetSurface === "desktop" ||
+      hasConcreteDesktopFallbackSignal(message, metadata));
+
   const userWantsDesktop =
-    !desktopDispatchDisabled &&
-    (explicitRuntimeCapabilityRequested ||
-      modelRequiresDesktop ||
-      failClosedDesktopFallback ||
-      classifierRequiresReadyDesktop);
+    modelRequiresDesktop ||
+    failClosedDesktopFallback ||
+    classifierRequiresReadyDesktop ||
+    validatedLocalExecutionRequest ||
+    (!desktopDispatchDisabled && explicitRuntimeCapabilityRequested);
 
   if (userWantsDesktop) {
     const needsPrivateDesktopData =
@@ -2853,6 +3141,8 @@ export async function decideCommandRoute(
         failClosedReason: "desktop_plan_required",
         semanticContract,
         outputContract,
+        classification,
+        understandingConsensus,
       });
     }
 
@@ -2891,6 +3181,8 @@ export async function decideCommandRoute(
         failClosedReason: "desktop_runtime_selected_target",
         semanticContract,
         outputContract,
+        classification,
+        understandingConsensus,
       });
     }
 
@@ -2924,6 +3216,8 @@ export async function decideCommandRoute(
         : "desktop_runtime_unavailable",
       semanticContract,
       outputContract,
+      classification,
+      understandingConsensus,
     });
   }
 
@@ -2957,6 +3251,8 @@ export async function decideCommandRoute(
     brainProfile: input.brainProfile,
     semanticContract,
     outputContract,
+    classification,
+    understandingConsensus,
   });
 }
 

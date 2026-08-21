@@ -20,23 +20,24 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
   // kodun gpt-oss-120b niyetini llama-3.1-8b ile eziyordu).
   assert.equal(catalog.fallbackModel, "openai/gpt-oss-120b");
   assert.deepEqual(catalog.defaultModelByWorkload, {
-    // Yönlendirme/niyet KATI JSON ister → reasoning-dışı model. gpt-oss gizli
-    // düşünme turunda bütçeyi tüketip JSON'u boş bırakıyordu (canlı 2026-08-08).
-    intent: "llama-3.1-8b-instant",
-    fast_route: "llama-3.1-8b-instant",
+    // Hızlı semantik yönlendirme 20B'de başlar; qwen yalnız uyumluluk
+    // fallback'idir.
+    intent: "openai/gpt-oss-20b",
+    fast_route: "openai/gpt-oss-20b",
     mobile_chat_fast: "openai/gpt-oss-20b",
-    mobile_chat_balanced: "openai/gpt-oss-20b",
+    mobile_chat_balanced: "openai/gpt-oss-120b",
     mobile_chat_deep_refine: "openai/gpt-oss-120b",
     // KATI-JSON ŞERİDİ. Belge analizi şemaya uyan JSON döndürüyor; canlıda
     // (2026-08-13, görev a4924a76 — "3.sınıf matematik PDF yaz") bu iş yükünde
     // gpt-oss-20b ve qwen ikisi de 400 json_validate_failed verdi ve PDF hiç
     // üretilemedi. Şerit reasoning-DIŞI modelde kalır.
-    document_analysis: "llama-3.1-8b-instant",
+    document_analysis: "qwen/qwen3.6-27b",
     document_generate: "openai/gpt-oss-120b",
     table_generate: "openai/gpt-oss-120b",
     image_analyze: "qwen/qwen3.6-27b",
-    // Masaüstü plan JSON'u reasoning gpt-oss yerine katı-JSON şeridini kullanır.
-    planning: "llama-3.1-8b-instant",
+    // Karmaşık masaüstü planı 120B'de başlar; typed parser/validator ve qwen
+    // fallback'i JSON güvenilirliğini korur.
+    planning: "openai/gpt-oss-120b",
     // Public research yolları kalite-öncelikli: büyük reasoning modelinde.
     public_research: "openai/gpt-oss-120b",
     public_deep_research: "openai/gpt-oss-120b",
@@ -49,6 +50,15 @@ test("buildGroqModelCatalog keeps the single Elyan brain on the configured Groq 
     "openai/gpt-oss-20b",
     "qwen/qwen3.6-27b",
   ]);
+});
+
+test("buildGroqModelCatalog normalizes the retired routing model", () => {
+  const catalog = buildGroqModelCatalog({
+    GROQ_ROUTING_MODEL: "llama-3.1-8b-instant",
+  });
+
+  assert.equal(catalog.defaultModelByWorkload.intent, "openai/gpt-oss-20b");
+  assert.equal(catalog.defaultModelByWorkload.planning, "openai/gpt-oss-120b");
 });
 
 test("resolveGroqFallbackModel returns a distinct backup model when primary fails", () => {

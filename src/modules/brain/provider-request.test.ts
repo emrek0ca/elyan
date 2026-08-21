@@ -136,24 +136,24 @@ test("buildSharedBrainRequestAttempt adds TurnEnvelope response_format only for 
   assert.equal("response_format" in ollamaGenerateAttempt.body, false);
 });
 
-test("TurnEnvelope format degrades to json_object for Groq models without json_schema support", () => {
+test("TurnEnvelope format uses json_object for gpt-oss and unsupported Groq models", () => {
   const chatBody = (model: string) => ({
     model,
     messages: [{ role: "user", content: "Selam" }],
   });
-  // json_schema destekleyen model aynen kalır.
+  // gpt-oss reasoning modeli JSON üretebilir; provider-level schema zorlaması
+  // canlıda boş/invalid çıktı üretebildiği için compact zarf talimatına düşer.
   const gptOss = buildSharedBrainRequestAttempt({
     provider: "groq",
     path: getChatCompletionPath("groq"),
     body: chatBody("openai/gpt-oss-20b"),
     turnEnvelopeEnabled: true,
   });
-  assert.equal(
-    (gptOss.body.response_format as Record<string, unknown>).type,
-    "json_schema",
-  );
+  assert.deepEqual(gptOss.body.response_format, { type: "json_object" });
+  const gptOssSystem = (gptOss.body.messages as Array<Record<string, unknown>>)[0];
+  assert.match(String(gptOssSystem?.content ?? ""), /must contain exactly these keys/u);
   // Desteklemeyen model (qwen, Groq 400: "does not support response format
-  // json_schema") json_object'e düşer; şema anayasası system mesajına taşınır.
+  // json_schema") de json_object'e düşer; şema anayasası system mesajına taşınır.
   const qwen = buildSharedBrainRequestAttempt({
     provider: "groq",
     path: getChatCompletionPath("groq"),
@@ -166,7 +166,7 @@ test("TurnEnvelope format degrades to json_object for Groq models without json_s
   assert.match(String(qwenSystem?.content ?? ""), /must contain exactly these keys/u);
 });
 
-test("buildRequestBody forbids prose on machine-JSON routes without imposing a schema", () => {
+test("buildRequestBody leaves Groq machine-JSON routes to the typed parser", () => {
   // Masaüstü plan/anlama rotasında turn envelope KAPALIdır ve şema override
   // yoktur; bu ikisi birleşince hiç `response_format` kalmıyordu ve model
   // soruyu sınıflamak yerine CEVAPLIYORDU (ölçüldü: soru biçimli mesajlarda
@@ -186,9 +186,10 @@ test("buildRequestBody forbids prose on machine-JSON routes without imposing a s
     true,
   ) as Record<string, unknown>;
 
-  assert.deepEqual(body.response_format, { type: "json_object" });
+  assert.equal(body.response_format, undefined);
 
-  // Şema verildiğinde katı şema kazanır; json_object onu EZMEZ.
+  // Groq makine rotasında şema da provider response_format olarak gönderilmez;
+  // aynı sözleşme prompt içinde taşınır ve typed parser doğrular.
   const schema = { type: "object", properties: {} };
   const schemaBody = buildRequestBody(
     "groq",
@@ -204,10 +205,7 @@ test("buildRequestBody forbids prose on machine-JSON routes without imposing a s
     schema,
     true,
   ) as Record<string, unknown>;
-  assert.equal(
-    (schemaBody.response_format as Record<string, unknown>).type,
-    "json_schema",
-  );
+  assert.equal(schemaBody.response_format, undefined);
 
   // Bayrak kapalıyken davranış hiç değişmez (mevcut sohbet yolu korunur).
   const plainBody = buildRequestBody(

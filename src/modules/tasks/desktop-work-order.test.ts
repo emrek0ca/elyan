@@ -63,6 +63,34 @@ test("buildDesktopWorkOrder turns a mobile dispatch prompt into typed execution 
   assert.deepEqual(workOrder.planPreview.planPreparation, { status: "pending" });
 });
 
+test("buildDesktopWorkOrder materializes explicit read-only runtime tools", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstü bağlamını getir ve sistem durumunu kısa özetle.",
+    title: "Runtime kontrolü",
+    routeDecision: routeDecision({
+      capabilities: ["retrieve_context", "sys_info", "run_skill"],
+    }),
+    requestedCapabilities: ["retrieve_context", "sys_info", "run_skill"],
+  });
+
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["retrieve_context", "sys_info"],
+  );
+  assert.deepEqual(workOrder.planPreview.steps[0]?.args, {
+    query: "Masaüstü bağlamını getir ve sistem durumunu kısa özetle.",
+    limit: 6,
+  });
+  assert.deepEqual(workOrder.planPreview.steps[1]?.args, { query: "all" });
+  // Skill selection still belongs to the validated skill catalog/materializer;
+  // the work order must preserve the requested scope without inventing a skill.
+  assert.equal(workOrder.requiredCapabilities.includes("run_skill"), true);
+  assert.equal(
+    workOrder.planPreview.steps.some((step) => step.capability === "run_skill"),
+    false,
+  );
+});
+
 test("buildDesktopWorkOrder prefers semantic desktop contract over prompt keyword inference", () => {
   const workOrder = buildDesktopWorkOrder({
     message: "devam et ve orada aç",
@@ -305,6 +333,14 @@ test("direct desktop app commands support terse Turkish and skip generic plannin
     capability: "close_app",
     appName: "Chrome",
   });
+  assert.deepEqual(parseDirectDesktopAppCommand("Chrome u kapatır mısın"), {
+    capability: "close_app",
+    appName: "Chrome",
+  });
+  assert.deepEqual(parseDirectDesktopAppCommand("Chrome'u kapatabilir misin?"), {
+    capability: "close_app",
+    appName: "Chrome",
+  });
   assert.deepEqual(
     parseDirectDesktopAppCommand("Masaüstümde Chrome uygulamasını aç."),
     {
@@ -330,6 +366,54 @@ test("direct desktop app commands support terse Turkish and skip generic plannin
   assert.ok(closeStep);
   assert.equal(closeStep.args.app_name, "Chrome");
   assert.equal(workOrder.planPreview.steps.some((step) => step.capability === "desktop_operator.run"), false);
+  assert.equal(workOrder.planPreview.planSource, "deterministic_registry");
+  assert.equal(workOrder.planPreview.contract, "elyan.compiled_plan.v1");
+  assert.deepEqual(workOrder.planPreview.planPreparation?.status, "ready");
+  assert.deepEqual(workOrder.planPreview.planPreparation?.outcome, "deterministic_materialized");
+
+  const spacedWorkOrder = buildDesktopWorkOrder({
+    message: "Chrome u kapat",
+    title: "Chrome'u kapat",
+    routeDecision: routeDecision({ capabilities: [] }),
+    requestedCapabilities: [],
+  });
+  assert.equal(spacedWorkOrder.planPreview.steps[0]?.capability, "close_app");
+  assert.equal(spacedWorkOrder.planPreview.steps[0]?.args.app_name, "Chrome");
+  assert.equal(spacedWorkOrder.planPreview.planSource, "deterministic_registry");
+
+  const politeWorkOrder = buildDesktopWorkOrder({
+    message: "Chrome u kapatır mısın",
+    title: "Chrome'u kapat",
+    routeDecision: routeDecision({ capabilities: [] }),
+    requestedCapabilities: [],
+  });
+  assert.equal(politeWorkOrder.planPreview.steps[0]?.capability, "close_app");
+  assert.equal(politeWorkOrder.planPreview.steps[0]?.args.app_name, "Chrome");
+  assert.equal(politeWorkOrder.planPreview.planSource, "deterministic_registry");
+});
+
+test("safe system status is a deterministic read-only registry plan", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstü sistem durumunu getir",
+    title: "Sistem durumu",
+    routeDecision: routeDecision({ capabilities: ["sys_info"] }),
+    requestedCapabilities: ["sys_info"],
+  });
+
+  assert.deepEqual(workOrder.planPreview.steps, [
+    {
+      id: "step_sys_info",
+      capability: "sys_info",
+      description: "Masaüstü sistem durumu salt-okunur olarak alınacak.",
+      args: { query: "all" },
+    },
+  ]);
+  assert.equal(workOrder.planPreview.planSource, "deterministic_registry");
+  assert.equal(workOrder.planPreview.planPreparation?.status, "ready");
+  assert.equal(
+    workOrder.planPreview.planPreparation?.outcome,
+    "deterministic_materialized",
+  );
 });
 
 test("direct image download becomes an artifact-producing image_fetch plan", () => {

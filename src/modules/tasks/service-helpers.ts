@@ -265,11 +265,10 @@ function extractTaskPlanningEvidence(payloadValue: unknown) {
   const payload = readRecord(payloadValue);
   const workOrder = readRecord(payload?.desktopWorkOrder);
   const planPreview = readRecord(workOrder?.planPreview);
-  if (
-    !planPreview ||
-    readString(planPreview, "planSource") !== "server_materialized" ||
-    readString(planPreview, "contract") !== "elyan.compiled_plan.v1"
-  ) {
+  const planSource = readString(planPreview, "planSource");
+  const trustedPlanSource =
+    planSource === "server_materialized" || planSource === "deterministic_registry";
+  if (!planPreview || !trustedPlanSource || readString(planPreview, "contract") !== "elyan.compiled_plan.v1") {
     return null;
   }
 
@@ -308,7 +307,7 @@ function extractTaskPlanningEvidence(payloadValue: unknown) {
   const preparation = readRecord(planPreview.planPreparation);
   const status = readString(preparation, "status");
   return {
-    source: "server_materialized",
+    source: planSource,
     contract: "elyan.compiled_plan.v1",
     status: status === "failed" ? "failed" : "ready",
     stepCount: rawSteps.length,
