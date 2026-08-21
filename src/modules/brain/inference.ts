@@ -598,6 +598,20 @@ type SharedBrainInferenceInput = {
   };
 };
 
+/**
+ * TEK LİSTE, TEK SAHİP. Masaüstü plan boru hattının HER aşaması saf makine
+ * JSON'u döndürür: materialize → transport_repair → critique. Yeni bir aşama
+ * eklenip bu listeye yazılmazsa o aşama sessizce SOHBET turu gibi işlenir
+ * (zarf protokolü, skill yönlendiricisi, katı json_schema) ve plan JSON'u
+ * bozulur.
+ *
+ * Canlı kanıt (2026-08-21, görev 45dd0087): `desktop_plan_transport_repair`
+ * bu listede yoktu ve `tryGenerateSkillReply` yalnız `desktop_plan` /
+ * `desktop_plan_repair` adlarına bakıyordu. Sonuç: her plan çağrısında 14.7k
+ * token'lık iç içe bir skill sınıflandırıcısı koştu, plan çıktısı iki kez
+ * ayrıştırılamadı, boru hattı 5sn geri çekilmeyle baştan koştu ve
+ * "klasör oluştur" gibi tek adımlık bir iş 51 saniyede onaya düştü.
+ */
 export function isDesktopPlanMachineJsonRoute(
   route: string | undefined,
 ): boolean {
@@ -605,6 +619,7 @@ export function isDesktopPlanMachineJsonRoute(
     route === "desktop_plan" ||
     route === "desktop_plan_repair" ||
     route === "desktop_plan_materialize" ||
+    route === "desktop_plan_transport_repair" ||
     route === "desktop_plan_critique"
   );
 }
@@ -11421,7 +11436,9 @@ async function tryGenerateSkillReply(
   // metnini kullanıcı isteği sanıp (ör. "belge analizi") iç içe bir üretim
   // başlatıyor ve saf plan-JSON beklentisi bozuluyordu — desktop_plan
   // çağrıları doğrudan modele gider.
-  if (input.route === "desktop_plan" || input.route === "desktop_plan_repair") {
+  // Aşama adlarını burada TEKRAR saymak, boru hattına yeni aşama eklendiğinde
+  // sessizce ölen bir kapı üretiyordu. Tek kaynak: makine-JSON rota listesi.
+  if (isDesktopPlanMachineJsonRoute(input.route)) {
     return null;
   }
   const skills = await listActiveSkillSummaries();

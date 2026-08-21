@@ -2276,6 +2276,11 @@ export async function maybeMaterializeDesktopPlan(
             provider: inference?.provider,
             model: inference?.model,
             textLength: inference?.text.length ?? 0,
+            // `textLength: 262, rawStepCount: 0` tek başına teşhis edilemez:
+            // model şemaya uydu ama adım mı üretmedi, yoksa düzyazı mı
+            // döndürdü ayırt edilemiyordu. Örnek SINIRLI ve modelin plan
+            // çıktısıdır — kullanıcı istemi değil.
+            outputSample: (inference?.text ?? "").slice(0, 300),
             jsonObjectFound: parsedPlan !== null,
             parsedStepCount: Array.isArray(parsedPlan?.steps)
               ? parsedPlan.steps.length

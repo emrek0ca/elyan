@@ -328,7 +328,18 @@ function scheduleLocalTaskDispatch(
       const delay = LOCAL_DISPATCH_RETRY_DELAYS_MS[planningAttempt];
       if (delay !== undefined && nextAttempt < MAX_PLAN_MATERIALIZATION_ATTEMPTS) {
         app.log.warn(
-          { taskId, planningAttempt, nextAttempt, retryInMs: delay, error },
+          {
+            taskId,
+            planningAttempt,
+            nextAttempt,
+            retryInMs: delay,
+            // Ham `error` nesnesi pino tarafından `{}` olarak yazılıyordu:
+            // canlıda 5sn'lik geri çekilmenin NEDENİ hiç görünmedi.
+            errorMessage:
+              error instanceof Error ? error.message : String(error),
+            errorName: error instanceof Error ? error.name : undefined,
+            error,
+          },
           "local task dispatch attempt failed; scheduling bounded retry",
         );
         const timer = setTimeout(() => {
