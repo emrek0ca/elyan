@@ -2426,6 +2426,26 @@ export async function maybeMaterializeDesktopPlan(
           materializationSource,
           stepCount: steps.length,
           capabilityScope: materializedCapabilityScope,
+          // ARGÜMAN SOMUTLUĞU ÖLÇÜLEBİLİR OLMALI.
+          //
+          // Canlı arıza (2026-08-22): plan `open_app{app_name:"Safariden
+          // youtube"}` üretti — kullanıcı isteğinin ham parçası argüman diye
+          // konmuştu. Hiçbir yerde görünmüyordu; ancak görev başarısız olup
+          // masaüstü "bu bilgisayarda bulunamadi" dediğinde fark edildi.
+          //
+          // Kural KOYMUYORUM: önce ölçüyorum. Bu alan, "argüman değeri kaç
+          // sözcük" dağılımını görünür kılar; eşik ancak veriyle konur.
+          // (Bugün iki kez, 5 örnekten kural yazmanın canlıda ne ettiğini
+          // gördüm.)
+          argWordCounts: steps
+            .flatMap((step) =>
+              Object.values(step.args ?? {}).map((value) =>
+                typeof value === "string"
+                  ? value.trim().split(/\s+/u).filter(Boolean).length
+                  : 0,
+              ),
+            )
+            .slice(0, 24),
         },
         "desktop plan materialized",
       );

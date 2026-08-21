@@ -66,3 +66,33 @@ test("a real live request now decomposes into more than one part", () => {
   assert.ok(types.has("quantity"));
   assert.ok(slots.length >= 4, `beklenen ≥4 yuva, gelen ${slots.length}`);
 });
+
+test("structural slots actually reach the work order entities", async () => {
+  const { buildDesktopWorkOrder } = await import("./desktop-work-order.js");
+  const workOrder = buildDesktopWorkOrder({
+    message: 'yarın 14:30 da "Proje Raporu" nu pdf yap',
+    title: "Rapor",
+    routeDecision: {
+      route: "desktop_runtime",
+      mode: "executable_task",
+      capabilities: [],
+      privacyClass: "local_private",
+      requiresApproval: false,
+      reason: "test",
+      intent: "desktop_cowork",
+      confidence: 0.9,
+      requiredRuntime: "desktop",
+      privacyLevel: "low",
+      shouldAskClarification: false,
+      failClosedReason: null,
+      selectedWorkload: "desktop_handoff",
+    } as never,
+    requestedCapabilities: [],
+  });
+  const types = new Set(workOrder.entities.map((entity) => entity.type));
+  // Planlayıcı istemi bunları `- <tip>: <değer>` olarak görür; tek blob değil.
+  assert.ok(types.has("time"), [...types].join(","));
+  assert.ok(types.has("quoted"), [...types].join(","));
+  assert.ok(types.has("format"), [...types].join(","));
+  assert.ok(types.has("topic"));
+});
