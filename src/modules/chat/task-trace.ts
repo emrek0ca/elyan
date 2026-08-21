@@ -871,6 +871,59 @@ function buildTraceSummary(input: {
   );
 }
 
+/**
+ * ONAY KARTI SÖZLEŞMESİ: blok "onay bekliyor" diyorsa BİR ADIM da öyle demeli.
+ *
+ * Mobil, onay düğmelerini (`Onayla` / `Reddet`) blok durumundan DEĞİL adım
+ * durumundan türetir: `needsApproval = steps.contains { $0.state ==
+ * .waitingApproval }`. Sunucu tarafında hiçbir yol jenerik boru-hattı
+ * adımlarından birini `waiting_approval` yapmıyordu — `advanceTaskTraceApproval`
+ * adımları ARAÇ ADIYLA eşleştiriyor ve `intent/route/plan/.../response`
+ * adımlarının hiçbirinde araç adı yok.
+ *
+ * Canlı sonuç (2026-08-21, görev 45dd0087): görev `waiting_approval`,
+ * `approval_request` eksiksiz (Onayla/Reddet etiketleri, son kullanma dâhil),
+ * ama telefonda düğme HİÇ çıkmadı; kullanıcı bastığını sandı, backend'e 90
+ * dakika boyunca tek bir `/approval` isteği gelmedi ve görev 9 dakika sonra
+ * iptal oldu.
+ *
+ * Bu kapı tek yerdedir: blok hangi yoldan üretilirse üretilsin (runtime izi ya
+ * da fallback) mobilin sözleşmesi burada garanti edilir.
+ */
+function ensureWaitingApprovalStep(
+  block: ElyanTaskTraceBlock,
+): ElyanTaskTraceBlock {
+  if (block.status !== "waiting_approval") return block;
+  const steps = block.steps ?? [];
+  if (steps.length === 0) return block;
+  if (steps.some((step) => step.status === "waiting_approval")) return block;
+  // Onayı hangi adım bekliyor: aktif adım → araç akışı → tamamlanmamış ilk
+  // adım → son adım. Tamamlanmış bir adımı geri almaktansa gerçekten bekleyen
+  // adımı işaretlemek doğrudur.
+  const candidateId =
+    steps.find((step) => step.id === block.activeStepId)?.id ??
+    steps.find((step) => step.id === "tool")?.id ??
+    steps.find(
+      (step) => step.status !== "completed" && step.status !== "skipped",
+    )?.id ??
+    steps[steps.length - 1]?.id;
+  if (!candidateId) return block;
+  return {
+    ...block,
+    activeStepId: candidateId,
+    steps: steps.map((step) =>
+      step.id === candidateId
+        ? {
+            ...step,
+            status: "waiting_approval" as const,
+            detail: compactDetail(step.detail ?? block.summary ?? undefined)
+              ?? "Onayını bekliyor.",
+          }
+        : step,
+    ),
+  };
+}
+
 export function buildTaskTraceBlock(input: {
   task: TaskTraceSource;
   assistantContent?: string | null;
@@ -1177,7 +1230,9 @@ export function buildTaskTraceBlock(input: {
     ...(activeStep ? { activeStepId: activeStep.id } : {}),
     steps,
   };
-  return runtimeExecutionTraceBlock({ task: input.task, fallback }) ?? fallback;
+  return ensureWaitingApprovalStep(
+    runtimeExecutionTraceBlock({ task: input.task, fallback }) ?? fallback,
+  );
 }
 
 export function enrichTaskTraceWithAgentPlan(input: {

@@ -529,3 +529,59 @@ test("buildTaskTraceBlock still reports no tool when none ran", () => {
   assert.equal(toolStep?.status, "skipped");
   assert.equal(toolStep?.detail, "Araç gerekmedi.");
 });
+
+// ---------------------------------------------------------------------------
+// Mobil onay düğmeleri blok durumundan DEĞİL adım durumundan türetilir
+// (`needsApproval = steps.contains { $0.state == .waitingApproval }`). Canlı
+// arıza (2026-08-21, görev 45dd0087): görev `waiting_approval`,
+// `approval_request` eksiksiz, ama hiçbir adım öyle işaretlenmediği için
+// telefonda Onayla/Reddet HİÇ çıkmadı — backend'e tek bir approval isteği
+// gelmedi ve görev 9 dakika sonra iptal oldu.
+// ---------------------------------------------------------------------------
+test("buildTaskTraceBlock marks a step as waiting_approval so mobile can render the approval controls", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-approval-1",
+      status: "waiting_approval",
+      payload: {
+        desktopWorkOrder: {
+          planPreview: { planSource: "server_materialized" },
+        },
+        metadata: {
+          understanding: { intent: { primaryIntent: "automation" } },
+        },
+      },
+      createdAt: new Date("2026-08-21T16:46:25.000Z"),
+      updatedAt: new Date("2026-08-21T16:47:19.000Z"),
+      runtimeConnectionId: "runtime-1",
+    },
+    assistantContent: "Görev için açık onay gerekiyor.",
+  });
+
+  const waiting = block.steps.filter((step) => step.status === "waiting_approval");
+  assert.equal(waiting.length, 1);
+  assert.equal(block.activeStepId, waiting[0]?.id);
+});
+
+test("buildTaskTraceBlock leaves a completed task without any waiting_approval step", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-approval-2",
+      status: "completed",
+      payload: {
+        metadata: {
+          understanding: { intent: { primaryIntent: "automation" } },
+        },
+      },
+      createdAt: new Date("2026-08-21T16:46:25.000Z"),
+      updatedAt: new Date("2026-08-21T16:47:19.000Z"),
+      completedAt: new Date("2026-08-21T16:47:19.000Z"),
+    },
+    assistantContent: "Bitti.",
+  });
+
+  assert.equal(
+    block.steps.some((step) => step.status === "waiting_approval"),
+    false,
+  );
+});
