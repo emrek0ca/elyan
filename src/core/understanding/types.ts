@@ -156,10 +156,30 @@ export const understandingMemoryCandidateKindValues = [
 
 export const understandingRiskLevelValues = ["low", "medium", "high"] as const;
 
+/**
+ * KONUŞMA EYLEMİ — "yapmamı mı istiyor, hakkında mı soruyor?"
+ *
+ * Yetenek uzayındaki mesafe bu ayrımı YAPISAL OLARAK taşıyamaz: "Chrome nedir"
+ * ile "Chrome'u kapat" aynı komşuluktadır (ölçüldü, 2026-08-22: close_app
+ * 0.961 / marj 0.320). Ayrı bir eksen olarak taşınır.
+ *
+ * KANIT, YETKİ DEĞİL: tek başına yürütmeye izin vermez. Ölçüm (eval:speech-act)
+ * korpus %96.2 / tutulan %66.7 ve marj dağılımları çakışıyor (gerçek komutlar
+ * min 0.002, yanlış-pozitif 0.019) — yani eşikle ayrılamaz. Kararı veren katman
+ * bunu diğer kanıtlarla birlikte tartar.
+ */
+export const understandingSpeechActSchema = z.object({
+  act: z.enum(["command", "question", "statement", "correction", "confirmation"]),
+  confidence: z.number().min(0).max(1),
+  margin: z.number().min(-1).max(1),
+  source: z.enum(["punctuation", "transformer", "hash"]),
+});
+
 export const understandingIntentSchema = z.object({
   name: z.enum(intentValues),
   action: z.string().min(1).max(64),
   topic: z.string().max(160).optional(),
+  speechAct: understandingSpeechActSchema.optional(),
   confidence: z.number().min(0).max(1),
   source: z.enum(["typed_extractor", "semantic_classifier", "policy_rules", "legacy_fallback"]),
 });
