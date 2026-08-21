@@ -214,6 +214,27 @@ export async function detectFabricatedActionClaim(
     responseText: input.responseText,
   });
 
+  // FAIL-OPEN GÖRÜNÜR OLMALI.
+  //
+  // Semantik karar veremediğinde kapı bilerek İZİN VERİR (gereksiz ret yasak).
+  // Ama bu sessiz olduğu sürece kapının çalışıp çalışmadığı ölçülemez: canlıda
+  // `GEMINI_FAST_MODEL` emekli bir modele işaret ediyordu, her çağrı 404 ile
+  // null dönüyordu ve kapı HER TURDA devre dışıydı — asistan "şarkıyı
+  // çalıyorum" dedi, hiçbir şey çalışmadı, hiçbir uyarı düşmedi (2026-08-22).
+  //
+  // Bu satır uydurmayı engellemez; engelleyicinin ÖLDÜĞÜNÜ duyurur.
+  if (!semantics) {
+    app.log?.warn?.(
+      {
+        gate: "action_claim",
+        outcome: "fail_open",
+        reason: "semantics_unavailable",
+        model: String(app.config?.GEMINI_FAST_MODEL ?? ""),
+      },
+      "action claim gate could not evaluate; turn allowed without semantic check",
+    );
+  }
+
   return evaluateActionClaimEvidence({
     route: input.route,
     executedToolCount: input.executedToolCount,

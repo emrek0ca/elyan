@@ -1,3 +1,4 @@
+import { GEMINI_MODELS } from "./model-policy.js";
 import { z } from "zod";
 
 export type SharedBrainProvider =
@@ -339,7 +340,10 @@ const envSchema = z.object({
   GEMINI_TEXT_MODEL: z.string().default("gemini-3.6-flash"),
   // En ucuz çok-kipli uç. Görsel/video/PDF alır; hızlı yol ve niyet turları
   // burada koşar.
-  GEMINI_FAST_MODEL: z.string().default("gemini-2.5-flash-lite"),
+  // Emekli model varsayılanı, uydurma kapısını fark edilmeden devre dışı
+  // bırakmıştı (2026-08-22): metadata 200, ÜRETİM 404. Varsayılan artık
+  // model politikasındaki doğrulanmış hızlı yardımcı modeldir.
+  GEMINI_FAST_MODEL: z.string().default(GEMINI_MODELS.roles.fast_utility),
   GEMINI_REASONING_MODEL: z.string().default("gemini-3.6-flash"),
   // Görme varsayılanı: yeni GA, düşük gecikme, çok-kipli — prodüksiyon için
   // 3.6-flash'tan daha mantıklı.
@@ -377,7 +381,7 @@ const envSchema = z.object({
   GEMINI_PAID_DATA_PROCESSING_ATTESTED: booleanFlag(false),
   GEMINI_FREE_MODEL_ALLOWLIST: z
     .string()
-    .default("gemini-2.5-flash-lite,gemini-3.1-flash-lite"),
+    .default(GEMINI_MODELS.inventory.join(",")),
   GEMINI_FREE_DAILY_REQUEST_LIMIT: z.coerce
     .number()
     .int()

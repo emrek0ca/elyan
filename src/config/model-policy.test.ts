@@ -2,12 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildGroqModelCatalog } from "../modules/brain/groq-models.js";
 import {
+  GEMINI_INVENTORY,
+  GEMINI_MODELS,
+  GEMINI_RETIRED,
   MODEL_INVENTORY,
   MODEL_POLICY,
   RETIRED_MODELS,
   isKnownModel,
   isRetiredModel,
+  isRetiredGeminiModel,
 } from "./model-policy.js";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // Sunucu ve masaüstü aynı model politikasını paylaşır. Canlı arıza
@@ -67,4 +74,48 @@ test("a retired model configured through env never becomes the structured lane",
   const catalog = buildGroqModelCatalog({ GROQ_ROUTING_MODEL: retired });
   assert.equal(isRetiredModel(catalog.structuredJsonModel), false);
   assert.ok(isKnownModel(catalog.structuredJsonModel));
+});
+
+
+// ---------------------------------------------------------------------------
+// GEMINI TARAFI. Canlı arıza (2026-08-22): `GEMINI_FAST_MODEL` emekli bir
+// modele işaret ediyordu; metadata ucu 200, ÜRETİM 404. Her
+// `callGeminiFreeStructured` null döndü ve uydurma kapısı her turda fail-open
+// çalıştı — asistan "şarkıyı çalıyorum" dedi, hiçbir şey çalışmadı.
+// ---------------------------------------------------------------------------
+
+test("no gemini role points at a retired model", () => {
+  for (const [role, model] of Object.entries(GEMINI_MODELS.roles)) {
+    assert.ok(model, `${role} rolü boş`);
+    assert.equal(isRetiredGeminiModel(model), false, `${role} emekli model: ${model}`);
+    assert.ok(GEMINI_INVENTORY.has(model), `${role} envanter dışı: ${model}`);
+  }
+  for (const retired of GEMINI_RETIRED) {
+    assert.equal(GEMINI_INVENTORY.has(retired), false, retired);
+  }
+});
+
+test("no retired model name is hardcoded anywhere in src", () => {
+  // Emekli ad kodda yeniden belirirse politika hiçbir şey ifade etmez. Bu kapı
+  // masaüstündeki eşdeğerinin aynısıdır (test_model_policy_sync.py).
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const offenders: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".ts")) continue;
+      // Politikanın kendisi ve bu test emekli adları taşımak ZORUNDA.
+      if (entry.name === "model-policy.ts" || entry.name === "model-policy.test.ts") continue;
+      const text = readFileSync(full, "utf8");
+      for (const retired of [...RETIRED_MODELS, ...GEMINI_RETIRED]) {
+        if (text.includes(retired)) offenders.push(`${entry.name}: ${retired}`);
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(offenders, [], `emekli model adı kodda geri geldi: ${offenders.join(", ")}`);
 });

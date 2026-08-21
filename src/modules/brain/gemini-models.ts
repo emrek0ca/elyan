@@ -1,3 +1,4 @@
+import { GEMINI_MODELS } from "../../config/model-policy.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
 type GeminiModelConfigSource = {
@@ -50,7 +51,10 @@ function uniqueStrings(values: string[]): string[] {
 export function buildGeminiModelCatalog(
   config: GeminiModelConfigSource,
 ): GeminiModelCatalog {
-  const fastModel = compactText(config.GEMINI_FAST_MODEL) || "gemini-2.5-flash-lite";
+  // Elle yazılmış yedek ad, model politikası dışına çıkan İKİNCİ bir liste
+  // demekti; emekli bir ad buradan da sızabiliyordu (2026-08-22).
+  const fastModel =
+    compactText(config.GEMINI_FAST_MODEL) || GEMINI_MODELS.roles.fast_utility;
   const reasoningModel =
     compactText(config.GEMINI_REASONING_MODEL) || "gemini-3.6-flash";
   const textModel = compactText(config.GEMINI_TEXT_MODEL) || reasoningModel;
