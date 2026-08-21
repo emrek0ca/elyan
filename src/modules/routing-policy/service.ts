@@ -1,3 +1,4 @@
+import { decideLocalExecution } from "../tasks/local-execution-decision.js";
 import { createHash, randomUUID } from "node:crypto";
 import { startStage } from "../../lib/perf-telemetry.js";
 import type { FastifyInstance } from "fastify";
@@ -3071,40 +3072,59 @@ export async function decideCommandRoute(
     (understandingConsensus.targetSurface === "desktop" ||
       hasConcreteDesktopFallbackSignal(message, metadata));
 
-  // YETENEK UZAYI KANITI — GERİ ALINDI (2026-08-22). Buraya bir daha bu haliyle
-  // konulmamalı; nedeni ölçüldü.
+  // KANIT UZLAŞMASI — tek sinyal değil, İKİ kanıt (İz 3).
   //
-  // Fikir: istek yetenek uzayında tek ve net bir YEREL EYLEME oturuyorsa tur
-  // masaüstü ister. İlk ölçüm (5 cümle) fikri destekliyordu:
-  //   "Gökhan türkmen den şarkı çal"  play_media 1.000 / marj 0.600
-  //   "Bugün hava nasıl"              get_weather (yerel eylem değil) → elenir
-  //   "Bana bir şiir yaz"             marj 0.170 → elenir
+  // 2026-08-22'de yetenek eşleşmesini TEK BAŞINA kapı yapmak canlıya tehlikeli
+  // bir kural gönderdi ("Chrome nedir" → close_app 0.961 / marj 0.320, yani
+  // bir SORU Chrome'u kapatabilirdi) ve geri alındı. Eksik olan şey ölçüm
+  // değil, ikinci eksendi: konuşma eylemi.
   //
-  // GENİŞ ÖLÇÜM FİKRİ ÇÜRÜTTÜ (13 cümle, canlı ısınmış e5):
-  //   "Chrome nedir"                  → close_app 0.961 / marj 0.320  (!)
-  //   "Takvimime nasıl etkinlik eklerim" → add_calendar_event 1.000 / marj 0.285 (!)
-  //   "Serdar ortaçtan bir şeyler çal"   → play_media 0.779 / marj 0.054  (kaçırma)
-  //   "Sezen aksudan bir sarki ac"       → desktop_os.open_permission_settings (!)
+  // Şimdi yürütme yalnız İKİSİ DE aynı yöne işaret ederse açılır:
+  //   1) konuşma eylemi yürütmeye izin veriyor (emir/onay/düzeltme), VE
+  //   2) istek yetenek uzayında marj eşiğini geçen bir YEREL EYLEM yeteneğine
+  //      oturuyor (manifestten türetilir).
   //
-  // Yani eşleştirici SORUYU EYLEMDEN ayıramıyor: "Chrome nedir" ile "Chrome'u
-  // kapat" aynı yetenek komşuluğunda ve ilki yüksek marjla geliyor. Bu kural
-  // canlıda kalsaydı bir SORU Chrome'u kapatırdı. Mutlak skor da ayırmıyor
-  // (0.961 vs 1.000). `isDesktopAdviceOnlyRequest` regex'i de "nedir"i
-  // tanımıyor — kelime listesiyle yamamak bu projede zaten dipsiz kuyu.
-  //
-  // Doğru yer muhtemelen niyet doğrulayıcısı: "kullanıcı bunu YAPMAMI mı
-  // istiyor, hakkında mı soruyor?" ayrımı anlamsal mesafeyle değil, o soruyla
-  // çözülür. Yeniden denenirse ÖNCE bu 13 cümlelik küme ölçülmeli.
-  //
-  // `evaluateLocalActionEvidence` ve manifest-türevi yerel eylem kümesi
-  // (testleriyle birlikte) DURUYOR — ölçüm aracı olarak değerli, karar
-  // mercii olarak değil.
+  // ÖLÇÜM (`npm run eval:local-execution`, 38 vaka, 12'si tutulan küme):
+  //   korpus  20/26 (%76.9)   YANLIŞ YÜRÜTME 0
+  //   tutulan 11/12 (%91.7)   YANLIŞ YÜRÜTME 0
+  // Hataların TAMAMI zararsız kaçırma. Marj eşiğini kaldırmayı da denedim:
+  // korpus %84.6'ya çıktı ama tutulanda bir TEHLİKELİ yürütme belirdi
+  // ("terminal ne işe yarar" → shell_run). Kaçırma zararsız, yanlış yürütme
+  // değil — bu yüzden muhafazakâr sürüm seçildi.
+  const localExecutionDecision =
+    hasLiveDesktopRuntime &&
+    !desktopDispatchDisabled &&
+    !isDesktopAdviceOnlyRequest(message)
+      ? await decideLocalExecution({ message, logger: app.log }).catch(() => null)
+      : null;
+  if (localExecutionDecision) {
+    // Kararın nedeni İLK GÜNDEN görünür. Bunu logsuz eklemek dün teşhisi
+    // imkânsız kılmıştı.
+    app.log?.info?.(
+      {
+        gate: "local_execution_decision",
+        requiresLocalExecution: localExecutionDecision.requiresLocalExecution,
+        reason: localExecutionDecision.reason,
+        capability: localExecutionDecision.capability,
+        capabilityScore: Number(localExecutionDecision.capabilityScore.toFixed(3)),
+        capabilityMargin: Number(localExecutionDecision.capabilityMargin.toFixed(3)),
+        speechAct: localExecutionDecision.speechAct?.act ?? null,
+        speechActMargin: localExecutionDecision.speechAct
+          ? Number(localExecutionDecision.speechAct.margin.toFixed(3))
+          : null,
+      },
+      "local execution decision",
+    );
+  }
+  const evidenceAgreedLocalExecution =
+    localExecutionDecision?.requiresLocalExecution === true;
 
   const userWantsDesktop =
     modelRequiresDesktop ||
     failClosedDesktopFallback ||
     classifierRequiresReadyDesktop ||
     validatedLocalExecutionRequest ||
+    evidenceAgreedLocalExecution ||
     (!desktopDispatchDisabled && explicitRuntimeCapabilityRequested);
 
   if (userWantsDesktop) {

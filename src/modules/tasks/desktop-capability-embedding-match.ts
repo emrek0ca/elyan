@@ -382,7 +382,17 @@ export async function evaluateLocalActionEvidence(input: {
   query: string;
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
 }): Promise<{
+  /** Marj eşiğini de geçen, TEK BAŞINA kullanılabilir güçlü kanıt. */
   localAction: boolean;
+  /**
+   * Top-1 bir yerel eylem yeteneği mi — MARJDAN BAĞIMSIZ.
+   *
+   * Ayrı tutuluyor çünkü marj eşiği, konuşma eylemi ekseni devredeyken
+   * GEREKSİZ ve ZARARLI: ölçümde ("Serdar ortaçtan bir şeyler çal" marj 0.054)
+   * gerçek komutları kesiyordu, oysa tehlikeli sınıfı zaten konuşma eylemi
+   * kapatıyor. Uzlaşma kuralı bu alanı kullanır.
+   */
+  localActionCapability: boolean;
   capability: string | null;
   score: number;
   margin: number;
@@ -394,6 +404,7 @@ export async function evaluateLocalActionEvidence(input: {
 }> {
   const empty = {
     localAction: false,
+    localActionCapability: false,
     capability: null,
     score: 0,
     margin: 0,
@@ -412,8 +423,14 @@ export async function evaluateLocalActionEvidence(input: {
   const best = ranked[0];
   if (!best) return empty;
   const margin = best.score - (ranked[1]?.score ?? 0);
-  const base = { capability: best.capability, score: best.score, margin };
-  if (!isLocalActionCapability(best.capability)) {
+  const localActionCapability = isLocalActionCapability(best.capability);
+  const base = {
+    capability: best.capability,
+    score: best.score,
+    margin,
+    localActionCapability,
+  };
+  if (!localActionCapability) {
     return { ...base, localAction: false, reason: "not_local_action" };
   }
   if (margin < FAST_PATH_MARGIN) {
