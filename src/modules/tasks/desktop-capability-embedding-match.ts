@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 import { normalizeText } from "./desktop-capability-ontology.js";
+import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import {
   actionPolarityAdjustment,
   capabilitySafetyAdjustment,
@@ -333,6 +334,93 @@ const ORCHESTRATION_CAPABILITIES = new Set([
   "run_skill",
   "mcp_call_tool",
 ]);
+
+/**
+ * YEREL EYLEM YETENEKLERİ — manifestten TÜRETİLİR, elle yazılmaz.
+ *
+ * Ölçüt: `privacyClass === "permission_gated"` ve `requiresApproval`. Bu, "bu
+ * iş kullanıcının makinesinde/hesabında gerçekten bir şey yapar" demenin
+ * manifestteki karşılığıdır: uygulama aç/kapat, medya oynat, tarayıcı sür,
+ * shell, mail gönder, takvim/hatırlatıcı yaz, WhatsApp, MCP aracı.
+ *
+ * Belge/grafik üretimi BİLEREK dışarıda: onları sunucu da üretebilir ve
+ * masaüstüne zorlamak mevcut davranışı bozardı. `get_weather`, `image_generate`,
+ * `web_research` de dışarıda kalır.
+ *
+ * Elle tutulan `DESKTOP_ONLY_CAPABILITIES` listesi ayrı bir amaca hizmet eder
+ * ve olduğu gibi durur; bu küme yalnız YÖNLENDİRME KANITI içindir.
+ */
+const LOCAL_ACTION_CAPABILITIES: ReadonlySet<string> = new Set(
+  DESKTOP_CAPABILITY_MANIFEST.filter(
+    (entry) => entry.privacyClass === "permission_gated" && entry.requiresApproval,
+  ).map((entry) => entry.name),
+);
+
+export function isLocalActionCapability(capability: string): boolean {
+  return LOCAL_ACTION_CAPABILITIES.has(String(capability ?? "").trim());
+}
+
+export function localActionCapabilityNames(): string[] {
+  return [...LOCAL_ACTION_CAPABILITIES].sort();
+}
+
+/**
+ * "Bu istek, yetenek uzayında tek ve net bir YEREL EYLEME oturuyor mu?"
+ *
+ * Canlı arıza (2026-08-22): "Müslüm gürsesden bir şeyler çal" sohbete düştü.
+ * `play_media` masaüstünde VAR ve eşleştirici onu 1.000 skor / 0.316 marjla
+ * birinci sırada veriyordu — ama eşleştirici yalnız rota ZATEN masaüstü
+ * seçildikten sonra çalıştırılıyordu (`isDesktopRoute` şartı). Yani karar
+ * verecek kanıt sistemde vardı, kimse ona sormuyordu.
+ *
+ * Marj şartı yanlış-pozitifleri kesiyor: ölçümde "Bana bir şiir yaz" turu
+ * top-1 `image_generate` (0.935) ile geliyor ama marjı 0.170 — eşiğin altında,
+ * reddedilir. Yerel-eylem şartı da "Bugün hava nasıl" (get_weather, marj
+ * 0.695) gibi yüksek marjlı ama sunucunun da yapabildiği işleri eler.
+ */
+export async function evaluateLocalActionEvidence(input: {
+  query: string;
+  logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
+}): Promise<{
+  localAction: boolean;
+  capability: string | null;
+  score: number;
+  margin: number;
+  reason:
+    | "confident_local_action"
+    | "not_local_action"
+    | "ambiguous_margin"
+    | "semantics_unavailable";
+}> {
+  const empty = {
+    localAction: false,
+    capability: null,
+    score: 0,
+    margin: 0,
+    reason: "semantics_unavailable" as const,
+  };
+  if (!String(input.query ?? "").trim()) return empty;
+  // Vektörler ısınmadıysa BEKLEME: yönlendirme yolu asla model ısıtmasına
+  // takılmamalı. Şüphede eski davranış (sunucu) sürer.
+  if (!isDesktopCapabilityVectorCacheReady()) return empty;
+
+  const ranked = await matchDesktopCapabilitiesWithEmbeddings({
+    query: input.query,
+    limit: 2,
+    logger: input.logger,
+  });
+  const best = ranked[0];
+  if (!best) return empty;
+  const margin = best.score - (ranked[1]?.score ?? 0);
+  const base = { capability: best.capability, score: best.score, margin };
+  if (!isLocalActionCapability(best.capability)) {
+    return { ...base, localAction: false, reason: "not_local_action" };
+  }
+  if (margin < FAST_PATH_MARGIN) {
+    return { ...base, localAction: false, reason: "ambiguous_margin" };
+  }
+  return { ...base, localAction: true, reason: "confident_local_action" };
+}
 
 export type FastPathDecision = {
   fastPath: boolean;
