@@ -1396,7 +1396,12 @@ function failureTaxonomy(): NonNullable<DesktopWorkOrder["failurePolicy"]>["taxo
     { code: "OS_PERMISSION_REQUIRED", class: "permission", retryable: false, replanAllowed: false },
     { code: "PERMISSION_REQUIRED", class: "permission", retryable: false, replanAllowed: false },
     { code: "CAPABILITY_UNAVAILABLE", class: "capability", retryable: false, replanAllowed: true },
-    { code: "CAPABILITY_SCOPE_MISMATCH", class: "capability", retryable: false, replanAllowed: false },
+    // Kapsam uyuşmazlığı bir GÜVENLİK REDDİ değildir: kullanıcı "hayır"
+    // demedi, plan eksik yetenek beyan etti. `replanAllowed: false` canlıda
+    // turu yarım yan etkiyle öldürüyordu (2026-08-21, görev 66443c57:
+    // Safari açıldı, YouTube açılmadı, görev başarısız). Revize plan yine
+    // aynı grant kapısından ve onay zarfından geçer.
+    { code: "CAPABILITY_SCOPE_MISMATCH", class: "capability", retryable: false, replanAllowed: true },
     { code: "WORK_ORDER_BINDING_MISMATCH", class: "capability", retryable: false, replanAllowed: false },
     { code: "TOOL_EXECUTION_FAILED", class: "verification", retryable: true, replanAllowed: true },
     { code: "WORK_ORDER_EVIDENCE_MISSING", class: "verification", retryable: true, replanAllowed: true },
