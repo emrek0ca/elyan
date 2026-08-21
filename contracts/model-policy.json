@@ -1,0 +1,22 @@
+{
+  "contract": "elyan.model_policy.v1",
+  "provider": "groq",
+  "note": "TEK KAYNAK. Sunucu ve masaüstü aynı model politikasını kullanır. Masaüstündeki runtime/model_roles.py bu dosyadan ÜRETİLİR (npm run models:export). Envanterdeki her ad sağlayıcının canlı kataloğunda bulunmalıdır (npm run models:verify).",
+  "inventory": [
+    "groq/compound",
+    "groq/compound-mini",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b"
+  ],
+  "retired": [
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile"
+  ],
+  "desktopRoles": {
+    "decision": ["openai/gpt-oss-20b", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"],
+    "planning": ["openai/gpt-oss-120b", "qwen/qwen3.6-27b"],
+    "research": ["groq/compound", "groq/compound-mini"],
+    "quick": ["openai/gpt-oss-20b", "qwen/qwen3.6-27b"]
+  }
+}

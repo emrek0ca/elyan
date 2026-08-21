@@ -1,3 +1,4 @@
+import { RETIRED_MODELS } from "../../config/model-policy.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
 export type GroqModelConfigSource = {
@@ -56,7 +57,10 @@ export function isStructuredGroqWorkload(
 }
 
 const DEFAULT_STRUCTURED_JSON_MODEL = "qwen/qwen3.6-27b";
-const RETIRED_STRUCTURED_JSON_MODELS = new Set(["llama-3.1-8b-instant"]);
+// Emekli model listesi TEK KAYNAKTAN gelir (`contracts/model-policy.json`).
+// Burada ikinci bir liste tutmak, masaüstüyle sürüklenmenin ta kendisiydi:
+// sunucu bir modelin kalktığını biliyor, masaüstü hâlâ zincirinde taşıyordu.
+const RETIRED_STRUCTURED_JSON_MODELS = RETIRED_MODELS;
 
 function compactText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
