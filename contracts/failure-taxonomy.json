@@ -1,0 +1,34 @@
+{
+  "contract": "elyan.failure_taxonomy.v1",
+  "note": "TEK KAYNAK. Sunucu iş emrine bu tabloyu `failurePolicy.taxonomy` olarak yazar; masaüstü aynı tablodan ÜRETİLEN runtime/failure_taxonomy.py ile okur (npm run failures:export). İki tarafta elle tutulan ikinci bir merdiven, canlı arıza sınıfıdır.",
+  "entries": [
+    { "code": "DEPENDENCY_UNAVAILABLE", "class": "dependency", "retryable": false, "replanAllowed": false },
+    { "code": "OS_PERMISSION_REQUIRED", "class": "permission", "retryable": false, "replanAllowed": false },
+    { "code": "PERMISSION_REQUIRED", "class": "permission", "retryable": false, "replanAllowed": false },
+    { "code": "EXPLICIT_APPROVAL_REQUIRED", "class": "permission", "retryable": false, "replanAllowed": false },
+    { "code": "CAPABILITY_GRANT_DENIED", "class": "permission", "retryable": false, "replanAllowed": false },
+    { "code": "CAPABILITY_GRANT_REPLAY", "class": "permission", "retryable": false, "replanAllowed": false },
+    { "code": "WORK_ORDER_TRUST_MISSING", "class": "capability", "retryable": false, "replanAllowed": false },
+    { "code": "WORK_ORDER_TASK_MISMATCH", "class": "capability", "retryable": false, "replanAllowed": false },
+    { "code": "WORK_ORDER_NOT_EXECUTING", "class": "capability", "retryable": false, "replanAllowed": false },
+    { "code": "WORK_ORDER_BINDING_MISMATCH", "class": "capability", "retryable": false, "replanAllowed": false },
+    { "code": "CAPABILITY_UNAVAILABLE", "class": "capability", "retryable": false, "replanAllowed": true },
+    { "code": "CAPABILITY_SCOPE_MISMATCH", "class": "capability", "retryable": false, "replanAllowed": true },
+    { "code": "TOOL_EXECUTION_FAILED", "class": "verification", "retryable": true, "replanAllowed": true },
+    { "code": "WORK_ORDER_EVIDENCE_MISSING", "class": "verification", "retryable": true, "replanAllowed": true },
+    { "code": "GOAL_VERIFICATION_FAILED", "class": "model", "retryable": true, "replanAllowed": true },
+    { "code": "TASK_EXECUTION_TIMEOUT", "class": "timeout", "retryable": true, "replanAllowed": true },
+    { "code": "EXECUTION_CANCELLED", "class": "cancelled", "retryable": false, "replanAllowed": false }
+  ],
+  "unknownDefault": { "class": "verification", "retryable": true, "replanAllowed": true },
+  "authorizationCodes": [
+    "EXPLICIT_APPROVAL_REQUIRED",
+    "CAPABILITY_GRANT_DENIED",
+    "CAPABILITY_GRANT_REPLAY",
+    "CAPABILITY_SCOPE_MISMATCH",
+    "WORK_ORDER_TRUST_MISSING",
+    "WORK_ORDER_TASK_MISMATCH",
+    "WORK_ORDER_NOT_EXECUTING",
+    "WORK_ORDER_BINDING_MISMATCH"
+  ]
+}

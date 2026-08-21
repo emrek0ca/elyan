@@ -47,7 +47,8 @@
     "eval:routing": "tsx src/scripts/routing-eval-report.ts",
     "eval:understanding": "tsx src/scripts/understanding-consistency-report.ts",
     "models:export": "node scripts/export-model-roles.mjs /Users/emrekoca/Desktop/elyan/runtime/model_roles.py",
-    "models:verify": "node --env-file-if-exists=.env scripts/verify-model-inventory.mjs"
+    "models:verify": "node --env-file-if-exists=.env scripts/verify-model-inventory.mjs",
+    "failures:export": "node scripts/export-failure-taxonomy.mjs /Users/emrekoca/Desktop/elyan/runtime/failure_taxonomy.py"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

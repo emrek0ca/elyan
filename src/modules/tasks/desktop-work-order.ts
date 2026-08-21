@@ -1,3 +1,4 @@
+import { failureTaxonomyEntries } from "../../config/failure-taxonomy.js";
 import { createHash } from "node:crypto";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 import type {
@@ -1391,24 +1392,11 @@ function ambiguityPolicyForWorkOrder(
 }
 
 function failureTaxonomy(): NonNullable<DesktopWorkOrder["failurePolicy"]>["taxonomy"] {
-  return [
-    { code: "DEPENDENCY_UNAVAILABLE", class: "dependency", retryable: false, replanAllowed: false },
-    { code: "OS_PERMISSION_REQUIRED", class: "permission", retryable: false, replanAllowed: false },
-    { code: "PERMISSION_REQUIRED", class: "permission", retryable: false, replanAllowed: false },
-    { code: "CAPABILITY_UNAVAILABLE", class: "capability", retryable: false, replanAllowed: true },
-    // Kapsam uyuşmazlığı bir GÜVENLİK REDDİ değildir: kullanıcı "hayır"
-    // demedi, plan eksik yetenek beyan etti. `replanAllowed: false` canlıda
-    // turu yarım yan etkiyle öldürüyordu (2026-08-21, görev 66443c57:
-    // Safari açıldı, YouTube açılmadı, görev başarısız). Revize plan yine
-    // aynı grant kapısından ve onay zarfından geçer.
-    { code: "CAPABILITY_SCOPE_MISMATCH", class: "capability", retryable: false, replanAllowed: true },
-    { code: "WORK_ORDER_BINDING_MISMATCH", class: "capability", retryable: false, replanAllowed: false },
-    { code: "TOOL_EXECUTION_FAILED", class: "verification", retryable: true, replanAllowed: true },
-    { code: "WORK_ORDER_EVIDENCE_MISSING", class: "verification", retryable: true, replanAllowed: true },
-    { code: "GOAL_VERIFICATION_FAILED", class: "model", retryable: true, replanAllowed: true },
-    { code: "TASK_EXECUTION_TIMEOUT", class: "timeout", retryable: true, replanAllowed: true },
-    { code: "EXECUTION_CANCELLED", class: "cancelled", retryable: false, replanAllowed: false },
-  ];
+  // TEK KAYNAK: contracts/failure-taxonomy.json. Burada ikinci bir liste
+  // tutmak, masaüstündeki metin-eşleşmeli merdivenle sürüklenmenin ta
+  // kendisiydi (canlı, 2026-08-21: kapsam uyuşmazlığı güvenlik reddi sanıldı,
+  // tur yarım yan etkiyle öldü).
+  return failureTaxonomyEntries();
 }
 
 function inferCalculationExpression(message: string): string {
