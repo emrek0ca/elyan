@@ -169,6 +169,20 @@ export type CommandRouteDecision = {
   // fresh decisions always populate the contract before workload selection.
   semanticContract?: SemanticContract;
   turnContract?: CommandTurnContract;
+  /**
+   * Turun konuşma eylemi — yönlendirmede ZATEN hesaplandı, üretim katmanı
+   * yeniden hesaplamasın diye taşınıyor.
+   *
+   * Ölçüm (2026-08-22): 7 günde 52 görevde SIFIR araç akışı; beyin kararları
+   * `tool_selection_source: not_advertised` diyordu. Hızlı sohbet şeridi araç
+   * kataloğunu gizliyor ve rota yetenek üretmediğinde model elinde araç
+   * olmadan cevap veriyor — kullanıcı "yapamıyor, anlatıyor" diye görüyor.
+   * Emir turunda araç göstermek için gereken tipli sinyal budur.
+   */
+  speechAct?: {
+    act: "command" | "question" | "statement" | "correction" | "confirmation";
+    margin: number;
+  };
   qualityGuard?: {
     strategy: "quantum_quality_guard_v1";
     source: "runtime_quantum_liveness_feedback";
@@ -1515,6 +1529,7 @@ function buildDecision(input: {
   classification: IntentClassification;
   understandingConsensus?: UnderstandingConsensus;
   clarificationOverride?: boolean;
+  speechAct?: CommandRouteDecision["speechAct"];
 }): CommandRouteDecision {
   // The classification has already passed through the semantic/model resolver
   // in decideCommandRoute. Do not reinterpret raw text here: route, workload
@@ -1568,6 +1583,7 @@ function buildDecision(input: {
     : input.capabilities;
 
   const decision: CommandRouteDecision = {
+    ...(input.speechAct ? { speechAct: input.speechAct } : {}),
     route: input.route,
     targetDeviceId: input.targetDeviceId,
     taskRoute: input.taskRoute ?? undefined,
@@ -3118,6 +3134,13 @@ export async function decideCommandRoute(
   }
   const evidenceAgreedLocalExecution =
     localExecutionDecision?.requiresLocalExecution === true;
+  const routeSpeechAct: CommandRouteDecision["speechAct"] =
+    localExecutionDecision?.speechAct
+      ? {
+          act: localExecutionDecision.speechAct.act,
+          margin: localExecutionDecision.speechAct.margin,
+        }
+      : undefined;
 
   const userWantsDesktop =
     modelRequiresDesktop ||
@@ -3206,6 +3229,7 @@ export async function decideCommandRoute(
         outputContract,
         classification,
         understandingConsensus,
+      speechAct: routeSpeechAct,
       });
     }
 
@@ -3246,6 +3270,7 @@ export async function decideCommandRoute(
         outputContract,
         classification,
         understandingConsensus,
+      speechAct: routeSpeechAct,
       });
     }
 
@@ -3281,6 +3306,7 @@ export async function decideCommandRoute(
       outputContract,
       classification,
       understandingConsensus,
+      speechAct: routeSpeechAct,
     });
   }
 
@@ -3316,6 +3342,7 @@ export async function decideCommandRoute(
     outputContract,
     classification,
     understandingConsensus,
+      speechAct: routeSpeechAct,
   });
 }
 

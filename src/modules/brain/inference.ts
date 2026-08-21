@@ -6347,7 +6347,20 @@ export async function generateSharedBrainReply(
   // eligible tools even though the semantic envelope had already selected a
   // research capability. Advertise tools only for typed semantic turns; plain
   // conversation still keeps the short, low-latency prompt.
+  // EMİR TURU ARAÇ GÖRÜR.
+  //
+  // Ölçüm (2026-08-22): 7 günde 52 görevde SIFIR araç akışı; beyin kararları
+  // `tool_selection_source: not_advertised`. Hızlı sohbet şeridi araç
+  // kataloğunu gizliyor ve rota yetenek üretmediğinde model elinde HİÇ araç
+  // olmadan cevap veriyor. Kullanıcının gördüğü şey tam olarak bu: asistan
+  // yapmak yerine anlatıyor ("Spotify açıp arama çubuğuna yazabilirsin").
+  //
+  // Konuşma eylemi yönlendirmede zaten hesaplandı; burada YENİDEN
+  // hesaplanmıyor, taşınan tipli sinyal okunuyor. Soru/sohbet turları eskisi
+  // gibi kısa ve araçsız kalır — yalnız gerçek bir iş isteği katalogu açar.
+  const commandTurn = input.routeDecision?.speechAct?.act === "command";
   const typedToolTurn =
+    commandTurn ||
     (understandingEnvelope?.required_capabilities.length ?? 0) > 0 ||
     (input.routeDecision?.capabilities.length ?? 0) > 0 ||
     (input.routeDecision?.taskRoute?.requiredCapabilities.length ?? 0) > 0 ||
