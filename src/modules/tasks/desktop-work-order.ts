@@ -310,10 +310,49 @@ export type DirectImageFetchCommand = {
   count: number;
 };
 
+/**
+ * Çok kelimeli GERÇEK uygulama adları. Doğrudan-komut kestirmesi yalnız bunlar
+ * için birden fazla sözcüğe izin verir.
+ *
+ * Gerekçe (canlı arıza 2026-08-21, görev 66443c57 "Safariden youtube u aç"):
+ * `app` grubu boşluğa izin verdiği için desen TÜM ÖBEĞİ uygulama adı sandı ve
+ * deterministik kestirme `open_app{app_name:"Safariden youtube"}` üretti. Bu
+ * plan model planlayıcısını tamamen ATLADIĞI için istek hiç çözümlenmedi:
+ * masaüstü "Safariden youtube bu bilgisayarda bulunamadi" (APP_NOT_FOUND)
+ * dedi, kendi kendini düzeltip Safari'yi açtı, ardından YouTube'a gitmek için
+ * gereken tarayıcı yeteneği iş emri kapsamında (`["open_app"]`) olmadığı için
+ * görev CAPABILITY_SCOPE_MISMATCH ile ÖLDÜ. Safari açıldı, YouTube açılmadı.
+ *
+ * Kestirme bir OPTİMİZASYONdur: eşleşmediğinde model planlayıcısına düşmek
+ * güvenli yöndür (ve artık ucuzdur). Bu yüzden liste dar tutulur.
+ */
+const KNOWN_MULTI_WORD_APPS = new Set([
+  "app store",
+  "activity monitor",
+  "adobe acrobat",
+  "adobe photoshop",
+  "android studio",
+  "disk utility",
+  "final cut pro",
+  "google chrome",
+  "logic pro",
+  "microsoft edge",
+  "microsoft excel",
+  "microsoft outlook",
+  "microsoft powerpoint",
+  "microsoft teams",
+  "microsoft word",
+  "quicktime player",
+  "sublime text",
+  "system settings",
+  "visual studio code",
+  "vs code",
+]);
+
 export function parseDirectDesktopAppCommand(message: string): DirectDesktopAppCommand | null {
   const compact = compactText(message, 240);
   const match = compact.match(
-    /^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)*(?<app>[\p{L}\p{N}][\p{L}\p{N} ._'’+-]{0,79}?)\s+(?:(?:uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+)?(?<verb>aç|ac|başlat|baslat|çalıştır|calistir|kapat|durdur|sonlandır|sonlandir)(?:(?:abilir|ebilir)|(?:ır|ir|ur|ür|ar|er))?(?:\s+(?:mı|mi|mu|mü)(?:sın|sin|sun|sün|sınız|siniz|sunuz|sünüz)?)?(?:\s+(?:lütfen|lutfen))?[.!?]*$/iu,
+    /^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)*(?<app>[\p{L}\p{N}][\p{L}\p{N} ._'’+-]{0,79}?)\s+(?:(?<appnoun>uygulamasını|uygulamasini|uygulamayı|uygulamayi|programını|programini|programı|programi)\s+)?(?<verb>aç|ac|başlat|baslat|çalıştır|calistir|kapat|durdur|sonlandır|sonlandir)(?:(?:abilir|ebilir)|(?:ır|ir|ur|ür|ar|er))?(?:\s+(?:mı|mi|mu|mü)(?:sın|sin|sun|sün|sınız|siniz|sunuz|sünüz)?)?(?:\s+(?:lütfen|lutfen))?[.!?]*$/iu,
   );
   const rawApp = match?.groups?.app?.trim() ?? "";
   const verb = match?.groups?.verb?.toLocaleLowerCase("tr-TR") ?? "";
@@ -330,6 +369,26 @@ export function parseDirectDesktopAppCommand(message: string): DirectDesktopAppC
     .replace(/\s+(?:y?[ıiuü])$/iu, "")
     .trim();
   if (!appName) return null;
+  // ÇOK SÖZCÜKLÜ ÖBEK KENDİLİĞİNDEN UYGULAMA ADI DEĞİLDİR.
+  //
+  // "Safariden youtube u aç" bileşik bir istektir (tarayıcıyı aç + adrese
+  // git); tek adımlık `open_app` kestirmesi onu çözemez. Ama "Hesap Makinesi
+  // uygulamasını aç" gerçekten çok sözcüklü bir uygulamadır — ve yerelleşmiş
+  // adlar (Sistem Ayarları, Etkinlik İzlencesi…) bir listeye sığmaz.
+  //
+  // Ayrım Türkçe ek TAHMİNİYLE değil, KULLANICININ KENDİ SÖZÜYLE yapılır:
+  // "uygulamasını/programını" diyorsa önceki sözcükler bir uygulama adıdır.
+  // Bu işaret yoksa yalnız bilinen çok sözcüklü uygulamalara izin verilir;
+  // gerisi model planlayıcısına düşer (kestirme bir optimizasyondur, karar
+  // mercii değil).
+  const declaredAsApplication = Boolean(match?.groups?.appnoun);
+  if (
+    /\s/u.test(appName) &&
+    !declaredAsApplication &&
+    !KNOWN_MULTI_WORD_APPS.has(appName.toLocaleLowerCase("tr-TR"))
+  ) {
+    return null;
+  }
   return {
     capability: /^(?:kapat|durdur|sonlandır|sonlandir)$/iu.test(verb) ? "close_app" : "open_app",
     appName,

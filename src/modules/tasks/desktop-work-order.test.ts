@@ -1045,3 +1045,32 @@ test("belge açıkça istendiğinde yazıcı yeteneği korunur", () => {
 
   assert.ok(workOrder.requiredCapabilities.includes("document_write"));
 });
+
+// ---------------------------------------------------------------------------
+// Canlı arıza (2026-08-21, görev 66443c57): "Safariden youtube u aç" desende
+// `app` grubu boşluğa izin verdiği için TÜM ÖBEK uygulama adı sanıldı ve
+// deterministik kestirme `open_app{app_name:"Safariden youtube"}` üretti. O
+// plan model planlayıcısını atladığı için istek hiç çözümlenmedi: masaüstü
+// APP_NOT_FOUND dedi, Safari'yi açtı, sonra YouTube'a gitmek için gereken
+// tarayıcı yeteneği iş emri kapsamı dışında kaldı ve görev
+// CAPABILITY_SCOPE_MISMATCH ile öldü.
+// ---------------------------------------------------------------------------
+test("parseDirectDesktopAppCommand refuses a compound phrase as an app name", () => {
+  assert.equal(parseDirectDesktopAppCommand("Safariden youtube u aç"), null);
+  assert.equal(parseDirectDesktopAppCommand("Chrome dan gmail aç"), null);
+});
+
+test("parseDirectDesktopAppCommand still accepts single and known multi-word apps", () => {
+  assert.deepEqual(parseDirectDesktopAppCommand("Chrome u kapat"), {
+    capability: "close_app",
+    appName: "Chrome",
+  });
+  assert.deepEqual(parseDirectDesktopAppCommand("Safari aç"), {
+    capability: "open_app",
+    appName: "Safari",
+  });
+  assert.deepEqual(parseDirectDesktopAppCommand("App Store aç"), {
+    capability: "open_app",
+    appName: "App Store",
+  });
+});
