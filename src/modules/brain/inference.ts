@@ -6376,6 +6376,24 @@ export async function generateSharedBrainReply(
       isAgentEngineV2Enabled(app, input.userId) ||
       isAgentEngineShadowEnabled(app)) &&
     (!fastTextTurn || fastTextToolsExplicitlyRequested || typedToolTurn);
+  // ARAÇ SESSİZLİĞİNİN NEDENİ GÖRÜNÜR OLMALI.
+  //
+  // Ölçüm (2026-08-22): son 7 gündeki 52 görevin HİÇBİRİNDE araç akışı yok ve
+  // beyin kararları `tool_selection_source: not_advertised` diyor. Ama log
+  // "model aracı seçmedi" ile "modele hiç araç verilmedi"yi ayırt edemiyordu —
+  // ikisi de sessizdi. Kullanıcının gördüğü sonuç: asistan yapmak yerine
+  // ANLATIYOR ("Spotify açıp arayabilirsin").
+  //
+  // Bu blok davranışı değiştirmez; hangi koşulun kapattığını söyler.
+  const toolProtocolBlockedReason = agentToolProtocolEnabled
+    ? null
+    : input.responseSchemaOverride
+      ? "response_schema_override"
+      : input.internalEvaluation?.refinementPass
+        ? "refinement_pass"
+        : fastTextTurn && !fastTextToolsExplicitlyRequested && !typedToolTurn
+          ? "fast_text_turn_without_typed_tools"
+          : "no_tool_source_enabled";
   let toolSelectionSource = agentToolProtocolEnabled
     ? "deterministic"
     : "not_advertised";
@@ -7656,6 +7674,7 @@ export async function generateSharedBrainReply(
       reasoningMode: input.understandingContext?.taskFrame?.reasoningMode,
       modelSelectionReason,
       toolSelectionSource,
+      toolProtocolBlockedReason,
       toolSelectionMs,
       result: "running",
       durationMs: Date.now() - startedAt,

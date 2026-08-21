@@ -26,6 +26,9 @@ test("brain decision observation keeps queued task ids and route fields content-
     model_selection_reason: null,
     fallback_reason: null,
     tool_selection_source: null,
+    // Araç sessizliğinin NEDENİ de gözlemde: `not_advertised` tek başına
+    // "model seçmedi" ile "modele hiç verilmedi"yi ayırt ettirmiyordu.
+    tool_protocol_blocked_reason: null,
     result: "queued",
     duration_ms: 12,
   });

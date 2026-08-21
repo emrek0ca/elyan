@@ -31,6 +31,13 @@ export type BrainDecisionObservationInput = {
   modelSelectionReason?: string | null;
   fallbackReason?: string | null;
   toolSelectionSource?: string | null;
+  /**
+   * Araç protokolü KAPALIYSA nedeni. `not_advertised` tek başına
+   * "model aracı seçmedi" ile "modele hiç araç verilmedi"yi ayırt
+   * ettirmiyordu; ikisi de sessizdi (ölçüm 2026-08-22: 7 günde 52
+   * görevde sıfır araç akışı).
+   */
+  toolProtocolBlockedReason?: string | null;
   toolSelectionMs?: number | null;
   reasoningEffort?: string | null;
   outputContract?: string | null;
@@ -104,6 +111,9 @@ export function buildBrainDecisionObservation(
     model_selection_reason: safeNullableText(input.modelSelectionReason),
     fallback_reason: safeNullableText(input.fallbackReason),
     tool_selection_source: safeNullableText(input.toolSelectionSource),
+    tool_protocol_blocked_reason: safeNullableText(
+      input.toolProtocolBlockedReason,
+    ),
     ...(input.toolSelectionMs != null
       ? { tool_selection_ms: safeDurationMs(input.toolSelectionMs) }
       : {}),
