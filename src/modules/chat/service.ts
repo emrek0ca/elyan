@@ -2831,7 +2831,19 @@ async function createChatMessageInner(
       usageAccess,
       targetDeviceId: session.targetDeviceId,
       requestedTargetDeviceId: input.targetDeviceId,
-      title: deriveChatTitle(input.title ?? session.title, input.content),
+      // GÖREV BAŞLIĞI BU TURU ANLATIR — OTURUM BAŞLIĞINI DEĞİL.
+      //
+      // Burada `?? session.title` vardı ve oturum başlığı ilk turdan geliyor.
+      // İkinci tur bu yüzden birinci turun başlığını miras alıyordu; anlama
+      // zarfı da konuyu başlıktan türettiği için `semanticGoal.objective`
+      // ÖNCEKİ isteğe kilitleniyordu.
+      //
+      // Canlı arıza (2026-08-21 23:36): "Terminali kapat" turundan sonra
+      // "Gökhan türkmen den şarkı çal" yazıldı. Görevin objective'i "Terminali
+      // kapat" kaldı, sunucu planı `close_app{Terminal}` + `play_media` olarak
+      // ÜRETTİ ve masaüstü Terminal'i GERÇEKTEN yeniden kapattı; cevapta da
+      // iki tur birbirine karıştı.
+      title: deriveChatTitle(input.title, input.content),
       payload: {
         prompt: input.content,
         source: input.source,

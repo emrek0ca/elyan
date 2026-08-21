@@ -149,9 +149,16 @@ function detectFollowUpKind(text: string, sourceReference: OutputReference): "ne
 
 function buildConversationState(input: {
   text: string;
+  /**
+   * Kullanıcının BU turdaki ham sözü. `text` sunum başlığını da içerir
+   * (`title\nmessage`); hedef alanları başlıkla kirlenmemelidir — bkz.
+   * `canonicalTopic`. Verilmezse `text`e düşer (eski çağrılar bozulmasın).
+   */
+  goalText?: string;
   metadata: Record<string, unknown>;
   outputContract: OutputContract;
 }) {
+  const goalText = compactText(input.goalText ?? input.text);
   const metadata = input.metadata;
   const lastAssistantSummary =
     readString(metadata, "lastAssistantSummary") ??
@@ -169,11 +176,11 @@ function buildConversationState(input: {
   const turnKind = detectFollowUpKind(input.text, input.outputContract.sourceReference);
   return {
     turnKind,
-    currentGoal: compactText(input.text).slice(0, 500) || null,
+    currentGoal: goalText.slice(0, 500) || null,
     lastAssistantSummary: lastAssistantSummary?.slice(0, 800) ?? null,
     lastArtifactSummary: lastArtifactSummary?.slice(0, 500) ?? null,
     lastImagePrompt: lastImagePrompt?.slice(0, 800) ?? null,
-    userCorrection: turnKind === "correction" ? compactText(input.text).slice(0, 500) : null,
+    userCorrection: turnKind === "correction" ? goalText.slice(0, 500) : null,
     carryForward:
       turnKind !== "new_request" ||
       input.outputContract.sourceReference === "previous_answer" ||
@@ -1062,6 +1069,31 @@ function inferEnvelopeConfidence(input: {
   );
 }
 
+/**
+ * KONU KULLANICININ ŞU ANKİ SÖZÜDÜR — başlık yalnız yedektir.
+ *
+ * Burada başlık mesajı yeniyordu (`title ?? message`). Başlık bir SUNUM
+ * etiketidir ve sohbet oturumunun ilk turundan miras kalır; sonraki turda
+ * hedefi ÖNCEKİ isteğe kilitliyordu.
+ *
+ * Canlı arıza (2026-08-21 23:36): "Terminali kapat" turundan sonra "Gökhan
+ * türkmen den şarkı çal" yazıldı. Zarfın konusu "Terminali kapat" kaldı,
+ * `semanticGoal.objective` oradan doğdu, sunucu planlayıcısı
+ * `close_app{Terminal}` + `play_media` planı üretti ve masaüstü Terminal'i
+ * gerçekten yeniden kapattı.
+ *
+ * Yedek yön korunuyor: mesajın olmadığı (yalnız başlıkla yaratılan) görevlerde
+ * başlık hâlâ konuyu verir.
+ */
+function canonicalTopic(
+  message: string | undefined,
+  title: string | undefined,
+): string | undefined {
+  const fromMessage = compactText(message ?? "").slice(0, 160);
+  if (fromMessage) return fromMessage;
+  return compactText(title ?? "").slice(0, 160) || undefined;
+}
+
 export function buildEmptyUnderstandingEnvelope(
   input: TaskUnderstandingInput,
   intent: IntentClassification,
@@ -1071,7 +1103,7 @@ export function buildEmptyUnderstandingEnvelope(
     intent: {
       name: intent.primaryIntent,
       action: "reply",
-      topic: compactText(input.title ?? input.message).slice(0, 160) || undefined,
+      topic: canonicalTopic(input.message, input.title),
       confidence: 0,
       source: "legacy_fallback",
     },
@@ -1179,7 +1211,12 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
   const ambiguities = buildAmbiguities({ desiredOutputs, format, localPrivate, sideEffect });
   const risk = buildRisk({ text, localPrivate, sideEffect, promptInjection, desiredOutputs });
   const successCriteria = buildSuccessCriteria({ desiredOutputs, constraints });
-  const conversationState = buildConversationState({ text, metadata, outputContract });
+  const conversationState = buildConversationState({
+    text,
+    goalText: input.message ?? text,
+    metadata,
+    outputContract,
+  });
   const latestArtifactRef = buildLatestArtifactRef(metadata);
   const intentGraph = buildIntentGraph({
     desiredOutputs,
@@ -1203,7 +1240,7 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
     intent: {
       name: input.intent.primaryIntent,
       action,
-      topic: compactText(input.title ?? text).slice(0, 160) || undefined,
+      topic: canonicalTopic(input.message, input.title),
       confidence: clampConfidence(input.intent.confidence),
       source: "semantic_classifier",
     },
