@@ -199,6 +199,7 @@ import {
 import { applyGoalProgressBlocks } from "../goals/service.js";
 import { recordStageDuration, startStage } from "../../lib/perf-telemetry.js";
 import {
+  getSharedBrainTargetDeviceId,
   getUserDevice,
   RUNTIME_CONNECTION_STALE_AFTER_MS,
 } from "../devices/service.js";
@@ -9773,10 +9774,21 @@ export async function createTask(
         `New direction: ${prompt}`,
       ].join("\n")
     : prompt;
-  const preferredDesktopTargetDeviceId =
+  // A chat session stores its execution target, and for ordinary conversation
+  // that target is the shared brain device. It must never be carried into the
+  // desktop lane: `selectedDeviceId` opens the semantic router gate and feeds
+  // desktop candidate selection, so a shared-brain id would both bias routing
+  // toward the desktop and arrive at target resolution as a bogus preference.
+  const requestedDesktopTargetDeviceId =
     input.targetDeviceId ??
     interventionContext?.previousTargetDeviceId ??
     undefined;
+  const preferredDesktopTargetDeviceId =
+    requestedDesktopTargetDeviceId &&
+    requestedDesktopTargetDeviceId ===
+      (await getSharedBrainTargetDeviceId(app).catch(() => null))
+      ? undefined
+      : requestedDesktopTargetDeviceId;
   const effectiveRequestedCapabilities =
     remoteMcpResolution.requestedCapabilities;
   const remoteMcpSelection = remoteMcpResolution.selection;

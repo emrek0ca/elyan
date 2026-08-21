@@ -3345,16 +3345,22 @@ export async function resolveCommandTarget(
   const normalizedRequestedCapabilities = normalizeRuntimeCapabilities(
     requestedCapabilities,
   );
-  const normalizedTargetDeviceId = targetDeviceId?.trim() ?? "";
-  if (normalizedTargetDeviceId) {
+  // A chat session persists its execution target, and for an ordinary
+  // conversation that stored target is the shared brain device (userId null).
+  // When a later turn in the same session routes to the desktop, that id
+  // arrives here as a desktop "preference". It is not a client error and must
+  // not fail the dispatch: the turn simply has no desktop preference, so it
+  // falls through to normal desktop selection below.
+  let explicitTargetDeviceId = targetDeviceId?.trim() ?? "";
+  if (explicitTargetDeviceId) {
     const ownedDevice = await getUserDevice(
       app,
       userId,
-      normalizedTargetDeviceId,
+      explicitTargetDeviceId,
     );
 
     if (ownedDevice?.type === "desktop") {
-      assertOwnedDesktopTaskTarget(ownedDevice, normalizedTargetDeviceId);
+      assertOwnedDesktopTaskTarget(ownedDevice, explicitTargetDeviceId);
       if (
         purpose === "task" &&
         normalizedRequestedCapabilities.length > 0 &&
@@ -3370,7 +3376,7 @@ export async function resolveCommandTarget(
           requestedCapabilities: normalizedRequestedCapabilities,
         });
         throw createRuntimeCapabilityMismatchError({
-          targetDeviceId: normalizedTargetDeviceId,
+          targetDeviceId: explicitTargetDeviceId,
           requestedCapabilities: normalizedRequestedCapabilities,
           availableCapabilities: normalizeRuntimeCapabilities(
             ownedDevice.runtime.capabilities,
@@ -3390,18 +3396,20 @@ export async function resolveCommandTarget(
     const sharedBrainDevice = await getSharedBrainTargetDevice(app);
     if (
       sharedBrainDevice &&
-      sharedBrainDevice.id === normalizedTargetDeviceId
+      sharedBrainDevice.id === explicitTargetDeviceId
     ) {
-      if (purpose === "task") {
-        throw createInvalidTargetDeviceError(normalizedTargetDeviceId);
+      if (purpose !== "task") {
+        return {
+          device: sharedBrainDevice,
+          isSharedBrain: true,
+        };
       }
-      return {
-        device: sharedBrainDevice,
-        isSharedBrain: true,
-      };
+      // Shared brain is never a desktop dispatch target. Drop it as a
+      // preference rather than rejecting the turn.
+      explicitTargetDeviceId = "";
+    } else {
+      throw createInvalidTargetDeviceError(explicitTargetDeviceId);
     }
-
-    throw createInvalidTargetDeviceError(normalizedTargetDeviceId);
   }
 
   if (purpose === "task") {

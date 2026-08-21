@@ -2328,3 +2328,136 @@ test("decideCommandRoute overrides an explicit server_brain model verdict for a 
   assert.equal(decision.route, "desktop_runtime");
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
+
+// ---------------------------------------------------------------------------
+// A chat session persists its execution target. For ordinary conversation that
+// stored target is the SHARED BRAIN device (userId null). Live regression
+// (2026-08-21): a later turn in the same session routed to the desktop, the
+// stored shared-brain id arrived as the desktop "preference", and the whole
+// dispatch died with 422 `invalid_target` — the user saw "Target device is not
+// a valid desktop runtime" while their MacBook was online with 102
+// capabilities. Shared brain is not a desktop target, but it is not a client
+// error either: drop it as a preference and select the desktop normally.
+// ---------------------------------------------------------------------------
+test("resolveCommandTarget falls back to the live desktop when a chat session hands it the shared-brain target", async () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  const sharedBrainRow = {
+    id: "shared-brain-1",
+    type: "desktop",
+    externalDeviceId: "shared-brain",
+    label: "Elyan",
+    platform: "server",
+    runtimeVersion: "server",
+    appVersion: null,
+    isActive: true,
+    pairedAt: now,
+    lastSeenAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const desktopRow = {
+    id: "desktop-1",
+    type: "desktop",
+    externalDeviceId: "mac-1",
+    label: "User MacBook",
+    platform: "macos",
+    runtimeVersion: "1.0.0",
+    appVersion: null,
+    isActive: true,
+    pairedAt: now,
+    lastSeenAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const app = {
+    db: new FakeDb([
+      // getUserDevice(shared-brain-1): usage truth, then the owned-device
+      // lookup that finds nothing because the shared brain has no owner.
+      ...proSubscriptionRows,
+      [],
+      // getSharedBrainTargetDevice(): the device row, then its runtime row.
+      [sharedBrainRow],
+      [],
+      // getDefaultDesktopTaskTarget() -> listUserDevices().
+      ...proSubscriptionRows,
+      [desktopRow],
+      [
+        {
+          id: "runtime-1",
+          deviceId: "desktop-1",
+          status: "online",
+          capabilities: ["filesystem"],
+          capabilityStates: {},
+          currentTaskId: null,
+          connectedAt: now,
+          lastHeartbeatAt: now,
+        },
+      ],
+    ]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+    },
+    services: {
+      realtimeHub: {
+        isRuntimeConnected: () => true,
+      },
+    },
+  };
+
+  const target = await resolveCommandTarget(
+    app as never,
+    "user-1",
+    "shared-brain-1",
+    "task",
+  );
+
+  assert.equal(target.isSharedBrain, false);
+  assert.equal(target.device.id, "desktop-1");
+});
+
+test("resolveCommandTarget still rejects a target device the user does not own", async () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  const app = {
+    db: new FakeDb([
+      ...proSubscriptionRows,
+      [],
+      [
+        {
+          id: "shared-brain-1",
+          type: "desktop",
+          externalDeviceId: "shared-brain",
+          label: "Elyan",
+          platform: "server",
+          runtimeVersion: "server",
+          appVersion: null,
+          isActive: true,
+          pairedAt: now,
+          lastSeenAt: now,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      [],
+    ]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+    },
+    services: {
+      realtimeHub: {
+        isRuntimeConnected: () => true,
+      },
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      resolveCommandTarget(
+        app as never,
+        "user-1",
+        "someone-elses-desktop",
+        "task",
+      ),
+    (error: unknown) =>
+      (error as { code?: string }).code === "invalid_target",
+  );
+});
