@@ -191,6 +191,12 @@ const taskTraceDataSchema = z.looseObject({
   phase: z.string().min(1).max(80).optional(),
   summary: z.string().min(1).max(180).optional(),
   activeStepId: z.string().min(1).max(80).optional(),
+  // AÇIK ONAY ALANI. `looseObject` olduğu için yazılmayan bir alan doğrulamadan
+  // geçer ama YAYIMLANAN şemada görünmez; istemci tarafı o zaman alanı
+  // türetmeye kalkar. Canlı sonuç (2026-08-21): mobil onay ihtiyacını adım
+  // durumlarından türetiyordu, sunucu hiçbir adımı öyle işaretlemiyordu,
+  // kullanıcıya onay düğmesi HİÇ çıkmadı. Türetme sözleşme değildir.
+  needsApproval: z.boolean().optional(),
   steps: z.array(stringRecordSchema).min(1),
 });
 const infoCardDataSchema = z.looseObject({

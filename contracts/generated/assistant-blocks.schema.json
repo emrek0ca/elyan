@@ -2236,6 +2236,9 @@
               "minLength": 1,
               "type": "string"
             },
+            "needsApproval": {
+              "type": "boolean"
+            },
             "phase": {
               "maxLength": 80,
               "minLength": 1,
@@ -7290,6 +7293,9 @@
               "minLength": 1,
               "type": "string"
             },
+            "needsApproval": {
+              "type": "boolean"
+            },
             "phase": {
               "maxLength": 80,
               "minLength": 1,
@@ -8295,7 +8301,7 @@
     "web_search": "WebSearchBlock"
   },
   "x-elyan-envelope-version": 1,
-  "x-elyan-schema-digest": "985ca3f5c3ee053f36268ca29a90a8032621e344663c842ac282bfe9877ed3e7",
+  "x-elyan-schema-digest": "11feef70934615947417a6ce8e4b49d04d754be168b954c4ee4689ca012f2b8d",
   "x-elyan-source-widget-types": [
     "mail_list",
     "mail_detail",

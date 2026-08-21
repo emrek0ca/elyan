@@ -896,7 +896,10 @@ function ensureWaitingApprovalStep(
   if (block.status !== "waiting_approval") return block;
   const steps = block.steps ?? [];
   if (steps.length === 0) return block;
-  if (steps.some((step) => step.status === "waiting_approval")) return block;
+  if (steps.some((step) => step.status === "waiting_approval")) {
+    // Adım zaten doğru; açık alanı da yaz ki mobil türetmeye mahkûm kalmasın.
+    return block.needsApproval === true ? block : { ...block, needsApproval: true };
+  }
   // Onayı hangi adım bekliyor: aktif adım → araç akışı → tamamlanmamış ilk
   // adım → son adım. Tamamlanmış bir adımı geri almaktansa gerçekten bekleyen
   // adımı işaretlemek doğrudur.
@@ -910,6 +913,7 @@ function ensureWaitingApprovalStep(
   if (!candidateId) return block;
   return {
     ...block,
+    needsApproval: true,
     activeStepId: candidateId,
     steps: steps.map((step) =>
       step.id === candidateId

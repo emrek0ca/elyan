@@ -440,6 +440,17 @@ export const elyanTaskTraceBlockSchema = z.object({
   }).passthrough().optional(),
   repairAttempts: z.number().int().min(0).max(32).optional(),
   stopReason: z.string().min(1).max(160).optional(),
+  /**
+   * Bu tur kullanıcıdan onay bekliyor mu — AÇIK alan.
+   *
+   * Mobil bunu şimdiye kadar adım durumlarından TÜRETİYORDU
+   * (`steps.contains { $0.state == .waitingApproval }`). Sunucu hiçbir adımı
+   * öyle işaretlemediği için canlıda onay düğmeleri hiç çıkmadı; kullanıcı
+   * bastığını sandı, backend'e tek bir approval isteği gelmedi ve görev 9
+   * dakika sonra iptal oldu (2026-08-21, görev 45dd0087). Türetme sözleşme
+   * değildir: sözleşme burada, açıkça yazılır.
+   */
+  needsApproval: z.boolean().optional(),
   steps: z.array(elyanTaskTraceStepSchema).min(1),
 });
 const elyanAssistantBlockBaseSchema = z.object({
