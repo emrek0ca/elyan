@@ -1,4 +1,3 @@
-import { evaluateLocalActionEvidence } from "../tasks/desktop-capability-embedding-match.js";
 import { createHash, randomUUID } from "node:crypto";
 import { startStage } from "../../lib/perf-telemetry.js";
 import type { FastifyInstance } from "fastify";
@@ -3072,38 +3071,40 @@ export async function decideCommandRoute(
     (understandingConsensus.targetSurface === "desktop" ||
       hasConcreteDesktopFallbackSignal(message, metadata));
 
-  // YETENEK UZAYI KANITI — kelime listesi değil, ölçülmüş anlamsal eşleşme.
+  // YETENEK UZAYI KANITI — GERİ ALINDI (2026-08-22). Buraya bir daha bu haliyle
+  // konulmamalı; nedeni ölçüldü.
   //
-  // Canlı arıza (2026-08-22): "Müslüm gürsesden bir şeyler çal" sohbete düştü;
-  // `play_media` yeteneği masaüstünde VARDI. Eşleştirici (aynı e5) o isteği
-  // 1.000 skor / 0.316 marjla `play_media` diye veriyordu — ama yalnız rota
-  // ZATEN masaüstü seçildikten SONRA çalıştırılıyordu. Karar verecek kanıt
-  // sistemde vardı, yönlendirme ona hiç sormuyordu.
+  // Fikir: istek yetenek uzayında tek ve net bir YEREL EYLEME oturuyorsa tur
+  // masaüstü ister. İlk ölçüm (5 cümle) fikri destekliyordu:
+  //   "Gökhan türkmen den şarkı çal"  play_media 1.000 / marj 0.600
+  //   "Bugün hava nasıl"              get_weather (yerel eylem değil) → elenir
+  //   "Bana bir şiir yaz"             marj 0.170 → elenir
   //
-  // İki şart birlikte aranır ve ikisi de ölçümle seçildi:
-  //   * eşleşen yetenek YEREL EYLEM olmalı (manifestten türetilir:
-  //     permission_gated + onay gerektiren) → "Bugün hava nasıl" (get_weather,
-  //     marj 0.695) yüksek marjına rağmen elenir, çünkü sunucu da yapar;
-  //   * marj eşiği → "Bana bir şiir yaz" turu top-1 `image_generate` (0.935)
-  //     ile gelir ama marjı 0.170, eşiğin altında kalır.
+  // GENİŞ ÖLÇÜM FİKRİ ÇÜRÜTTÜ (13 cümle, canlı ısınmış e5):
+  //   "Chrome nedir"                  → close_app 0.961 / marj 0.320  (!)
+  //   "Takvimime nasıl etkinlik eklerim" → add_calendar_event 1.000 / marj 0.285 (!)
+  //   "Serdar ortaçtan bir şeyler çal"   → play_media 0.779 / marj 0.054  (kaçırma)
+  //   "Sezen aksudan bir sarki ac"       → desktop_os.open_permission_settings (!)
   //
-  // Kullanıcının masaüstü anahtarı kapalıysa bu kanıt uygulanmaz: burada
-  // "kullanıcı bunu istedi mi" belirsizliği yok, tercih açıkça kapatılmış.
-  const semanticLocalActionEvidence =
-    hasLiveDesktopRuntime && !desktopDispatchDisabled && !isDesktopAdviceOnlyRequest(message)
-      ? await evaluateLocalActionEvidence({ query: message, logger: app.log }).catch(
-          () => null,
-        )
-      : null;
-  const semanticLocalActionRequest =
-    semanticLocalActionEvidence?.localAction === true;
+  // Yani eşleştirici SORUYU EYLEMDEN ayıramıyor: "Chrome nedir" ile "Chrome'u
+  // kapat" aynı yetenek komşuluğunda ve ilki yüksek marjla geliyor. Bu kural
+  // canlıda kalsaydı bir SORU Chrome'u kapatırdı. Mutlak skor da ayırmıyor
+  // (0.961 vs 1.000). `isDesktopAdviceOnlyRequest` regex'i de "nedir"i
+  // tanımıyor — kelime listesiyle yamamak bu projede zaten dipsiz kuyu.
+  //
+  // Doğru yer muhtemelen niyet doğrulayıcısı: "kullanıcı bunu YAPMAMI mı
+  // istiyor, hakkında mı soruyor?" ayrımı anlamsal mesafeyle değil, o soruyla
+  // çözülür. Yeniden denenirse ÖNCE bu 13 cümlelik küme ölçülmeli.
+  //
+  // `evaluateLocalActionEvidence` ve manifest-türevi yerel eylem kümesi
+  // (testleriyle birlikte) DURUYOR — ölçüm aracı olarak değerli, karar
+  // mercii olarak değil.
 
   const userWantsDesktop =
     modelRequiresDesktop ||
     failClosedDesktopFallback ||
     classifierRequiresReadyDesktop ||
     validatedLocalExecutionRequest ||
-    semanticLocalActionRequest ||
     (!desktopDispatchDisabled && explicitRuntimeCapabilityRequested);
 
   if (userWantsDesktop) {
