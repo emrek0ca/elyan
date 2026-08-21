@@ -7590,8 +7590,30 @@ export async function generateSharedBrainReply(
     // json_schema'sı dayatılınca model iki şema arasında sıkışıp hiçbir şey
     // üretemiyor (Groq `json_validate_failed`, `failed_generation: ""`).
     const machineJsonRoute = isDesktopPlanMachineJsonRoute(input.route);
+    // İÇ KONTROL-DÜZLEMİ TURU ZARF PROTOKOLÜNÜ ASLA KULLANMAZ.
+    //
+    // Semantik yönlendirici kendi rota JSON'unu döndürür; TurnEnvelope
+    // (message + tool_requests + bloklar) DEĞİL. `ELYAN_TURN_ENVELOPE_ENABLED`
+    // canlıda açık olduğu için zarf bu çağrıda da isteniyordu ve deneme
+    // listesi şu hâle geliyordu: zarf denemesi → `!visibleText` →
+    // `empty_response`, aynı zarf denemesi tekrar → `empty_response`, ancak
+    // ÜÇÜNCÜ (zarfsız) deneme başarılı. Yani her sohbet turunda iki Groq
+    // gidiş-dönüşü GARANTİLİ olarak boşa gidiyordu.
+    //
+    // Canlı kanıt (2026-08-21 16:53, "Chrome u kapat"):
+    //   16:53:36.081  fast_route retry=0 invalid_output reason=empty_response
+    //   16:53:36.572  fast_route retry=1 invalid_output reason=empty_response
+    //   16:53:37.384  fast_route            success
+    //   → `route.model_call` p50 1893ms. Aynı istek doğrudan Groq'a
+    //     atıldığında (gerçek 7KB prompt, reasoning_effort=low) gpt-oss-20b
+    //     282-417ms'de GEÇERLİ JSON dönüyor. Kayıp modelde değil, zarftaydı.
+    const controlPlaneMachineJsonTurn =
+      input.requestMetadata?.semanticRouteOnly === true ||
+      workload === "fast_route" ||
+      workload === "intent";
     const turnEnvelopeEnabled =
       !machineJsonRoute &&
+      !controlPlaneMachineJsonTurn &&
       !input.responseSchemaOverride &&
       (connectorToolsAdvertised ||
         // AÇIK yapılandırma hızlı tur kısıtını yener: `ELYAN_TURN_ENVELOPE_ENABLED`
