@@ -7,6 +7,7 @@ import type {
 } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 import type { RemoteMcpSelectionMetadata } from "../integrations/provider-registry.js";
+import { extractStructuralSlots } from "./structural-slots.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import { matchDesktopCapabilitiesSemantically } from "./desktop-capability-ontology.js";
 
@@ -85,7 +86,20 @@ export type DesktopWorkOrder = {
     };
   };
   entities: Array<{
-    type: "url" | "email" | "file_hint" | "app_hint" | "topic";
+    // Yapısal yuvalar (time/date/quoted/format/quantity) 2026-08-22'de eklendi:
+    // iş emrine giden veri tek parçaydı (`topic` = cümlenin tamamı) ve
+    // planlayıcı somut argüman üretemiyordu.
+    type:
+      | "url"
+      | "email"
+      | "file_hint"
+      | "app_hint"
+      | "topic"
+      | "time"
+      | "date"
+      | "quoted"
+      | "format"
+      | "quantity";
     value: string;
   }>;
   constraints: string[];
@@ -615,6 +629,13 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
   )) {
     const appName = match[1]?.replace(/^(?:(?:lütfen|lutfen|şimdi|simdi|bana)\s+)+/i, "").trim();
     if (appName) add("app_hint", appName);
+  }
+
+  // YAPISAL YUVALAR — dile bağlı olmayan parçalar (saat, tarih, tırnak içi ad,
+  // biçim, miktar). Planlayıcı istemine `- <tip>: <değer>` olarak girer ve
+  // somut argüman üretmesini sağlar. Tek başına hiçbir kapıyı açmaz.
+  for (const slot of extractStructuralSlots(message)) {
+    add(slot.type, slot.normalized ?? slot.value);
   }
 
   const topic = compactText(
