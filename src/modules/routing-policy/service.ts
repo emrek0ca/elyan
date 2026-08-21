@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { startStage } from "../../lib/perf-telemetry.js";
 import type { FastifyInstance } from "fastify";
 import {
   classifyIntent,
@@ -2330,6 +2331,7 @@ async function resolveTaskRouteFromModel(
   }
 
   let responseText = "";
+  const endRouteModelStage = startStage("route.model_call");
   try {
     const response = await generateSharedBrainReply(app, {
       userId: input.userId,
@@ -2350,6 +2352,8 @@ async function resolveTaskRouteFromModel(
     responseText = response.text;
   } catch {
     return { route: null, fallbackAllowed: true, failure: "model_error" };
+  } finally {
+    endRouteModelStage();
   }
 
   const parsed = parseTaskRouteFallbackResponse(responseText);
@@ -2727,6 +2731,12 @@ export async function decideCommandRoute(
   // the structured route model to decide which intent owns the turn. This is
   // the only model-first interpretation boundary; later layers consume the
   // resulting typed contract and never scan the prompt again.
+  // Both understanding hops sit on the ACCEPT path, before the first token.
+  // They were added without their own stage timers, so `chat.route_model`
+  // (1317ms p50 live) could not be split between understanding and the route
+  // model itself. Measure them separately or every latency claim here is a
+  // guess.
+  const endSemanticStage = startStage("route.understanding_semantic");
   const semanticClassification = await enhanceIntentWithTransformer(
     message,
     deterministicClassification,
@@ -2739,6 +2749,7 @@ export async function decideCommandRoute(
         deterministicClassification.primaryIntent !== "planning",
     },
   );
+  endSemanticStage();
   const semanticVerificationRequired =
     semanticClassification.requiresLocalRuntime === true ||
     semanticClassification.requiresToolUse === true ||
@@ -2746,12 +2757,15 @@ export async function decideCommandRoute(
     semanticClassification.confidence < 0.72 ||
     semanticClassification.secondaryIntents.length > 0 ||
     semanticClassification.primaryIntent === "unknown";
+  const endVerifierStage = startStage("route.understanding_verifier");
   const classification = await enhanceIntentWithGeminiFree(app, {
     userId: input.userId,
     message,
     current: semanticClassification,
     forceVerification: semanticVerificationRequired,
-  }).catch(() => semanticClassification);
+  })
+    .catch(() => semanticClassification)
+    .finally(() => endVerifierStage());
   const verifierInvoked = classification !== semanticClassification;
   const understandingConsensus = buildUnderstandingConsensus({
     message,

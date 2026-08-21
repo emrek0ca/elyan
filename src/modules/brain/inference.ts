@@ -8768,6 +8768,15 @@ export async function generateSharedBrainReply(
                 retry: retryIndex,
                 retryAfterMs: attemptFailure.retryAfterMs,
                 outcome: attemptFailure.failureClass,
+                // The failure CLASS alone is not diagnosable: `invalid_output`
+                // covers empty responses, schema rejections, reasoning dumps
+                // and missing envelopes alike. Live routing burned two Groq
+                // round trips per turn on this class and the logs could not
+                // say why. `reason` is a bounded internal code (or a truncated
+                // provider error), never prompt text.
+                reason: attemptFailure.reason,
+                status: attemptFailure.status,
+                workload,
               },
               "shared brain provider attempt failed",
             );
