@@ -1,4 +1,5 @@
 import { decideLocalExecution } from "../tasks/local-execution-decision.js";
+import type { ExecutionStep } from "../tasks/execution-step.js";
 import {
   recallRoutingEpisodes,
   summarizeRoutePrecedent,
@@ -75,6 +76,19 @@ export type TaskRoute = {
   needsPrivateDesktopData: boolean;
   needsUserApproval: boolean;
   requiredCapabilities: string[];
+  /**
+   * CİHAZ-FARKINDA ADIMLAR (Notion §4).
+   *
+   * `executionPlan` yalnız yüzey listesi taşır; adım başına cihaz taşımaz.
+   * Bu alan capability ile device kararını AYRI tutar:
+   *   capability = browser_automation   (ne yapılacak)
+   *   device     = desktop              (nerede yapılacak)
+   *
+   * Eski alan KALDIRILMADI: bu projede çalışan bir yolu yenisiyle değiştirmek
+   * defalarca regresyon üretti. Yeni şekil önce yanında yaşar, ölçülür, sonra
+   * tek kaynak olur.
+   */
+  executionSteps?: ExecutionStep[];
   semanticDesktopContract?: SemanticDesktopDispatchContract;
 };
 
