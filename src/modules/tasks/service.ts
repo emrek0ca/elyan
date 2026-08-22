@@ -51,6 +51,7 @@ import {
 import { createAuditLog } from "../audit/service.js";
 import { getUserApprovalMode } from "../approval-policy/service.js";
 import { deriveTaskFailureSignature } from "./task-failure-analytics.js";
+import { settleAutomationTask } from "../automations/service.js";
 import {
   extractAttachmentMetadataCarrier,
   extractAttachmentCandidatesFromBrainContext,
@@ -7006,6 +7007,19 @@ async function completeServerBrainTask(
       );
     });
   }
+  if (finalTaskStatus === "completed") {
+    void settleAutomationTask(app, {
+      userId: updatedTask.userId,
+      task: {
+        id: updatedTask.id,
+        status: finalTaskStatus,
+        payload: updatedTask.payload,
+        result: updatedTask.result,
+        summary: updatedTask.summary,
+        error: updatedTask.error,
+      },
+    }).catch(() => undefined);
+  }
   void recordBlockQualityLearning(app, {
     userId: updatedTask.userId,
     accountId: updatedTask.userId,
@@ -8982,6 +8996,17 @@ async function finalizeSharedBrainChatFailure(
     updatedTask: failedTask,
     message: fallbackMessage,
   });
+  void settleAutomationTask(app, {
+    userId: failedTask.userId,
+    task: {
+      id: failedTask.id,
+      status: failedTask.status,
+      payload: failedTask.payload,
+      result: failedTask.result,
+      summary: failedTask.summary,
+      error: failedTask.error,
+    },
+  }).catch(() => undefined);
   await releaseMediaInputsFromMetadata(
     app,
     input.userId,
@@ -9654,6 +9679,17 @@ export async function failQueuedDesktopPlanTask(
     updatedTask: failedTask,
     message,
   });
+  void settleAutomationTask(app, {
+    userId: failedTask.userId,
+    task: {
+      id: failedTask.id,
+      status: failedTask.status,
+      payload: failedTask.payload,
+      result: failedTask.result,
+      summary: failedTask.summary,
+      error: failedTask.error,
+    },
+  }).catch(() => undefined);
   return failedTask;
 }
 
@@ -13210,6 +13246,18 @@ export async function updateTaskFromRuntime(
         capabilities: failureSignature.capabilities,
       }).catch(() => undefined);
     }
+
+    void settleAutomationTask(app, {
+      userId: ownedTask.userId,
+      task: {
+        id: ownedTask.id,
+        status: input.status,
+        payload,
+        result: runtimeResult,
+        summary: input.summary ?? input.message,
+        error: input.error,
+      },
+    }).catch(() => undefined);
   }
 
   await publishTaskEvent(app, updatedTask, "task.updated", {

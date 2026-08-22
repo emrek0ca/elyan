@@ -47,6 +47,10 @@ import {
 import { generateSharedBrainReply } from "./inference.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
 import { readVerifiedQuantumBenchmark } from "./quantum-benchmark.js";
+import {
+  processDueAutomations,
+  type AutomationSweepResult,
+} from "../automations/runner.js";
 
 type TrainingJobRow = typeof trainingJobs.$inferSelect;
 type DatasetManifestRow = Pick<
@@ -1254,6 +1258,16 @@ export async function runProactiveScheduler(
       }
     } catch (error) {
       app.log.error?.({ error }, "proactive scheduler iteration failed");
+    }
+
+    try {
+      const automations: AutomationSweepResult = await processDueAutomations(app);
+      if (automations.processed > 0) {
+        app.log.info?.(automations, "automation scheduler dispatched tasks");
+        processed = true;
+      }
+    } catch (error) {
+      app.log.error?.({ error }, "automation scheduler iteration failed");
     }
 
     // The night sweep is intentionally in the same loop but independently

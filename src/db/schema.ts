@@ -479,6 +479,58 @@ export const tasks = pgTable(
   }),
 );
 
+/**
+ * User-approved repetitions of a previously fulfilled task.
+ *
+ * The prompt and capability list are copied at creation time so a later
+ * cleanup of the source task does not silently change what will run. The
+ * source task reference is still useful for audit, but is intentionally
+ * nullable because task retention may remove that historical row.
+ */
+export const taskAutomations = pgTable(
+  "task_automations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sourceTaskId: uuid("source_task_id").references(() => tasks.id, {
+      onDelete: "set null",
+    }),
+    targetDeviceId: uuid("target_device_id").references(() => devices.id, {
+      onDelete: "set null",
+    }),
+    title: varchar("title", { length: 200 }).notNull(),
+    prompt: text("prompt").notNull(),
+    requestedCapabilities: jsonb("requested_capabilities")
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    intervalMinutes: integer("interval_minutes").notNull(),
+    timezone: varchar("timezone", { length: 80 }).notNull().default("Europe/Istanbul"),
+    status: varchar("status", { length: 24 }).notNull().default("active"),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    lastTaskId: uuid("last_task_id").references(() => tasks.id, {
+      onDelete: "set null",
+    }),
+    lastOutcome: varchar("last_outcome", { length: 32 }),
+    lastError: varchar("last_error", { length: 240 }),
+    failureCount: integer("failure_count").notNull().default(0),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userStatusNextRunIdx: index("task_automations_user_status_next_run_idx").on(
+      table.userId,
+      table.status,
+      table.nextRunAt,
+    ),
+    sourceTaskIdx: index("task_automations_source_task_idx").on(table.sourceTaskId),
+    lastTaskIdx: index("task_automations_last_task_idx").on(table.lastTaskId),
+  }),
+);
+
 export const taskEvents = pgTable(
   "task_events",
   {

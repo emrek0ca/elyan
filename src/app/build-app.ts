@@ -50,6 +50,7 @@ import { mcpRoutes } from "../modules/mcp/routes.js";
 import { adminRoutes } from "../modules/admin/routes.js";
 import { trainPanelRoutes } from "../modules/admin/train-panel.js";
 import { webRoutes } from "../modules/web/routes.js";
+import { automationRoutes } from "../modules/automations/routes.js";
 import { ensureTaskDispatchWorker } from "../modules/tasks/dispatch-queue.js";
 import { warmDesktopCapabilityVectors } from "../modules/tasks/desktop-capability-embedding-match.js";
 import { primeSemanticComputeWorker } from "../modules/brain/semantic-compute-client.js";
@@ -520,6 +521,7 @@ export async function buildApp(envInput?: AppEnv) {
   await app.register(mcpRoutes, { prefix: "/v1/mcp" });
   await app.register(adminRoutes, { prefix: "/v1/admin" });
   await app.register(webRoutes, { prefix: "/v1/web" });
+  await app.register(automationRoutes, { prefix: "/v1/automations" });
   await app.register(trainPanelRoutes);
 
   reportDisabledCapabilities(app);
