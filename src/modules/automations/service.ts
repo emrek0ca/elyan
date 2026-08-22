@@ -118,6 +118,14 @@ export function nextAutomationRunAt(input: {
   return next;
 }
 
+/** A fast child task may settle before its dispatch row is annotated. */
+export function canSettleAutomationTask(input: {
+  lastTaskId: string | null;
+  taskId: string;
+}): boolean {
+  return input.lastTaskId == null || input.lastTaskId === input.taskId;
+}
+
 function assertTimezone(timezone: string): string {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format();
@@ -335,20 +343,34 @@ export async function markAutomationDispatched(
     now,
     intervalMinutes: input.intervalMinutes,
   });
+  const currentRows = await app.db
+    .select({
+      status: taskAutomations.status,
+      lastOutcome: taskAutomations.lastOutcome,
+      lastError: taskAutomations.lastError,
+      nextRunAt: taskAutomations.nextRunAt,
+    })
+    .from(taskAutomations)
+    .where(eq(taskAutomations.id, input.automationId))
+    .limit(1);
+  const current = currentRows[0];
+  if (!current || current.status === "canceled") return;
+  const alreadySettled =
+    current.lastOutcome != null && current.lastOutcome !== "dispatched";
   await app.db
     .update(taskAutomations)
     .set({
-      status: "active",
-      nextRunAt,
+      status: current.status === "running" ? "active" : current.status,
+      nextRunAt: current.status === "running" ? nextRunAt : current.nextRunAt,
       lastRunAt: now,
       lastTaskId: input.taskId,
-      lastOutcome: "dispatched",
-      lastError: null,
+      lastOutcome: alreadySettled ? current.lastOutcome : "dispatched",
+      lastError: alreadySettled ? current.lastError : null,
       failureCount: 0,
       leaseUntil: null,
       updatedAt: now,
     })
-    .where(and(eq(taskAutomations.id, input.automationId), eq(taskAutomations.status, "running")));
+    .where(eq(taskAutomations.id, input.automationId));
 }
 
 export async function markAutomationDispatchFailed(
@@ -390,11 +412,13 @@ export async function settleAutomationTask(
     .where(and(
       eq(taskAutomations.id, automationId),
       eq(taskAutomations.userId, input.userId),
-      eq(taskAutomations.lastTaskId, input.task.id),
     ))
     .limit(1);
   const automation = rows[0];
-  if (!automation) return;
+  if (!automation || !canSettleAutomationTask({
+    lastTaskId: automation.lastTaskId,
+    taskId: input.task.id,
+  })) return;
   const assessment = assessTaskOutcome({
     status: input.task.status,
     request: readPrompt(payload),

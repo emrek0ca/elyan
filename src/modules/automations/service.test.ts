@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canSettleAutomationTask,
   isAutomationCapabilitySafe,
   nextAutomationRunAt,
 } from "./service.js";
@@ -26,6 +27,21 @@ test("kaçırılmış otomasyon tikleri tek sonraki gelecekteki çalışmaya ile
     intervalMinutes: 60,
   });
   assert.equal(next.toISOString(), "2026-08-23T11:00:00.000Z");
+});
+
+test("çok hızlı child task dispatch satırından önce settle olursa kaybolmaz", () => {
+  assert.equal(
+    canSettleAutomationTask({ lastTaskId: null, taskId: "child-1" }),
+    true,
+  );
+  assert.equal(
+    canSettleAutomationTask({ lastTaskId: "child-1", taskId: "child-1" }),
+    true,
+  );
+  assert.equal(
+    canSettleAutomationTask({ lastTaskId: "child-2", taskId: "child-1" }),
+    false,
+  );
 });
 
 test("otomasyon sözleşmesi yalnız desteklenen aralıkları ve güvenli başlangıcı parse eder", () => {
