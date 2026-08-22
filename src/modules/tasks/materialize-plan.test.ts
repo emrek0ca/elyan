@@ -373,16 +373,25 @@ test("desktop materialization keeps full catalog awareness but expands only requ
     "run_skill",
   ]);
 
+  // GEREKLİ yetenek uzun sözleşmeyle açılır.
   const documentLine = prompt
     .split("\n")
     .find((line) => line.startsWith("- document_write:"));
-  const spreadsheetLine = prompt
-    .split("\n")
-    .find((line) => line.startsWith("- spreadsheet_write:"));
   assert.match(documentLine ?? "", /\| input:/);
-  assert.ok(spreadsheetLine);
-  assert.doesNotMatch(spreadsheetLine ?? "", /\| input:/);
-  assert.match(prompt, /open_app:/);
+
+  // GEREKLİ OLMAYAN yetenek katalogda DURUR ama sıkışık biçimde.
+  //
+  // Eskiden bu satır da "- spreadsheet_write:" prose biçimindeydi ve test onu
+  // arıyordu; katalog sıkışık JSON'a geçince test sessizce kırıldı. Testin
+  // niyeti (tam katalog farkındalığı + yalnız gerekli olanın açılması) geçerli,
+  // yalnız biçim eskimişti.
+  const spreadsheetEntry = prompt
+    .split("\n")
+    .find((line) => line.includes('{"id":"spreadsheet_write"'));
+  assert.ok(spreadsheetEntry, "gerekli olmayan yetenek katalogdan düşmüş");
+  assert.doesNotMatch(spreadsheetEntry ?? "", /\| input:/);
+  assert.match(prompt, /spreadsheet_write/);
+  assert.match(prompt, /open_app/);
   assert.ok(prompt.length < 50_000);
 });
 

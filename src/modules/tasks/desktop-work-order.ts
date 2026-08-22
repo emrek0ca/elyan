@@ -1,6 +1,6 @@
 import { failureTaxonomyEntries } from "../../config/failure-taxonomy.js";
 import { createHash } from "node:crypto";
-import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
+import { trStemPattern, unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 import type {
   CommandRouteDecision,
   SemanticDesktopDispatchContract,
@@ -443,11 +443,58 @@ export function parseDirectFolderCreateCommand(
   return { folderName, locationHint };
 }
 
+/**
+ * TÜRKÇE EK TOLERANSI — PLANLAMA SİNYALLERİ.
+ *
+ * Bu dosyadaki niyet kalıpları `\b` ile kök arıyordu. Türkçe eklemeli bir dil
+ * olduğu için ASCII `\b` ekli biçimlerde SESSİZCE ölüyor. Ölçüldü:
+ *
+ *   /\b(?:indir|kaydet|download|save)\b/  ✗ "kaydeder misin", "indirir misin"
+ *   /\b(...|dosya|belge|rapor|sunum)\b/   ✗ "dosyayı kaydet", "raporu hazırla"
+ *   /\b(terminal|komut|shell)\b/          ✗ "terminali kapat", "şu komutu koştur"
+ *   /\b(ekran|...|uygulama|program)\b/    ✗ "uygulamayı kapat", "ekranda ne var"
+ *
+ * `unicodeWordPattern` bu sorunu ÇÖZMEZ — o yalnız sınırı Unicode'a taşır;
+ * "raporu"da "u" yine harf olduğu için sınır oluşmaz. Ek toleransı için tek
+ * doğru araç `trStemPattern`.
+ *
+ * Neden önemli: bu sinyaller beklenen ÇIKTIYI (artefakt/dosya) ve görev türünü
+ * belirliyor. "raporu hazırla" isteğinde dosya çıktısı beklenmiyorsa plan
+ * kapsama doğrulaması da çalışmıyor — kullanıcının yaşadığı "yaptım ama dosya
+ * yok" arızasının kaynağı bu.
+ *
+ * `exclude` listeleri ölçülerek eklendi: ek toleransı kontrolsüz bırakılırsa
+ * "indir" kökü "indirim"i, "not" kökü "noter"i, "yazı" kökü "yazılım"ı yakalar.
+ */
+const SAVE_INTENT_PATTERN = trStemPattern(
+  ["indir", "kaydet", "kayded", "download", "save"],
+  { exclude: ["indirim", "indirimi", "indirimli", "indirime", "indirgeme", "indirgemeli"] },
+);
+const TERMINAL_CONTEXT_PATTERN = trStemPattern(["terminal", "komut", "shell"], {
+  exclude: ["komutan\\p{L}*", "komuta"],
+});
+const SCREEN_OR_APP_PATTERN = trStemPattern(
+  ["ekran", "screenshot", "uygulama", "program"],
+  { exclude: ["ekranı kapat"] },
+);
+const PRESENTATION_PATTERN = trStemPattern([
+  "pptx",
+  "powerpoint",
+  "sunum",
+  "slayt",
+  "slide",
+  "presentation",
+]);
+const DOCUMENT_NOUN_PATTERN = trStemPattern(
+  ["pdf", "docx", "xlsx", "csv", "svg", "dosya", "belge", "rapor", "sunum", "slayt", "presentation"],
+  { exclude: ["belgesel", "belgeseli", "belgeselleri"] },
+);
+
 export function parseDirectImageFetchCommand(message: string): DirectImageFetchCommand | null {
   const compact = compactText(message, 400);
   const normalized = compact.toLocaleLowerCase("tr-TR");
   const hasImage = unicodeWordPattern(String.raw`\b(?:resim|resmi|resmini|görsel|gorsel|görseli|gorseli|foto|fotoğraf|fotograf|image|picture)\b`, "i").test(normalized);
-  const hasSave = /\b(?:indir|kaydet|download|save)\b/iu.test(normalized);
+  const hasSave = SAVE_INTENT_PATTERN.test(normalized);
   const hasGeneration = unicodeWordPattern(String.raw`\b(?:çiz|ciz|oluştur|olustur|üret|uret|generate|tasarla|yap)\b`, "i").test(normalized);
   if (!hasImage || !hasSave || hasGeneration) return null;
 
@@ -748,7 +795,7 @@ function inferLocalContext(
   if (unicodeWordPattern(String.raw`\b(chrome|safari|browser|tarayıcı|tarayici)\b`, "i").test(normalized) || capabilities.includes("browser_control")) {
     contexts.add("browser");
   }
-  if (/\b(terminal|komut|shell)\b/i.test(normalized) || capabilities.includes("shell_run")) {
+  if (TERMINAL_CONTEXT_PATTERN.test(normalized) || capabilities.includes("shell_run")) {
     contexts.add("terminal");
   }
   if (capabilities.includes("email_send") || capabilities.includes("email_draft")) {
@@ -807,13 +854,13 @@ function inferKind(routeDecision: CommandRouteDecision, message: string): string
   ) return "image_edit";
   if (unicodeWordPattern(String.raw`\b(görsel|gorsel|resim|image|illustration|poster|afiş|afis)\b`, "i").test(normalized)
     && unicodeWordPattern(String.raw`\b(üret\p{L}*|uret\p{L}*|oluştur\p{L}*|olustur\p{L}*|çiz\p{L}*|ciz\p{L}*|generate|create|draw)\b`, "i").test(normalized)) return "image_generate";
-  if (/\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)) return "presentation_task";
+  if (PRESENTATION_PATTERN.test(normalized)) return "presentation_task";
   if (routeDecision.capabilities.includes("email_send")) return "email_send";
   if (routeDecision.capabilities.includes("email_draft")) return "email_draft";
   if (unicodeWordPattern(String.raw`\b(pdf|docx|xlsx|excel|belge|doküman|dokuman|rapor)\b`, "i").test(normalized)) return "document_task";
   if (/\b(browser|chrome|safari|web|site|url|link)\b/i.test(normalized)) return "browser_task";
-  if (/\b(terminal|komut|shell)\b/i.test(normalized)) return "terminal_task";
-  if (/\b(ekran|screenshot|uygulama|program|app)\b/i.test(normalized)) return "computer_task";
+  if (TERMINAL_CONTEXT_PATTERN.test(normalized)) return "terminal_task";
+  if (SCREEN_OR_APP_PATTERN.test(normalized)) return "computer_task";
   return "desktop_cowork";
 }
 
@@ -997,7 +1044,7 @@ function inferCapabilities(
   const analysisRequested = unicodeWordPattern(String.raw`\b(?:analiz\p{L}*|yorumla\p{L}*|değerlendir\p{L}*|degerlendir\p{L}*|incele\p{L}*|rapor\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*)\b`, "i").test(normalized);
   const calculationRequested = unicodeWordPattern(String.raw`\b(?:hesapla\p{L}*|hesap\p{L}*|kdv|vergi|yüzde|yuzde|%)\b`, "i").test(normalized)
     && /\d/u.test(normalized);
-  const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
+  const presentationRequested = PRESENTATION_PATTERN.test(normalized)
     && unicodeWordPattern(String.raw`\b(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yap\p{L}*|çevir\p{L}*|cevir\p{L}*|kaydet\p{L}*|save|create|prepare)\b`, "i").test(normalized);
   const directAppCommand = parseDirectDesktopAppCommand(message);
   const directImageFetch = parseDirectImageFetchCommand(message);
@@ -1046,6 +1093,12 @@ function inferCapabilities(
   //
   // Klasör isteğinin kendi tanıyıcısı var; ortada belge nesnesi de anılmadıysa
   // yazıcı tahmininin hiçbir dayanağı yok.
+  // BURADA EK TOLERANSI KASITLI OLARAK YOK.
+  //
+  // Kontrol NEGATİF: "içinde belge geçmiyorsa yalnız klasör isteği". Ek
+  // toleransı eklenirse "masaüstünde rapor klasörü oluştur" isteğinde "rapor"
+  // eşleşir, `folderOnlyRequest` yanlışlıkla false olur ve klasör oluşturma
+  // yolu kapanır. Negatif kapılarda geniş eşleşme, dar eşleşmeden PAHALIDIR.
   const folderOnlyRequest =
     parseDirectFolderCreateCommand(message) !== null &&
     !unicodeWordPattern(
@@ -1078,7 +1131,7 @@ function inferCapabilities(
   ) {
     capabilities.add("browser_control");
   }
-  if (/\b(terminal|komut|shell)\b/i.test(normalized)) capabilities.add("shell_run");
+  if (TERMINAL_CONTEXT_PATTERN.test(normalized)) capabilities.add("shell_run");
   if (unicodeWordPattern(String.raw`\b(ekran|screenshot|görüntü|goruntu)\b`, "i").test(normalized)) capabilities.add("desktop_operator.observe_screen");
   return [...capabilities].slice(0, 16);
 }
@@ -1109,7 +1162,7 @@ function inferExpectedOutputs(
     addOutput({ kind: "artifact", format: "image", required: true });
     addOutput({ kind: "file_update", format: "state_readback", required: true });
   }
-  const presentationRequested = /\b(?:pptx|powerpoint|sunum|slayt|slide|presentation)\b/iu.test(normalized)
+  const presentationRequested = PRESENTATION_PATTERN.test(normalized)
     && unicodeWordPattern(String.raw`\b(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yap\p{L}*|çevir\p{L}*|cevir\p{L}*|kaydet\p{L}*|save|create|prepare)\b`, "i").test(normalized);
   if (presentationRequested) {
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
@@ -1130,7 +1183,7 @@ function inferExpectedOutputs(
     ].includes(capability),
   );
   const explicitArtifactCreation =
-    /\b(pdf|docx|xlsx|pptx|csv|svg|dosya|belge|rapor|sunum|slayt|presentation)\b/i.test(normalized) &&
+    DOCUMENT_NOUN_PATTERN.test(normalized) &&
     unicodeWordPattern(String.raw`\b(oluştur|olustur|hazırla|hazirla|dönüştür|donustur|export|dışa aktar|disa aktar|kaydet|yap)\b`, "i").test(normalized);
   // Bir TAHMİN, zorunlu çıktı beyanı üretemez.
   //
