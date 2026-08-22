@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   WRITER_CONTENT_MIN_WORDS,
@@ -95,4 +96,38 @@ test("boş yazıcı adımı da eksik sayılır", () => {
 
 test("canvas_write da düzyazı yazıcısıdır", () => {
   assert.ok(findWriterContentGap(step({ capability: "canvas_write", args: { prompt: "kısa" } })));
+});
+
+// ---------------------------------------------------------------------------
+// SESSİZ DÜŞÜŞ YASAK — kaynak düzeyi kilit.
+//
+// Bu katman fail-open'dı: gövde üretimi patlarsa plan olduğu gibi devam ediyor,
+// masaüstü yazıcıya verilen kısa brief'i dosyaya AYNEN yazıyordu. Kullanıcı
+// "DOCX oluşturuldu" mesajı ve içi konu tarifi olan bir dosya alıyordu —
+// üstelik doğrulama da geçiyordu, çünkü kontroller yalnız "dosya var mı"
+// diye soruyor. Canlı kanıt: 907dbd2d (21 kelime), b2845b50 (42 kelime).
+//
+// `fillWriterContent` gerçek model çağrısı yaptığı için davranışsal test
+// ağ/zaman aşımına takılıyor; kilit kaynak düzeyinde kuruluyor.
+// ---------------------------------------------------------------------------
+
+test("üretilemeyen gövde bildirilir ve plan yayınlanmaz", () => {
+  const writer = readFileSync(
+    new URL("./writer-content.ts", import.meta.url).pathname.replace(/\/dist\//, "/src/"),
+    "utf8",
+  );
+  assert.ok(writer.includes("unresolved: WriterContentGap[]"), "unresolved bildirilmiyor");
+
+  const materialize = readFileSync(
+    new URL("./materialize-plan.ts", import.meta.url).pathname.replace(/\/dist\//, "/src/"),
+    "utf8",
+  );
+  const guard = materialize.indexOf("if (writerContent.unresolved.length > 0)");
+  assert.ok(guard > -1, "materializer unresolved'ı okumuyor");
+  const body = materialize.slice(guard, guard + 700);
+  assert.ok(body.includes("return false"), "plan yayınlanmaya devam ediyor");
+
+  // Plan, adımlar yayınlanmadan ÖNCE tutulmalı: önce kapı, sonra cache.
+  const cache = materialize.indexOf("storeDesktopPlanCache", guard);
+  assert.ok(cache > guard, "kapı plan cache'inden SONRA geliyor");
 });

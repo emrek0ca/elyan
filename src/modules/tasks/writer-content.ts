@@ -241,13 +241,31 @@ export async function fillWriterContent(input: {
   steps: DesktopWorkOrderStep[];
   userId: string;
   taskId: string;
-}): Promise<{ steps: DesktopWorkOrderStep[]; filled: number }> {
+}): Promise<{
+  steps: DesktopWorkOrderStep[];
+  filled: number;
+  /**
+   * Gövdesi ÜRETİLEMEYEN yazıcı adımları.
+   *
+   * SESSİZ DÜŞÜŞ YASAK. Eskiden bu katman fail-open'dı: üretim patlarsa plan
+   * olduğu gibi devam ediyor, masaüstü de yazıcıya verilen kısa brief'i
+   * dosyaya AYNEN yazıyordu. Kullanıcı "DOCX oluşturuldu" mesajı ve içi konu
+   * tarifi olan bir dosya alıyordu — üstelik doğrulama da geçiyordu, çünkü
+   * kontroller yalnız "dosya var mı" diye soruyor.
+   *
+   * Canlı kanıt: görev 907dbd2d (21 kelime), b2845b50 (42 kelime).
+   *
+   * Çağıran bu listeyi görünce planı YAYINLAMAMALI. Yarım iş, yapılmamış
+   * işten daha kötüdür: kullanıcı yanlış bilgilendirilir.
+   */
+  unresolved: WriterContentGap[];
+}> {
   const gaps = input.steps
     .map((step) => ({ step, gap: findWriterContentGap(step) }))
     .filter((entry): entry is { step: DesktopWorkOrderStep; gap: WriterContentGap } =>
       entry.gap !== null,
     );
-  if (gaps.length === 0) return { steps: input.steps, filled: 0 };
+  if (gaps.length === 0) return { steps: input.steps, filled: 0, unresolved: [] };
 
   // EN HIZLI VE EN DOĞRU YOL — hangisi olduğu ÖLÇÜLEREK seçilir.
   //
@@ -327,11 +345,19 @@ export async function fillWriterContent(input: {
         generatedWords: generated.get(entry.gap.stepId)?.words ?? 0,
       })),
       threshold: WRITER_CONTENT_MIN_WORDS,
+      unresolved: gaps
+        .filter((entry) => !generated.has(entry.gap.stepId))
+        .map((entry) => entry.gap.stepId),
     },
     "writer content filled",
   );
 
-  if (generated.size === 0) return { steps: input.steps, filled: 0 };
+  const unresolved = gaps
+    .filter((entry) => !generated.has(entry.gap.stepId))
+    .map((entry) => entry.gap);
+  if (generated.size === 0) {
+    return { steps: input.steps, filled: 0, unresolved };
+  }
   const steps = input.steps.map((step) => {
     const produced = generated.get(step.id);
     if (!produced) return step;
@@ -358,5 +384,5 @@ export async function fillWriterContent(input: {
       },
     };
   });
-  return { steps, filled: generated.size };
+  return { steps, filled: generated.size, unresolved };
 }

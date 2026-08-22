@@ -2536,6 +2536,35 @@ export async function maybeMaterializeDesktopPlan(
       });
       steps = writerContent.steps;
 
+      // SESSİZ DÜŞÜŞ YASAK.
+      //
+      // Gövde üretilemediyse plan YAYINLANMAZ. Eskiden fail-open'dı: üretim
+      // patlarsa plan olduğu gibi gidiyor, masaüstü yazıcıya verilen kısa
+      // brief'i dosyaya AYNEN yazıyordu ve kullanıcı "DOCX oluşturuldu"
+      // mesajıyla içi konu tarifi olan bir dosya alıyordu. Doğrulama da
+      // geçiyordu, çünkü kontroller yalnız "dosya var mı" diye soruyor.
+      //
+      // Canlı kanıt: 907dbd2d (21 kelimelik brief), b2845b50 (42 kelime).
+      //
+      // `false` dönmek görevi ANINDA öldürmez: kuyruk materyalizasyonu
+      // yeniden dener (geçici sağlayıcı hatası ikinci denemede geçebilir) ve
+      // ancak deneme hakkı bitince görev açık bir mesajla başarısız olur.
+      // Yarım iş, yapılmamış işten kötüdür — kullanıcı yanlış bilgilendirilir.
+      if (writerContent.unresolved.length > 0) {
+        app.log.warn(
+          {
+            taskId: task.id,
+            unresolvedSteps: writerContent.unresolved.map((gap) => ({
+              stepId: gap.stepId,
+              capability: gap.capability,
+              briefWords: gap.words,
+            })),
+          },
+          "desktop plan withheld: writer body could not be generated",
+        );
+        return false;
+      }
+
       const planCache = await storeDesktopPlanCache({
         app,
         workOrder,
