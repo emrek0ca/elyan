@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { recordRoutingEpisode } from "../routing-policy/episodic-decisions.js";
 import { assessTaskOutcome } from "../tasks/outcome-verdict.js";
+import { recordStepOutcomes } from "../tasks/step-outcome-ledger.js";
 import type { FastifyInstance } from "fastify";
 import { chatMessages, chatSessions, tasks } from "../../db/schema.js";
 import type { TaskStatus } from "../../contracts/domain.js";
@@ -694,6 +695,14 @@ function readTaskPrompt(task: typeof tasks.$inferSelect): string {
   return prompt.trim() || String(task.title ?? "").trim();
 }
 
+/** Görev türü — araç başarısını bağlamıyla birlikte saklamak için. */
+function readTaskGoalKind(task: typeof tasks.$inferSelect): string {
+  const payload = (task.payload ?? {}) as Record<string, unknown>;
+  const workOrder = (payload.desktopWorkOrder ?? {}) as Record<string, unknown>;
+  const goal = (workOrder.goal ?? {}) as Record<string, unknown>;
+  return typeof goal.kind === "string" && goal.kind ? goal.kind : "unknown";
+}
+
 /** Sonuçtaki kullanıcıya görünen özet — netleştirme sorusu buradan yakalanır. */
 function readResultSummary(task: typeof tasks.$inferSelect): string {
   const result = (task.result ?? {}) as Record<string, unknown>;
@@ -773,6 +782,23 @@ export async function syncChatTaskLifecycle(
       },
       "task outcome assessed",
     );
+    // ADIM DÜZEYİ DEFTER — "hangi aracı ne zaman kullanmalı" ancak buradan
+    // öğrenilebilir. Görev düzeyi epizot bu soruyu cevaplayamaz.
+    void recordStepOutcomes(app, {
+      userId: input.updatedTask.userId,
+      taskId: input.updatedTask.id,
+      route: readTaskOperationalRoute(input.updatedTask),
+      device: input.updatedTask.targetDeviceId ? "desktop" : "server",
+      intentKind: readTaskGoalKind(input.updatedTask),
+      assessment,
+      result: input.updatedTask.result,
+      latencyMs:
+        input.updatedTask.completedAt && input.updatedTask.createdAt
+          ? new Date(input.updatedTask.completedAt).getTime() -
+            new Date(input.updatedTask.createdAt).getTime()
+          : undefined,
+    }).catch(() => 0);
+
     void recordRoutingEpisode(app, {
       userId: input.updatedTask.userId,
       taskId: input.updatedTask.id,
