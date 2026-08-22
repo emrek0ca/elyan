@@ -1,4 +1,5 @@
 import { decideLocalExecution } from "../tasks/local-execution-decision.js";
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 import { createHash, randomUUID } from "node:crypto";
 import { startStage } from "../../lib/perf-telemetry.js";
 import type { FastifyInstance } from "fastify";
@@ -428,20 +429,82 @@ async function reserveModelRouteAdmission(
 }
 
 const EMAIL_ADDRESS_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+/**
+ * TÜRKÇE EK TOLERANSI — YÖNLENDİRME SİNYALLERİ.
+ *
+ * Bu listeler `\b` ile kök arıyordu. Türkçe eklemeli olduğu için ASCII `\b`
+ * ekli biçimlerde eşleşmiyor ve kural SESSİZCE ölüyor. Üretim listeleriyle
+ * ölçüldü (2026-08-22):
+ *
+ *   EMAIL_SIDE_EFFECT : 1/5  ✗ "maili gönder", "e-postayı yolla", "epostayı at"
+ *   EMAIL_DRAFT       : 0/3  ✗ "maile taslak hazırla", "e-postayı yazsana"
+ *   LOCAL_FILE_DESTRUCTIVE: 2/5 ✗ "dosyayı sil", "şu dosyayı güncelle"
+ *   LOCAL_PRIVATE     : 4/9  ✗ "terminali aç", "takvimimi göster", "ajandama bak"
+ *
+ * Sonuç yön olarak AZ-ALGILAMA: en doğal Türkçe ifadelerde masaüstü niyeti ve
+ * yan etki sinyali görülmüyor, planlayıcıya yetenek ipucu gitmiyor.
+ *
+ * `exclude` listeleri ölçülerek eklendi; ek toleransı kontrolsüz bırakılırsa
+ * "sil" kökü "silah"ı, "belge" kökü "belgesel"i, "posta" kökü "postane"yi yakalar.
+ */
+const stemOf = (stems: string[], exclude?: string[]) =>
+  trStemPattern(stems, exclude && exclude.length > 0 ? { exclude } : {});
+
+/** `A ... B` sırası arayan iki taraflı kalıp. */
+const stemSequence = (left: RegExp, right: RegExp) =>
+  new RegExp(`${left.source}.*${right.source}`, "iu");
+
+const MAIL_NOUN_STEMS = stemOf(
+  ["mail", "email", "e-posta", "eposta", "e posta", "posta"],
+  ["postane", "postanesi", "postacı", "postaci", "postalama"],
+);
+const SEND_VERB_STEMS = stemOf(["gönder", "gonder", "yolla", "at", "send", "ilet"]);
+const DRAFT_VERB_STEMS = stemOf(
+  ["taslak", "taslağ", "taslag", "hazırla", "hazirla", "yaz", "compose", "draft"],
+  ["yazılım", "yazilim", "yazılımcı", "yazilimci", "yazık", "yazik", "yazgı", "yazgi"],
+);
+const FILE_NOUN_STEMS = stemOf(
+  ["dosya", "belge", "rapor", "klasör", "klasor", "workspace", "folder", "path", "file"],
+  ["belgesel", "belgeseli", "belgeselleri"],
+);
+const DESTRUCTIVE_VERB_STEMS = stemOf(
+  ["sil", "delete", "overwrite", "append", "güncelle", "guncelle", "üzerine yaz", "uzerine yaz", "üstüne yaz", "ustune yaz"],
+  ["silah", "silahı", "silahlı", "silik", "silindir", "silsile", "silüet", "siluet"],
+);
+const PRIVATE_SURFACE_STEMS = stemOf([
+  "takvim",
+  "calendar",
+  "ajanda",
+  "hatırlatıcı",
+  "hatirlatici",
+  "reminder",
+  "screenshot",
+  "ekran",
+  "indirilenler",
+  "downloads",
+  "download",
+  "desktop",
+  "terminal",
+  "shell",
+  "browser",
+  "computer",
+  "klasör",
+  "klasor",
+  "folder",
+]);
+
 const EMAIL_SIDE_EFFECT_PATTERNS = [
-  /\b(mail|email|e-?posta)\b.*\b(gönder|gonder|yolla|at|send)\b/i,
-  /\b(gönder|gonder|yolla|at|send)\b.*\b(mail|email|e-?posta)\b/i,
-  /\bmail gönder\b/i,
-  /\bemail gönder\b/i,
+  stemSequence(MAIL_NOUN_STEMS, SEND_VERB_STEMS),
+  stemSequence(SEND_VERB_STEMS, MAIL_NOUN_STEMS),
 ];
 const EMAIL_DRAFT_PATTERNS = [
-  /\b(mail|email|e-?posta)\b.*\b(taslak|taslağı|taslagi|hazırla|hazirla|yaz|compose|draft)\b/i,
-  /\b(taslak|taslağı|taslagi|hazırla|hazirla|yaz|compose|draft)\b.*\b(mail|email|e-?posta)\b/i,
+  stemSequence(MAIL_NOUN_STEMS, DRAFT_VERB_STEMS),
+  stemSequence(DRAFT_VERB_STEMS, MAIL_NOUN_STEMS),
 ];
 const LOCAL_PRIVATE_PATTERNS = [
   /\b(downloads?|indirilenler|desktop|klasör|klasor|folder|workspace|local file|yerel dosya|file system|dosya sistemi|path)\b/i,
-  /\b(takvim|calendar|ajanda|hatırlatıcı|reminder|ekran görüntüsü|screenshot|ekran)\b/i,
-  /\b(open_app|browser|computer|terminal|shell)\b/i,
+  PRIVATE_SURFACE_STEMS,
+  /\b(open_app)\b/i,
   /(?:masaüst|masaust|bilgisayar|ekran|pencere)[\p{L}'’]*/iu,
   /\b(bilgisayar(?:ım|im|ımda|imde|umda|unda)?|son çalıştığımız belge|son calistigimiz belge|masaüstündeki dosya|masaustundeki dosya|indirilenlerdeki dosya|indirilenlerdeki rapor)\b/i,
   /\b(masaüstü|masaustu|desktop)\b.*\b(dosya|belge|rapor|klasör|klasor)\b/i,
@@ -449,8 +512,8 @@ const LOCAL_PRIVATE_PATTERNS = [
 ];
 const LOCAL_FILE_DESTRUCTIVE_PATTERNS = [
   /\b(dosyaya yaz|file write|write to file|overwrite|üzerine yaz|uzerine yaz|append|sil dosya|delete file|güncelle dosya|guncelle dosya)\b/i,
-  /\b(sil|delete|overwrite|append|güncelle|guncelle)\b.*\b(dosya|file|klasör|klasor|workspace|folder|path)\b/i,
-  /\b(dosya|file|klasör|klasor|workspace|folder|path)\b.*\b(sil|delete|overwrite|append|güncelle|guncelle)\b/i,
+  stemSequence(DESTRUCTIVE_VERB_STEMS, FILE_NOUN_STEMS),
+  stemSequence(FILE_NOUN_STEMS, DESTRUCTIVE_VERB_STEMS),
 ];
 const LOCAL_FILE_BENIGN_SAVE_PATTERNS = [
   /\b(masaüstüne|masaustune|desktop(?:a|e)?|bilgisayara|downloads?a?|indirilenlere)\b.*\b(kaydet|save|gönder|gonder|indir|export|dışa aktar|disa aktar)\b/i,
