@@ -1,6 +1,19 @@
 import { z } from "zod";
 import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
 
+/** Server-owned vocabulary for the mobile surfaces that can be declared. */
+export const mobileCapabilityValues = [
+  "camera",
+  "location",
+  "notifications",
+  "share",
+  "photo_library",
+  "microphone",
+  "present_file",
+] as const;
+
+const mobileCapabilitySchema = z.enum(mobileCapabilityValues);
+
 export const registerMobileDeviceBodySchema = z.object({
   externalDeviceId: z.string().min(1).max(160),
   label: z.string().min(1).max(120),
@@ -12,6 +25,7 @@ export const registerMobileDeviceBodySchema = z.object({
   supportsLiveActivities: z.boolean().optional(),
   supportsDynamicIsland: z.boolean().optional(),
   backgroundRefreshEnabled: z.boolean().optional(),
+  capabilities: z.array(mobileCapabilitySchema).max(64).optional(),
   buildMetadata: boundedJsonRecordSchema.optional(),
 });
 

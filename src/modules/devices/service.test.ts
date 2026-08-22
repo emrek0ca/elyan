@@ -6,6 +6,7 @@ import {
   mobileRegistrationAuditMetadata,
   shapeUserDevice,
 } from "./service.js";
+import { registerMobileDeviceBodySchema } from "./schemas.js";
 
 const now = new Date("2026-05-13T00:02:00.000Z").getTime();
 const staleTimestamp = new Date(now - 5 * 60_000 - 1);
@@ -160,6 +161,25 @@ test("mobile registration audit metadata never includes the push token", () => {
   assert.equal(metadata.pushConfigured, true);
   assert.equal(metadata.pushProvider, "apns");
   assert.equal("pushToken" in metadata, false);
+});
+
+test("mobile registration accepts only server-owned capability names", () => {
+  const base = {
+    externalDeviceId: "installation-1",
+    label: "User iPhone",
+    platform: "ios",
+  };
+  const parsed = registerMobileDeviceBodySchema.parse({
+    ...base,
+    capabilities: ["present_file", "share"],
+  });
+  assert.deepEqual(parsed.capabilities, ["present_file", "share"]);
+  assert.throws(() =>
+    registerMobileDeviceBodySchema.parse({
+      ...base,
+      capabilities: ["shell_run"],
+    }),
+  );
 });
 
 function fakeAppWithConnection(row: unknown) {

@@ -151,6 +151,31 @@ test("hiçbir cihaz beyan etmemişse kapı SUSAR", () => {
   assert.deepEqual(unplaceable, []);
 });
 
+test("mobil istemci beyanı readiness handshake gelene kadar gölgede kalır", () => {
+  const unplaceable = unplaceableSteps({
+    map: [
+      {
+        deviceId: "phone",
+        platform: "ios",
+        kind: "mobile",
+        online: false,
+        capabilities: ["present_file"],
+        source: "client_declared",
+      },
+    ],
+    placements: [
+      placement({
+        stepId: "s1",
+        capability: "unsupported_capability",
+        basis: "unresolved",
+        device: undefined,
+        online: undefined,
+      }),
+    ],
+  });
+  assert.deepEqual(unplaceable, []);
+});
+
 test("her adım yerleştiyse kapı sessiz", () => {
   assert.deepEqual(
     unplaceableSteps({

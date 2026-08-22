@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { placeCapability, type DeviceCapabilityView } from "./device-capability-map.js";
+import { placeCapability, readDeviceCapabilityMap, type DeviceCapabilityView } from "./device-capability-map.js";
 
 // ---------------------------------------------------------------------------
 // HANGİ YETENEK HANGİ CİHAZDA?
@@ -61,6 +61,68 @@ test("bilinmeyen yetenek boş döner", () => {
 test("yetenek kaynağı bildirilir", () => {
   const map = [device({ deviceId: "phone", capabilities: ["camera"], source: "platform_baseline" })];
   assert.equal(placeCapability(map, "camera")[0].source, "platform_baseline");
+});
+
+test("mobil istemci beyanı platform tabanının yerini alır", async () => {
+  const chain = {
+    from: () => chain,
+    leftJoin: () => chain,
+    where: () => chain,
+    orderBy: () => chain,
+    limit: async () => [
+      {
+        deviceId: "phone",
+        platform: "ios",
+        capabilities: null,
+        clientMetadata: {
+          capabilities: ["present_file", "share"],
+        },
+        status: null,
+        heartbeat: null,
+      },
+    ],
+  };
+  const app = {
+    db: { select: () => chain },
+  } as unknown as Parameters<typeof readDeviceCapabilityMap>[0];
+
+  const map = await readDeviceCapabilityMap(app, { userId: "user-1" });
+  assert.deepEqual(map[0]?.capabilities, ["present_file", "share"]);
+  assert.equal(map[0]?.source, "client_declared");
+  assert.equal(placeCapability(map, "present_file")[0]?.deviceId, "phone");
+  assert.deepEqual(placeCapability(map, "camera"), []);
+});
+
+test("client metadata migration yoksa runtime haritasına geri döner", async () => {
+  let queryCount = 0;
+  const chain = {
+    from: () => chain,
+    leftJoin: () => chain,
+    where: () => chain,
+    orderBy: () => chain,
+    limit: async () => {
+      queryCount += 1;
+      if (queryCount === 1) throw { code: "42703" };
+      return [
+        {
+          deviceId: "mac",
+          platform: "macos",
+          capabilities: ["file.search"],
+          status: "online",
+          heartbeat: new Date(),
+        },
+      ];
+    },
+  };
+  const app = {
+    db: { select: () => chain },
+    log: { warn: () => undefined },
+  } as unknown as Parameters<typeof readDeviceCapabilityMap>[0];
+
+  const map = await readDeviceCapabilityMap(app, { userId: "user-1" });
+  assert.equal(queryCount, 2);
+  assert.equal(map[0]?.source, "runtime_declared");
+  assert.deepEqual(map[0]?.capabilities, ["file.search"]);
 });
 
 // ---------------------------------------------------------------------------

@@ -710,6 +710,7 @@ export async function registerMobileDevice(
     supportsLiveActivities?: boolean;
     supportsDynamicIsland?: boolean;
     backgroundRefreshEnabled?: boolean;
+    capabilities?: string[];
     buildMetadata?: Record<string, unknown>;
     ipAddress?: string;
     userAgent?: string;
@@ -743,6 +744,7 @@ export async function registerMobileDevice(
     supportsLiveActivities: input.supportsLiveActivities ?? false,
     supportsDynamicIsland: input.supportsDynamicIsland ?? false,
     backgroundRefreshEnabled: input.backgroundRefreshEnabled ?? false,
+    capabilities: input.capabilities ?? [],
     buildMetadata: input.buildMetadata ?? {},
   };
   // A fresh token from the same install clears an earlier "provider says this

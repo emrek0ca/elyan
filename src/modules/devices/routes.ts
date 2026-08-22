@@ -53,6 +53,7 @@ export const deviceRoutes: FastifyPluginAsync = async (app) => {
       supportsLiveActivities: body.supportsLiveActivities,
       supportsDynamicIsland: body.supportsDynamicIsland,
       backgroundRefreshEnabled: body.backgroundRefreshEnabled,
+      capabilities: body.capabilities,
       buildMetadata: body.buildMetadata,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,

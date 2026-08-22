@@ -87,7 +87,7 @@ export async function placeExecutionSteps(
     const device = best ? toExecutionDevice(best.kind) : undefined;
     const basis: StepPlacement["basis"] = !best
       ? "unresolved"
-      : best.source === "runtime_declared"
+      : best.source === "runtime_declared" || best.source === "client_declared"
         ? best.online
           ? "declared_online"
           : "declared_offline"
@@ -178,9 +178,12 @@ export function unplaceableSteps(input: {
   placements: StepPlacement[];
   map: DeviceCapabilityView[];
 }): StepPlacement[] {
-  const hasDeclaredCapabilities = input.map.some(
+  // Mobile declarations are currently shadow evidence only. They are bounded
+  // by the server vocabulary, but do not yet include a permission/readiness
+  // handshake that could authorize real mobile execution.
+  const hasTrustedRuntimeCapabilities = input.map.some(
     (device) => device.source === "runtime_declared" && device.capabilities.length > 0,
   );
-  if (!hasDeclaredCapabilities) return [];
+  if (!hasTrustedRuntimeCapabilities) return [];
   return input.placements.filter((placement) => placement.basis === "unresolved");
 }

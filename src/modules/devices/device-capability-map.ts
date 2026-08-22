@@ -8,7 +8,7 @@ import { devices, runtimeConnections } from "../../db/schema.js";
  * ÖLÇÜM (2026-08-22):
  *   devices        : ios 129 · macos 48 · linux 6 · darwin 2 · server 1
  *   masaüstü       : `runtime_connections.capabilities` → 102 yetenek beyan ediyor
- *   MOBİL          : hiçbir yetenek beyan ETMİYOR
+ *   MOBİL          : eski istemcilerde hiçbir yetenek beyan etmiyor
  *
  * Yani planlayıcı "kamera/konum/bildirim/paylaşım mobilde" bilgisine sahip
  * değil. "Bilgisayarımdaki son faturayı bul ve telefona gönder" gibi bir
@@ -18,13 +18,14 @@ import { devices, runtimeConnections } from "../../db/schema.js";
  * İKİ KAYNAK, AÇIK ÖNCELİK
  * ------------------------
  * 1. Çalışma zamanı beyanı (masaüstü bunu yapıyor) — GERÇEK kaynak.
- * 2. Platform tabanı (aşağıdaki liste) — beyan YOKKEN kullanılan taban.
+ * 2. İstemci beyanı (mobil register payload'ı) — gerçek mobil yüzey.
+ * 3. Platform tabanı (aşağıdaki liste) — eski istemci beyanı yokken kullanılan taban.
  *
  * Taban elle tutulan bir listedir ve bu projede elle tutulan listeler
  * defalarca gerçekle ayrıştı. Bu yüzden: beyan varsa taban HİÇ kullanılmaz,
  * ve taban yalnız platformun kesin olarak sunduğu yüzeyleri içerir
- * (iOS'ta kamera vardır — bu bir tahmin değil). Mobil uygulama beyan
- * göndermeye başladığında bu liste ölür.
+ * (iOS'ta kamera vardır — bu bir tahmin değil). Mobil istemci beyan
+ * gönderdiği sürece bu liste o cihaz için ölür.
  */
 
 /** iOS uygulamasının platform gereği sunduğu yüzeyler. */
@@ -46,7 +47,7 @@ export type DeviceCapabilityView = {
   online: boolean;
   capabilities: string[];
   /** Yetenekler nereden geldi — beyan mı, taban mı? */
-  source: "runtime_declared" | "platform_baseline" | "none";
+  source: "runtime_declared" | "client_declared" | "platform_baseline" | "none";
 };
 
 /**
@@ -98,6 +99,31 @@ function readDeclaredCapabilities(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function readClientDeclaredCapabilities(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return readDeclaredCapabilities(
+    (value as { capabilities?: unknown }).capabilities,
+  );
+}
+
+type DeviceCapabilityRow = {
+  deviceId: unknown;
+  platform: unknown;
+  capabilities: unknown;
+  clientMetadata?: unknown;
+  status: unknown;
+  heartbeat: unknown;
+};
+
+function isUndefinedColumnError(error: unknown): boolean {
+  return Boolean(
+    typeof error === "object" &&
+    error &&
+    "code" in error &&
+    String(error.code) === "42703",
+  );
+}
+
 /**
  * Kullanıcının cihazları ve her birinin yapabildikleri.
  *
@@ -110,19 +136,47 @@ export async function readDeviceCapabilityMap(
   input: { userId: string },
 ): Promise<DeviceCapabilityView[]> {
   try {
-    const rows = await app.db
-      .select({
-        deviceId: devices.id,
-        platform: devices.platform,
-        capabilities: runtimeConnections.capabilities,
-        status: runtimeConnections.status,
-        heartbeat: runtimeConnections.lastHeartbeatAt,
-      })
-      .from(devices)
-      .leftJoin(runtimeConnections, eq(runtimeConnections.deviceId, devices.id))
-      .where(and(eq(devices.userId, input.userId)))
-      .orderBy(desc(runtimeConnections.lastHeartbeatAt))
-      .limit(50);
+    let rows: DeviceCapabilityRow[];
+    try {
+      rows = await app.db
+        .select({
+          deviceId: devices.id,
+          platform: devices.platform,
+          capabilities: runtimeConnections.capabilities,
+          clientMetadata: devices.clientMetadata,
+          status: runtimeConnections.status,
+          heartbeat: runtimeConnections.lastHeartbeatAt,
+        })
+        .from(devices)
+        .leftJoin(
+          runtimeConnections,
+          eq(runtimeConnections.deviceId, devices.id),
+        )
+        .where(and(eq(devices.userId, input.userId)))
+        .orderBy(desc(runtimeConnections.lastHeartbeatAt))
+        .limit(50);
+    } catch (error) {
+      if (!isUndefinedColumnError(error)) throw error;
+      app.log?.warn?.(
+        "devices.client_metadata migration missing; using runtime-only capability map",
+      );
+      rows = await app.db
+        .select({
+          deviceId: devices.id,
+          platform: devices.platform,
+          capabilities: runtimeConnections.capabilities,
+          status: runtimeConnections.status,
+          heartbeat: runtimeConnections.lastHeartbeatAt,
+        })
+        .from(devices)
+        .leftJoin(
+          runtimeConnections,
+          eq(runtimeConnections.deviceId, devices.id),
+        )
+        .where(and(eq(devices.userId, input.userId)))
+        .orderBy(desc(runtimeConnections.lastHeartbeatAt))
+        .limit(50);
+    }
 
     const byDevice = new Map<string, DeviceCapabilityView>();
     for (const row of rows) {
@@ -130,7 +184,13 @@ export async function readDeviceCapabilityMap(
       if (!deviceId || byDevice.has(deviceId)) continue;
       const platform = String(row.platform ?? "unknown");
       const kind = classifyPlatform(platform);
-      const declared = readDeclaredCapabilities(row.capabilities);
+      const runtimeDeclared = readDeclaredCapabilities(row.capabilities);
+      const clientDeclared =
+        kind === "mobile"
+          ? readClientDeclaredCapabilities(row.clientMetadata)
+          : [];
+      const declared =
+        runtimeDeclared.length > 0 ? runtimeDeclared : clientDeclared;
       const capabilities =
         declared.length > 0
           ? declared
@@ -144,11 +204,13 @@ export async function readDeviceCapabilityMap(
         online: String(row.status ?? "") === "online",
         capabilities,
         source:
-          declared.length > 0
+          runtimeDeclared.length > 0
             ? "runtime_declared"
-            : capabilities.length > 0
-              ? "platform_baseline"
-              : "none",
+            : clientDeclared.length > 0
+              ? "client_declared"
+              : capabilities.length > 0
+                ? "platform_baseline"
+                : "none",
       });
     }
     return [...byDevice.values()];
