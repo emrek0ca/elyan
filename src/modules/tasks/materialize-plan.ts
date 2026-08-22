@@ -4,6 +4,8 @@ import { tasks } from "../../db/schema.js";
 import { extractFirstJsonObject } from "../brain/desktop-plan.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import { fillWriterContent } from "./writer-content.js";
+import { classifyKnowledgeRecency } from "../../core/understanding/knowledge-recency.js";
+import { pruneUnneededResearchSteps } from "./plan-shortest-path.js";
 import { getUserDevice } from "../devices/service.js";
 import {
   missingRuntimeCapabilities,
@@ -1057,6 +1059,9 @@ export function buildPlanningPrompt(
   // Çağıran tarafından hazır metin olarak verilir (toplama async'tir).
   // Boşsa istem hiç değişmez.
   exemplars = "",
+  // Konu modelin kendi bilgisiyle karşılanıyor mu? Çağıran ölçer (async).
+  // Verilmezse istem hiç değişmez.
+  knowledgeRecency: "stable_knowledge" | "current_facts" | null = null,
 ): string {
   // Task titles are presentation labels and may collapse the actual request to
   // "Desktop cowork task". Planning must be anchored to the latest canonical
@@ -1125,6 +1130,26 @@ export function buildPlanningPrompt(
       "). Fewer steps is a tie-breaker, never a reason to drop an outcome the user asked for.",
     "- Order steps so each runs after its dependencies; set dependsOn to the ids whose output it consumes.",
     "- The plan must be executable as a professional chain, not a short suggestion. Every user-requested deliverable needs a writer/export/verification step, not just analysis prose.",
+    ...(knowledgeRecency === "stable_knowledge"
+      ? [
+          // EN HIZLI YOL — KULLANICININ AÇIK İSTEĞİ.
+          //
+          // Ölçüldü (canlı Groq, gerçek planlama promptu): "zürafalar hakkında
+          // rapor" isteğinde planlayıcı 4/4 denemede
+          // `web_research → text_analyze → document_write` üretiyordu. Zürafa
+          // bilgisi kalıcı; araştırma adımı gereksiz gecikme ve kırılganlık.
+          // Üstelik `text_analyze` MODEL ÇAĞIRMAZ, metni mekanik olarak
+          // dilimler — çıktı rapor değil madde listesi olur.
+          //
+          // Tazelik ekseni (`npm run eval:knowledge-recency`, tutulan 94.4%,
+          // uydurma riski 0) bu turu `stable_knowledge` işaretledi.
+          "- KNOWLEDGE NOTE: this topic is answered by the model's own stable knowledge. Do NOT add web_research or text_analyze steps for it. Produce the shortest plan that delivers the artifact (usually a single writer step); the document body is generated separately with a dedicated budget, so leave the writer's content argument short or empty.",
+        ]
+      : knowledgeRecency === "current_facts"
+        ? [
+            "- KNOWLEDGE NOTE: this topic needs CURRENT facts. Add a web_research step before the writer and feed the writer with {{steps.<research_id>.output}}.",
+          ]
+        : []),
     "- For each meaningful phase, use descriptions that can be shown as live progress. Keep them concrete: researching source, reading file, analyzing evidence, writing document, verifying artifact, observing screen, clicking target, retrying after failed state.",
     "- If an action can be verified, add a follow-up observation/readback/artifact-producing step. Do not mark UI or file work complete from intention alone.",
     "- Goal loop contract: gather evidence after each meaningful side effect, feed prior outputs into verification/writer steps, and ensure the final visible answer can cite tool_result, artifact, or state_readback evidence.",
@@ -2279,7 +2304,18 @@ export async function maybeMaterializeDesktopPlan(
           query: readPlanningGatePrompt(workOrder),
         }).catch(() => []),
       );
-      const prompt = buildPlanningPrompt(workOrder, allowed, exemplars);
+      // Tazelik kararı PLANLAMADAN ÖNCE alınır: "modelin bildiği konu" ise
+      // planlayıcıya araştırma adımı ekletmeyiz. Kullanıcının açık isteği:
+      // "en hızlı ve en doğru yolu kullanmalıyız".
+      const planRecency = await classifyKnowledgeRecency(
+        readPlanningGatePrompt(workOrder),
+      ).catch(() => null);
+      const prompt = buildPlanningPrompt(
+        workOrder,
+        allowed,
+        exemplars,
+        planRecency?.recency ?? null,
+      );
       const gatePrompt = readPlanningSecurityPrompt(workOrder);
       const knowledgeQuery = readPlanningGatePrompt(workOrder);
 
@@ -2463,6 +2499,27 @@ export async function maybeMaterializeDesktopPlan(
         );
         return false;
       }
+      // EN HIZLI YOL: modelin bildiği konuda araştırma/analiz adımı düşer.
+      // Prompt direktifi tek başına yetmiyor (ölçüm: 2/4 denemede model yine
+      // `text_analyze` ekliyordu). Kullanıcının kendi verisi işin içindeyse
+      // budama çalışmaz — koruma `pruneUnneededResearchSteps` içinde.
+      const pruning = pruneUnneededResearchSteps({
+        steps,
+        recency: planRecency?.recency ?? null,
+      });
+      if (pruning.pruned.length > 0) {
+        steps = pruning.steps;
+        app.log.info?.(
+          {
+            taskId: task.id,
+            prunedStepIds: pruning.pruned,
+            recency: planRecency?.recency ?? null,
+            remainingSteps: steps.length,
+          },
+          "plan shortest path applied",
+        );
+      }
+
       // GÖVDEYİ PLANLAYICI YAZAMAZ — ayrı bütçeyle burada üretilir.
       //
       // Masaüstü yazıcıları içerik üretmez; verilen metni aynen dosyaya yazar.
