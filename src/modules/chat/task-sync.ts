@@ -1,4 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
+import { recordRoutingEpisode } from "../routing-policy/episodic-decisions.js";
 import type { FastifyInstance } from "fastify";
 import { chatMessages, chatSessions, tasks } from "../../db/schema.js";
 import type { TaskStatus } from "../../contracts/domain.js";
@@ -678,6 +679,32 @@ export function sanitizeHumanizedTerminalTaskContent(
   return sanitizeAssistantVisibleText(value, { fallback: safeFallback });
 }
 
+const TERMINAL_TASK_STATUSES = new Set<string>([
+  "completed",
+  "failed",
+  "canceled",
+  "expired",
+]);
+
+/** Görev isteğinin ham metni — epizot bunun üzerine indekslenir. */
+function readTaskPrompt(task: typeof tasks.$inferSelect): string {
+  const payload = (task.payload ?? {}) as Record<string, unknown>;
+  const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
+  return prompt.trim() || String(task.title ?? "").trim();
+}
+
+/** Kararın kendisi: sunucu mu masaüstü mü çalıştı? */
+function readTaskOperationalRoute(task: typeof tasks.$inferSelect): string {
+  const payload = (task.payload ?? {}) as Record<string, unknown>;
+  const metadata = (payload.metadata ?? {}) as Record<string, unknown>;
+  const routeDecision = (metadata.routeDecision ?? {}) as Record<string, unknown>;
+  const taskRoute = (routeDecision.taskRoute ?? {}) as Record<string, unknown>;
+  const operational =
+    typeof taskRoute.operationalRoute === "string" ? taskRoute.operationalRoute : "";
+  if (operational) return operational;
+  return typeof routeDecision.route === "string" ? routeDecision.route : "unknown";
+}
+
 export async function syncChatTaskLifecycle(
   app: FastifyInstance,
   input: {
@@ -692,6 +719,32 @@ export async function syncChatTaskLifecycle(
   const assistantMessageId = metadata?.assistantMessageId;
   if (!sessionId || !assistantMessageId) {
     return;
+  }
+
+  // EPİZODİK KARAR HAFIZASI — biten görev deneyime dönüşsün.
+  //
+  // Sistem 45.676 öğrenme olayı kaydediyor ama karar katmanı hiçbirini
+  // okumuyordu; aynı cümle 14:59'da masaüstüne, 17:02'de sunucuya gitti.
+  // Burada her terminal geçiş (istek → rota → sonuç) epizot olarak yazılır.
+  //
+  // Yalnız GEÇİŞTE yazılır (önceki durum terminal değilken), yoksa aynı görev
+  // her senkronda tekrar tekrar kaydolur. Fail-open: yazamazsa akış etkilenmez.
+  const wasTerminal = TERMINAL_TASK_STATUSES.has(input.originalTask.status);
+  const isTerminal = TERMINAL_TASK_STATUSES.has(input.updatedTask.status);
+  if (!wasTerminal && isTerminal) {
+    void recordRoutingEpisode(app, {
+      userId: input.updatedTask.userId,
+      taskId: input.updatedTask.id,
+      message: readTaskPrompt(input.updatedTask),
+      route: readTaskOperationalRoute(input.updatedTask),
+      outcome:
+        input.updatedTask.status === "completed"
+          ? "completed"
+          : input.updatedTask.status === "canceled"
+            ? "canceled"
+            : "failed",
+      failureReason: input.updatedTask.error ?? null,
+    }).catch(() => false);
   }
 
   const assistantStatus = mapTaskStatusToChatStatus(input.updatedTask.status);
