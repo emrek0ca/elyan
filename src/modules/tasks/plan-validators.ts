@@ -1,4 +1,5 @@
 import { getDesktopCapabilityOntology } from "./desktop-capability-ontology.js";
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 import path from "node:path";
 import {
   DESKTOP_CAPABILITY_MANIFEST,
@@ -47,6 +48,51 @@ function templateStepReferences(value: unknown): Set<string> {
   return refs;
 }
 
+/**
+ * DIŞARI MESAJ GÖNDERMEK, İSTENMEDİKÇE YAPILMAZ.
+ *
+ * CANLI ARIZA (görev 4d1a9de6 ve 18eef3db — "masaüstündeki son raporu bul ve
+ * telefonuma gönder"): planlayıcı ikinci adım olarak `send_whatsapp_message`
+ * seçti. Kullanıcı WhatsApp'tan HİÇ söz etmemişti; "telefonuma gönder" sonucun
+ * kendi uygulamasına dönmesi demekti — ki görev sonucu zaten oraya döner.
+ *
+ * İki görevde de aynı seçim yapıldı; prompt kuralı eklemek YETMEDİ. Model
+ * "gönder" fiilini görünce elindeki tek gönderme aracına uzanıyor.
+ *
+ * Bu bir yetenek TAHMİNİ meselesi değil, RIZA meselesidir: kullanıcının
+ * istemediği bir kişiye/kanala mesaj gitmesi geri alınamaz bir yan etkidir.
+ * Bu yüzden kanal açıkça anılmadıkça giden-mesaj yetenekleri yasaklı sayılır.
+ *
+ * Alıcı adı geçip kanal geçmiyorsa ("Ali'ye gönder") yine yasaklıdır: doğru
+ * davranış kanalı TAHMİN etmek değil, sormaktır.
+ */
+const OUTBOUND_MESSAGING_CAPABILITIES = new Set([
+  "send_whatsapp_message",
+  "save_whatsapp_contact",
+  "email_send",
+]);
+
+const EXPLICIT_CHANNEL_PATTERN = trStemPattern([
+  "whatsapp",
+  "wp",
+  "mail",
+  "e-posta",
+  "eposta",
+  "posta",
+  "sms",
+  "telegram",
+  "mesaj",
+  "ileti",
+]);
+
+const EMAIL_ADDRESS_PATTERN = /[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
+
+export function namesExplicitOutboundChannel(goalText: string): boolean {
+  const text = String(goalText ?? "");
+  if (!text.trim()) return false;
+  return EXPLICIT_CHANNEL_PATTERN.test(text) || EMAIL_ADDRESS_PATTERN.test(text);
+}
+
 export function buildAllowedCapabilities(
   workOrder: DesktopWorkOrder,
 ): string[] {
@@ -85,8 +131,18 @@ export function buildAllowedCapabilities(
   // kapısı aynen uygulanır; ayrıca her adım masaüstünde kendi izin kapısından
   // ayrıca geçer.
   const preferred = required;
+  // Kanal açıkça anılmadıysa giden-mesaj yetenekleri kapalıdır (yukarıdaki not).
+  const outboundAllowed = namesExplicitOutboundChannel(
+    [
+      workOrder.goal?.summary ?? "",
+      workOrder.semanticGoal?.objective ?? "",
+    ].join(" "),
+  );
   const allowed = DESKTOP_CAPABILITY_MANIFEST.filter((entry) => {
     if (forbidden.has(entry.name)) return false;
+    if (!outboundAllowed && OUTBOUND_MESSAGING_CAPABILITIES.has(entry.name)) {
+      return false;
+    }
     if (autonomyAllowed && !autonomyAllowed.has(entry.name)) return false;
     if (
       authorization &&
