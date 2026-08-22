@@ -5,6 +5,7 @@ import {
   needsLiveResearch,
 } from "../../core/understanding/knowledge-recency.js";
 import type { DesktopWorkOrder, DesktopWorkOrderStep } from "./desktop-work-order.js";
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 
 /**
  * YAZICI İÇERİĞİNİ SUNUCU ÜRETİR.
@@ -131,6 +132,22 @@ export function findWriterContentGap(
  * istiyor). Cümle gibi görünüyorsa (uzun, nokta ile biten) başlık sayılmaz.
  */
 /**
+ * İSTENEN BİÇİM KAYBOLMASIN.
+ *
+ * Canlı çıktı (görev b2845b50, 2026-08-22 17:59): kullanıcı "bir PDF hazırla"
+ * dedi, masaüstü `.docx` üretti. Plan adımında ne `outputFormat` ne de `.pdf`
+ * uzantılı bir `outputPath` vardı; masaüstü varsayılan olarak docx yazıyor
+ * (`actions/document_write.py`: outputFormat/uzantı yoksa `.docx`).
+ *
+ * Biçim kullanıcının AÇIK isteği; plan taşımadıysa burada tamamlanır.
+ */
+const PDF_REQUEST_PATTERN = trStemPattern(["pdf"]);
+
+function requestedOutputFormat(goalText: string): "pdf" | null {
+  return PDF_REQUEST_PATTERN.test(goalText) ? "pdf" : null;
+}
+
+/**
  * Bölüm adları başlık DEĞİLDİR.
  *
  * Ölçüldü: model prompt'ta başlık istenmediğinde metne doğrudan "Giriş" diye
@@ -253,10 +270,23 @@ export async function fillWriterContent(input: {
         taskId: input.taskId,
         title: "Desktop writer content",
         prompt: buildContentPrompt({ workOrder: input.workOrder, step, gap, liveResearch }),
-        // `public_research` Groq Compound'a uygun iş yükü: yerleşik web
-        // aramasıyla canlı veriyi kendisi getirir. `document_generate` ise hızlı
-        // yol — modelin kendi bilgisi, ek tur yok.
-        workload: liveResearch ? "public_research" : "document_generate",
+        // İŞ YÜKÜ SEÇİMİ ÖLÇÜMLE DÜZELTİLDİ (görev b2845b50, 2026-08-22 17:59).
+        //
+        // Önce `document_generate` seçmiştim — YANLIŞ. O iş yükü YAPILANDIRILMIŞ
+        // blok şeridi: `decideStructuredResponseDecision` onu görünce
+        // `document_block` şeması ekliyor, şema yüzünden uyumluluk modeli
+        // (qwen/qwen3.6-27b) seçiliyor ve çağrı `json_validate_failed` ile
+        // 400 dönüyor. Canlı log:
+        //   workload=document_analysis model=qwen/qwen3.6-27b
+        //   response_format=json_schema → provider_error:json_validate_failed
+        //   → "writer content generation failed", generatedWords: 0
+        // Fail-open devreye girip belgeye yine 42 kelimelik brief yazıldı.
+        //
+        // Gövde DÜZ METİNDİR. `mobile_chat_balanced` düz metin şeridi; token
+        // bütçesini zaten aşağıda kendimiz veriyoruz.
+        // `public_research` ise Groq Compound'a uygun: yerleşik web aramasıyla
+        // canlı veriyi kendisi getirir.
+        workload: liveResearch ? "public_research" : "mobile_chat_balanced",
         route: "desktop_writer_content",
         meteringSurface: "task",
         maxCompletionTokensOverride: 3_000,
@@ -310,12 +340,21 @@ export async function fillWriterContent(input: {
     const args = readArgs(step);
     const existingTitle = typeof args.title === "string" ? args.title.trim() : "";
     const derivedTitle = existingTitle ? null : deriveTitle(produced.text);
+    const hasFormat =
+      typeof args.outputFormat === "string" && args.outputFormat.trim().length > 0;
+    const hasPdfPath =
+      typeof args.outputPath === "string" && /\.pdf$/i.test(args.outputPath.trim());
+    const format =
+      hasFormat || hasPdfPath
+        ? null
+        : requestedOutputFormat(input.workOrder.goal?.summary ?? "");
     return {
       ...step,
       args: {
         ...args,
         [gap.argKey]: produced.text,
         ...(derivedTitle ? { title: derivedTitle } : {}),
+        ...(format ? { outputFormat: format } : {}),
       },
     };
   });
