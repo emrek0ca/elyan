@@ -12,6 +12,7 @@ import { pruneUnneededResearchSteps } from "./plan-shortest-path.js";
 import {
   placeExecutionSteps,
   summarizePlacements,
+  unplaceableSteps,
 } from "./execution-placement.js";
 import { getUserDevice } from "../devices/service.js";
 import {
@@ -1176,6 +1177,14 @@ export function buildPlanningPrompt(
     "- If the user provides inline private facts, test values, case notes, project notes, pasted text, or a local file to read/analyze/summarize before writing, start with document_read or file_read when available, then feed {{steps.<id>.output}} into document_write/presentation_write/spreadsheet_write.",
     "- If text_analyze is available and the task asks to analyze/interpret/evaluate/summarize/explain/compare or produce a professional/student artifact, insert text_analyze between gathering/calculation/research and the writer. Its sourceContext must reference prior outputs with {{steps.<id>.output}}, and the writer must consume {{steps.<analysis_id>.output}}.",
     "- Do not send private inline facts, file contents, medical/test values, legal case facts, or local document summaries to web_research. Use web_research only for public background/source lookup, and merge it later in writer args.",
+    // SONUÇ ZATEN KULLANICIYA DÖNER — TESLİM ADIMI UYDURMA.
+    //
+    // Canlı arıza (görev 4d1a9de6, "masaüstündeki son raporu bul ve telefonuma
+    // gönder"): planlayıcı ikinci adım olarak `send_whatsapp_message` koydu.
+    // Kullanıcı WhatsApp'tan hiç söz etmemişti; "telefonuma gönder" sonucun
+    // mobil uygulamaya ulaşması demekti — ki görev sonucu ZATEN oraya döner.
+    // Adım hiçbir cihazda yoktu ve görev FILE_NOT_FOUND ile öldü.
+    "- The task result is ALWAYS delivered back to the surface the user asked from (their phone or desktop chat). Never add a delivery step for that. Only add a messaging/email step when the user explicitly names an external channel or recipient (WhatsApp, e-mail, a person). \"Send it to my phone\" means: return the result — it is not a messaging request.",
     "- For web_research, query must be a concrete search query with key terms only. Do not pass the full user goal, private case facts, file summaries, or writing instructions as the query.",
     "- For professional workflows, preserve private case/test/project facts in writer args, but keep web_research queries public and generic enough for source lookup.",
     "- Ground every path explicitly. Never use '.' or a bare relative filename in a remote plan. Use ~/Desktop for the user's Desktop/Masaüstü, ~/Downloads for Downloads/İndirilenler, workspace/ for the current Elyan workspace, or an absolute path already supplied by the user. A named child file must retain its parent root, for example ~/Desktop/notlar.txt.",
@@ -2607,6 +2616,10 @@ export async function maybeMaterializeDesktopPlan(
         steps,
       }).catch(() => null);
       if (placement) {
+        const unplaceable = unplaceableSteps({
+          placements: placement.placements,
+          map: placement.map,
+        });
         app.log.info?.(
           {
             taskId: task.id,
@@ -2615,8 +2628,29 @@ export async function maybeMaterializeDesktopPlan(
               .filter((entry) => entry.basis === "unresolved")
               .map((entry) => entry.capability),
           },
-          "execution placement resolved (shadow)",
+          "execution placement resolved",
         );
+        // HİÇBİR CİHAZDA ÇALIŞAMAYACAK ADIM GÖNDERİLMEZ.
+        //
+        // Canlı arıza (görev 4d1a9de6): plan `send_whatsapp_message` içeriyordu,
+        // masaüstü bu yeteneği beyan etmiyordu, görev FILE_NOT_FOUND ile öldü.
+        // Yerleştirme bunu ÖNCEDEN biliyordu ama kimse okumuyordu.
+        //
+        // `false` görevi anında öldürmez: kuyruk yeniden planlar ve model
+        // elindeki gerçek yeteneklerle farklı bir plan üretebilir.
+        if (unplaceable.length > 0) {
+          app.log.warn(
+            {
+              taskId: task.id,
+              unplaceable: unplaceable.map((entry) => ({
+                stepId: entry.stepId,
+                capability: entry.capability,
+              })),
+            },
+            "desktop plan withheld: step has no device that can run it",
+          );
+          return false;
+        }
       }
 
       const planCache = await storeDesktopPlanCache({

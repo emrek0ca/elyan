@@ -57,7 +57,11 @@ function toExecutionDevice(kind: DeviceCapabilityView["kind"]): ExecutionDevice 
 export async function placeExecutionSteps(
   app: FastifyInstance,
   input: { userId: string; steps: DesktopWorkOrderStep[] },
-): Promise<{ steps: ExecutionStep[]; placements: StepPlacement[] }> {
+): Promise<{
+  steps: ExecutionStep[];
+  placements: StepPlacement[];
+  map: DeviceCapabilityView[];
+}> {
   const map = await readDeviceCapabilityMap(app, { userId: input.userId });
   const placements: StepPlacement[] = [];
   const steps: ExecutionStep[] = [];
@@ -92,7 +96,7 @@ export async function placeExecutionSteps(
     });
   }
 
-  return { steps, placements };
+  return { steps, placements, map };
 }
 
 /** Ölçüm özeti — yerleştirme ne kadar işe yarıyor? */
@@ -120,4 +124,30 @@ export function summarizePlacements(placements: StepPlacement[]): {
     offline,
     byDevice,
   };
+}
+
+/**
+ * Bu plan gönderilebilir mi?
+ *
+ * CANLI ARIZA (görev 4d1a9de6): plan iki adımdı —
+ *   1. file_search             → çalıştı
+ *   2. send_whatsapp_message   → HİÇBİR CİHAZDA YOK → FILE_NOT_FOUND ile öldü
+ * Yerleştirme bunu ÖNCEDEN biliyordu (`unresolved`), ama kimse okumuyordu.
+ *
+ * "Sessiz düşüş yasak" kuralı yazıcı gövdesi için uygulanmıştı; aynısı burada
+ * da geçerli: hiçbir cihazda çalışamayacak bir adım içeren plan gönderilmez.
+ *
+ * KAPI YALNIZ BİLGİ VARKEN KONUŞUR. Hiçbir cihaz yetenek beyan etmemişse
+ * (bağlantı yok, eski istemci) her adım "unresolved" görünür; o durumda
+ * susmak zorunludur — yoksa bilgi eksikliği yüzünden tüm görevler ölür.
+ */
+export function unplaceableSteps(input: {
+  placements: StepPlacement[];
+  map: DeviceCapabilityView[];
+}): StepPlacement[] {
+  const hasDeclaredCapabilities = input.map.some(
+    (device) => device.source === "runtime_declared" && device.capabilities.length > 0,
+  );
+  if (!hasDeclaredCapabilities) return [];
+  return input.placements.filter((placement) => placement.basis === "unresolved");
 }

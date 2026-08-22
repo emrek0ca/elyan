@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { summarizePlacements, type StepPlacement } from "./execution-placement.js";
+import {
+  summarizePlacements,
+  unplaceableSteps,
+  type StepPlacement,
+} from "./execution-placement.js";
+import type { DeviceCapabilityView } from "../devices/device-capability-map.js";
 
 // ---------------------------------------------------------------------------
 // Notion §5: koordinatörün sorması gereken sıra —
@@ -49,4 +54,74 @@ test("boş plan sıfır döner", () => {
   assert.equal(summary.total, 0);
   assert.equal(summary.resolved, 0);
   assert.deepEqual(summary.byDevice, {});
+});
+
+// ---------------------------------------------------------------------------
+// HİÇBİR CİHAZDA ÇALIŞAMAYACAK ADIM GÖNDERİLMEZ.
+//
+// Canlı arıza (görev 4d1a9de6): plan iki adımdı —
+//   1. file_search            → çalıştı
+//   2. send_whatsapp_message  → hiçbir cihazda YOK → FILE_NOT_FOUND
+// Yerleştirme bunu ÖNCEDEN biliyordu; kimse okumuyordu.
+// ---------------------------------------------------------------------------
+
+function declaredMap(): DeviceCapabilityView[] {
+  return [
+    {
+      deviceId: "mac",
+      platform: "macos",
+      kind: "desktop",
+      online: true,
+      capabilities: ["file.search"],
+      source: "runtime_declared",
+    },
+  ];
+}
+
+test("yerleşemeyen adım bildirilir", () => {
+  const unplaceable = unplaceableSteps({
+    map: declaredMap(),
+    placements: [
+      placement({ stepId: "s1", capability: "file_search" }),
+      placement({
+        stepId: "s2",
+        capability: "send_whatsapp_message",
+        basis: "unresolved",
+        device: undefined,
+        online: undefined,
+      }),
+    ],
+  });
+  assert.equal(unplaceable.length, 1);
+  assert.equal(unplaceable[0].capability, "send_whatsapp_message");
+});
+
+test("hiçbir cihaz beyan etmemişse kapı SUSAR", () => {
+  // Bilgi eksikliği yüzünden tüm görevleri öldürmek, hatayı düzeltmez.
+  const unplaceable = unplaceableSteps({
+    map: [
+      {
+        deviceId: "phone",
+        platform: "ios",
+        kind: "mobile",
+        online: true,
+        capabilities: ["camera"],
+        source: "platform_baseline",
+      },
+    ],
+    placements: [
+      placement({ stepId: "s1", capability: "file_search", basis: "unresolved", device: undefined }),
+    ],
+  });
+  assert.deepEqual(unplaceable, []);
+});
+
+test("her adım yerleştiyse kapı sessiz", () => {
+  assert.deepEqual(
+    unplaceableSteps({
+      map: declaredMap(),
+      placements: [placement({ stepId: "s1", capability: "file_search" })],
+    }),
+    [],
+  );
 });
