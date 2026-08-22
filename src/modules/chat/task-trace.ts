@@ -6,6 +6,7 @@ import type {
   ElyanTaskTraceStepStatus,
   TaskStatus,
 } from "../../contracts/domain.js";
+import { DESKTOP_CAPABILITY_MANIFEST } from "../tasks/desktop-capability-manifest.js";
 import {
   extractTaskRouteDecision,
   getPayloadMetadata,
@@ -890,6 +891,50 @@ function buildTraceSummary(input: {
  * Bu kapı tek yerdedir: blok hangi yoldan üretilirse üretilsin (runtime izi ya
  * da fallback) mobilin sözleşmesi burada garanti edilir.
  */
+/**
+ * ADIM BAŞLIĞI YETENEK KİMLİĞİ OLAMAZ.
+ *
+ * Canlı ekran (2026-08-22): telefonda adım satırı "document_write — ." diye
+ * göründü. İki ayrı kusur:
+ *   - başlık ham yetenek kimliği (mobil, etiket yoksa `capability` alanına
+ *     düşüyor — `DispatchStep.init`),
+ *   - cümle yalnız noktadan ibaret (mobil tarafta ayrıca düzeltildi).
+ *
+ * Trace yolundaki adımların Türkçe etiketleri zaten var (`STEP_LABELS`), ama
+ * plan/runtime yolundan gelen adımlar yetenek kimliğiyle geliyor. Manifest
+ * `displayName` taşıyor; kullanan yoktu.
+ */
+function capabilityDisplayName(capability: string): string | null {
+  const entry = DESKTOP_CAPABILITY_MANIFEST.find(
+    (candidate) => candidate.name === capability,
+  );
+  const displayName = typeof entry?.displayName === "string" ? entry.displayName.trim() : "";
+  return displayName.length > 0 ? displayName : null;
+}
+
+export function withCapabilityStepLabels(
+  block: ElyanTaskTraceBlock,
+): ElyanTaskTraceBlock {
+  const steps = block.steps ?? [];
+  if (steps.length === 0) return block;
+  let changed = false;
+  const labelled = steps.map((step) => {
+    const capability =
+      typeof (step as { capability?: unknown }).capability === "string"
+        ? ((step as { capability?: string }).capability ?? "")
+        : "";
+    if (!capability) return step;
+    const label = typeof step.label === "string" ? step.label.trim() : "";
+    // Etiket yoksa ya da etiket yetenek kimliğinin ta kendisiyse düzelt.
+    if (label.length > 0 && label !== capability) return step;
+    const displayName = capabilityDisplayName(capability);
+    if (!displayName) return step;
+    changed = true;
+    return { ...step, label: displayName };
+  });
+  return changed ? { ...block, steps: labelled } : block;
+}
+
 function ensureWaitingApprovalStep(
   block: ElyanTaskTraceBlock,
 ): ElyanTaskTraceBlock {
@@ -1234,8 +1279,10 @@ export function buildTaskTraceBlock(input: {
     ...(activeStep ? { activeStepId: activeStep.id } : {}),
     steps,
   };
-  return ensureWaitingApprovalStep(
-    runtimeExecutionTraceBlock({ task: input.task, fallback }) ?? fallback,
+  return withCapabilityStepLabels(
+    ensureWaitingApprovalStep(
+      runtimeExecutionTraceBlock({ task: input.task, fallback }) ?? fallback,
+    ),
   );
 }
 
