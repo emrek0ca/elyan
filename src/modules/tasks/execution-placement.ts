@@ -40,6 +40,21 @@ export type StepPlacement = {
     | "unresolved";
 };
 
+export type ExecutionPlacementSummary = {
+  total: number;
+  resolved: number;
+  unresolved: number;
+  offline: number;
+  byDevice: Record<string, number>;
+};
+
+export type ExecutionPlacementSnapshot = {
+  mode: "shadow";
+  resolvedAt: string;
+  summary: ExecutionPlacementSummary;
+  unresolvedCapabilities: string[];
+};
+
 function toExecutionDevice(kind: DeviceCapabilityView["kind"]): ExecutionDevice | undefined {
   if (kind === "desktop") return "desktop";
   if (kind === "mobile") return "mobile";
@@ -100,13 +115,9 @@ export async function placeExecutionSteps(
 }
 
 /** Ölçüm özeti — yerleştirme ne kadar işe yarıyor? */
-export function summarizePlacements(placements: StepPlacement[]): {
-  total: number;
-  resolved: number;
-  unresolved: number;
-  offline: number;
-  byDevice: Record<string, number>;
-} {
+export function summarizePlacements(
+  placements: StepPlacement[],
+): ExecutionPlacementSummary {
   const byDevice: Record<string, number> = {};
   let resolved = 0;
   let offline = 0;
@@ -123,6 +134,28 @@ export function summarizePlacements(placements: StepPlacement[]): {
     unresolved: placements.length - resolved,
     offline,
     byDevice,
+  };
+}
+
+/**
+ * Persistable, bounded shadow evidence for a work-order plan.
+ *
+ * The full device map stays local to this decision. Only the counts and the
+ * unresolved capability names travel with the plan, so the control plane does
+ * not copy unrelated device metadata into the task payload.
+ */
+export function buildPlacementSnapshot(
+  placements: StepPlacement[],
+  resolvedAt = new Date().toISOString(),
+): ExecutionPlacementSnapshot {
+  return {
+    mode: "shadow",
+    resolvedAt,
+    summary: summarizePlacements(placements),
+    unresolvedCapabilities: placements
+      .filter((placement) => placement.basis === "unresolved")
+      .map((placement) => placement.capability)
+      .slice(0, 32),
   };
 }
 

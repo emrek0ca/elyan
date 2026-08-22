@@ -10,8 +10,8 @@ import {
 import { classifyKnowledgeRecency } from "../../core/understanding/knowledge-recency.js";
 import { pruneUnneededResearchSteps } from "./plan-shortest-path.js";
 import {
+  buildPlacementSnapshot,
   placeExecutionSteps,
-  summarizePlacements,
   unplaceableSteps,
 } from "./execution-placement.js";
 import { getUserDevice } from "../devices/service.js";
@@ -2018,6 +2018,55 @@ export async function withoutUnreadyDeviceCapabilities(
   return kept;
 }
 
+type ExecutionPlacementResolution = Awaited<
+  ReturnType<typeof placeExecutionSteps>
+> & {
+  snapshot: ReturnType<typeof buildPlacementSnapshot>;
+};
+
+/**
+ * Resolve device placement for every compiled plan source.
+ *
+ * This is deliberately measurement-only for now. The existing desktop
+ * dispatch path remains authoritative until the persisted shadow evidence is
+ * populated from both deterministic and model-materialized plans.
+ */
+async function measureExecutionPlacement(
+  app: FastifyInstance,
+  task: Pick<TaskRow, "id" | "userId">,
+  steps: DesktopWorkOrderStep[],
+): Promise<ExecutionPlacementResolution | null> {
+  // Small unit-test doubles and old callers may not expose the database. In
+  // the real Fastify app this is always present; skipping here preserves the
+  // old fail-open behavior for those non-runtime callers.
+  if (!app.db) return null;
+  const placement = await placeExecutionSteps(app, {
+    userId: task.userId,
+    steps,
+  }).catch((error) => {
+    app.log.warn?.(
+      {
+        taskId: task.id,
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 240),
+      },
+      "execution placement measurement unavailable",
+    );
+    return null;
+  });
+  if (!placement) return null;
+
+  const snapshot = buildPlacementSnapshot(placement.placements);
+  app.log.info?.(
+    {
+      taskId: task.id,
+      placement: snapshot.summary,
+      unresolvedCapabilities: snapshot.unresolvedCapabilities,
+    },
+    "execution placement resolved",
+  );
+  return { ...placement, snapshot };
+}
+
 export async function maybeMaterializeDesktopPlan(
   app: FastifyInstance,
   task: TaskRow,
@@ -2069,18 +2118,28 @@ export async function maybeMaterializeDesktopPlan(
       ) {
         return false;
       }
+      const placement = await measureExecutionPlacement(app, task, existingSteps);
       const materializedCapabilityScope = [
         ...new Set(existingSteps.map((step) => step.capability)),
       ];
-      if (
+      const materializedScopeChanged =
         JSON.stringify(workOrder.materializedCapabilityScope ?? []) !==
-        JSON.stringify(materializedCapabilityScope)
-      ) {
+        JSON.stringify(materializedCapabilityScope);
+      if (materializedScopeChanged || placement) {
         await persistTaskPayload(app, task, {
           ...payload,
           desktopWorkOrder: {
             ...workOrder,
             materializedCapabilityScope,
+            planPreview: {
+              ...planPreview,
+              ...(placement
+                ? {
+                    executionSteps: placement.steps,
+                    executionPlacement: placement.snapshot,
+                  }
+                : {}),
+            },
           },
         });
       }
@@ -2627,25 +2686,12 @@ export async function maybeMaterializeDesktopPlan(
       // KAYDEDİLİR; yürütme bugünkü yoldan devam eder. Sayılar iyi olmadan
       // yürütme buna bağlanmaz — bu oturumda çalışan bir yolu yenisiyle
       // değiştirmek 9 gizli regresyon üretmişti.
-      const placement = await placeExecutionSteps(app, {
-        userId: task.userId,
-        steps,
-      }).catch(() => null);
+      const placement = await measureExecutionPlacement(app, task, steps);
       if (placement) {
         const unplaceable = unplaceableSteps({
           placements: placement.placements,
           map: placement.map,
         });
-        app.log.info?.(
-          {
-            taskId: task.id,
-            placement: summarizePlacements(placement.placements),
-            unresolvedCapabilities: placement.placements
-              .filter((entry) => entry.basis === "unresolved")
-              .map((entry) => entry.capability),
-          },
-          "execution placement resolved",
-        );
         // HİÇBİR CİHAZDA ÇALIŞAMAYACAK ADIM GÖNDERİLMEZ.
         //
         // Canlı arıza (görev 4d1a9de6): plan `send_whatsapp_message` içeriyordu,
@@ -2680,6 +2726,15 @@ export async function maybeMaterializeDesktopPlan(
       const updatedPlanPreview = {
         ...planPreview,
         steps,
+        ...(placement
+          ? {
+              executionSteps: placement.steps,
+              executionPlacement: placement.snapshot,
+            }
+          : {
+              executionSteps: undefined,
+              executionPlacement: undefined,
+            }),
         planSource: "server_materialized" as const,
         contract: "elyan.compiled_plan.v1" as const,
         planCache,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildPlacementSnapshot,
   summarizePlacements,
   unplaceableSteps,
   type StepPlacement,
@@ -54,6 +55,40 @@ test("boş plan sıfır döner", () => {
   assert.equal(summary.total, 0);
   assert.equal(summary.resolved, 0);
   assert.deepEqual(summary.byDevice, {});
+});
+
+test("shadow snapshot only carries bounded placement evidence", () => {
+  const snapshot = buildPlacementSnapshot(
+    [
+      placement({ stepId: "s1", deviceId: "mac" }),
+      placement({
+        stepId: "s2",
+        capability: "present_file",
+        device: "mobile",
+        basis: "baseline_online",
+      }),
+      placement({
+        stepId: "s3",
+        capability: "send_whatsapp_message",
+        basis: "unresolved",
+        device: undefined,
+        online: undefined,
+      }),
+    ],
+    "2030-01-01T00:00:00.000Z",
+  );
+  assert.deepEqual(snapshot, {
+    mode: "shadow",
+    resolvedAt: "2030-01-01T00:00:00.000Z",
+    summary: {
+      total: 3,
+      resolved: 2,
+      unresolved: 1,
+      offline: 0,
+      byDevice: { desktop: 1, mobile: 1 },
+    },
+    unresolvedCapabilities: ["send_whatsapp_message"],
+  });
 });
 
 // ---------------------------------------------------------------------------

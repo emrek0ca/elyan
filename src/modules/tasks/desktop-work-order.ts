@@ -10,6 +10,8 @@ import type { RemoteMcpSelectionMetadata } from "../integrations/provider-regist
 import { extractStructuralSlots } from "./structural-slots.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import { matchDesktopCapabilitiesSemantically } from "./desktop-capability-ontology.js";
+import type { ExecutionStep } from "./execution-step.js";
+import type { ExecutionPlacementSnapshot } from "./execution-placement.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
 // görevler masaüstünde WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu.
@@ -212,6 +214,9 @@ export type DesktopWorkOrder = {
     summary: string;
     privacyClass: "public_text" | "local_private" | "side_effect";
     steps: DesktopWorkOrderStep[];
+    /** Adım-cihaz kararı; ilk aşamada yalnız shadow evidence olarak taşınır. */
+    executionSteps?: ExecutionStep[];
+    executionPlacement?: ExecutionPlacementSnapshot;
     dispatchOptimization?: {
       strategy: "quantum_guided_dispatch_v1";
       source: "backend_neural_readiness";
