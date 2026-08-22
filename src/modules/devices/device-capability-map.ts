@@ -1,0 +1,169 @@
+import type { FastifyInstance } from "fastify";
+import { and, desc, eq } from "drizzle-orm";
+import { devices, runtimeConnections } from "../../db/schema.js";
+
+/**
+ * HANGİ YETENEK HANGİ CİHAZDA? — cihazlar arası yürütmenin ön koşulu.
+ *
+ * ÖLÇÜM (2026-08-22):
+ *   devices        : ios 129 · macos 48 · linux 6 · darwin 2 · server 1
+ *   masaüstü       : `runtime_connections.capabilities` → 102 yetenek beyan ediyor
+ *   MOBİL          : hiçbir yetenek beyan ETMİYOR
+ *
+ * Yani planlayıcı "kamera/konum/bildirim/paylaşım mobilde" bilgisine sahip
+ * değil. "Bilgisayarımdaki son faturayı bul ve telefona gönder" gibi bir
+ * isteği cihazlara bölememesinin sebebi bu: ikinci cihazın ne yapabildiği
+ * hiçbir yerde yazmıyor.
+ *
+ * İKİ KAYNAK, AÇIK ÖNCELİK
+ * ------------------------
+ * 1. Çalışma zamanı beyanı (masaüstü bunu yapıyor) — GERÇEK kaynak.
+ * 2. Platform tabanı (aşağıdaki liste) — beyan YOKKEN kullanılan taban.
+ *
+ * Taban elle tutulan bir listedir ve bu projede elle tutulan listeler
+ * defalarca gerçekle ayrıştı. Bu yüzden: beyan varsa taban HİÇ kullanılmaz,
+ * ve taban yalnız platformun kesin olarak sunduğu yüzeyleri içerir
+ * (iOS'ta kamera vardır — bu bir tahmin değil). Mobil uygulama beyan
+ * göndermeye başladığında bu liste ölür.
+ */
+
+/** iOS uygulamasının platform gereği sunduğu yüzeyler. */
+const IOS_BASELINE_CAPABILITIES = [
+  "camera",
+  "location",
+  "notifications",
+  "contacts",
+  "share",
+  "photo_library",
+  "microphone",
+  "present_file",
+] as const;
+
+export type DeviceCapabilityView = {
+  deviceId: string;
+  platform: string;
+  kind: "desktop" | "mobile" | "server" | "unknown";
+  online: boolean;
+  capabilities: string[];
+  /** Yetenekler nereden geldi — beyan mı, taban mı? */
+  source: "runtime_declared" | "platform_baseline" | "none";
+};
+
+function classifyPlatform(platform: string): DeviceCapabilityView["kind"] {
+  const normalized = platform.toLowerCase();
+  if (normalized === "ios" || normalized === "android") return "mobile";
+  if (normalized === "macos" || normalized === "darwin" || normalized === "linux" || normalized === "windows") {
+    return "desktop";
+  }
+  if (normalized === "server") return "server";
+  return "unknown";
+}
+
+function readDeclaredCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) =>
+      typeof item === "string"
+        ? item
+        : typeof (item as { name?: unknown })?.name === "string"
+          ? String((item as { name: string }).name)
+          : "",
+    )
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Kullanıcının cihazları ve her birinin yapabildikleri.
+ *
+ * Çevrimdışı cihaz da DÖNER — planlayıcının "yetenek var ama cihaz kapalı"
+ * ile "yetenek hiç yok" arasını ayırt etmesi gerekir. İkisini aynı saymak,
+ * kullanıcıya "yapamıyorum" demekle "şu an ulaşamıyorum" demeyi karıştırır.
+ */
+export async function readDeviceCapabilityMap(
+  app: FastifyInstance,
+  input: { userId: string },
+): Promise<DeviceCapabilityView[]> {
+  try {
+    const rows = await app.db
+      .select({
+        deviceId: devices.id,
+        platform: devices.platform,
+        capabilities: runtimeConnections.capabilities,
+        status: runtimeConnections.status,
+        heartbeat: runtimeConnections.lastHeartbeatAt,
+      })
+      .from(devices)
+      .leftJoin(runtimeConnections, eq(runtimeConnections.deviceId, devices.id))
+      .where(and(eq(devices.userId, input.userId)))
+      .orderBy(desc(runtimeConnections.lastHeartbeatAt))
+      .limit(50);
+
+    const byDevice = new Map<string, DeviceCapabilityView>();
+    for (const row of rows) {
+      const deviceId = String(row.deviceId ?? "");
+      if (!deviceId || byDevice.has(deviceId)) continue;
+      const platform = String(row.platform ?? "unknown");
+      const kind = classifyPlatform(platform);
+      const declared = readDeclaredCapabilities(row.capabilities);
+      const capabilities =
+        declared.length > 0
+          ? declared
+          : kind === "mobile"
+            ? [...IOS_BASELINE_CAPABILITIES]
+            : [];
+      byDevice.set(deviceId, {
+        deviceId,
+        platform,
+        kind,
+        online: String(row.status ?? "") === "online",
+        capabilities,
+        source:
+          declared.length > 0
+            ? "runtime_declared"
+            : capabilities.length > 0
+              ? "platform_baseline"
+              : "none",
+      });
+    }
+    return [...byDevice.values()];
+  } catch (error) {
+    app.log?.warn?.(
+      { err: error instanceof Error ? error.message : String(error) },
+      "device capability map unavailable",
+    );
+    return [];
+  }
+}
+
+export type CapabilityPlacement = {
+  capability: string;
+  deviceId: string;
+  kind: DeviceCapabilityView["kind"];
+  online: boolean;
+  source: DeviceCapabilityView["source"];
+};
+
+/**
+ * Bu yetenek NEREDE çalışabilir?
+ *
+ * Çevrimiçi cihaz önce gelir; ama çevrimdışı seçenek de döner ki çağıran
+ * "hiç yok" ile "şu an kapalı" arasını ayırabilsin.
+ */
+export function placeCapability(
+  map: DeviceCapabilityView[],
+  capability: string,
+): CapabilityPlacement[] {
+  const needle = capability.trim();
+  if (!needle) return [];
+  return map
+    .filter((device) => device.capabilities.includes(needle))
+    .sort((left, right) => Number(right.online) - Number(left.online))
+    .map((device) => ({
+      capability: needle,
+      deviceId: device.deviceId,
+      kind: device.kind,
+      online: device.online,
+      source: device.source,
+    }));
+}
