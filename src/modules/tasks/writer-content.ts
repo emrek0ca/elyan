@@ -119,6 +119,29 @@ export function findWriterContentGap(
   return { stepId: step.id, capability: step.capability, argKey, words };
 }
 
+/**
+ * DOSYA ADI CÜMLE OLAMAZ.
+ *
+ * Canlı çıktı (2026-08-22): `masaustune-zurafalar-hakkinda-bir-rapor-hazirla-ve-kaydet.docx`
+ * Masaüstü, `title` yoksa dosya adını `prompt`/hedef metninden türetiyor
+ * (`ensure_allowed_output_path(..., hint=title or prompt or ...)`), o da
+ * kullanıcının cümlesinin tamamı oluyordu.
+ *
+ * Üretilen metnin İLK SATIRI zaten belge başlığıdır (prompt bölüm başlıkları
+ * istiyor). Cümle gibi görünüyorsa (uzun, nokta ile biten) başlık sayılmaz.
+ */
+function deriveTitle(text: string): string | null {
+  const firstLine = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) return null;
+  const cleaned = firstLine.replace(/^#+\s*/, "").replace(/[.:;]+$/, "").trim();
+  if (cleaned.length < 3 || cleaned.length > 80) return null;
+  if (cleaned.split(/\s+/).length > 8) return null;
+  return cleaned;
+}
+
 function buildContentPrompt(input: {
   workOrder: DesktopWorkOrder;
   step: DesktopWorkOrderStep;
@@ -257,7 +280,17 @@ export async function fillWriterContent(input: {
     if (!produced) return step;
     const gap = gaps.find((entry) => entry.gap.stepId === step.id)?.gap;
     if (!gap) return step;
-    return { ...step, args: { ...readArgs(step), [gap.argKey]: produced.text } };
+    const args = readArgs(step);
+    const existingTitle = typeof args.title === "string" ? args.title.trim() : "";
+    const derivedTitle = existingTitle ? null : deriveTitle(produced.text);
+    return {
+      ...step,
+      args: {
+        ...args,
+        [gap.argKey]: produced.text,
+        ...(derivedTitle ? { title: derivedTitle } : {}),
+      },
+    };
   });
   return { steps, filled: generated.size };
 }

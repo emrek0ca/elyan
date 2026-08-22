@@ -612,6 +612,27 @@ type SharedBrainInferenceInput = {
  * ayrıştırılamadı, boru hattı 5sn geri çekilmeyle baştan koştu ve
  * "klasör oluştur" gibi tek adımlık bir iş 51 saniyede onaya düştü.
  */
+/**
+ * DÜZ METİN ÜRETİM ROTALARI — zarf protokolü BURAYA GİRMEZ.
+ *
+ * Bu rotalar bir sohbet turu değil; çıktısı doğrudan bir belgeye/artefakta
+ * giden düz metindir. `ELYAN_TURN_ENVELOPE_ENABLED` canlıda açık olduğu için
+ * bu çağrılar da `json_object` formatına zorlanıyordu ve zincir komple
+ * çöküyordu.
+ *
+ * CANLI KANIT (görev 907dbd2d, 2026-08-22 15:00 — "zürafalar hakkında rapor"):
+ *   response_format: json_object  ←  düz metin isteyen çağrı
+ *   groq/compound        → provider_error:400        (json_object desteklemiyor)
+ *   openai/gpt-oss-20b   → json_validate_failed      (model düzyazı yazdı)
+ *   openai/gpt-oss-20b   → empty_response ×2
+ *   → "writer content generation failed", belgeye yine 46 kelimelik brief gitti.
+ */
+export function isPlainProseGenerationRoute(
+  route: string | undefined,
+): boolean {
+  return route === "desktop_writer_content";
+}
+
 export function isDesktopPlanMachineJsonRoute(
   route: string | undefined,
 ): boolean {
@@ -7657,9 +7678,11 @@ export async function generateSharedBrainReply(
       input.requestMetadata?.semanticRouteOnly === true ||
       workload === "fast_route" ||
       workload === "intent";
+    const plainProseTurn = isPlainProseGenerationRoute(input.route);
     const turnEnvelopeEnabled =
       !machineJsonRoute &&
       !controlPlaneMachineJsonTurn &&
+      !plainProseTurn &&
       !input.responseSchemaOverride &&
       (connectorToolsAdvertised ||
         // AÇIK yapılandırma hızlı tur kısıtını yener: `ELYAN_TURN_ENVELOPE_ENABLED`
