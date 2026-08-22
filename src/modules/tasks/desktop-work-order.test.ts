@@ -136,6 +136,60 @@ test("buildDesktopWorkOrder prefers semantic desktop contract over prompt keywor
   );
 });
 
+test("buildDesktopWorkOrder materializes a latest desktop report lookup without a messaging step", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "masaüstündeki son raporu bul ve telefonuma gönder",
+    title: "Son raporu bul",
+    routeDecision: routeDecision({
+      taskRoute: {
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "Local file lookup",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDesktopContract: {
+          contract: "elyan.semantic_desktop_dispatch.v1",
+          route: "desktop_runtime",
+          intent: "file_workflow",
+          requiredSemanticCapabilities: ["file_find"],
+          requiredLocalContext: ["filesystem"],
+          sideEffectLevel: "read",
+          confidence: 0.98,
+          evidence: ["measured local file lookup"],
+        },
+      },
+    }),
+    requestedCapabilities: [],
+  });
+
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["file_find"],
+  );
+  assert.deepEqual(workOrder.planPreview.steps[0]?.args, {
+    path: "~/Desktop",
+    name_contains: "rapor",
+    kind: "document",
+    max_depth: 3,
+    max_results: 20,
+  });
+  assert.equal(workOrder.planPreview.planSource, "deterministic_registry");
+  assert.equal(workOrder.planPreview.planPreparation?.status, "ready");
+  assert.equal(
+    workOrder.planPreview.planPreparation?.outcome,
+    "deterministic_materialized",
+  );
+  assert.equal(
+    workOrder.planPreview.steps.some((step) =>
+      ["email_send", "mcp_call_tool", "desktop_operator.run"].includes(step.capability),
+    ),
+    false,
+  );
+});
+
 test("desktop plan preparation gate blocks pending v1.7 work without an age escape", () => {
   const payload = {
     desktopWorkOrder: {

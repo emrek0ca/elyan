@@ -2073,6 +2073,36 @@ test("decideCommandRoute uses regex fallback only when route model fails technic
   );
 });
 
+test("decideCommandRoute maps a latest desktop report lookup to file_find", async () => {
+  const app = createDesktopReadyApp(["file_find"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => {
+        throw new Error("route model timeout");
+      },
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "latest-desktop-report-user",
+    message: "masaüstündeki son raporu bul ve telefonuma gönder",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.semanticDesktopContract?.intent, "file_workflow");
+  assert.deepEqual(
+    decision.taskRoute?.semanticDesktopContract?.requiredSemanticCapabilities,
+    ["file_find"],
+  );
+  assert.deepEqual(
+    decision.taskRoute?.semanticDesktopContract?.requiredLocalContext,
+    ["filesystem"],
+  );
+});
+
 test("decideCommandRoute fails closed when an explicit desktop capability has no runtime", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {

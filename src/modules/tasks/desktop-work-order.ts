@@ -504,6 +504,47 @@ const DOCUMENT_NOUN_PATTERN = trStemPattern(
   { exclude: ["belgesel", "belgeseli", "belgeselleri"] },
 );
 
+type FileFindKind =
+  | "document"
+  | "spreadsheet"
+  | "presentation"
+  | "image"
+  | "archive"
+  | "any";
+
+function fileFindArgsForRequest(message: string): Record<string, unknown> {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  const path = trStemPattern(["indirilenler", "download"]).test(normalized)
+    ? "~/Downloads"
+    : trStemPattern(["belgeler", "document"]).test(normalized)
+      ? "~/Documents"
+      : /\bworkspace\b|\brepo(?:su|sitory)?\b/iu.test(normalized)
+        ? "workspace"
+        : "~/Desktop";
+
+  const nameMatchers: Array<{
+    pattern: RegExp;
+    name: string;
+    kind: FileFindKind;
+  }> = [
+    { pattern: trStemPattern(["rapor", "report"]), name: normalized.includes("report") ? "report" : "rapor", kind: "document" },
+    { pattern: trStemPattern(["sunum", "slayt", "presentation", "powerpoint"]), name: "sunum", kind: "presentation" },
+    { pattern: trStemPattern(["excel", "xlsx", "csv", "tablo", "spreadsheet"]), name: "excel", kind: "spreadsheet" },
+    { pattern: trStemPattern(["pdf", "docx", "word", "belge", "document"]), name: "", kind: "document" },
+    { pattern: trStemPattern(["görsel", "gorsel", "resim", "foto", "image", "png", "jpg", "jpeg"]), name: "", kind: "image" },
+    { pattern: trStemPattern(["zip", "arşiv", "arsiv", "archive"]), name: "", kind: "archive" },
+  ];
+  const match = nameMatchers.find((candidate) => candidate.pattern.test(normalized));
+  const args: Record<string, unknown> = {
+    path,
+    max_depth: 3,
+    max_results: 20,
+  };
+  if (match?.name) args.name_contains = match.name;
+  if (match) args.kind = match.kind;
+  return args;
+}
+
 export function parseDirectImageFetchCommand(message: string): DirectImageFetchCommand | null {
   const compact = compactText(message, 400);
   const normalized = compact.toLocaleLowerCase("tr-TR");
@@ -1653,6 +1694,14 @@ function buildSteps(input: {
       args: { query: "all" },
     });
   }
+  if (input.capabilities.includes("file_find")) {
+    steps.push({
+      id: "step_file_find",
+      capability: "file_find",
+      description: "İzinli yerel klasörde dosya adları ve tarihleri aranıp en yeni eşleşme seçilecek.",
+      args: fileFindArgsForRequest(input.message),
+    });
+  }
   for (const capability of ["open_app", "close_app"] as const) {
     if (!input.capabilities.includes(capability)) continue;
     steps.push({
@@ -2085,13 +2134,20 @@ export function buildDesktopWorkOrder(input: {
     steps.length === 1 &&
     steps[0]?.capability === "sys_info" &&
     steps[0]?.args?.query === "all";
+  const deterministicFileFindStep =
+    steps.length === 1 &&
+    steps[0]?.capability === "file_find" &&
+    typeof steps[0]?.args?.path === "string" &&
+    typeof steps[0]?.args?.max_depth === "number" &&
+    typeof steps[0]?.args?.max_results === "number";
   const deterministicRegistryPlan =
     (directRegistryCommand !== null &&
       steps.length === 1 &&
       steps[0]?.capability === directRegistryCommand.capability &&
       Object.keys(steps[0]?.args ?? {}).length === 1 &&
       typeof steps[0]?.args.app_name === "string") ||
-    deterministicReadOnlyStep;
+    deterministicReadOnlyStep ||
+    deterministicFileFindStep;
   const basePrivacyRouting = executionEnvelope?.privacy_routing ?? {
     mode: localContextNeeded.length > 0 ? "desktop_private" : "server",
     mayUseHostedModels: localContextNeeded.length === 0,

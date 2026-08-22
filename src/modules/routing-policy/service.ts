@@ -606,6 +606,38 @@ const DESKTOP_FALLBACK_ANCHOR_PATTERNS = [
   /\b(ekran|screen|pencere|window|chrome|safari|firefox|finder|terminal|shell|tarayıcı|tarayici|uygulama|app)\b/iu,
   /\b(bilgisayar(?:ım|im|ımda|imde|umda|unda)?|masaüstündeki|masaustundeki|indirilenlerdeki)\b/iu,
 ];
+const FILE_LOOKUP_VERB_STEMS = stemOf(
+  ["bul", "getir", "listele", "göster", "goster", "find", "show", "list"],
+  ["bulut", "bulgu", "bulgular"],
+);
+const FILE_LOOKUP_RECENCY_STEMS = stemOf([
+  "son",
+  "yeni",
+  "dünkü",
+  "dunku",
+  "latest",
+  "newest",
+  "recent",
+  "last",
+]);
+const LOCAL_FILE_LOOKUP_PATTERNS = [
+  stemSequence(
+    DESKTOP_FALLBACK_ANCHOR_PATTERNS[0],
+    stemSequence(FILE_NOUN_STEMS, FILE_LOOKUP_VERB_STEMS),
+  ),
+  stemSequence(
+    DESKTOP_FALLBACK_ANCHOR_PATTERNS[0],
+    stemSequence(FILE_LOOKUP_VERB_STEMS, FILE_NOUN_STEMS),
+  ),
+  stemSequence(
+    FILE_LOOKUP_RECENCY_STEMS,
+    stemSequence(FILE_NOUN_STEMS, FILE_LOOKUP_VERB_STEMS),
+  ),
+  stemSequence(
+    FILE_LOOKUP_RECENCY_STEMS,
+    stemSequence(FILE_LOOKUP_VERB_STEMS, FILE_NOUN_STEMS),
+  ),
+];
 const QUANTUM_CAPABILITIES = [
   "quantum_model_problem",
   "quantum_run_experiment",
@@ -1024,9 +1056,18 @@ function hasDesktopWriteSideEffectSignal(message: string): boolean {
   );
 }
 
+function hasDesktopFileLookupSignal(message: string): boolean {
+  return (
+    !hasDesktopWriteSideEffectSignal(message) &&
+    !hasDesktopSaveExportSignal(message) &&
+    matchesAny(message, LOCAL_FILE_LOOKUP_PATTERNS)
+  );
+}
+
 function hasDesktopActionSignal(message: string): boolean {
   return (
     hasDesktopPrivateDataSignal(message) ||
+    hasDesktopFileLookupSignal(message) ||
     hasDesktopSaveExportSignal(message) ||
     hasDesktopWriteSideEffectSignal(message) ||
     matchesAny(message, DESKTOP_APP_ACTION_PATTERNS)
@@ -2115,6 +2156,15 @@ function semanticIntentFromSignals(input: {
   }
   if (
     input.capabilities.some((capability) =>
+      ["file_find", "file_search", "file_read", "directory_tree"].includes(
+        capability,
+      ),
+    )
+  ) {
+    return "file_workflow";
+  }
+  if (
+    input.capabilities.some((capability) =>
       [
         "document_read",
         "document_write",
@@ -2141,9 +2191,15 @@ function localContextFromSignals(input: {
   if (input.screenGlanceRequested) contexts.add("screen");
   for (const capability of input.capabilities) {
     if (
-      ["filesystem_read", "filesystem_write", "document_read"].includes(
-        capability,
-      )
+      [
+        "filesystem_read",
+        "filesystem_write",
+        "document_read",
+        "file_find",
+        "file_search",
+        "file_read",
+        "directory_tree",
+      ].includes(capability)
     ) {
       contexts.add("filesystem");
     }
@@ -2172,6 +2228,17 @@ function buildFallbackSemanticDesktopContract(input: {
   confidence: number;
   evidence: string[];
 }): SemanticDesktopDispatchContract {
+  const normalizedCapabilities = uniqueSemanticCapabilities(input.capabilities);
+  // A missing capability list is the degraded route-model fallback, not an
+  // instruction to drive the screen. A measured filename/date lookup has a
+  // bounded read-only registry capability and must keep that meaning all the
+  // way into the desktop work order.
+  const requiredSemanticCapabilities =
+    normalizedCapabilities.length > 0
+      ? normalizedCapabilities.slice(0, 16)
+      : hasDesktopFileLookupSignal(input.message)
+        ? ["file_find"]
+        : ["desktop_operator.run"];
   const sideEffectLevel: SemanticDesktopSideEffectLevel =
     input.capabilities.some((capability) =>
       ["filesystem_delete", "delete_file"].includes(capability),
@@ -2196,17 +2263,14 @@ function buildFallbackSemanticDesktopContract(input: {
     route: "desktop_runtime",
     intent: semanticIntentFromSignals({
       screenGlanceRequested: input.screenGlanceRequested,
-      capabilities: input.capabilities,
+      capabilities: requiredSemanticCapabilities,
       message: input.message,
     }),
-    requiredSemanticCapabilities:
-      input.capabilities.length > 0
-        ? uniqueSemanticCapabilities(input.capabilities).slice(0, 16)
-        : ["desktop_operator.run"],
+    requiredSemanticCapabilities,
     requiredLocalContext: localContextFromSignals({
       screenGlanceRequested: input.screenGlanceRequested,
       needsPrivateDesktopData: input.needsPrivateDesktopData,
-      capabilities: input.capabilities,
+      capabilities: requiredSemanticCapabilities,
     }),
     sideEffectLevel,
     confidence: Number(
