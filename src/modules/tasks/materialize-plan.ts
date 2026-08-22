@@ -3,7 +3,10 @@ import type { FastifyInstance } from "fastify";
 import { tasks } from "../../db/schema.js";
 import { extractFirstJsonObject } from "../brain/desktop-plan.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
-import { fillWriterContent } from "./writer-content.js";
+import {
+  fillWriterContent,
+  writerBodyRestatesRequest,
+} from "./writer-content.js";
 import { classifyKnowledgeRecency } from "../../core/understanding/knowledge-recency.js";
 import { pruneUnneededResearchSteps } from "./plan-shortest-path.js";
 import { getUserDevice } from "../devices/service.js";
@@ -2550,6 +2553,30 @@ export async function maybeMaterializeDesktopPlan(
       // yeniden dener (geçici sağlayıcı hatası ikinci denemede geçebilir) ve
       // ancak deneme hakkı bitince görev açık bir mesajla başarısız olur.
       // Yarım iş, yapılmamış işten kötüdür — kullanıcı yanlış bilgilendirilir.
+      // İÇERİK DOĞRULAMASI — varlık değil, İÇERİK.
+      //
+      // Gövde üretimi "başarılı" dönse bile, yazıcıya giden metin kullanıcının
+      // isteğinin yeniden ifadesiyse bu bir belge değildir. Görev doğrulaması
+      // bunu YAKALAYAMIYOR: yalnız "dosya var mı" diye soruyor.
+      const restating = steps.filter((step) =>
+        writerBodyRestatesRequest({
+          step,
+          goalSummary: readPlanningGatePrompt(workOrder),
+        }),
+      );
+      if (restating.length > 0) {
+        app.log.warn(
+          {
+            taskId: task.id,
+            steps: restating.map((step) => ({
+              stepId: step.id,
+              capability: step.capability,
+            })),
+          },
+          "desktop plan withheld: writer body restates the request",
+        );
+        return false;
+      }
       if (writerContent.unresolved.length > 0) {
         app.log.warn(
           {

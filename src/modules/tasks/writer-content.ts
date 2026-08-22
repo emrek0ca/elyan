@@ -68,6 +68,61 @@ function readArgs(step: DesktopWorkOrderStep): Record<string, unknown> {
   return step.args && typeof step.args === "object" ? step.args : {};
 }
 
+/**
+ * DOĞRULAMA VARLIĞA DEĞİL İÇERİĞE BAKMALI.
+ *
+ * Görev doğrulaması bugün yalnız "dosya var mı" diye soruyor:
+ *   output:artifact ✓   output:file_update ✓   rule:artifact_reference ✓
+ * Bu yüzden içi konu tarifi olan bir belge tüm kapıları geçiyordu.
+ *
+ * Bu kontrol gönderim ÖNCESİ çalışır ve tek bir şeyi sorar: yazıcıya verilen
+ * gövde, kullanıcının isteğinin kendisi mi? Öyleyse bu bir belge değil,
+ * isteğin kopyasıdır.
+ *
+ * Canlı kanıt:
+ *   907dbd2d → gövde: "Kedilerin tarihçesi, tür çeşitliliği… iki sayfalık bir
+ *              rapor. Giriş, ana bölümler ve sonuç kısmı içersin." (21 kelime)
+ *   b2845b50 → gövde: hedef metninin kendisi (42 kelime)
+ */
+function normalizeForComparison(value: string): string {
+  return value
+    .toLocaleLowerCase("tr")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function writerBodyRestatesRequest(input: {
+  step: DesktopWorkOrderStep;
+  goalSummary: string;
+}): boolean {
+  if (!PROSE_WRITER_CAPABILITIES.has(input.step.capability)) return false;
+  const args = readArgs(input.step);
+  const body = CONTENT_ARG_KEYS.map((key) => args[key])
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .trim();
+  if (!body) return false;
+  if (STEP_REFERENCE_RE.test(body)) return false;
+
+  const normalizedBody = normalizeForComparison(body);
+  const normalizedGoal = normalizeForComparison(input.goalSummary);
+  if (!normalizedBody || !normalizedGoal) return false;
+
+  // Gövde hedefi İÇERİYOR ya da hedef gövdeyi içeriyorsa: bu bir yeniden
+  // ifadedir, belge değil. Kısa gövdelerde kapsama testi yeterli; uzun bir
+  // belge zaten hedefin çok ötesine geçer.
+  if (normalizedBody.length <= normalizedGoal.length * 2) {
+    if (
+      normalizedBody.includes(normalizedGoal) ||
+      normalizedGoal.includes(normalizedBody)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type WriterContentGap = {
   stepId: string;
   capability: string;

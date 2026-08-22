@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   WRITER_CONTENT_MIN_WORDS,
   findWriterContentGap,
+  writerBodyRestatesRequest,
 } from "./writer-content.js";
 import type { DesktopWorkOrderStep } from "./desktop-work-order.js";
 
@@ -130,4 +131,71 @@ test("üretilemeyen gövde bildirilir ve plan yayınlanmaz", () => {
   // Plan, adımlar yayınlanmadan ÖNCE tutulmalı: önce kapı, sonra cache.
   const cache = materialize.indexOf("storeDesktopPlanCache", guard);
   assert.ok(cache > guard, "kapı plan cache'inden SONRA geliyor");
+});
+
+// ---------------------------------------------------------------------------
+// DOĞRULAMA VARLIĞA DEĞİL İÇERİĞE BAKMALI.
+//
+// Görev doğrulaması yalnız "dosya var mı" diye soruyor:
+//   output:artifact ✓  output:file_update ✓  rule:artifact_reference ✓
+// Bu yüzden içi konu tarifi olan bir belge tüm kapıları geçiyordu.
+// ---------------------------------------------------------------------------
+
+const LIVE_GOAL = "masaüstüne zürafalar hakkında bir pdf hazırla ve kaydet";
+
+test("hedefin kendisi gövde olarak gönderilemez", () => {
+  assert.equal(
+    writerBodyRestatesRequest({
+      step: step({ args: { prompt: LIVE_GOAL } }),
+      goalSummary: LIVE_GOAL,
+    }),
+    true,
+  );
+});
+
+test("hedefin tarifi de gövde sayılmaz", () => {
+  assert.equal(
+    writerBodyRestatesRequest({
+      step: step({ args: { prompt: `${LIVE_GOAL} document_kind: "report"` } }),
+      goalSummary: LIVE_GOAL,
+    }),
+    true,
+  );
+});
+
+test("gerçek gövde geçer", () => {
+  const body = [
+    "Zürafa Bilimsel Raporu",
+    "Giriş",
+    "Zürafalar Afrika savanlarında yaşayan, uzun boyunlarıyla tanınan memelilerdir.",
+    "Beslenme",
+    "Ağırlıklı olarak akasya yapraklarıyla beslenirler ve günün büyük bölümünü otlanarak geçirirler.",
+  ].join("\n");
+  assert.equal(
+    writerBodyRestatesRequest({
+      step: step({ args: { prompt: body } }),
+      goalSummary: LIVE_GOAL,
+    }),
+    false,
+  );
+});
+
+test("adım referansı taşıyan gövdeye karışılmaz", () => {
+  assert.equal(
+    writerBodyRestatesRequest({
+      step: step({ args: { prompt: "{{steps.arastirma.output}}" } }),
+      goalSummary: LIVE_GOAL,
+    }),
+    false,
+  );
+});
+
+test("düzyazı olmayan yazıcı kapsam dışı", () => {
+  assert.equal(
+    writerBodyRestatesRequest({
+      step: step({ capability: "spreadsheet_write", args: { prompt: LIVE_GOAL } }),
+      goalSummary: LIVE_GOAL,
+    }),
+    false,
+  );
 });
