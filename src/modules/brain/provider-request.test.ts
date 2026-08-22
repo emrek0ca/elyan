@@ -166,11 +166,19 @@ test("TurnEnvelope format uses json_object for gpt-oss and unsupported Groq mode
   assert.match(String(qwenSystem?.content ?? ""), /must contain exactly these keys/u);
 });
 
-test("buildRequestBody leaves Groq machine-JSON routes to the typed parser", () => {
-  // Masaüstü plan/anlama rotasında turn envelope KAPALIdır ve şema override
-  // yoktur; bu ikisi birleşince hiç `response_format` kalmıyordu ve model
-  // soruyu sınıflamak yerine CEVAPLIYORDU (ölçüldü: soru biçimli mesajlarda
-  // ~%40 düzyazı → masaüstü ayrıştıramaz → desen tabanlı bozulmuş mod).
+test("buildRequestBody makine-JSON rotasında biçimi ZORLAR (qwen hariç)", () => {
+  // Bu testin kendi yorumu arızayı ZATEN anlatıyordu: "hiç `response_format`
+  // kalmıyordu ve model soruyu sınıflamak yerine CEVAPLIYORDU (~%40 düzyazı)".
+  // Ama iddia o bozuk durumu KİLİTLİYORDU.
+  //
+  // Bastırma kuralı qwen için yazılmıştı, tüm Groq modellerine uygulanıyordu.
+  // Ölçüm (gerçek 33KB planlama promptu, canlı Groq):
+  //   qwen/qwen3.6-27b   json_object → 0/2 (HTTP 400)   → bastırma HAKLI
+  //   openai/gpt-oss-20b json_object → 2/2              → bastırma SAF KAYIP
+  //   openai/gpt-oss-120b json_object → 4/4 (2–3 adım)
+  //
+  // Canlı bedel: iki görevde de ilk plan denemesi Markdown döndü, onarım tek
+  // adıma çöktü, belgeye konu tarifi yazıldı.
   const body = buildRequestBody(
     "groq",
     "openai/gpt-oss-120b",
@@ -186,10 +194,28 @@ test("buildRequestBody leaves Groq machine-JSON routes to the typed parser", () 
     true,
   ) as Record<string, unknown>;
 
-  assert.equal(body.response_format, undefined);
+  assert.deepEqual(body.response_format, { type: "json_object" });
 
-  // Groq makine rotasında şema da provider response_format olarak gönderilmez;
-  // aynı sözleşme prompt içinde taşınır ve typed parser doğrular.
+  // qwen HÂLÂ bastırılır: bu model biçim bayrağıyla 400 dönüyor.
+  const qwenBody = buildRequestBody(
+    "groq",
+    "qwen/qwen3.6-27b",
+    [{ role: "user", content: "selam" }],
+    512,
+    undefined,
+    false,
+    [],
+    "hidden",
+    "low",
+    0.2,
+    undefined,
+    true,
+  ) as Record<string, unknown>;
+  assert.equal(qwenBody.response_format, undefined);
+
+  // Groq makine rotasında KATI ŞEMA yine gönderilmez (gpt-oss'ta
+  // json_validate_failed veriyordu); sözleşme prompt içinde taşınır ve typed
+  // parser doğrular. Ama biçim yine JSON'a zorlanır.
   const schema = { type: "object", properties: {} };
   const schemaBody = buildRequestBody(
     "groq",
@@ -205,7 +231,7 @@ test("buildRequestBody leaves Groq machine-JSON routes to the typed parser", () 
     schema,
     true,
   ) as Record<string, unknown>;
-  assert.equal(schemaBody.response_format, undefined);
+  assert.deepEqual(schemaBody.response_format, { type: "json_object" });
 
   // Bayrak kapalıyken davranış hiç değişmez (mevcut sohbet yolu korunur).
   const plainBody = buildRequestBody(

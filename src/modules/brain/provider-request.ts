@@ -291,13 +291,31 @@ export function buildRequestBody(
     );
   }
 
-  // Groq'un güncel JSON uyumlu modelleri (özellikle qwen/qwen3.6-27b)
-  // makine rotasında response_format gönderildiğinde 400 dönebiliyor. Plan
-  // prompt'u zaten tam JSON sözleşmesini içeriyor; bu özel rotada biçim
-  // bayrağını kaldırıp çıktıyı backend parser + typed validator'a bırakıyoruz.
-  // Normal sohbet/TurnEnvelope yolu bu korumadan etkilenmez.
+  // BASTIRMA ARTIK MODELE ÖZEL (2026-08-22).
+  //
+  // Kural qwen/qwen3.6-27b için yazılmıştı — o model makine rotasında
+  // `response_format` gönderilince 400 dönüyor. Ama koşul TÜM Groq modellerine
+  // uygulanıyordu; yani asıl planlayıcı (gpt-oss) da hiçbir biçim kısıtı
+  // ALMADAN çağrılıyordu ve model düzyazı dönmekte serbestti.
+  //
+  // Canlı bedel: iki görevde de ilk planlama denemesi Markdown tablo döndü
+  // (`jsonObjectFound: false`), üstelik PLANI DOĞRUYDU ("Metin üret → belgeye
+  // yaz"). Onarım yolu sıfırdan planlayıp tek adıma çöktü ve belgeye konu
+  // tarifi yazıldı.
+  //
+  // Ölçüm (gerçek 33KB planlama promptu, canlı Groq):
+  //   qwen/qwen3.6-27b   biçim yok → 0/2 JSON   json_object → 0/2 (HTTP 400)
+  //   openai/gpt-oss-20b biçim yok → 2/2 JSON   json_object → 2/2
+  //   openai/gpt-oss-120b                        json_object → 4/4 (2–3 adım)
+  //
+  // Yani bastırma qwen için HÂLÂ gerekli, gpt-oss için saf kayıp. `json_object`
+  // sağlayıcı düzeyinde zorlama sağlar; sistem istemi ne derse desin çıktı JSON
+  // kalır. `json_schema` (katı) DEĞİL — o gpt-oss'ta json_validate_failed
+  // veriyordu ve `modelSupportsJsonSchemaFormat` zaten onu eliyor.
   const suppressGroqMachineJsonResponseFormat =
-    provider === "groq" && jsonObjectMode;
+    provider === "groq" &&
+    jsonObjectMode &&
+    modelRejectsMachineJsonResponseFormat(model);
   const outMessages = buildOpenAiMessagesWithVision(provider, messages, visionImages);
   return {
     model,
@@ -401,6 +419,15 @@ function supportsTurnEnvelopeResponseFormat(
  * zarf sözleşmesi system prompt'a taşınır, otoriter doğrulama typed parser'da
  * kalır. qwen gibi diğer desteklenmeyen modeller de aynı fallback'i kullanır.
  */
+/**
+ * Makine-JSON rotasında `response_format` gönderilince 400 dönen modeller.
+ *
+ * Ölçülerek doldurulur, tahminle değil. Bugün tek üye qwen ailesi.
+ */
+function modelRejectsMachineJsonResponseFormat(model: unknown): boolean {
+  return String(model ?? "").toLowerCase().startsWith("qwen/");
+}
+
 function modelSupportsJsonSchemaFormat(
   provider: SharedBrainProvider,
   model: unknown,
