@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
+import {
+  classifyKnowledgeRecency,
+  needsLiveResearch,
+} from "../../core/understanding/knowledge-recency.js";
 import type { DesktopWorkOrder, DesktopWorkOrderStep } from "./desktop-work-order.js";
 
 /**
@@ -119,6 +123,7 @@ function buildContentPrompt(input: {
   workOrder: DesktopWorkOrder;
   step: DesktopWorkOrderStep;
   gap: WriterContentGap;
+  liveResearch: boolean;
 }): string {
   const args = readArgs(input.step);
   const brief = CONTENT_ARG_KEYS.map((key) => args[key])
@@ -141,8 +146,16 @@ function buildContentPrompt(input: {
     "KURALLAR:",
     "- Sadece metnin KENDİSİNİ yaz. Ne yapacağını anlatma, plan sunma, önsöz/sonsöz ekleme.",
     "- Bölüm başlıkları kullan; giriş, ana bölümler ve sonuç barındır.",
-    "- Bildiklerinle yaz. Uydurma sayı, tarih, isim veya alıntı KULLANMA.",
-    "- Emin olmadığın güncel/değişken bilgiyi (fiyat, güncel istatistik, son gelişme) yazma; kalıcı ve genel doğru bilgiyle ilerle.",
+    "- Uydurma sayı, tarih, isim veya alıntı KULLANMA.",
+    ...(input.liveResearch
+      ? [
+          "- Güncel veriyi ARAŞTIR ve bulduğun somut değerleri yaz; kaynağın adını doğal cümle içinde belirt.",
+          "- Bir değeri bulamazsan uydurma; o noktada bilginin alınamadığını açıkça yaz.",
+        ]
+      : [
+          "- Bildiklerinle yaz; bu konu kalıcı ve genel bilgiyle karşılanır.",
+          "- Emin olmadığın güncel/değişken bilgiyi (fiyat, güncel istatistik, son gelişme) yazma.",
+        ]),
     "- Markdown başlık işareti (#) kullanma; başlıkları düz satır olarak yaz.",
   ]
     .filter(Boolean)
@@ -169,6 +182,19 @@ export async function fillWriterContent(input: {
     );
   if (gaps.length === 0) return { steps: input.steps, filled: 0 };
 
+  // EN HIZLI VE EN DOĞRU YOL — hangisi olduğu ÖLÇÜLEREK seçilir.
+  //
+  // "Kediler hakkında rapor" modelin zaten bildiği bir konu; araştırma adımı
+  // gereksiz yavaşlık ve kırılganlık. "2026 enflasyon rakamları" ise tersine
+  // canlı kaynak ister; model kendi bilgisiyle yazarsa UYDURUR.
+  //
+  // Karar e5 prototip eşleştirmesiyle veriliyor (`npm run eval:knowledge-recency`,
+  // korpus 100% → tutulan 94.4%, uydurma riski 0). Şüphede hızlı yol seçilir.
+  const recency = await classifyKnowledgeRecency(
+    input.workOrder.goal?.summary ?? "",
+  ).catch(() => null);
+  const liveResearch = needsLiveResearch(recency);
+
   const generated = new Map<string, { text: string; words: number }>();
   for (const { step, gap } of gaps) {
     try {
@@ -176,12 +202,15 @@ export async function fillWriterContent(input: {
         userId: input.userId,
         taskId: input.taskId,
         title: "Desktop writer content",
-        prompt: buildContentPrompt({ workOrder: input.workOrder, step, gap }),
-        workload: "document_generate",
+        prompt: buildContentPrompt({ workOrder: input.workOrder, step, gap, liveResearch }),
+        // `public_research` Groq Compound'a uygun iş yükü: yerleşik web
+        // aramasıyla canlı veriyi kendisi getirir. `document_generate` ise hızlı
+        // yol — modelin kendi bilgisi, ek tur yok.
+        workload: liveResearch ? "public_research" : "document_generate",
         route: "desktop_writer_content",
         meteringSurface: "task",
         maxCompletionTokensOverride: 3_000,
-        timeoutMsOverride: 30_000,
+        timeoutMsOverride: liveResearch ? 45_000 : 30_000,
         skillToolAllowlist: [],
         internalEvaluation: {
           skipUsageValidation: true,
@@ -208,6 +237,9 @@ export async function fillWriterContent(input: {
   input.app.log.info?.(
     {
       taskId: input.taskId,
+      liveResearch,
+      recency: recency?.recency ?? null,
+      recencyMargin: recency ? Number(recency.margin.toFixed(3)) : null,
       gaps: gaps.map((entry) => ({
         stepId: entry.gap.stepId,
         capability: entry.gap.capability,
