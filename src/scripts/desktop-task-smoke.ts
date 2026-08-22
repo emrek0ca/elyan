@@ -186,12 +186,35 @@ function watch(taskId?: string): number {
     problems.push("BİÇİM: pdf istendi, docx üretildi");
   }
 
+  // GECİKME GÖRÜNÜR OLSUN.
+  //
+  // Son canlı görev tek adımlık bir belge için 73 saniye sürdü ve nerede
+  // geçtiği ancak logları elle tarayarak anlaşılıyordu. Aşama süreleri artık
+  // aynı ekranda.
+  let stages = "";
+  try {
+    stages = execFileSync(
+      "ssh",
+      [
+        ...SSH,
+        `docker logs --since 2h elyan-backend-backend-1 2>&1 | grep ${JSON.stringify(id)} | grep 'brain decision' | grep -o '"route":"[^"]*","model":"[^"]*"\\|"duration_ms":[0-9]*' | paste - - 2>/dev/null | tail -8`,
+      ],
+      { encoding: "utf8", timeout: 60_000 },
+    ).trim();
+  } catch {
+    stages = "";
+  }
+
   console.log(`görev ${id}`);
   console.log(`  istek     : ${prompt}`);
   console.log(`  durum     : ${status}  (${created} → ${updated})`);
   console.log(`  rota      : ${route[2]}   plan: ${route[0]} / ${route[1]} adım`);
   console.log(`  çıktı     : ${output}`);
   console.log(`  blok      : ${artifact[0]}`);
+  if (stages) {
+    console.log("  aşamalar  :");
+    for (const line of stages.split("\n").slice(0, 8)) console.log(`     ${line.replace(/\s+/g, " ")}`);
+  }
   console.log(problems.length === 0 ? "\n✓ SORUN GÖRÜLMEDİ" : `\n✗ ${problems.length} SORUN`);
   for (const problem of problems) console.log(`    ${problem}`);
   return problems.length > 0 ? 1 : 0;
