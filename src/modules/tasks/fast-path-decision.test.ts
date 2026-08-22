@@ -57,11 +57,22 @@ test("the deterministic parser still covers the shapes it was written for", () =
 test("the deterministic parser misses ordinary phrasings — this is why the gate is semantic now", () => {
   // Hepsi tek ve net masaüstü komutu; hiçbiri kelime desenine uymuyor.
   // Eskiden bu istekler ~2.5 sn'lik anlama hattını boşuna ödüyordu.
-  for (const message of [
-    "Terminali kapatır mısın",
-    "chrome kapansın artık",
-    "şu uygulamadan çık",
-  ]) {
+  //
+  // GÜNCELLEME (2026-08-22): "Terminali kapatır mısın" ARTIK deterministik
+  // olarak çözülüyor — yapısal yuva çıkarımı (024a7f06) uygulama adını ekli
+  // hâlde tanıyabiliyor. Bu bir iyileşme; test onu yansıtacak şekilde
+  // güncellendi, kod geri alınmadı.
+  //
+  // Hata nasıl gözden kaçtı: 024a7f06 turunda tam test kümesi koşulmadı.
+  // Aynı ölçüm hijyeni dersi — bkz. c257398b'nin 9 gizli regresyonu.
+  assert.equal(
+    isDeterministicDesktopFastWorkOrder(desktopRoute(), "Terminali kapatır mısın"),
+    true,
+    "yapısal yuva çıkarımı bu ifadeyi artık çözüyor",
+  );
+
+  // Bunlar hâlâ kelime desenine uymuyor; semantik kapının varlık sebebi.
+  for (const message of ["chrome kapansın artık", "şu uygulamadan çık"]) {
     assert.equal(
       isDeterministicDesktopFastWorkOrder(desktopRoute(), message),
       false,
