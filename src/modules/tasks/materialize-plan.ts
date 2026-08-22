@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { tasks } from "../../db/schema.js";
 import { extractFirstJsonObject } from "../brain/desktop-plan.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
+import { fillWriterContent } from "./writer-content.js";
 import { getUserDevice } from "../devices/service.js";
 import {
   missingRuntimeCapabilities,
@@ -2407,6 +2408,22 @@ export async function maybeMaterializeDesktopPlan(
         );
         return false;
       }
+      // GÖVDEYİ PLANLAYICI YAZAMAZ — ayrı bütçeyle burada üretilir.
+      //
+      // Masaüstü yazıcıları içerik üretmez; verilen metni aynen dosyaya yazar.
+      // Planlayıcının cevabı ise ölçümde 100–309 token (görev fd3acf73) — iki
+      // sayfalık metin oraya sığmıyor. Bu çağrı yapı kurulduktan SONRA yalnız
+      // gövdesi eksik kalmış yazıcı adımlarını doldurur; adım referansı olan
+      // ({{steps.<id>.output}}) planlara dokunmaz.
+      const writerContent = await fillWriterContent({
+        app,
+        workOrder,
+        steps,
+        userId: task.userId,
+        taskId: task.id,
+      });
+      steps = writerContent.steps;
+
       const planCache = await storeDesktopPlanCache({
         app,
         workOrder,

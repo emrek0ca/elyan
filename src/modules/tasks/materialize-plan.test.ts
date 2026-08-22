@@ -502,7 +502,10 @@ test("desktop materialization prompt exposes v2 capability quality contracts", (
 
   assert.match(prompt, /canvas_write: PDF\/PNG canvas çıktısı üretir/);
   assert.match(prompt, /artifact: .*"artifactTypes":\["pdf","image"\]/);
-  assert.match(prompt, /spreadsheet_write: XLSX\/Excel çalışma kitabı üretir/);
+  // Açıklama 7cdc31ee ile değişti: yazıcılar artık "içerik ÜRETMEZ" diyor,
+  // çünkü uygulama gerçekten üretmiyordu (canlı arıza: belgeye konu tarifi
+  // yazıldı). Testin niyeti — yetenek sözleşmesinin prompta düşmesi — aynı.
+  assert.match(prompt, /spreadsheet_write: Verilen HAZIR satır\/sütun verisini XLSX/);
   assert.match(prompt, /output: .*"formats":\["xlsx"\]/);
   assert.match(prompt, /analyze_screen: Aktif pencereyi kullanıcı sorusuna göre görsel olarak analiz eder/);
   assert.match(prompt, /privacy: local_private_screen/);
