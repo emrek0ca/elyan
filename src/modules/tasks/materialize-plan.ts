@@ -1177,12 +1177,62 @@ export function buildPlanningPrompt(
  * sınırlar ve MAX_WORK_ORDER_STEPS ile kırpar. Kullanışlı adım kalmazsa null
  * döner; tek adımlı doğru plan geçerlidir.
  */
+/**
+ * PLAN ZARFININ ADI SABİT DEĞİL — İÇERİĞİ ÖNEMLİ.
+ *
+ * Canlı arıza (görev abeb6d44, 2026-08-22 15:44): model DOĞRU ve çok adımlı bir
+ * plan üretti (`web_research` → belge), JSON de geçerliydi (`jsonObjectFound:
+ * true`) — ama zarfı `{"plan":[...]}` diye adlandırdı. Ayrıştırıcı yalnız
+ * `steps` anahtarına bakıyordu; `parsedStepCount: null` oldu, onarım da aynı
+ * duvara tosladı ve kullanıcı "Görevin güvenilir yürütme planı hazırlanamadı"
+ * gördü.
+ *
+ * Katı `json_schema` gpt-oss'ta çalışmıyor (json_validate_failed), yani zarf
+ * adını sağlayıcı düzeyinde garanti edemiyoruz. Bir eş anlamlı yüzünden doğru
+ * planı çöpe atmak, kırılganlığı kullanıcıya fatura etmektir.
+ *
+ * Adım alanlarında da aynı tolerans: `capability|tool|name`,
+ * `args|arguments|input|parameters`, `description|label|summary|title`.
+ * Sözleşme prompt'ta net anlatılıyor; burası yalnız isimlendirme sapmasını
+ * yutar, YAPIYI değil — yetenek adı hâlâ katalogda olmalı, argümanlar hâlâ
+ * doğrulanır.
+ */
+const PLAN_ARRAY_KEYS = ["steps", "plan", "actions", "tasks", "planSteps"] as const;
+
+function readPlanStepArray(rawPlan: Record<string, unknown>): unknown[] {
+  for (const key of PLAN_ARRAY_KEYS) {
+    const value = rawPlan[key];
+    if (Array.isArray(value) && value.length > 0) return value;
+  }
+  // Bazı turlarda zarf tek bir sarmalayıcının içinde geliyor: {"result":{"steps":[…]}}
+  for (const value of Object.values(rawPlan)) {
+    const nested = asRecord(value);
+    if (!nested) continue;
+    for (const key of PLAN_ARRAY_KEYS) {
+      const inner = nested[key];
+      if (Array.isArray(inner) && inner.length > 0) return inner;
+    }
+  }
+  return [];
+}
+
+function readStepField(
+  step: Record<string, unknown>,
+  keys: readonly string[],
+): unknown {
+  for (const key of keys) {
+    const value = step[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return undefined;
+}
+
 export function normalizeMaterializedSteps(
   rawPlan: Record<string, unknown> | null,
   allowedCapabilities: Iterable<string> = MATERIALIZABLE_CAPABILITIES,
 ): DesktopWorkOrderStep[] | null {
   if (!rawPlan) return null;
-  const rawSteps = Array.isArray(rawPlan.steps) ? rawPlan.steps : [];
+  const rawSteps = readPlanStepArray(rawPlan);
   const allowed = new Set(
     [...allowedCapabilities].map((capability) =>
       String(capability ?? "").trim(),
@@ -1194,14 +1244,17 @@ export function normalizeMaterializedSteps(
     if (normalized.length >= MAX_WORK_ORDER_STEPS) break;
     const step = asRecord(rawSteps[index]);
     if (!step) continue;
-    const capability = String(step.capability ?? "").trim();
+    const capability = String(
+      readStepField(step, ["capability", "tool", "name"]) ?? "",
+    ).trim();
     if (!capability || !CAPABILITY_NAME_RE.test(capability)) continue;
     if (!allowed.has(capability)) continue;
     let id = String(step.id ?? "").trim();
     if (!id || seenIds.has(id)) id = `s${normalized.length + 1}`;
     seenIds.add(id);
-    let args = asRecord(step.args);
-    let encodedArgs: unknown = step.args;
+    const rawArgs = readStepField(step, ["args", "arguments", "input", "parameters"]);
+    let args = asRecord(rawArgs);
+    let encodedArgs: unknown = rawArgs;
     for (
       let decodeAttempt = 0;
       !args && typeof encodedArgs === "string" && decodeAttempt < 3;
@@ -1217,7 +1270,7 @@ export function normalizeMaterializedSteps(
         break;
       }
     }
-    if (!args && step.args !== undefined) continue;
+    if (!args && rawArgs !== undefined) continue;
     args ??= {};
     const dependsOn = (Array.isArray(step.dependsOn) ? step.dependsOn : [])
       .map((d) => String(d ?? "").trim())
@@ -1225,7 +1278,9 @@ export function normalizeMaterializedSteps(
     normalized.push({
       id,
       capability,
-      description: String(step.description ?? "").slice(0, 220),
+      description: String(
+        readStepField(step, ["description", "label", "summary", "title"]) ?? "",
+      ).slice(0, 220),
       args,
       dependsOn,
     });
