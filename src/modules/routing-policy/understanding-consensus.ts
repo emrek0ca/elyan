@@ -147,6 +147,21 @@ export function buildUnderstandingConsensus(input: {
   normalizedArgs?: Record<string, unknown>;
   successCriteria?: string[];
   approvalRequired?: boolean;
+  /**
+   * Kullanıcı hedefi AÇIKÇA söylediyse ("masaüstüne … kaydet") burada gelir.
+   *
+   * Canlı arıza (görev dbc7352e, 2026-08-22 17:22): "masaüstüne zürafalar
+   * hakkında bir pdf hazırla ve kaydet" isteğinde anlama katmanları yüzey
+   * konusunda ayrıştı, `clarification_required` çıktı ve tur sunucu sohbetine
+   * düştü. Model de kullanıcıya "Netleştireyim: tam olarak neyi yapmamı
+   * istiyorsun?" diye sordu — oysa kullanıcı NEREYE ve NE yapılacağını zaten
+   * söylemişti.
+   *
+   * Katmanların birbiriyle anlaşamaması, kullanıcının açık talimatını
+   * geçersiz kılmaz. Açık hedef varsa yüzey çatışması netleştirme sebebi
+   * DEĞİLDİR; hedef kullanıcının dediğidir.
+   */
+  explicitTargetSurface?: "desktop" | null;
 }): UnderstandingConsensus {
   const primaryCandidate: ConsensusCandidate = {
     source: "semantic_transformer",
@@ -186,7 +201,12 @@ export function buildUnderstandingConsensus(input: {
     selectedSurface === "desktop" ||
     primaryCandidate.classification.privacyRisk !== "low" ||
     selected.privacyRisk !== "low";
-  const hardConflict = conflict.targetSurface || conflict.privacy || (highRisk && conflict.intent);
+  // Açık hedef, yüzey/gizlilik çatışmasını çözer: kullanıcı zaten söyledi.
+  // Niyet çatışması (ör. "bu gerçekten bir iş mi, sohbet mi") hâlâ geçerlidir.
+  const explicitDesktop = input.explicitTargetSurface === "desktop";
+  const hardConflict = explicitDesktop
+    ? highRisk && conflict.intent
+    : conflict.targetSurface || conflict.privacy || (highRisk && conflict.intent);
   const lowConfidence = Math.min(
     primaryCandidate.classification.confidence,
     selected.confidence,
@@ -196,7 +216,11 @@ export function buildUnderstandingConsensus(input: {
     : input.verifierInvoked
       ? "agreed"
       : "fallback";
-  const targetSurface = hardConflict ? "server" : selectedSurface;
+  const targetSurface = hardConflict
+    ? "server"
+    : explicitDesktop
+      ? "desktop"
+      : selectedSurface;
   const normalizedIntent = normalizedIntentFor(selected, targetSurface);
   const objectiveHash = createHash("sha256")
     .update(String(input.message ?? "").replace(/\s+/g, " ").trim())

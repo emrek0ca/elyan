@@ -2875,6 +2875,17 @@ export async function decideCommandRoute(
     sideEffect:
       classification.privacyRisk === "high" &&
       hasDesktopWriteSideEffectSignal(message),
+    // AÇIK HEDEF, KATMAN ANLAŞMAZLIĞINI BİTİRİR.
+    //
+    // Canlı arıza (görev dbc7352e): "masaüstüne zürafalar hakkında bir pdf
+    // hazırla ve kaydet" turunda katmanlar yüzeyde ayrıştı, `clarification_
+    // required` çıktı, tur sunucu sohbetine düştü ve model kullanıcıya
+    // "Netleştireyim: tam olarak neyi yapmamı istiyorsun?" diye sordu.
+    // Kullanıcı NEREYE ve NE yapılacağını zaten söylemişti.
+    //
+    // `hasDesktopSaveExportSignal` tam bu kalıbı ölçer: yerel hedef adı +
+    // kaydetme fiili ("masaüstüne … kaydet", "indirilenlere … indir").
+    explicitTargetSurface: hasDesktopSaveExportSignal(message) ? "desktop" : null,
   });
   // This is the only route-stage interpretation of the raw turn. The typed
   // contract is carried through workload selection, task persistence, and the
