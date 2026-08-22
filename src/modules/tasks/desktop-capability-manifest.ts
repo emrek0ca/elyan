@@ -2345,14 +2345,14 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "document_write",
     "displayName": "Belge oluşturma",
-    "description": "DOCX/Word veya sade PDF belgesi üretir; metin, bölüm, tablo, grafik ve görsel bloklarını düzenli belgeye yazar.",
-    "usage": "Word/DOCX, sade PDF, dilekçe, rapor, yazı, taslak, not veya profesyonel belge istendiğinde. Tasarımlı canvas PDF için canvas_write, Excel için spreadsheet_write, sunum için presentation_write.",
+    "description": "Verilen HAZIR metni DOCX/Word veya sade PDF dosyasına yazar. İçerik ÜRETMEZ — ne verilirse dosyada o görünür.",
+    "usage": "HAZIR metni Word/DOCX veya sade PDF dosyasına dökmek için. Metin yoksa ÖNCE onu üreten bir adım gerekir; bu araç yazmaz, sadece kaydeder. Tasarımlı canvas PDF için canvas_write, Excel için spreadshee…",
     "requiredArgs": [],
     "requiresApproval": true,
     "whenToUse": [
-      "savunma dilekçesi hazırla",
-      "rapor yaz ve docx kaydet",
-      "okunan metni Word belgesi yap"
+      "hazırlanan metni docx olarak kaydet",
+      "okunan metni Word belgesi yap",
+      "üretilen dilekçeyi dosyaya yaz"
     ],
     "whenNotToUse": [
       "Görsel tasarımlı PDF isteniyorsa canvas_write kullan.",
@@ -2364,7 +2364,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "properties": {
         "prompt": {
           "type": "STRING",
-          "description": "Belge içeriği/talimatı."
+          "description": "Belgeye YAZILACAK hazır metin. Konu/talimat DEĞİL. Metin henüz yoksa önce üreten adımı koy ve {{steps.<id>.output}} ver."
         },
         "outputPath": {
           "type": "STRING",
@@ -2407,6 +2407,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         "sourceContext",
         "sourcePath"
       ],
+      "contentIsWrittenVerbatim": "prompt/sections/blocks are written to the file AS-IS; this tool never expands a topic into prose",
       "formatDecision": "outputFormat/outputPath extension chooses docx or pdf",
       "mustUsePriorOutputs": "research/read/analysis outputs go into sourceContext or prompt"
     },
@@ -2432,7 +2433,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     },
     "verificationPlan": [
       "Check written artifact exists and extension matches requested format.",
-      "Writer args must contain concrete content or a prior-step reference."
+      "Writer args must contain concrete content or a prior-step reference.",
+      "Content must be the deliverable itself, never a description of it."
     ],
     "liveNarration": [
       "Belge içeriği düzenleniyor",
@@ -2448,7 +2450,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       {
         "args": {
           "title": "Pazar Raporu",
-          "prompt": "Elektrikli araç pazarı hakkında 1 sayfalık özet"
+          "prompt": "{{steps.icerik.output}}"
         }
       }
     ],
@@ -4372,7 +4374,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "presentation_write",
     "displayName": "Sunum oluşturma",
-    "description": "PPTX/PowerPoint sunum üretir; araştırma/analiz çıktısını slaytlara böler.",
+    "description": "Verilen HAZIR metni/anahatları PPTX sunum dosyasına yazar. İçerik ÜRETMEZ.",
     "usage": "Sunum, slayt, pptx, ders/proje sunumu veya konuşma deck'i istendiğinde.",
     "requiredArgs": [],
     "requiresApproval": true,
@@ -4389,7 +4391,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [],
       "properties": {
         "prompt": {
-          "type": "STRING"
+          "type": "STRING",
+          "description": "Slaytlara YAZILACAK hazır metin/anahat. Konu/talimat DEĞİL."
         },
         "outputPath": {
           "type": "STRING"
@@ -4450,7 +4453,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       {
         "args": {
           "title": "Ürün Tanıtımı",
-          "prompt": "5 slaytlık ürün sunumu"
+          "prompt": "{{steps.icerik.output}}"
         }
       }
     ],
@@ -5443,7 +5446,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "spreadsheet_write",
     "displayName": "Tablo oluşturma",
-    "description": "XLSX/Excel çalışma kitabı üretir; satır, sütun, sheet ve hesap sonuçlarını yapılandırılmış tabloya yazar.",
+    "description": "Verilen HAZIR satır/sütun verisini XLSX/Excel çalışma kitabına yazar. Veri ÜRETMEZ.",
     "usage": "Excel, xlsx, tablo, bütçe, hesap dökümü, karşılaştırma matrisi veya satır/sütunlu çıktı istendiğinde.",
     "requiredArgs": [],
     "requiresApproval": true,
@@ -5461,7 +5464,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "required": [],
       "properties": {
         "prompt": {
-          "type": "STRING"
+          "type": "STRING",
+          "description": "Sayfaya YAZILACAK hazır metin/veri. Konu/talimat DEĞİL."
         },
         "outputPath": {
           "type": "STRING"
@@ -5525,7 +5529,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       {
         "args": {
           "title": "Aylık Bütçe",
-          "prompt": "Gelir-gider tablosu, 3 aylık"
+          "columns": "{{steps.analiz.result.columns}}",
+          "rows": "{{steps.analiz.result.previewRows}}"
         }
       }
     ],
