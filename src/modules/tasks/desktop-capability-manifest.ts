@@ -2251,6 +2251,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "proje klasörünün yapısını göster",
       "indirilenler klasöründe ne var",
       "bu dizindeki dosyaları listele",
+      "masaüstünde hangi dosyalar var",
       "klasör ağacı",
       "klasörleri listele",
       "dosya yapısını göster"
@@ -2727,8 +2728,24 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         }
       }
     ],
-    "utterances": [],
-    "notFor": [],
+    "utterances": [
+      "masaüstündeki son raporu bul",
+      "en yeni sunumu getir",
+      "son indirdiğim dosyayı bul",
+      "dünkü excel dosyasını bul",
+      "indirilenlerdeki pdf'leri listele",
+      "masaüstündeki word belgelerini göster",
+      "en son değiştirdiğim dosya hangisi",
+      "find the newest file"
+    ],
+    "notFor": [
+      "rapor hazırla",
+      "word belgesi oluştur",
+      "sunum yap",
+      "bu metni pdf olarak kaydet",
+      "dosyanın içinde ara",
+      "dosya içeriğini oku"
+    ],
     "privacyClass": "local_private_read",
     "skillAffinity": []
   },
@@ -3022,12 +3039,11 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "utterances": [
       "projede TODO geçen yerleri bul",
-      "son indirdiğim dosyayı bul",
       "bu metnin geçtiği dosyaları ara",
       "dosyalarımın içinde arama yap",
-      "dosya ara",
-      "klasörde bul",
-      "find local file"
+      "kodda şu fonksiyon nerede geçiyor",
+      "dosya içinde metin ara",
+      "search inside files"
     ],
     "notFor": [
       "internette ara",
@@ -3592,7 +3608,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "utterances": [
       "git durumuna bak",
       "depoda ne durumdayız",
-      "hangi dosyalar değişmiş"
+      "git'te hangi dosyalar değişmiş",
+      "commit edilmemiş değişiklikler neler"
     ],
     "notFor": [
       "git nedir",

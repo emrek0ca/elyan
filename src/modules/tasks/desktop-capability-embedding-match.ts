@@ -126,6 +126,26 @@ type CapabilityVectors = {
 let warmupPromise: Promise<CapabilityVectors[] | null> | null = null;
 let capabilityVectors: CapabilityVectors[] | null = null;
 
+/** Bir yeteneğin seçilebilir olması için gereken asgari kullanıcı-dili örneği. */
+const MIN_SEMANTIC_PHRASES = 4;
+
+/**
+ * YENİ ARAÇ EKLENDİĞİNDE HİSSEDİLMELİ.
+ *
+ * ÖLÇÜM (2026-08-23): `file_find` yeteneği eklendi, masaüstü onu beyan etti,
+ * manifest ve ontolojiye girdi — ama eşleştirmede HİÇ SEÇİLMEDİ (kendi
+ * kullanım örnekleriyle bile 0/4). Sebep: bu fonksiyon yalnız
+ * `manifest.utterances` okuyordu; yeni yeteneğin `utterances`ı boştu
+ * (yazarı `whenToUse` doldurmuştu) ve o yüzden anlamsal varlığı SIFIRDI.
+ *
+ * Yani bir araç eklemek, onu seçilebilir yapmıyordu. Kullanıcının "araçları
+ * geliştirdikçe gücü hissedilmeli" isteği tam olarak burada kırılıyordu.
+ *
+ * Artık `whenToUse` de olumlu metinlere giriyor: bir yetenek, kullanım
+ * örneklerini nereye yazarsa yazsın seçilebilir olur. `utterances` hâlâ
+ * öncelikli (phrasebook özenle yazılmış kullanıcı dilidir); `whenToUse`
+ * eksiği kapatır.
+ */
 function positiveTextsFor(entry: DesktopCapabilityOntologyEntry): string[] {
   const manifest = entry.manifest;
   const identity = [manifest.displayName, manifest.description]
@@ -134,9 +154,45 @@ function positiveTextsFor(entry: DesktopCapabilityOntologyEntry): string[] {
   const appUsage = ["close_app", "open_app", "browser_control"].includes(entry.canonicalId)
     ? [manifest.usage]
     : [];
-  return [identity, ...appUsage, ...manifest.utterances.slice(0, 6)].filter(
-    (text) => text.trim().length > 0,
-  );
+  const utterances = manifest.utterances.slice(0, 6);
+  // `whenToUse` TAMAMLAYICIDIR, EK YÜK DEĞİL.
+  //
+  // İlk sürümde her yeteneğe eklenince katalog 560 → 694 metne çıktı (%24) ve
+  // e5 ısınması bütçeyi aştı: ölçüm kapısı "vektör önbelleği hazır değil"
+  // diyerek üretim sayısını vermeyi reddetti. Üretimde bu SESSİZCE sözcüksel
+  // skora düşmek demekti.
+  //
+  // Phrasebook'u özenle yazılmış yetenekler ek metne muhtaç değil; eksik olan
+  // yeni yetenekler ise seçilebilmek için buna muhtaç. Bu yüzden yalnız
+  // asgariyi tamamlar.
+  const whenToUse =
+    utterances.length >= MIN_SEMANTIC_PHRASES || !Array.isArray(manifest.whenToUse)
+      ? []
+      : manifest.whenToUse
+          .filter((text) => typeof text === "string")
+          .slice(0, MIN_SEMANTIC_PHRASES - utterances.length);
+  const seen = new Set<string>();
+  return [identity, ...appUsage, ...utterances, ...whenToUse].filter((text) => {
+    const trimmed = String(text ?? "").trim();
+    if (!trimmed || seen.has(trimmed)) return false;
+    seen.add(trimmed);
+    return true;
+  });
+}
+
+/**
+ * Bir yeteneğin kullanıcı dilinde KAÇ örneği var?
+ *
+ * Sıfırsa o yetenek pratikte seçilemez: yalnız kimlik metniyle yarışır ve
+ * örnek cümlesi olan her rakibe kaybeder. Kapı testi bunu yakalar.
+ */
+export function capabilityUtteranceCount(
+  entry: DesktopCapabilityOntologyEntry,
+): number {
+  const manifest = entry.manifest;
+  const utterances = Array.isArray(manifest.utterances) ? manifest.utterances.length : 0;
+  const whenToUse = Array.isArray(manifest.whenToUse) ? manifest.whenToUse.length : 0;
+  return utterances + whenToUse;
 }
 
 function negativeTextsFor(entry: DesktopCapabilityOntologyEntry): string[] {

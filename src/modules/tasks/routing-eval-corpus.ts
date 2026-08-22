@@ -298,8 +298,18 @@ export const ROUTING_EVAL_CORPUS: RoutingEvalCase[] = [
     group: "files",
   },
   {
+    // ETİKET GÜNCELLENDİ (2026-08-23): doğru cevap artık `file_find`.
+    //
+    // Bu vaka `file_find` yeteneği YOKKEN yazılmıştı ve elde `file_search`ten
+    // başka seçenek olmadığı için ona etiketlenmişti. Ama `file_search` dosya
+    // İÇERİĞİNDE arar; "son indirdiğim dosya" sorusunu cevaplayamaz. Yetenek
+    // eklendiğinde eski etiket yanlış hale geldi.
+    //
+    // Bu bir teste göre ayar DEĞİL: etiket, yeteneği olmayan bir sistemin
+    // mecburiyetiydi; artık doğrusu mevcut.
     utterance: "son indirdiğim dosyayı bul",
-    expected: "file_search",
+    expected: "file_find",
+    alsoAcceptable: ["file_search"],
     mustNotMatch: ["file_read"],
     group: "files",
   },
