@@ -13,6 +13,7 @@ import { agentEngineRepository } from "./agent-engine-repository.js";
 import { isAgentEngineShadowEnabled, isAgentEngineV2Enabled } from "./agent-engine-policy.js";
 import {
   agentPlanEnvelopeSchema,
+  agentVerificationSchema,
   buildAgentPlanFromToolRequests,
   hardenAgentPlanVerification,
   type AgentPlanEnvelope,
@@ -49,6 +50,27 @@ function requestKey(request: AgentToolRequest): string {
   return JSON.stringify([request.tool, request.args]);
 }
 
+export function selectAgentPlanSteps(
+  plan: AgentPlanEnvelope,
+  requests: AgentToolRequest[],
+  maxRequests: number,
+): AgentPlanEnvelope["steps"] {
+  const allowedRequestCounts = new Map<string, number>();
+  for (const request of requests) {
+    const key = requestKey(request);
+    allowedRequestCounts.set(key, (allowedRequestCounts.get(key) ?? 0) + 1);
+  }
+  return plan.steps
+    .filter((step) => {
+      const key = requestKey(step.tool_request);
+      const remaining = allowedRequestCounts.get(key) ?? 0;
+      if (remaining <= 0) return false;
+      allowedRequestCounts.set(key, remaining - 1);
+      return true;
+    })
+    .slice(0, maxRequests);
+}
+
 function verificationFailureResult(result: AgentToolResult): AgentToolResult {
   return {
     ...result,
@@ -75,20 +97,11 @@ async function runVerifiedLegacyPlan(
   const plan = hardenAgentPlanVerification(
     agentPlanEnvelopeSchema.parse(input.plan),
   );
-  const allowedRequestCounts = new Map<string, number>();
-  for (const request of input.requests) {
-    const key = requestKey(request);
-    allowedRequestCounts.set(key, (allowedRequestCounts.get(key) ?? 0) + 1);
-  }
-  const selectedSteps = plan.steps
-    .filter((step) => {
-      const key = requestKey(step.tool_request);
-      const remaining = allowedRequestCounts.get(key) ?? 0;
-      if (remaining <= 0) return false;
-      allowedRequestCounts.set(key, remaining - 1);
-      return true;
-    })
-    .slice(0, input.maxRequests);
+  const selectedSteps = selectAgentPlanSteps(
+    plan,
+    input.requests,
+    input.maxRequests,
+  );
   const selectedStepIds = new Set(selectedSteps.map((step) => step.id));
   const verifiedStepIds = new Set<string>();
   const results: AgentToolResult[] = [];
@@ -154,6 +167,161 @@ async function runVerifiedLegacyPlan(
   };
 }
 
+async function projectShadowAgentRun(input: {
+  app: FastifyInstance;
+  userId: string;
+  runId: string;
+  plan: AgentPlanEnvelope;
+  requests: AgentToolRequest[];
+  maxRequests: number;
+  results: AgentToolResult[];
+  durationMs: number;
+  timedOut: boolean;
+}): Promise<void> {
+  const repository = agentEngineRepository(input.app);
+  let snapshot = await repository.loadRun(input.userId, input.runId);
+  if (snapshot.run.state !== "ready") return;
+
+  await repository.transitionRun({
+    userId: input.userId,
+    runId: input.runId,
+    expectedRevision: snapshot.run.revision,
+    to: "executing",
+    eventType: "agent.shadow_execution_started",
+    payload: { requestCount: input.requests.length },
+  });
+
+  const selectedSteps = selectAgentPlanSteps(
+    input.plan,
+    input.requests,
+    input.maxRequests,
+  );
+  const resultByStepId = new Map(
+    selectedSteps
+      .slice(0, input.results.length)
+      .map((step, index) => [step.id, input.results[index]] as const),
+  );
+
+  for (const storedStep of snapshot.steps) {
+    const planStep = input.plan.steps.find(
+      (step) => step.id === storedStep.stepKey,
+    );
+    const result = planStep ? resultByStepId.get(planStep.id) : undefined;
+
+    if (!planStep || !result) {
+      if (storedStep.state === "pending" || storedStep.state === "ready") {
+        await repository.transitionStep({
+          userId: input.userId,
+          stepId: storedStep.id,
+          to: "skipped",
+        });
+      }
+      continue;
+    }
+
+    if (storedStep.state === "pending") {
+      await repository.transitionStep({
+        userId: input.userId,
+        stepId: storedStep.id,
+        to: "ready",
+      });
+    }
+    await repository.transitionStep({
+      userId: input.userId,
+      stepId: storedStep.id,
+      to: "executing",
+      incrementAttempt: true,
+    });
+    await repository.transitionStep({
+      userId: input.userId,
+      stepId: storedStep.id,
+      to: "observed",
+      toolResult: result,
+    });
+
+    const evidence = deriveAgentEvidence(result);
+    const evidenceRows = await repository.recordEvidence({
+      userId: input.userId,
+      runId: input.runId,
+      stepId: storedStep.id,
+      evidence,
+    });
+    const verification = verifyAgentStep({
+      step: planStep,
+      evidence: evidence.map((item, index) => ({
+        ...item,
+        id: evidenceRows[index]?.id,
+      })),
+    });
+    await repository.transitionStep({
+      userId: input.userId,
+      stepId: storedStep.id,
+      to: verification.passed ? "verified" : "failed",
+      verification,
+    });
+  }
+
+  snapshot = await repository.loadRun(input.userId, input.runId);
+  const observing = await repository.transitionRun({
+    userId: input.userId,
+    runId: input.runId,
+    expectedRevision: snapshot.run.revision,
+    to: "observing",
+    eventType: "agent.shadow_observed",
+    payload: {
+      projectedStepCount: snapshot.steps.filter(
+        (step) => step.state !== "skipped",
+      ).length,
+    },
+  });
+  const verifying = await repository.transitionRun({
+    userId: input.userId,
+    runId: input.runId,
+    expectedRevision: observing.revision,
+    to: "verifying",
+    eventType: "agent.shadow_verification_started",
+  });
+  snapshot = await repository.loadRun(input.userId, input.runId);
+  const activeSteps = snapshot.steps.filter((step) => step.state !== "skipped");
+  const verifications = snapshot.steps
+    .map((step) => agentVerificationSchema.safeParse(step.verification))
+    .filter((result) => result.success)
+    .map((result) => result.data);
+  const verificationPassed =
+    activeSteps.length > 0 &&
+    activeSteps.every((step) => step.state === "verified") &&
+    verifications.length === activeSteps.length &&
+    canCompleteAgentRun(verifications);
+  const verifiedStepCount = activeSteps.filter(
+    (step) => step.state === "verified",
+  ).length;
+  const failedStepCount = activeSteps.filter(
+    (step) => step.state === "failed",
+  ).length;
+  await repository.transitionRun({
+    userId: input.userId,
+    runId: input.runId,
+    expectedRevision: verifying.revision,
+    to: verificationPassed ? "completed" : "failed",
+    eventType: verificationPassed
+      ? "agent.shadow_completed"
+      : "agent.shadow_failed",
+    failureCode: verificationPassed ? null : "shadow_verification_failed",
+    computeMs: input.durationMs,
+    terminalResult: {
+      shadow: true,
+      timedOut: input.timedOut,
+      durationMs: input.durationMs,
+      projectedStepCount: activeSteps.length,
+      verifiedStepCount,
+      failedStepCount,
+      skippedStepCount: snapshot.steps.filter(
+        (step) => step.state === "skipped",
+      ).length,
+    },
+  });
+}
+
 export async function runAgentToolLoop(
   app: FastifyInstance,
   input: {
@@ -183,10 +351,16 @@ export async function runAgentToolLoop(
   const taskId = input.context.taskId ?? null;
   const v2Enabled = taskId ? isAgentEngineV2Enabled(app, input.context.userId) : false;
   const shadowEnabled = taskId ? isAgentEngineShadowEnabled(app) : false;
+  let shadowRun: { runId: string; plan: AgentPlanEnvelope } | null = null;
   if (taskId && (v2Enabled || shadowEnabled)) {
-    const plan = input.plan
-      ? agentPlanEnvelopeSchema.parse(input.plan)
-      : buildAgentPlanFromToolRequests({ goal: `Execute ${requests.length} typed tool request(s)`, requests });
+    const plan = hardenAgentPlanVerification(
+      input.plan
+        ? agentPlanEnvelopeSchema.parse(input.plan)
+        : buildAgentPlanFromToolRequests({
+            goal: `Execute ${requests.length} typed tool request(s)`,
+            requests,
+          }),
+    );
     const snapshot = await createAgentRun({
       app,
       userId: input.context.userId,
@@ -195,6 +369,7 @@ export async function runAgentToolLoop(
       plan,
       shadow: !v2Enabled,
     });
+    if (!v2Enabled) shadowRun = { runId: snapshot.run.id, plan };
     if (v2Enabled) {
       const queued = await enqueueAgentRun(app, {
         runId: snapshot.run.id,
@@ -246,8 +421,9 @@ export async function runAgentToolLoop(
     }
   }
 
+  let legacyResult: AgentToolLoopResult;
   if (input.plan) {
-    return runVerifiedLegacyPlan(app, {
+    legacyResult = await runVerifiedLegacyPlan(app, {
       context: input.context,
       requests,
       plan: input.plan,
@@ -255,29 +431,53 @@ export async function runAgentToolLoop(
       budgetMs,
       startedAt,
     });
+  } else {
+    const wrapped = Promise.all(
+      requests.map((request) => executeAgentTool(app, input.context, request)),
+    );
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), budgetMs).unref?.();
+    });
+    const result = await Promise.race([wrapped, timeout]);
+    legacyResult =
+      result === "timeout"
+        ? {
+            iterations: 1,
+            durationMs: elapsed(startedAt),
+            timedOut: true,
+            results: [],
+          }
+        : {
+            iterations: 1,
+            durationMs: elapsed(startedAt),
+            timedOut: false,
+            results: result,
+          };
   }
 
-  const wrapped = Promise.all(
-    requests.map((request) => executeAgentTool(app, input.context, request)),
-  );
-  const timeout = new Promise<"timeout">((resolve) => {
-    setTimeout(() => resolve("timeout"), budgetMs).unref?.();
-  });
-  const result = await Promise.race([wrapped, timeout]);
-  if (result === "timeout") {
-    return {
-      iterations: 1,
-      durationMs: elapsed(startedAt),
-      timedOut: true,
-      results: [],
-    };
+  if (shadowRun) {
+    await projectShadowAgentRun({
+      app,
+      userId: input.context.userId,
+      runId: shadowRun.runId,
+      plan: shadowRun.plan,
+      requests,
+      maxRequests,
+      results: legacyResult.results,
+      durationMs: legacyResult.durationMs,
+      timedOut: legacyResult.timedOut,
+    }).catch((error) => {
+      app.log.warn?.(
+        {
+          runId: shadowRun?.runId,
+          errorCode:
+            error instanceof Error ? error.name : "shadow_projection_failed",
+        },
+        "shadow agent run projection failed",
+      );
+    });
   }
-  return {
-    iterations: 1,
-    durationMs: elapsed(startedAt),
-    timedOut: false,
-    results: result,
-  };
+  return legacyResult;
 }
 
 export function summarizeToolResultsForMetadata(results: AgentToolResult[]): Array<Record<string, unknown>> {

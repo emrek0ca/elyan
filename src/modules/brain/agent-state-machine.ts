@@ -15,7 +15,7 @@ const runTransitions: Record<AgentRunState, ReadonlySet<AgentRunState>> = {
 
 const stepTransitions: Record<AgentStepState, ReadonlySet<AgentStepState>> = {
   pending: new Set(["ready", "skipped", "canceled"]),
-  ready: new Set(["executing", "canceled"]),
+  ready: new Set(["executing", "skipped", "canceled"]),
   executing: new Set(["observed", "waiting_approval", "failed", "canceled"]),
   observed: new Set(["verified", "waiting_evidence", "failed", "canceled"]),
   waiting_approval: new Set(["ready", "canceled"]),

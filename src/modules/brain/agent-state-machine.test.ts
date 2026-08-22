@@ -10,6 +10,10 @@ test("agent run follows execute observe verify sequence", () => {
   assert.doesNotThrow(() => assertAgentRunTransition("verifying", "completed"));
 });
 
+test("shadow projection can skip a step that legacy execution did not reach", () => {
+  assert.doesNotThrow(() => assertAgentStepTransition("ready", "skipped"));
+});
+
 test("side-effect approval is scoped to one step", () => {
   assert.equal(isSideEffectApprovedForStep({ allowSideEffects: true, approvedStepId: "step-a", stepId: "step-a" }), true);
   assert.equal(isSideEffectApprovedForStep({ allowSideEffects: true, approvedStepId: "step-a", stepId: "step-b" }), false);
