@@ -1,3 +1,4 @@
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 import {
   DESKTOP_CAPABILITY_MANIFEST,
   type DesktopCapabilityManifestEntry,
@@ -138,6 +139,47 @@ function cosine(left: SparseEmbedding, right: SparseEmbedding): number {
   return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
 }
 
+/**
+ * TÜRKÇE KÖK + EK TOLERANSI — `\b` burada sessizce ölüyordu.
+ *
+ * Ölçülen arıza (2026-08-22): `make_directory` yan etki sınıfı "none" çıkıyordu.
+ * Açıklaması "Klasör OLUŞTURUR" — yazma kalıbı `\bolustur\b` idi ve Türkçe
+ * ek yüzünden ("olusturur") EŞLEŞMİYORDU. Yani klasör oluşturmak "yan etkisiz"
+ * sayılıyordu; hem yönlendirmedeki yan-etki uyumu hem de plan sonuç-kapsamı
+ * bu yanlış sınıfı okuyordu.
+ *
+ * Bu, bu projenin en sık tekrarlayan hata sınıfı (`\büret\b` de aynı şekilde
+ * ölmüştü). Doğru araç sınır değil, SINIRLI EK TOLERANSI: `trStemPattern`.
+ * İngilizce kökler `\b` ile kalır — orada sorun yok.
+ */
+const DESTRUCTIVE_PATTERN = new RegExp(
+  `\\b(?:delete|remove|erase|destructive)\\b|${trStemPattern(["sil", "kaldir"]).source}`,
+  "u",
+);
+const READ_PATTERN = new RegExp(
+  `\\b(?:read|search|list|status|observe|analyze)\\b|${trStemPattern([
+    "oku",
+    "ara",
+    "listele",
+    "gozlemle",
+    "analiz",
+  ]).source}`,
+  "u",
+);
+const WRITE_PATTERN = new RegExp(
+  `\\b(?:write|send|add|save|move|patch|commit|create|update|edit)\\b|${trStemPattern([
+    "yaz",
+    "gonder",
+    "ekle",
+    "kaydet",
+    "tasi",
+    "olustur",
+    "duzenle",
+    "hazirla",
+  ]).source}`,
+  "u",
+);
+
 function sideEffectClassFor(
   entry: DesktopCapabilityManifestEntry,
 ): DesktopCapabilitySideEffectClass {
@@ -152,7 +194,7 @@ function sideEffectClassFor(
     ].join(" "),
   );
   if (
-    /\b(delete|remove|erase|sil|kaldir|destructive)\b/u.test(text) ||
+    DESTRUCTIVE_PATTERN.test(text) ||
     name.includes("delete")
   ) {
     return "destructive";
@@ -160,18 +202,11 @@ function sideEffectClassFor(
   if (
     entry.privacyClass.includes("_read") ||
     entry.privacyClass.includes("screen") ||
-    /\b(read|search|list|status|observe|analyze|oku|ara|listele|gozlemle|analiz)\b/u.test(
-      text,
-    )
+    READ_PATTERN.test(text)
   ) {
     return "read";
   }
-  if (
-    entry.privacyClass.includes("_write") ||
-    /\b(write|send|add|save|move|patch|commit|create|update|edit|yaz|gonder|ekle|kaydet|tasi|olustur|duzenle)\b/u.test(
-      text,
-    )
-  ) {
+  if (entry.privacyClass.includes("_write") || WRITE_PATTERN.test(text)) {
     return "write";
   }
   return "none";

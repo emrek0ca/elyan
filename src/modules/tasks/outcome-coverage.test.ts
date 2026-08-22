@@ -37,7 +37,10 @@ test("an observe-only plan cannot satisfy a required file outcome", () => {
 });
 
 test("a plan containing a writer step satisfies it", () => {
-  for (const writer of ["document_write", "file_write", "image_generate"]) {
+  // `make_directory` hiçbir ARTEFAKT üretmez ama "klasör oluştur" isteğini tam
+  // olarak karşılar; yalnız artefakt üreticilerini saymak DOĞRU planları
+  // reddederdi (kendi kapımın yanlış-pozitifi, 2026-08-22).
+  for (const writer of ["document_write", "file_write", "image_generate", "make_directory", "file_move"]) {
     const issues = validateOutcomeCoverage(
       [step("desktop_operator.observe_screen"), step(writer)],
       requiresFile,

@@ -1,3 +1,4 @@
+import { getDesktopCapabilityOntology } from "./desktop-capability-ontology.js";
 import path from "node:path";
 import {
   DESKTOP_CAPABILITY_MANIFEST,
@@ -209,6 +210,21 @@ function validateEnumArguments(
  * `desktop_operator.observe_screen` için ikisi de boştur (`primary:
  * "observation"`) — yani ekranı GÖZLEMLER, hiçbir yere KAYDETMEZ.
  */
+let sideEffectByCapability: Map<string, string> | null = null;
+
+/** Ontolojinin yan etki sınıfı — tek kaynak, elle liste yok. */
+function sideEffectClassForCapability(capability: string): string {
+  if (!sideEffectByCapability) {
+    sideEffectByCapability = new Map(
+      getDesktopCapabilityOntology().map((entry) => [
+        entry.canonicalId,
+        entry.sideEffectClass,
+      ]),
+    );
+  }
+  return sideEffectByCapability.get(capability) ?? "none";
+}
+
 function producesPersistentOutput(
   manifest: DesktopCapabilityManifestEntry,
 ): boolean {
@@ -217,7 +233,16 @@ function producesPersistentOutput(
   if (primary.toLowerCase().includes("artifact")) return true;
   const artifact = asRecord(manifest.artifactContract);
   const types = artifact?.artifactTypes;
-  return Array.isArray(types) && types.length > 0;
+  if (Array.isArray(types) && types.length > 0) return true;
+  // ARTEFAKT ÜRETMEYEN AMA DURUMU DEĞİŞTİREN YETENEKLER DE SAYILIR.
+  //
+  // Kendi kapımın yanlış-pozitifi: `make_directory` hiçbir artefakt üretmez
+  // ama kullanıcının "klasör oluştur" isteğini TAM OLARAK karşılar. İş emri o
+  // turda `file_update: required` beyan ediyor; yalnız artefakt üreticilerini
+  // saysaydım DOĞRU planı reddedip gereksiz replan'a sokardım.
+  // Yan etki sınıfı (ontoloji) bu ayrımın doğru sahibi.
+  const sideEffect = sideEffectClassForCapability(manifest.name);
+  return sideEffect === "write" || sideEffect === "destructive";
 }
 
 /**
