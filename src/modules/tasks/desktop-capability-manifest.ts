@@ -2645,6 +2645,94 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "skillAffinity": []
   },
   {
+    "name": "file_find",
+    "displayName": "Dosya bulma",
+    "description": "Dosyaları ADIYLA/TÜRÜYLE bulur ve EN YENİDEN eskiye sıralar; içeriği hiç açmaz.",
+    "usage": "\"Son/en yeni X dosyası\", \"masaüstündeki raporlar\", \"dünkü sunum\" gibi DOSYA bulma isteklerinde. Dosya İÇİNDE metin aramak için file_search.",
+    "requiredArgs": [],
+    "requiresApproval": false,
+    "whenToUse": [
+      "masaüstündeki son raporu bul",
+      "en yeni sunumu getir",
+      "indirilenlerdeki pdf'leri listele",
+      "dünkü excel dosyasını bul"
+    ],
+    "whenNotToUse": [
+      "Dosya İÇERİĞİNDE metin/fonksiyon aramak için file_search kullan.",
+      "Yalnız klasör yapısını görmek için directory_tree kullan."
+    ],
+    "inputContract": {
+      "required": [],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Aranacak klasör (ör. ~/Desktop)."
+        },
+        "name_contains": {
+          "type": "STRING",
+          "description": "Dosya adında geçmesi gereken metin (ör. 'rapor')."
+        },
+        "kind": {
+          "type": "STRING",
+          "description": "document | spreadsheet | presentation | image | archive | any",
+          "enum": [
+            "document",
+            "spreadsheet",
+            "presentation",
+            "image",
+            "archive",
+            "any"
+          ]
+        },
+        "max_depth": {
+          "type": "NUMBER"
+        },
+        "max_results": {
+          "type": "NUMBER"
+        }
+      },
+      "additionalProperties": false,
+      "optionalScope": [
+        "path",
+        "name_contains",
+        "kind"
+      ],
+      "sortOrder": "modifiedAt DESC — 'son/en yeni' isteği doğrudan karşılanır",
+      "singleResultField": "result.newest — tek dosya gerekiyorsa sonraki adım bunu kullanır"
+    },
+    "outputContract": {
+      "kind": "file_find",
+      "primary": "files",
+      "newest": "result.newest"
+    },
+    "artifactContract": {},
+    "verificationPlan": [
+      "Return files sorted newest first, or an explicit empty result.",
+      "Never open file contents; this capability only reads names, sizes and timestamps."
+    ],
+    "liveNarration": [
+      "Dosyalar taranıyor",
+      "En yeni dosya seçiliyor"
+    ],
+    "failureModes": [
+      "FILE_NOT_FOUND",
+      "PATH_BLOCKED"
+    ],
+    "fewShots": [
+      {
+        "args": {
+          "path": "~/Desktop",
+          "name_contains": "rapor",
+          "kind": "document"
+        }
+      }
+    ],
+    "utterances": [],
+    "notFor": [],
+    "privacyClass": "local_private_read",
+    "skillAffinity": []
+  },
+  {
     "name": "file_move",
     "displayName": "Dosya taşıma",
     "description": "Dosyayı başka bir konuma taşır (hedef klasörse içine).",
@@ -2875,7 +2963,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "whenNotToUse": [
       "Sadece klasör yapısı için directory_tree kullan.",
-      "Web bilgisi için web_research kullan."
+      "Web bilgisi için web_research kullan.",
+      "Dosyayı ADIYLA/TARİHE göre bulmak için file_find kullan — bu araç içeriğe bakar, 'son rapor' sorusunu cevaplayamaz."
     ],
     "inputContract": {
       "required": [
