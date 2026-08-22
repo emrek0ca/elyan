@@ -51,7 +51,8 @@
     "failures:export": "node scripts/export-failure-taxonomy.mjs /Users/emrekoca/Desktop/elyan/runtime/failure_taxonomy.py",
     "eval:speech-act": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/speech-act-eval-report.ts",
     "eval:local-execution": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/local-execution-eval-report.ts",
-    "eval:knowledge-recency": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/knowledge-recency-eval-report.ts"
+    "eval:knowledge-recency": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/knowledge-recency-eval-report.ts",
+    "smoke:desktop": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/desktop-task-smoke.ts"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",
