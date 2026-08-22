@@ -235,7 +235,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "type": "STRING"
         },
         "target": {
-          "type": "STRING"
+          "type": "STRING",
+          "enum": [
+            "active_window"
+          ]
         },
         "cloudAllowed": {
           "type": "BOOLEAN",
@@ -1539,7 +1542,18 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "actionType": {
-          "type": "STRING"
+          "type": "STRING",
+          "enum": [
+            "click",
+            "double_click",
+            "right_click",
+            "drag",
+            "type_text",
+            "hotkey",
+            "scroll",
+            "wait",
+            "focus_window"
+          ]
         },
         "targetText": {
           "type": "STRING"
@@ -1743,7 +1757,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "type": "STRING"
         },
         "target": {
-          "type": "STRING"
+          "type": "STRING",
+          "enum": [
+            "active_window"
+          ]
         },
         "preserveScreenshot": {
           "type": "BOOLEAN"

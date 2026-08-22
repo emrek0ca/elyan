@@ -201,6 +201,77 @@ function validateEnumArguments(
   }
 }
 
+/**
+ * BİR ADIM KALICI ÇIKTI ÜRETEBİLİR Mİ — manifestten türetilir, elle liste yok.
+ *
+ * `outputContract.primary` "artifact"/"image_artifact" ise ya da
+ * `artifactContract.artifactTypes` doluysa o yetenek dosya/artefakt üretir.
+ * `desktop_operator.observe_screen` için ikisi de boştur (`primary:
+ * "observation"`) — yani ekranı GÖZLEMLER, hiçbir yere KAYDETMEZ.
+ */
+function producesPersistentOutput(
+  manifest: DesktopCapabilityManifestEntry,
+): boolean {
+  const output = asRecord(manifest.outputContract);
+  const primary = typeof output?.primary === "string" ? output.primary : "";
+  if (primary.toLowerCase().includes("artifact")) return true;
+  const artifact = asRecord(manifest.artifactContract);
+  const types = artifact?.artifactTypes;
+  return Array.isArray(types) && types.length > 0;
+}
+
+/**
+ * SONUÇ KAPSAMI: plan, kullanıcının İSTEDİĞİ her zorunlu çıktıyı üretmeli.
+ *
+ * Canlı arıza (2026-08-22, görev 3834eb15) "Ekran görüntüsü al ve masaüstüne
+ * kaydet": iş emri `expectedOutputs` içinde
+ * `{"kind":"file_update","required":true}` BEYAN ETMİŞTİ — yani sistem dosya
+ * çıktısı gerektiğini BİLİYORDU. Üretilen plan ise tek adımdı:
+ * `desktop_operator.observe_screen`. O yetenek hiçbir dosya üretmez; görev
+ * çalıştırıldı ve düştü.
+ *
+ * Bu, tek bir göreve özgü bir yama değil GENEL bir eksikti: planlayıcı istemi
+ * "eksik ÖN KOŞUL olmasın" diyordu ama "istenen her SONUÇ üretilsin"
+ * demiyordu. Bileşik istekler ("X yap VE Y'ye kaydet") bu yüzden tek adıma
+ * çöküyordu — aynı sınıf "Safariden youtube u aç" turunda da görülmüştü.
+ *
+ * Mekanik ve dilden bağımsız: iş emrinin kendi beyanı ile manifestin kendi
+ * beyanı karşılaştırılır. Hata metni replan'a NE eksik olduğunu söyler.
+ *
+ * Kapsam dar tutuldu: yalnız kalıcı çıktı (artifact/file_update) denetlenir.
+ * `chat_result` cevabın kendisidir; diğer türlerde manifest tarafında net bir
+ * sinyal olmadığı için yanlış-pozitif üretmemek adına denetlenmez.
+ */
+export function validateOutcomeCoverage(
+  steps: DesktopWorkOrderStep[],
+  expectedOutputs: ReadonlyArray<{ kind?: unknown; required?: unknown }> | undefined,
+): string[] {
+  if (!Array.isArray(expectedOutputs) || expectedOutputs.length === 0) return [];
+  const needsPersistentOutput = expectedOutputs.some((output) => {
+    const kind = typeof output?.kind === "string" ? output.kind : "";
+    return (
+      output?.required === true &&
+      (kind === "file_update" || kind === "artifact")
+    );
+  });
+  if (!needsPersistentOutput) return [];
+
+  const covered = steps.some((step) => {
+    const manifest = CAPABILITY_MANIFEST_BY_NAME.get(step.capability);
+    return manifest ? producesPersistentOutput(manifest) : false;
+  });
+  if (covered) return [];
+
+  const producers = [...CAPABILITY_MANIFEST_BY_NAME.values()]
+    .filter((manifest) => producesPersistentOutput(manifest))
+    .map((manifest) => manifest.name)
+    .slice(0, 12);
+  return [
+    "plan: the request requires a saved file/artifact but no step produces one; " +
+      `add a step with a capability that writes output, for example: ${producers.join(", ")}`,
+  ];
+}
+
 export function validateMaterializedPlanContracts(
   steps: DesktopWorkOrderStep[],
 ): string[] {

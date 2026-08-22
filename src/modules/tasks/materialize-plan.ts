@@ -41,6 +41,7 @@ import { isSemanticFallbackCapability } from "./semantic-fallback.js";
 import {
   buildAllowedCapabilities,
   validateMaterializedPlanAgainstWorkOrder,
+  validateOutcomeCoverage,
   validateMaterializedPlanContracts,
 } from "./plan-validators.js";
 import { normalizeTaskApprovalRequest } from "./service-lifecycle.js";
@@ -1093,6 +1094,11 @@ export function buildPlanningPrompt(
     catalogs.skillCatalog,
     "",
     ...(exemplars ? [exemplars, ""] : []),
+    "DECOMPOSE BEFORE YOU PLAN:",
+    "- A request usually carries MORE THAN ONE outcome. Silently list them first: 'take a screenshot and save it to the desktop' = (1) capture the screen, (2) write the file to ~/Desktop. 'open Safari and go to youtube' = (1) open the app, (2) navigate.",
+    "- Then give every outcome at least one step. Observing is not saving. Opening an app is not navigating inside it. Reading is not writing.",
+    "- The work order's expectedOutputs declares which results are REQUIRED. A required file/artifact output means some step must actually produce a file; a capability whose output is only an observation cannot satisfy it.",
+    "",
     "PLAN MODE DECISION:",
     `- Existing backend work type hint: ${String(workOrder.workType ?? "unknown")}. Use it as a hint, but override it when the goal clearly requires another mode.`,
     "- DATA WORKFLOW: use this when the task is mainly research, private file/text reading, analysis, math, optimization, or artifact creation. Typical chain: gather/read/research -> analyze/model/calculate -> write/export/report/verify.",
@@ -1113,9 +1119,9 @@ export function buildPlanningPrompt(
     '- Output EXACTLY ONE valid json object, no prose, no markdown fences: {"steps":[...]}',
     '- Each step: {"id":"s1","capability":"<catalog name>","args":"<JSON-encoded object>","dependsOn":["<earlier id>"],"description":"<short>"}',
     '- The strict transport schema requires args to be a string containing one valid JSON object. For example, use "args":"{\\"path\\":\\"~/Desktop\\"}". The backend parses it into the normal args object before desktop dispatch.',
-    "- Use the smallest correct number of steps (between 1 and " +
+    "- Use the smallest number of steps that still covers EVERY requested outcome (between 1 and " +
       String(MAX_WORK_ORDER_STEPS) +
-      ").",
+      "). Fewer steps is a tie-breaker, never a reason to drop an outcome the user asked for.",
     "- Order steps so each runs after its dependencies; set dependsOn to the ids whose output it consumes.",
     "- The plan must be executable as a professional chain, not a short suggestion. Every user-requested deliverable needs a writer/export/verification step, not just analysis prose.",
     "- For each meaningful phase, use descriptions that can be shown as live progress. Keep them concrete: researching source, reading file, analyzing evidence, writing document, verifying artifact, observing screen, clicking target, retrying after failed state.",
@@ -1528,11 +1534,12 @@ async function critiqueAndRevisePlan(
       "SELF-CRITIQUE CHECKLIST — fix EVERY issue you find:",
       "1) Grounding: every arg holds concrete executable data or a {{steps.<id>.output}} reference. Remove vague placeholders ('the total', 'the file', 'the research result').",
       "2) Right method/mode: Excel->spreadsheet_write, slides->presentation_write, doc/report/petition->document_write, UI action->desktop_operator, analysis->text_analyze between gather and writer; run_skill when a catalog skill fits exactly.",
-      "3) Completeness: no missing prerequisite (read/research before analyze; analyze before write; observe before/after risky UI actions).",
-      "4) Data flow: dependsOn is correct and each consumer references its producer with {{steps.<id>.output}}.",
-      "5) math_solve.expression numeric only; web_research.query short & public (no private facts).",
-      "6) Every path is explicitly rooted. Never use '.' or a bare filename; retain the user's folder root such as ~/Desktop/notlar.txt or workspace/README.md.",
-      "7) Smallest correct plan (1..16 steps).",
+      "3) OUTCOME COVERAGE — the most common real failure. First list every distinct outcome the user asked for, then check that a step PRODUCES each one. A request often carries more than one outcome joined by 'and': 'take a screenshot AND save it to the desktop' needs a capture step AND a step that writes the file; 'open Safari AND go to youtube' needs the app step AND the navigation step. Observing is not saving; opening is not navigating. A plan that leaves one requested outcome unproduced is broken, no matter how clean the rest is.",
+      "4) Completeness of prerequisites: read/research before analyze; analyze before write; observe before/after risky UI actions.",
+      "5) Data flow: dependsOn is correct and each consumer references its producer with {{steps.<id>.output}}.",
+      "6) math_solve.expression numeric only; web_research.query short & public (no private facts).",
+      "7) Every path is explicitly rooted. Never use '.' or a bare filename; retain the user's folder root such as ~/Desktop/notlar.txt or workspace/README.md.",
+      "8) Smallest plan that still covers EVERY requested outcome (1..16 steps). Smallest is a tie-breaker, never a reason to drop an outcome.",
       "",
       "CAPABILITY CATALOG (allowed names only):",
       catalogs.capabilityCatalog,
@@ -2322,8 +2329,17 @@ export async function maybeMaterializeDesktopPlan(
 
       // ÖZELEŞTİRİ: model kendi planını eleştirel gözden geçirip düzeltir
       // (muhakeme kalitesi). Fail-safe: revizyon zayıfsa taslak korunur.
-      const draftValidationIssues =
-        validateMaterializedPlanAgainstWorkOrder(draftSteps, workOrder);
+      // SONUÇ KAPSAMI YALNIZ YENİ TASLAKTA DENETLENİR.
+      //
+      // İlk denememde bunu `validateMaterializedPlanAgainstWorkOrder` içine
+      // koydum ve üç test düştü: o fonksiyon SAKLANMIŞ planların hâlâ
+      // dispatch edilebilir olup olmadığını da sorguluyor. Kapsam eksikliği
+      // "bu planı yeniden düşün" demektir, "onaylanmış planı geçersiz kıl"
+      // değil. İki soru ayrı; kapı taslak yolunda duruyor.
+      const draftValidationIssues = [
+        ...validateMaterializedPlanAgainstWorkOrder(draftSteps, workOrder),
+        ...validateOutcomeCoverage(draftSteps, workOrder.expectedOutputs),
+      ];
       let steps =
         draftSteps.length > 1 || draftValidationIssues.length > 0
           ? await critiqueAndRevisePlan(
