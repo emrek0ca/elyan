@@ -345,8 +345,41 @@ const HINT_CONFIDENCE = 0.55;
  * 0.2 eşiği bu ayrımı temiz yapıyor: korpusta hızlı yola giren 124 istekten
  * 4'ünde top-1 hatalı (%3) ve o hata bile yürütmeyi değiştirmiyor — yalnız
  * planlayıcıya daha zayıf bir ipucu gider, seçim yine tam manifestten yapılır.
+ *
+ * EŞİĞİ DÜŞÜRME DENENDİ VE REDDEDİLDİ (2026-08-22). Süpürme (150 komut,
+ * 25 sohbet cümlesi, söz edimi kapısı açık):
+ *
+ *   eşik | komut hızlı yolda | top-1 yanlış | sohbet sızan
+ *   0.20 | 102/150 (68.0%)   | 2 (2.0%)     | 0/25
+ *   0.18 | 107/150 (71.3%)   | 2 (1.9%)     | 0/25
+ *   0.15 | 110/150 (73.3%)   | 3 (2.7%)     | 0/25
+ *   0.12 | 112/150 (74.7%)   | 5 (4.5%)     | 0/25
+ *   0.10 | 113/150 (75.3%)   | 5 (4.4%)     | 1/25
+ *
+ * Sayı 0.15'i cazip gösteriyor. Kazanılan 8 isteğe TEK TEK bakınca kazanç
+ * sahte: "içine şunu yazdığın basit bir txt bırak" (0.1896) gönderme
+ * içeriyor — "şunu" önceki turda; "ekibe bir yazı gönder ama önce göreyim"
+ * (0.1749) bir ONAY KISITI taşıyor. Hızlı yol anlama zarfını boşaltır; bu
+ * ikisinde kaybedilen şey ipucu kalitesi değil, isteğin kendisi.
+ *
+ * Yani düşük marj bir kusur değil, doğru sinyal: bağlama muhtaç istekler
+ * zaten orada toplanıyor. Gecikme kazancı için ağır yolu kapatmak, tam da
+ * bağlamı gereken isteklerde kapatmak demek.
  */
 const FAST_PATH_MARGIN = 0.2;
+
+/**
+ * Yerel eylem KANITI için gereken ayrışma.
+ *
+ * Sayısı bugün `FAST_PATH_MARGIN` ile aynı ama AYNI ŞEY DEĞİL ve tek sabit
+ * olarak paylaşılamaz: hızlı yol eşiği bir GECİKME ayarıdır (yanılırsa bir
+ * tur 2,5 sn yavaşlar), bu eşik bir GÜVENLİK kapısıdır (yanılırsa kullanıcının
+ * makinesinde yanlış iş çalışır). Tek sabit paylaşıldığında, ileride gecikme
+ * için yapılan bir ayar yürütme kapısını sessizce gevşetir.
+ *
+ * Ayrı ayrı ölçülür, ayrı ayrı değiştirilir.
+ */
+const LOCAL_ACTION_MARGIN = 0.2;
 
 /**
  * Hızlı yola ASLA girmeyen yetenekler.
@@ -461,7 +494,7 @@ export async function evaluateLocalActionEvidence(input: {
   if (!localActionCapability) {
     return { ...base, localAction: false, reason: "not_local_action" };
   }
-  if (margin < FAST_PATH_MARGIN) {
+  if (margin < LOCAL_ACTION_MARGIN) {
     return { ...base, localAction: false, reason: "ambiguous_margin" };
   }
   return { ...base, localAction: true, reason: "confident_local_action" };

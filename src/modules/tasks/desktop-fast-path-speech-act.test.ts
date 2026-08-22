@@ -64,3 +64,33 @@ test("karar nesnesi söz edimini geri bildirir", () => {
     "FastPathDecision söz edimini taşımıyor; kapının okunup okunmadığı loglanamaz",
   );
 });
+
+// ---------------------------------------------------------------------------
+// GECİKME EŞİĞİ İLE GÜVENLİK EŞİĞİ AYNI SABİT OLAMAZ.
+//
+// `FAST_PATH_MARGIN` yanılırsa bir tur 2,5 sn yavaşlar. `LOCAL_ACTION_MARGIN`
+// yanılırsa kullanıcının makinesinde yanlış iş çalışır. Tek sabit paylaşılırsa
+// gecikme için yapılan bir ayar yürütme kapısını sessizce gevşetir.
+// ---------------------------------------------------------------------------
+
+test("yürütme kanıtı gecikme eşiğini kullanmaz", () => {
+  const start = matcher.indexOf("export async function evaluateLocalActionEvidence");
+  assert.ok(start > -1, "evaluateLocalActionEvidence bulunamadı");
+  const body = matcher.slice(start, matcher.indexOf("export type FastPathDecision", start));
+  assert.ok(
+    body.includes("LOCAL_ACTION_MARGIN"),
+    "yürütme kapısı kendi eşiğini okumuyor",
+  );
+  assert.equal(
+    body.includes("FAST_PATH_MARGIN"),
+    false,
+    "yürütme kapısı gecikme eşiğine bağlı — biri değişince diğeri sessizce kayar",
+  );
+});
+
+test("hızlı yol kendi eşiğini kullanır", () => {
+  const start = matcher.indexOf("export async function evaluateDesktopFastPath");
+  const body = matcher.slice(start);
+  assert.ok(body.includes("FAST_PATH_MARGIN"));
+  assert.equal(body.includes("LOCAL_ACTION_MARGIN"), false);
+});
