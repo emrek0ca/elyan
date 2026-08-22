@@ -9,6 +9,10 @@ import {
 } from "./writer-content.js";
 import { classifyKnowledgeRecency } from "../../core/understanding/knowledge-recency.js";
 import { pruneUnneededResearchSteps } from "./plan-shortest-path.js";
+import {
+  placeExecutionSteps,
+  summarizePlacements,
+} from "./execution-placement.js";
 import { getUserDevice } from "../devices/service.js";
 import {
   missingRuntimeCapabilities,
@@ -2590,6 +2594,29 @@ export async function maybeMaterializeDesktopPlan(
           "desktop plan withheld: writer body could not be generated",
         );
         return false;
+      }
+
+      // YERLEŞTİRME — GÖLGE MODU (Notion §4/§5).
+      //
+      // Her adımın hangi cihazda çalışması gerektiği burada çözülür ve
+      // KAYDEDİLİR; yürütme bugünkü yoldan devam eder. Sayılar iyi olmadan
+      // yürütme buna bağlanmaz — bu oturumda çalışan bir yolu yenisiyle
+      // değiştirmek 9 gizli regresyon üretmişti.
+      const placement = await placeExecutionSteps(app, {
+        userId: task.userId,
+        steps,
+      }).catch(() => null);
+      if (placement) {
+        app.log.info?.(
+          {
+            taskId: task.id,
+            placement: summarizePlacements(placement.placements),
+            unresolvedCapabilities: placement.placements
+              .filter((entry) => entry.basis === "unresolved")
+              .map((entry) => entry.capability),
+          },
+          "execution placement resolved (shadow)",
+        );
       }
 
       const planCache = await storeDesktopPlanCache({

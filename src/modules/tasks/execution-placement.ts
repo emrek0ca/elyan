@@ -1,0 +1,123 @@
+import type { FastifyInstance } from "fastify";
+import {
+  placeCapability,
+  readDeviceCapabilityMap,
+  type DeviceCapabilityView,
+} from "../devices/device-capability-map.js";
+import type { DesktopWorkOrderStep } from "./desktop-work-order.js";
+import type { ExecutionDevice, ExecutionStep } from "./execution-step.js";
+
+/**
+ * YERLEŞTİRME — hangi adım hangi cihazda çalışacak? (Notion §5)
+ *
+ * Koordinatörün sorması gereken sıra:
+ *   gerekli capability → hangi cihazlarda var → veri nerede → izin var mı
+ *   → cihaz açık mı → en iyi hedef
+ *
+ * Bu modül o zincirin ilk üç halkasını çözer ve kararı GÖRÜNÜR kılar. Şu an
+ * yürütmeyi değiştirmez: plan yine bugünkü yoldan gider, yerleştirme yalnız
+ * kaydedilir ve ölçülür.
+ *
+ * NEDEN GÖLGEDE
+ * -------------
+ * Bu oturumda çalışan bir yolu yenisiyle değiştirmek 9 gizli regresyon üretti.
+ * Yerleştirme önce kendini kanıtlamalı: kaç adım çözülüyor, kaçı çözülemiyor,
+ * hangi yeteneğin evi yok. Sayılar iyi olmadan yürütme buna bağlanmaz.
+ */
+
+export type StepPlacement = {
+  stepId: string;
+  capability: string;
+  device?: ExecutionDevice;
+  deviceId?: string;
+  online?: boolean;
+  /** Karar nasıl verildi — ölçüm ve teşhis için. */
+  basis:
+    | "declared_online"
+    | "declared_offline"
+    | "baseline_online"
+    | "baseline_offline"
+    | "unresolved";
+};
+
+function toExecutionDevice(kind: DeviceCapabilityView["kind"]): ExecutionDevice | undefined {
+  if (kind === "desktop") return "desktop";
+  if (kind === "mobile") return "mobile";
+  if (kind === "server") return "control-plane";
+  return undefined;
+}
+
+/**
+ * Adımları cihazlara yerleştir.
+ *
+ * ÇÖZÜLEMEYEN ADIM UYDURULMAZ. `device` boş bırakılır ve `basis: "unresolved"`
+ * yazılır. Bir yeteneği rastgele bir cihaza koymak, kullanıcının işini yanlış
+ * makinede çalıştırmaktır — çözememekten kötüdür.
+ */
+export async function placeExecutionSteps(
+  app: FastifyInstance,
+  input: { userId: string; steps: DesktopWorkOrderStep[] },
+): Promise<{ steps: ExecutionStep[]; placements: StepPlacement[] }> {
+  const map = await readDeviceCapabilityMap(app, { userId: input.userId });
+  const placements: StepPlacement[] = [];
+  const steps: ExecutionStep[] = [];
+
+  for (const step of input.steps) {
+    const candidates = placeCapability(map, step.capability);
+    const best = candidates[0];
+    const device = best ? toExecutionDevice(best.kind) : undefined;
+    const basis: StepPlacement["basis"] = !best
+      ? "unresolved"
+      : best.source === "runtime_declared"
+        ? best.online
+          ? "declared_online"
+          : "declared_offline"
+        : best.online
+          ? "baseline_online"
+          : "baseline_offline";
+
+    placements.push({
+      stepId: step.id,
+      capability: step.capability,
+      ...(device ? { device } : {}),
+      ...(best ? { deviceId: best.deviceId, online: best.online } : {}),
+      basis,
+    });
+    steps.push({
+      stepId: step.id,
+      capability: step.capability,
+      ...(device ? { device } : {}),
+      ...(step.dependsOn && step.dependsOn.length > 0 ? { dependsOn: step.dependsOn } : {}),
+      ...(step.args !== undefined ? { input: step.args } : {}),
+    });
+  }
+
+  return { steps, placements };
+}
+
+/** Ölçüm özeti — yerleştirme ne kadar işe yarıyor? */
+export function summarizePlacements(placements: StepPlacement[]): {
+  total: number;
+  resolved: number;
+  unresolved: number;
+  offline: number;
+  byDevice: Record<string, number>;
+} {
+  const byDevice: Record<string, number> = {};
+  let resolved = 0;
+  let offline = 0;
+  for (const placement of placements) {
+    if (placement.basis === "unresolved") continue;
+    resolved += 1;
+    if (placement.online === false) offline += 1;
+    const key = placement.device ?? "unknown";
+    byDevice[key] = (byDevice[key] ?? 0) + 1;
+  }
+  return {
+    total: placements.length,
+    resolved,
+    unresolved: placements.length - resolved,
+    offline,
+    byDevice,
+  };
+}
