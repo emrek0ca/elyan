@@ -10011,6 +10011,8 @@ export async function createTask(
   const semanticFastPath = isDesktopRoute
     ? await evaluateDesktopFastPath({
         query: planningPrompt,
+        // Yönlendirici bunu zaten hesapladı; hızlı yol ek e5 çağrısı yapmasın.
+        speechAct: routeDecision.speechAct?.act ?? null,
         logger: app.log,
       }).catch(() => null)
     : null;

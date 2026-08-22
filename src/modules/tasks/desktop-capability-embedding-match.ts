@@ -11,6 +11,10 @@ import {
   embedTextsForStorage,
 } from "../brain/semantic-embedder.js";
 import {
+  speechActAllowsExecution,
+  type SpeechAct,
+} from "../../core/understanding/speech-act.js";
+import {
   getDesktopCapabilityOntology,
   matchDesktopCapabilitiesSemantically,
   type DesktopCapabilityOntologyEntry,
@@ -472,7 +476,10 @@ export type FastPathDecision = {
     | "confident_single_capability"
     | "ambiguous_margin"
     | "orchestration_capability"
+    | "speech_act_blocks"
     | "semantics_unavailable";
+  /** Söz edimi kapısının bu kararda okunup okunmadığı — sessiz kalmasın. */
+  speechAct: SpeechAct | null;
 };
 
 /**
@@ -492,14 +499,25 @@ export type FastPathDecision = {
  */
 export async function evaluateDesktopFastPath(input: {
   query: string;
+  /**
+   * Yönlendiricinin ZATEN hesapladığı söz edimi. Burada yeniden hesaplamıyoruz:
+   * hızlı yolun tek varlık sebebi gecikmeyi düşürmek, ek bir e5 çağrısı o
+   * amacı yer.
+   *
+   * Verilmezse davranış değişmez (hızlı yol eskisi gibi çalışır). Bilgi yoksa
+   * yavaşlatmak da bir bedel; kapı yalnız ELDE VERİ VARKEN konuşur.
+   */
+  speechAct?: SpeechAct | null;
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
 }): Promise<FastPathDecision> {
+  const speechAct = input.speechAct ?? null;
   const empty: FastPathDecision = {
     fastPath: false,
     capability: null,
     score: 0,
     margin: 0,
     reason: "semantics_unavailable",
+    speechAct,
   };
   if (!String(input.query ?? "").trim()) return empty;
   if (!isDesktopCapabilityVectorCacheReady()) {
@@ -514,10 +532,26 @@ export async function evaluateDesktopFastPath(input: {
   const best = ranked[0];
   if (!best) return empty;
   const margin = best.score - (ranked[1]?.score ?? 0);
-  const base = { capability: best.capability, score: best.score, margin };
+  const base = { capability: best.capability, score: best.score, margin, speechAct };
 
   if (ORCHESTRATION_CAPABILITIES.has(best.capability)) {
     return { ...base, fastPath: false, reason: "orchestration_capability" };
+  }
+  // SÖZ EDİMİ KAPISI — aynı sinyali `evaluateLocalActionEvidence` okuyordu,
+  // burası okumuyordu.
+  //
+  // Ölçüldü: 25 gündelik sohbet cümlesinin 6'sı bu kapıdan hızlı yola
+  // giriyordu — "bugün kendimi yorgun hissediyorum" → get_weather,
+  // "bazen susmak konuşmaktan iyi geliyor" → desktop_os.volume,
+  // "en sevdiğin film türü hangisi" → desktop_os.active_window. Hızlı yol
+  // ağır anlama hattını (~2,5 sn) ve hafıza aramasını ATLAR; yani tam da
+  // anlaşılmayı en çok gerektiren cümlede anlama kapatılıyordu.
+  //
+  // Bu cümleler üretimde `isDesktopRoute` olmadan buraya ULAŞMIYOR — yani
+  // arıza gizil, canlı değil. Kapı yine de burada: aynı sinyalin bir kapıda
+  // okunup diğerinde okunmaması bu projede tekrar eden hata sınıfı.
+  if (speechAct && !speechActAllowsExecution(speechAct)) {
+    return { ...base, fastPath: false, reason: "speech_act_blocks" };
   }
   if (margin < FAST_PATH_MARGIN) {
     return { ...base, fastPath: false, reason: "ambiguous_margin" };
