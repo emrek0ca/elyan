@@ -54,3 +54,79 @@ test("komutan/komuta gibi kelimeler terminal görevi saymaz", () => {
     assert.notEqual(goalKindFor(message), "terminal_task", message);
   }
 });
+
+// ---------------------------------------------------------------------------
+// MENÜ HEDEFLE ÇELİŞMEMELİ.
+//
+// Canlı arıza (görev fd3acf73): "masaüstüne kediler hakkında rapor hazırla ve
+// kaydet" isteğinde hedef doğru çıktı (document_task) ama anlamsal sözleşme
+// [desktop_operator.run, desktop_operator_run, document_read] önerdi — hiçbiri
+// belge YAZMIYOR. Menüde yazıcı olmayınca planlayıcı elindeki tek "dış dünya"
+// aracına uzandı: tarayıcıyı sürüp Wikipedia'ya gitmek.
+// ---------------------------------------------------------------------------
+
+function documentWorkflowRoute(): CommandRouteDecision {
+  return {
+    route: "desktop_runtime",
+    capabilities: [],
+    taskRoute: {
+      operationalRoute: "desktop_runtime",
+      semanticDesktopContract: {
+        contract: "elyan.semantic_desktop_dispatch.v1",
+        route: "desktop_runtime",
+        intent: "document_workflow",
+        requiredSemanticCapabilities: [
+          "desktop_operator.run",
+          "desktop_operator_run",
+          "document_read",
+        ],
+        requiredLocalContext: [],
+        sideEffectLevel: "write",
+        confidence: 0.7,
+        evidence: [],
+      },
+    },
+  } as unknown as CommandRouteDecision;
+}
+
+function capabilitiesFor(message: string): string[] {
+  const order = buildDesktopWorkOrder({
+    message,
+    title: message,
+    routeDecision: documentWorkflowRoute(),
+    requestedCapabilities: [],
+  } as never);
+  return order.requiredCapabilities;
+}
+
+test("belge görevine yazıcı eklenir", () => {
+  const capabilities = capabilitiesFor("masaüstüne kediler hakkında bir rapor hazırla ve kaydet");
+  assert.ok(
+    capabilities.includes("document_write"),
+    `menüde yazıcı yok: ${capabilities.join(", ")}`,
+  );
+});
+
+test("ekran bağlamı yoksa belge görevinden ekran otomasyonu düşer", () => {
+  const capabilities = capabilitiesFor("masaüstüne kediler hakkında bir rapor hazırla ve kaydet");
+  assert.equal(
+    capabilities.some((capability) => capability.startsWith("desktop_operator")),
+    false,
+    `bilgi görevinde ekran otomasyonu kaldı: ${capabilities.join(", ")}`,
+  );
+});
+
+test("gerçek karma işlerde ekran otomasyonu KORUNUR", () => {
+  // Bunlar ekran/tarayıcı yüzeyine gerçekten muhtaç; kapı onları elemez.
+  for (const message of [
+    "ekran görüntüsü al ve masaüstüne kaydet",
+    "ekrandaki tabloyu bir word belgesine aktar",
+    "chrome'daki sayfayı pdf olarak kaydet",
+  ]) {
+    const capabilities = capabilitiesFor(message);
+    assert.ok(
+      capabilities.some((capability) => capability.startsWith("desktop_operator")),
+      `${message} → ekran erişimi düştü: ${capabilities.join(", ")}`,
+    );
+  }
+});

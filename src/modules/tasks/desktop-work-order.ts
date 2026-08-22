@@ -477,6 +477,20 @@ const SCREEN_OR_APP_PATTERN = trStemPattern(
   ["ekran", "screenshot", "uygulama", "program"],
   { exclude: ["ekranı kapat"] },
 );
+const SCREEN_CONTEXT_PATTERN = trStemPattern(
+  ["ekran", "screenshot", "görüntü", "goruntu", "pencere", "window"],
+  { exclude: ["görüntülü", "goruntulu", "windows"] },
+);
+const BROWSER_CONTEXT_PATTERN = trStemPattern([
+  "chrome",
+  "safari",
+  "firefox",
+  "edge",
+  "browser",
+  "tarayıcı",
+  "tarayici",
+  "sekme",
+]);
 const PRESENTATION_PATTERN = trStemPattern([
   "pptx",
   "powerpoint",
@@ -789,10 +803,14 @@ function inferLocalContext(
   if (unicodeWordPattern(String.raw`\b(masaüstü\p{L}*|masaustu\p{L}*|desktop|indirilenler\p{L}*|downloads|klasör\p{L}*|klasor\p{L}*|dosya\p{L}*|belge\p{L}*|pdf)\b`, "i").test(normalized)) {
     contexts.add("filesystem");
   }
-  if (unicodeWordPattern(String.raw`\b(ekran|screenshot|görüntü|goruntu)\b`, "i").test(normalized) || capabilities.includes("screen_context")) {
+  // Ek toleransı ŞART: `\bekran\b` "ekrandaki" ile eşleşmez ("d" ASCII harf).
+  // Bu kapı yalnız bağlam etiketi üretmiyor; belge görevinden ekran
+  // otomasyonunu çıkarma kararı da buna bakıyor. Kaçırırsa "ekrandaki tabloyu
+  // word'e aktar" isteğinden ekran erişimi düşer.
+  if (SCREEN_CONTEXT_PATTERN.test(normalized) || capabilities.includes("screen_context")) {
     contexts.add("screen");
   }
-  if (unicodeWordPattern(String.raw`\b(chrome|safari|browser|tarayıcı|tarayici)\b`, "i").test(normalized) || capabilities.includes("browser_control")) {
+  if (BROWSER_CONTEXT_PATTERN.test(normalized) || capabilities.includes("browser_control")) {
     contexts.add("browser");
   }
   if (TERMINAL_CONTEXT_PATTERN.test(normalized) || capabilities.includes("shell_run")) {
@@ -1910,6 +1928,54 @@ export function buildDesktopWorkOrder(input: {
       ...(directRegistryCommand ? [directRegistryCommand.capability] : []),
     ]),
   ];
+  // MENÜ, HEDEFLE ÇELİŞMEMELİ.
+  //
+  // Canlı arıza (görev fd3acf73): "masaüstüne kediler hakkında rapor hazırla ve
+  // kaydet" isteğinde `goal.kind = document_task` doğru çıktı, ama anlamsal
+  // sözleşme `requiredSemanticCapabilities = [desktop_operator.run,
+  // desktop_operator_run, document_read]` verdi — hiçbiri belge YAZMIYOR.
+  // Menüde yazıcı olmayınca planlayıcı elindeki tek "dış dünya" aracına
+  // uzandı: tarayıcıyı sürüp Wikipedia'ya gitmek. Bilgi görevinde en kırılgan
+  // yol, çünkü menü başka bir şey sunmuyordu.
+  //
+  // (`routing-policy` boş kapasite listesinde varsayılan olarak
+  // `["desktop_operator.run"]` koyuyor — "hiçbir şey bilmiyorsak ekranı sür".)
+  //
+  // Burada iki gerçek aynı anda elimizde: hedefin türü ve önerilen yetenekler.
+  // Çelişiyorlarsa hedef kazanır.
+  const writerForKind =
+    kind === "document_task"
+      ? "document_write"
+      : kind === "presentation_task"
+        ? "presentation_write"
+        : null;
+  if (writerForKind && !capabilities.includes(writerForKind)) {
+    capabilities.push(writerForKind);
+  }
+  // Ekran otomasyonu belge görevinden ÇIKARILIR — ama yalnız istekte ekran,
+  // pencere veya tarayıcı bağlamı yoksa. "Ekrandaki tabloyu belgeye aktar"
+  // gibi gerçek karma işler bu kapıdan geçmez.
+  if (writerForKind) {
+    const contexts = inferLocalContext(message, capabilities, semanticDesktopContract);
+    const needsScreenSurface =
+      contexts.includes("screen") ||
+      contexts.includes("browser") ||
+      contexts.includes("window");
+    if (!needsScreenSurface) {
+      for (let index = capabilities.length - 1; index >= 0; index -= 1) {
+        const capability = capabilities[index];
+        if (
+          capability.startsWith("desktop_operator") ||
+          capability === "observe_screen" ||
+          capability === "analyze_screen" ||
+          capability === "browser_control"
+        ) {
+          capabilities.splice(index, 1);
+        }
+      }
+    }
+  }
+
   const summary = compactText(
     [
       kind === "remote_mcp"
