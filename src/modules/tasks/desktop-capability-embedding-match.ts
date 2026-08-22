@@ -74,6 +74,30 @@ const NEGATIVE_MARGIN_WEIGHT = 8;
 // aynı ölçekte yarışsın diye.
 const IDENTITY_DAMPENING = 0.85;
 
+/**
+ * MUTLAK EŞİK DENENDİ VE ÖLÇÜMLE REDDEDİLDİ (2026-08-22).
+ *
+ * Normalize edilmiş skor mutlak güven ölçüsü değildir: sorgu hiçbir yeteneğe
+ * uymasa bile en iyi aday 1.0'a yakın çıkar. 30 gündelik sohbet cümlesinden
+ * ("bugün kendimi yorgun hissediyorum", "sence hayatın anlamı ne") OTUZU da
+ * bir yetenekle top-1 eşleşti, birkaçı 1.0000 skorla.
+ *
+ * Çözüm olarak ham e5 kosinüsünü ("hiçbir yetenek uymuyor" diyebilmek için)
+ * eşiklemeyi denedim. Dağılımlar ÇAKIŞIYOR:
+ *
+ *   nötr sohbet (n=20) : min 0.8274  med 0.8581  max 0.8934
+ *   gerçek komut (n=150): min 0.8388  med 0.9421  max 0.9819
+ *
+ * 0.89 eşiği nötrlerin yalnız 2/20'sini elerken GERÇEK komutların 25/150'sini
+ * de eliyordu — üstelik en tipik olanlarını: "Terminali kapat" (0.8869),
+ * "chrome'u açar mısın" (0.8885), "Notlar uygulamasını kapat" (0.8899).
+ * Ters yönde de ayırmıyor: eval'in "sohbet olmalıydı" dediği "bilgisayarı
+ * kapat" 0.9230 ile komutların çoğundan YÜKSEK.
+ *
+ * Sonuç: "eylem mi sohbet mi" ayrımı yetenek benzerliğinden okunamaz; o karar
+ * söz-edimi katmanının işi (`core/understanding/speech-act.ts`) ve orada
+ * ölçülen ayrım çok daha keskin. Buraya mutlak eşik EKLEME.
+ */
 function normalizeScores(values: number[]): number[] {
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
