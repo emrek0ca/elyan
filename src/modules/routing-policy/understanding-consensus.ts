@@ -201,11 +201,29 @@ export function buildUnderstandingConsensus(input: {
     selectedSurface === "desktop" ||
     primaryCandidate.classification.privacyRisk !== "low" ||
     selected.privacyRisk !== "low";
-  // Açık hedef, yüzey/gizlilik çatışmasını çözer: kullanıcı zaten söyledi.
-  // Niyet çatışması (ör. "bu gerçekten bir iş mi, sohbet mi") hâlâ geçerlidir.
+  // AÇIK HEDEF, KATMAN ANLAŞMAZLIĞINI TAMAMEN BİTİRİR.
+  //
+  // İlk sürümde yalnız yüzey ve gizlilik çatışmasını çözüyordum; niyet
+  // çatışmasını "bu iş mi sohbet mi" emniyet valfi diye açık bırakmıştım.
+  // CANLI ÖLÇÜM O VALFİN YANLIŞ YERDE OLDUĞUNU GÖSTERDİ.
+  //
+  // Aynı cümle iki kez gönderildi:
+  //   b2845b50 (14:59) → desktop_runtime      (doğrulayıcı hemfikirdi)
+  //   63553c0b (17:02) → server_brain         (doğrulayıcı NİYETTE ayrıştı)
+  // Kullanıcı iki kez aynı şeyi yazdı, sistem iki farklı şey yaptı. Bu
+  // rastgelelik, kırılganlığın kullanıcıya faturalanmasıdır.
+  //
+  // "masaüstüne … hazırla ve kaydet" cümlesinde hedef de eylem de açıktır;
+  // katmanlar ne derse desin kullanıcıya "tam olarak ne istiyorsun?" diye
+  // sormak doğru cevap DEĞİLDİR.
+  //
+  // Güvenlik burada gevşemiyor: yürütmeyi söz-edimi kapısı ve yerel-eylem
+  // kanıtı ayrıca koruyor (ölçüm: YANLIŞ YÜRÜTME 0). Ayrıca çağıran taraf
+  // tavsiye sorularını (`isDesktopAdviceOnlyRequest`) bu bayrağın dışında
+  // tutuyor.
   const explicitDesktop = input.explicitTargetSurface === "desktop";
   const hardConflict = explicitDesktop
-    ? highRisk && conflict.intent
+    ? false
     : conflict.targetSurface || conflict.privacy || (highRisk && conflict.intent);
   const lowConfidence = Math.min(
     primaryCandidate.classification.confidence,

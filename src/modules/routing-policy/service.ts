@@ -2885,7 +2885,10 @@ export async function decideCommandRoute(
     //
     // `hasDesktopSaveExportSignal` tam bu kalıbı ölçer: yerel hedef adı +
     // kaydetme fiili ("masaüstüne … kaydet", "indirilenlere … indir").
-    explicitTargetSurface: hasDesktopSaveExportSignal(message) ? "desktop" : null,
+    explicitTargetSurface:
+      hasDesktopSaveExportSignal(message) && !isDesktopAdviceOnlyRequest(message)
+        ? "desktop"
+        : null,
   });
   // This is the only route-stage interpretation of the raw turn. The typed
   // contract is carried through workload selection, task persistence, and the

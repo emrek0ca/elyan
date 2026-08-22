@@ -108,3 +108,29 @@ test("açık hedef YOKKEN yüzey çatışması hâlâ netleştirme ister", () =>
 
   assert.equal(consensus.status, "clarification_required");
 });
+
+test("açık hedef varken NİYET çatışması da netleştirme üretmez", () => {
+  // Canlı ölçüm: aynı cümle iki kez gönderildi.
+  //   b2845b50 (14:59) → desktop_runtime  (doğrulayıcı hemfikirdi)
+  //   63553c0b (17:02) → server_brain     (doğrulayıcı NİYETTE ayrıştı)
+  // Kullanıcı iki kez aynı şeyi yazdı, sistem iki farklı şey yaptı.
+  const consensus = buildUnderstandingConsensus({
+    message: "masaüstüne zürafalar hakkında bir pdf hazırla ve kaydet",
+    primary: classification({
+      primaryIntent: "document",
+      requiresLocalRuntime: true,
+      privacyRisk: "high",
+    }),
+    verifier: classification({
+      primaryIntent: "chat",
+      requiresLocalRuntime: true,
+      privacyRisk: "high",
+    }),
+    verifierInvoked: true,
+    sideEffect: true,
+    explicitTargetSurface: "desktop",
+  });
+
+  assert.notEqual(consensus.status, "clarification_required");
+  assert.equal(consensus.targetSurface, "desktop");
+});
