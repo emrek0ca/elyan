@@ -23,6 +23,24 @@ const intentRules: Array<{ intent: UnderstandingIntent; patterns: RegExp[] }> = 
     intent: "coding",
     patterns: [
       /\b(code|implement|refactor|typescript|javascript|python|swift|flutter|sql|api|backend|frontend|test)\b/i,
+      // ÖLÇÜLDÜ, HENÜZ DÜZELTİLMEDİ (2026-08-22) — Türkçe ek toleransı yok.
+      //
+      //   coding  : 0/5  ✗ "kodu incele", "dosyayı aç", "testleri koştur",
+      //                     "repoyu güncelle", "kodda ara"
+      //   research: 1/5  ✗ "kaynakları göster", "incelesene", "doğrular mısın"
+      //   math    : 2/5  ✗ "denklemi çöz", "hesaplar mısın", "sonucu söyle"
+      //
+      // Önemi: `classifyIntent` yalnız `user-understanding-service` içinde
+      // `enhanceIntentWithTransformer` ile yükseltiliyor. `routing-policy`,
+      // `brain/routes` ve `speech/stream-routes` HAM regex sonucunu kullanıyor;
+      // orada kaçırma doğrudan niyet kaybı demek.
+      //
+      // Neden bu turda düzeltilmedi: niyet sınıflandırması gecenin en geniş
+      // etki alanına sahip yüzeyi (yönlendirme + beyin + ses) ve düzeltme
+      // kullanıcının test edeceği saate 30 dakika kala yapılacaktı. Ölçüm
+      // burada duruyor; düzeltme `trStemPattern` ile, negatif örneklerle
+      // birlikte yapılmalı ("kod"→"kodla/kodlama" istenir, "test"→"testere"
+      // istenmez).
       /\b(kod|uygula|implement|refaktor|backend|frontend|test|repo|dosya)\b/i,
       // C/C++ ve sistem programlama: `\b` "+" karakterinde çalışmadığı için
       // c++ lookaround ile yakalanıyor. Tek başına "c" harfi çok geniş —
