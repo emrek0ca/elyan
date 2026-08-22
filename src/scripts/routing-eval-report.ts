@@ -8,6 +8,7 @@ import {
   ROUTING_EVAL_HELDOUT,
 } from "../modules/tasks/routing-eval-corpus.js";
 import {
+  isDesktopCapabilityVectorCacheReady,
   matchDesktopCapabilitiesWithEmbeddings,
   warmDesktopCapabilityVectors,
 } from "../modules/tasks/desktop-capability-embedding-match.js";
@@ -84,17 +85,76 @@ async function runFullPipelineEval(corpus: typeof ROUTING_EVAL_CORPUS) {
 }
 
 const asJson = process.argv.includes("--json");
-const withEmbeddings = process.argv.includes("--full");
+/**
+ * ÜRETİM YOLU ARTIK VARSAYILAN (2026-08-22).
+ *
+ * Eskiden tam boru hattı yalnız `--full` ile koşuyordu; varsayılan rapor
+ * SÖZCÜKSEL katmanı ölçüyordu. Sonuç: haftalardır "genelleme payı 40,6 puan"
+ * diye raporladığım sayı, üretimin verdiği kararın DEĞİL bir bileşenin
+ * sayısıydı. Aynı anda ölçüldü:
+ *
+ *   sözcüksel  : korpus 98.1% → tutulan 57.5%  (fark 40.6 puan)
+ *   ÜRETİM (e5): korpus 99.0% → tutulan 83.0%  (fark 16.0 puan)
+ *
+ * Sözcüksel kaçırmaların bir kısmını e5 zaten kurtarıyor (ör. "şu görseli
+ * üretiver bana" yalnız sözcüksel katmanda kayıp). Yanlış aşamaya bakmak,
+ * iyileştirme çabasını olmayan bir soruna yönlendiriyordu.
+ *
+ * `--lexical-only` bileşeni tek başına ölçmek için durur; ama artık kapının
+ * BAŞLIK sayısı üretim yoludur.
+ */
+const lexicalOnly = process.argv.includes("--lexical-only");
 const corpusReport = runRoutingEval(ROUTING_EVAL_CORPUS);
 const heldoutReport = runRoutingEval(ROUTING_EVAL_HELDOUT);
+
+type PipelineResult = Awaited<ReturnType<typeof runFullPipelineEval>>;
+let productionCorpus: PipelineResult | null = null;
+let productionHeldout: PipelineResult | null = null;
+let embeddingsReady = false;
+
+if (!lexicalOnly) {
+  try {
+    // The production app warms this asynchronously. The evaluator is the
+    // explicit opt-in caller allowed to wait once before scoring the corpus;
+    // every measured request below uses the already-ready cache.
+    await warmDesktopCapabilityVectors();
+    embeddingsReady = isDesktopCapabilityVectorCacheReady();
+    if (embeddingsReady) {
+      productionCorpus = await runFullPipelineEval(ROUTING_EVAL_CORPUS);
+      productionHeldout = await runFullPipelineEval(ROUTING_EVAL_HELDOUT);
+    }
+  } finally {
+    // The semantic worker is unref'd, but its pending scheduler/worker state
+    // still kept the old evaluator alive after it had printed its report.
+    resetSemanticComputeWorkerForTests();
+  }
+}
 
 if (asJson) {
   console.log(
     JSON.stringify(
       {
         generatedAt: new Date().toISOString(),
-        corpus: summarize("corpus", corpusReport),
-        heldout: summarize("heldout", heldoutReport),
+        // Kapının BAŞLIK sayısı: üretim yolu. e5 hazır değilse null —
+        // sessizce sözcüksel sayıya düşmek, bu kapıyı yıllarca yanlış
+        // aşamaya baktıran hatanın ta kendisiydi.
+        production: embeddingsReady
+          ? {
+              corpus: {
+                cases: productionCorpus?.scored ?? 0,
+                top1Ratio: Number((productionCorpus?.rate ?? 0).toFixed(4)),
+              },
+              heldout: {
+                cases: productionHeldout?.scored ?? 0,
+                top1Ratio: Number((productionHeldout?.rate ?? 0).toFixed(4)),
+              },
+            }
+          : null,
+        embeddingsReady,
+        lexical: {
+          corpus: summarize("corpus", corpusReport),
+          heldout: summarize("heldout", heldoutReport),
+        },
       },
       null,
       2,
@@ -108,29 +168,36 @@ if (asJson) {
   const corpusTop1 = corpusReport.top1Rate;
   const heldoutTop1 = heldoutReport.top1Rate;
   console.log(
-    `\nGENELLEME PAYI: korpus ${(corpusTop1 * 100).toFixed(1)}% → tutulan ${(heldoutTop1 * 100).toFixed(1)}%` +
+    `\n[BİLEŞEN] sözcüksel katman: korpus ${(corpusTop1 * 100).toFixed(1)}% → tutulan ${(heldoutTop1 * 100).toFixed(1)}%` +
       ` (fark ${((corpusTop1 - heldoutTop1) * 100).toFixed(1)} puan)`,
   );
-}
 
-if (withEmbeddings) {
-  try {
-    console.log("\n===== TAM BORU HATTI (sözcüksel + e5 yeniden sıralama) =====");
-    // The production app warms this asynchronously. The evaluator is the
-    // explicit opt-in caller allowed to wait once before scoring the corpus;
-    // every measured request below uses the already-ready cache.
-    await warmDesktopCapabilityVectors();
-    for (const [name, corpus] of [
-      ["KORPUS", ROUTING_EVAL_CORPUS],
-      ["TUTULAN", ROUTING_EVAL_HELDOUT],
-    ] as const) {
-      const full = await runFullPipelineEval(corpus);
-      console.log(`${name}: top-1 ${full.top1}/${full.scored} (${(full.rate * 100).toFixed(1)}%)`);
-      for (const miss of full.misses.slice(0, 12)) console.log(miss);
-    }
-  } finally {
-    // The semantic worker is unref'd, but its pending scheduler/worker state
-    // still kept the old evaluator alive after it had printed its report.
-    resetSemanticComputeWorkerForTests();
+  if (lexicalOnly) {
+    console.log(
+      "\n--lexical-only: ÜRETİM yolu ölçülmedi. Yukarıdaki sayı kapının başlık sayısı DEĞİLDİR.",
+    );
+  } else if (!embeddingsReady || !productionCorpus || !productionHeldout) {
+    console.log(
+      "\n!!! ÜRETİM YOLU ÖLÇÜLEMEDİ: e5 vektör önbelleği hazır değil." +
+        "\n    Üretim bu durumda SESSİZCE sözcüksel skora düşer; kapı da bunu" +
+        "\n    sessizce yapmasın diye burada duruyor. Sayıyı geçerli sayma.",
+    );
+    process.exitCode = 1;
+  } else {
+    console.log(`\n===== ÜRETİM YOLU (sözcüksel + e5 yeniden sıralama) =====`);
+    console.log(
+      `KORPUS : top-1 ${productionCorpus.top1}/${productionCorpus.scored} (${(productionCorpus.rate * 100).toFixed(1)}%)`,
+    );
+    for (const miss of productionCorpus.misses.slice(0, 12)) console.log(miss);
+    console.log(
+      `TUTULAN: top-1 ${productionHeldout.top1}/${productionHeldout.scored} (${(productionHeldout.rate * 100).toFixed(1)}%)`,
+    );
+    for (const miss of productionHeldout.misses.slice(0, 12)) console.log(miss);
+    console.log(
+      `\nGENELLEME PAYI (ÜRETİM): korpus ${(productionCorpus.rate * 100).toFixed(1)}%` +
+        ` → tutulan ${(productionHeldout.rate * 100).toFixed(1)}%` +
+        ` (fark ${((productionCorpus.rate - productionHeldout.rate) * 100).toFixed(1)} puan)`,
+    );
   }
 }
+
