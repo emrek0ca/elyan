@@ -91,3 +91,46 @@ test("tolerans YAPIYI gevşetmez", () => {
   assert.equal(normalizeMaterializedSteps({ plan: [] }, ALLOWED), null);
   assert.equal(normalizeMaterializedSteps(null, ALLOWED), null);
 });
+
+// ---------------------------------------------------------------------------
+// YETENEK ADI `id` ALANINA YAZILMIŞ OLABİLİR.
+//
+// Canlı arıza (görev 18eef3db, 2026-08-22 19:48): model planı şöyle döndürdü —
+//   {"id":"desktop_operator.run","args":{"goal":"…"},"output":"selectedFile"}
+//   {"id":"send_whatsapp_message","args":{…}}
+// `capability` alanı HİÇ YOK. Doğru plan, yalnız alan adı yanlış — ve tamamı
+// çöpe gitti; kullanıcı "güvenilir yürütme planı hazırlanamadı" gördü.
+// ---------------------------------------------------------------------------
+
+test("yetenek adı id alanındaysa kurtarılır", () => {
+  const steps = normalizeMaterializedSteps(
+    {
+      steps: [
+        { id: "web_research", args: { query: "zürafa" } },
+        { id: "document_write", args: { prompt: "x" } },
+      ],
+    },
+    ALLOWED,
+  );
+  assert.equal(steps?.length, 2);
+  assert.deepEqual(steps?.map((s) => s.capability), ["web_research", "document_write"]);
+  // Yetenek id'den geldiyse o id artık adım kimliği olamaz.
+  assert.notEqual(steps?.[0].id, "web_research");
+});
+
+test("uydurma id yetenek yerine GEÇMEZ", () => {
+  // Tolerans dar: id ancak katalogda gerçekten var olan bir yetenekse kabul.
+  assert.equal(
+    normalizeMaterializedSteps({ steps: [{ id: "sihirli_arac", args: {} }] }, ALLOWED),
+    null,
+  );
+});
+
+test("capability varsa id adım kimliği kalır", () => {
+  const steps = normalizeMaterializedSteps(
+    { steps: [{ id: "adim1", capability: "document_write", args: {} }] },
+    ALLOWED,
+  );
+  assert.equal(steps?.[0].id, "adim1");
+  assert.equal(steps?.[0].capability, "document_write");
+});

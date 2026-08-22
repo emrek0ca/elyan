@@ -1285,12 +1285,28 @@ export function normalizeMaterializedSteps(
     if (normalized.length >= MAX_WORK_ORDER_STEPS) break;
     const step = asRecord(rawSteps[index]);
     if (!step) continue;
-    const capability = String(
+    // YETENEK ADI `id` ALANINA YAZILMIŞ OLABİLİR.
+    //
+    // Canlı arıza (görev 18eef3db, 2026-08-22 19:48): model planı şöyle
+    // döndürdü —
+    //   {"id":"desktop_operator.run","args":{"goal":"…"},"output":"selectedFile"}
+    //   {"id":"send_whatsapp_message","args":{…}}
+    // `capability` alanı HİÇ YOK; yetenek adı `id`'ye yazılmış. Doğru plan,
+    // yalnız alan adı yanlış — ve bu yüzden tamamı çöpe gitti, kullanıcı
+    // "güvenilir yürütme planı hazırlanamadı" gördü.
+    //
+    // Tolerans DAR: `id` ancak KATALOGDA GERÇEKTEN VAR OLAN bir yetenek adıysa
+    // kabul edilir. Uydurma bir id yetenek yerine geçemez.
+    const declared = String(
       readStepField(step, ["capability", "tool", "name"]) ?? "",
     ).trim();
+    const rawId = String(step.id ?? "").trim();
+    const capability =
+      declared || (rawId && allowed.has(rawId) ? rawId : "");
     if (!capability || !CAPABILITY_NAME_RE.test(capability)) continue;
     if (!allowed.has(capability)) continue;
-    let id = String(step.id ?? "").trim();
+    // Yetenek `id`'den geldiyse o id artık adım kimliği olamaz.
+    let id = declared ? rawId : "";
     if (!id || seenIds.has(id)) id = `s${normalized.length + 1}`;
     seenIds.add(id);
     const rawArgs = readStepField(step, ["args", "arguments", "input", "parameters"]);
