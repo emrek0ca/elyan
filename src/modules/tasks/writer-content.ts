@@ -29,7 +29,7 @@ import { trStemPattern } from "../../lib/tr-word-boundary.js";
  * KAPSAM DAR: yalnız düzyazı yazıcıları. `spreadsheet_write` yapılandırılmış
  * satır/sütun ister; oraya düzyazı üretmek yanlış olur.
  */
-const PROSE_WRITER_CAPABILITIES = new Set([
+export const PROSE_WRITER_CAPABILITIES = new Set([
   "document_write",
   "canvas_write",
   "presentation_write",
@@ -54,6 +54,16 @@ const CONTENT_ARG_KEYS = [
  *
  * Gerçek trafikle kalibre edilebilsin diye her iki dal da loglanır.
  */
+/**
+ * Gövde üretiminin kullandığı iş yükleri — TEK KAYNAK.
+ *
+ * Test bunları `decideStructuredResponseDecision`'a sorup yapılandırılmış blok
+ * şeridine düşmediklerini doğruluyor. `document_generate` seçmiştim ve tam
+ * olarak bu yüzden patlamıştı (şema → uyumluluk modeli → json_validate_failed).
+ */
+export const WRITER_PROSE_WORKLOAD = "mobile_chat_balanced" as const;
+export const WRITER_RESEARCH_WORKLOAD = "public_research" as const;
+
 export const WRITER_CONTENT_MIN_WORDS = 120;
 
 const STEP_REFERENCE_RE = /\{\{\s*steps\./;
@@ -198,7 +208,7 @@ export function findWriterContentGap(
  */
 const PDF_REQUEST_PATTERN = trStemPattern(["pdf"]);
 
-function requestedOutputFormat(goalText: string): "pdf" | null {
+export function requestedOutputFormat(goalText: string): "pdf" | null {
   return PDF_REQUEST_PATTERN.test(goalText) ? "pdf" : null;
 }
 
@@ -359,7 +369,9 @@ export async function fillWriterContent(input: {
         // bütçesini zaten aşağıda kendimiz veriyoruz.
         // `public_research` ise Groq Compound'a uygun: yerleşik web aramasıyla
         // canlı veriyi kendisi getirir.
-        workload: liveResearch ? "public_research" : "mobile_chat_balanced",
+        workload: liveResearch
+          ? WRITER_RESEARCH_WORKLOAD
+          : WRITER_PROSE_WORKLOAD,
         route: "desktop_writer_content",
         meteringSurface: "task",
         maxCompletionTokensOverride: 3_000,
