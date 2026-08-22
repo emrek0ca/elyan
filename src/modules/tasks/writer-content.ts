@@ -130,6 +130,31 @@ export function findWriterContentGap(
  * Üretilen metnin İLK SATIRI zaten belge başlığıdır (prompt bölüm başlıkları
  * istiyor). Cümle gibi görünüyorsa (uzun, nokta ile biten) başlık sayılmaz.
  */
+/**
+ * Bölüm adları başlık DEĞİLDİR.
+ *
+ * Ölçüldü: model prompt'ta başlık istenmediğinde metne doğrudan "Giriş" diye
+ * başlıyordu; ilk satırı körlemesine başlık saymak dosya adını `Giris.docx`
+ * yapardı. Prompt artık ilk satırı başlık olarak istiyor, bu liste de kalan
+ * durumları eliyor.
+ */
+const SECTION_WORDS = new Set([
+  "giris",
+  "giriş",
+  "ozet",
+  "özet",
+  "sonuc",
+  "sonuç",
+  "icindekiler",
+  "içindekiler",
+  "genel bakis",
+  "genel bakış",
+  "introduction",
+  "summary",
+  "conclusion",
+  "overview",
+]);
+
 function deriveTitle(text: string): string | null {
   const firstLine = text
     .split("\n")
@@ -139,6 +164,7 @@ function deriveTitle(text: string): string | null {
   const cleaned = firstLine.replace(/^#+\s*/, "").replace(/[.:;]+$/, "").trim();
   if (cleaned.length < 3 || cleaned.length > 80) return null;
   if (cleaned.split(/\s+/).length > 8) return null;
+  if (SECTION_WORDS.has(cleaned.toLocaleLowerCase("tr"))) return null;
   return cleaned;
 }
 
@@ -167,8 +193,9 @@ function buildContentPrompt(input: {
     `Bu isteğin karşılığı olan ${kind} yaz. Dil: ${language}.`,
     "",
     "KURALLAR:",
+    "- İLK SATIR belgenin BAŞLIĞI olsun (kısa isim tamlaması, en fazla 6 kelime, nokta yok).",
     "- Sadece metnin KENDİSİNİ yaz. Ne yapacağını anlatma, plan sunma, önsöz/sonsöz ekleme.",
-    "- Bölüm başlıkları kullan; giriş, ana bölümler ve sonuç barındır.",
+    "- Başlıktan sonra bölüm başlıkları kullan; giriş, ana bölümler ve sonuç barındır.",
     "- Uydurma sayı, tarih, isim veya alıntı KULLANMA.",
     ...(input.liveResearch
       ? [
