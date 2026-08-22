@@ -76,6 +76,17 @@ const SPEECH_ACT_EXEMPLARS: Record<SpeechAct, string[]> = {
     "ekran görüntüsü al",
     "takvime toplantı ekle",
     "maili gönder",
+    // BUYRUK + NESNE — zaman/yer ekiyle uzayan komutlar.
+    //
+    // Ölçüm: "perşembe öğlen için ajandama bir şey koy" → statement sanıldı
+    // (marj 0.004). Eski komut örneklerinin hepsi kısa ve çıplaktı; zaman
+    // ifadesiyle uzayan buyruk cümlesi hiç yoktu.
+    // Bu örnekler de tutulan kümeden ALINMADI; aynı şekli taşıyan farklı
+    // cümlelerdir ("perşembe öğlen için ajandama bir şey koy" tutulan kümede).
+    "yarın sabaha alarm kur",
+    "şu dosyayı masaüstüne kaydet",
+    "bu klasörü çöp kutusuna at",
+    "pazartesi için hatırlatma ekle",
     "play a song",
     "close the browser",
     "create a folder",
@@ -90,6 +101,33 @@ const SPEECH_ACT_EXEMPLARS: Record<SpeechAct, string[]> = {
     "ücretli mi",
     "ne kadar sürer",
     "bugün hava nasıl",
+    // YETENEK HAKKINDAKİ SORULAR — ölçümle eklendi (2026-08-22).
+    //
+    // Korpus ve tutulan kümede aynı sınıf düşüyordu ve hepsi soru işaretsiz:
+    //   "Mail nasıl yazılır"              → command sanıldı (korpus)
+    //   "terminal ne işe yarar"           → command
+    //   "bilgisayarımın şarjı ne alemde"  → command
+    //   "klasör oluşturmanın kısayolu var mı" → command
+    // Ortak şekil: cümlede bir YETENEK adı geçiyor ve soru bir eylem talebi
+    // değil, o yetenek HAKKINDA. Eski örnekler yalnız çıplak soru kalıplarını
+    // ("nasıl yapılır") taşıyordu; yetenek adı taşıyan soru hiç yoktu, o
+    // yüzden yakınlık komut örneklerine kayıyordu.
+    // ÖNEMLİ: bu örnekler TUTULAN KÜMEDEN alınmaz.
+    //
+    // İlk denememde tutulan kümenin üç cümlesini birebir örnek olarak
+    // eklemiştim ("terminal ne işe yarar", "bilgisayarımın şarjı ne alemde",
+    // "klasör oluşturmanın kısayolu var mı") ve tutulan küme %66.7 → %100
+    // çıktı. O sayı SAHTEYDİ: modele sınav sorularını çalıştırmıştım.
+    // Geri alındı; aşağıdakiler aynı ŞEKLİ taşıyan farklı cümlelerdir.
+    "mail nasıl yazılır",
+    "ekran görüntüsü nasıl alınır",
+    "takvime etkinlik nasıl eklenir",
+    "bu uygulama ne yapar",
+    "dosya taşımanın yolu nedir",
+    "tarayıcı geçmişi nerede tutulur",
+    "not defterinin kısayolu nedir",
+    "what does the terminal do",
+    "how do I take a screenshot",
     "what is this",
     "how do I do it",
     "is it safe",
