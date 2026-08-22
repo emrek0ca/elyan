@@ -844,3 +844,49 @@ test("PDF başlığı cevabın kendi başlığından türer", async () => {
   assert.equal(content.fileName, "elyan_tanitim_raporu.pdf");
   assert.match(String(content.markdown), /^# Elyan Tanıtım Raporu/);
 });
+
+// ---------------------------------------------------------------------------
+// CANLI ARIZA (görev 67649401, 2026-08-22 16:34).
+//
+// "masaüstüne zürafalar hakkında bir pdf hazırla ve kaydet" isteğinde model
+// netleştirme sorusu döndürdü — "Netleştireyim: tam olarak neyi yapmamı
+// istiyorsun?" — ve bu SORU PDF'in gövdesi olarak basıldı. Görev
+// "PDF Belgesi hazır." diye BAŞARILI raporlandı. Kullanıcı masaüstünde içi
+// tek soru cümlesi olan bir PDF buldu.
+//
+// Asgari içerik kapısı vardı ama yalnız araştırma artefaktlarında çalışıyordu.
+// ---------------------------------------------------------------------------
+
+test("netleştirme sorusu belge gövdesi olamaz", async () => {
+  const userRequest = "masaüstüne zürafalar hakkında bir pdf hazırla ve kaydet";
+  const result = await buildArtifactPipeline({
+    userRequest,
+    responseText: "Netleştireyim: tam olarak neyi yapmamı istiyorsun?",
+    understandingEnvelope: buildTypedUnderstandingEnvelope({
+      userId: "user_1",
+      message: userRequest,
+      intent: documentIntent(),
+    }),
+  });
+
+  assert.equal(result.kind, "evidence_required");
+  if (result.kind !== "evidence_required") return;
+  assert.equal(result.reason, "artifact_content_is_clarification");
+});
+
+test("gerçek cevap metni belge gövdesi OLABİLİR", async () => {
+  // Kapı yalnız soruyu eler; kısa ama geçerli dönüşümler etkilenmez.
+  const userRequest = "Bu içeriği Word dosyası olarak oluştur";
+  const result = await buildArtifactPipeline({
+    userRequest,
+    responseText:
+      "Proje planlandığı gibi ilerliyor ve tüm kilometre taşları tamamlandı.",
+    understandingEnvelope: buildTypedUnderstandingEnvelope({
+      userId: "user_1",
+      message: userRequest,
+      intent: documentIntent(),
+    }),
+  });
+
+  assert.equal(result.kind, "rendered");
+});

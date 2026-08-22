@@ -1055,7 +1055,27 @@ function shouldOverrideModelServerRouteForDesktop(input: {
   classification?: IntentClassification;
   hasLiveDesktopRuntime?: boolean;
 }): boolean {
-  if (input.modelTaskRoute?.operationalRoute !== "server_brain") return false;
+  // ROTA MODELİ YOKSA "fikri yok" demektir, "sunucu dedi" değil.
+  //
+  // Bu kapı `modelTaskRoute?.operationalRoute !== "server_brain"` diyordu.
+  // Üretimde rota modeli YAPILANDIRILMAMIŞ (bu dosyanın kendi notu:
+  // "ROUTEMODEL false (model YOK)"), yani `undefined !== "server_brain"` her
+  // zaman doğru çıkıp geçersiz kılma HİÇ çalışmıyordu.
+  //
+  // Canlı arıza (görev 67649401, 2026-08-22 16:34): kullanıcı "MASAÜSTÜNE
+  // zürafalar hakkında bir pdf hazırla ve kaydet" dedi. Sınıflandırıcı doğru
+  // karar verdi (requiresLocalRuntime=true), masaüstü çevrimiçiydi, hedef
+  // çıpası ve kaydetme sinyali de eşleşiyordu — ama tur `server_brain`'e
+  // gitti (`selectedDeviceIgnored: true`) ve sunucu tarafı PDF üretti.
+  // Aynı cümlenin "pdf" yerine "rapor" hâli masaüstüne gidiyordu.
+  //
+  // Artık yalnız model AÇIKÇA başka bir yol seçtiyse çekiliyoruz.
+  if (
+    input.modelTaskRoute &&
+    input.modelTaskRoute.operationalRoute !== "server_brain"
+  ) {
+    return false;
+  }
   if (isDesktopAdviceOnlyRequest(input.message)) return false;
   // Sınıflandırıcının KENDİ kararı da geçerli bir sinyaldir.
   //

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 import { learningEvents } from "../../db/schema.js";
 import type { ElyanAssistantDocumentBlock } from "../../contracts/domain.js";
 import { withCanonicalAssistantBlockEnvelope } from "../chat/block-envelope.js";
@@ -65,7 +66,9 @@ export type ArtifactPipelineResult =
       intent: ArtifactIntent;
       reason:
         | "grounding_evidence_unavailable"
-        | "artifact_content_insufficient";
+        | "artifact_content_insufficient"
+        // Netleştirme sorusu belge gövdesi olamaz — canlı arıza 67649401.
+        | "artifact_content_is_clarification";
       latencyMs: number;
     }
   | {
@@ -272,6 +275,35 @@ export async function buildArtifactPipeline(input: {
       };
     }
   }
+  // BELGE, ELDEKİ HERHANGİ BİR METİN DEĞİLDİR.
+  //
+  // Canlı arıza (görev 67649401, 2026-08-22 16:34 — "masaüstüne zürafalar
+  // hakkında bir pdf hazırla ve kaydet"): model netleştirme sorusu döndürdü
+  // ("Netleştireyim: tam olarak neyi yapmamı istiyorsun?") ve bu SORU PDF'in
+  // gövdesi olarak basıldı. Görev "PDF Belgesi hazır." diye BAŞARILI raporlandı.
+  //
+  // Asgari içerik kapısı zaten vardı ama YALNIZ araştırma artefaktlarında
+  // çalışıyordu (`researchArtifactRequested`). Sıradan bir "pdf hazırla"
+  // isteğinde 50 karakterlik bir soru belge oldu.
+  //
+  // İki kapı, ikisi de gövde metnine bakar:
+  // ASGARİ UZUNLUK KAPISI DENENDİ VE GERİ ALINDI: "bu içeriği word yap" gibi
+  // meşru kısa dönüşümler 70 karakterlik gövdeyle geliyor (mevcut testler bunu
+  // koruyor). Ayırt edici olan uzunluk değil, metnin SORU olması.
+  if (intent.type === "pdf" || intent.type === "document") {
+    // Gövde metni BOŞSA burası karar vermez: içerik kullanıcı isteğinden
+    // deterministik olarak da türetilebiliyor (fiş/irsaliye yolu, responseText
+    // hiç yok). Bu kapı yalnız ELDE BİR CEVAP METNİ VARKEN konuşur.
+    const bodyText = artifactSourceText(input);
+    if (bodyText.length > 0 && isClarificationText(bodyText)) {
+      return {
+        kind: "evidence_required",
+        intent,
+        reason: "artifact_content_is_clarification",
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+  }
   const rawSpec = buildArtifactSpec({
     ...input,
     intent,
@@ -337,6 +369,29 @@ function sourceDocumentBlock(
         (block as ElyanAssistantDocumentBlock).sections.length > 0,
     ) ?? null
   );
+}
+
+/**
+ * Metin bir cevap mı, yoksa kullanıcıya sorulmuş bir soru mu?
+ *
+ * Soru gövde olamaz. Tek sinyal noktalama değil; "netleştireyim/hangisini
+ * istersin" gibi açılışlar soru işareti olmadan da netleştirmedir.
+ */
+function isClarificationText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  if (/\?\s*$/u.test(normalized)) return true;
+  return trStemPattern([
+    "netleştir",
+    "netlestir",
+    "hangisini",
+    "hangi biçim",
+    "hangi format",
+    "tam olarak ne",
+    "biraz daha detay",
+    "clarify",
+    "could you specify",
+  ]).test(normalized);
 }
 
 function artifactSourceText(input: {
