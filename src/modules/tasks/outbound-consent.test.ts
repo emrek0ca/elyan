@@ -32,6 +32,9 @@ test("kanal anılmadıysa giden mesaj kapalı", () => {
   );
   assert.equal(allowed.includes("send_whatsapp_message"), false);
   assert.equal(allowed.includes("email_send"), false);
+  // Canlı arıza 23:25: WhatsApp kapatılınca planlayıcı email_draft'a geçti.
+  // Bir yeteneği kapatıp kardeşini açık bırakmak kapıyı hiç koymamak gibidir.
+  assert.equal(allowed.includes("email_draft"), false);
   // Diğer yetenekler daralmaz.
   assert.ok(allowed.includes("document_write"));
   assert.ok(allowed.includes("file_search"));
@@ -45,6 +48,7 @@ test("kanal açıkça anıldıysa açılır", () => {
 
   const mail = buildAllowedCapabilities(workOrder("raporu mail olarak gönder"));
   assert.ok(mail.includes("email_send"));
+  assert.ok(mail.includes("email_draft"));
 });
 
 test("e-posta adresi de açık kanaldır", () => {

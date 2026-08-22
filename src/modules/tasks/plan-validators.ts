@@ -70,6 +70,14 @@ const OUTBOUND_MESSAGING_CAPABILITIES = new Set([
   "send_whatsapp_message",
   "save_whatsapp_contact",
   "email_send",
+  // `email_draft` İLK SÜRÜMDE UNUTULMUŞTU — kapı yarım kaldı.
+  //
+  // Canlı arıza (2026-08-22 23:25, aynı istek): WhatsApp kapatıldıktan sonra
+  // planlayıcı bu sefer "Raporu ekleyerek e-posta taslağı oluştur" + "Mail
+  // uygulamasını aç" adımlarını kurdu. Kullanıcı yine hiçbir kanal
+  // söylememişti. Bir yeteneği kapatıp kardeşini açık bırakmak, kapıyı hiç
+  // koymamakla aynı sonucu veriyor.
+  "email_draft",
 ]);
 
 const EXPLICIT_CHANNEL_PATTERN = trStemPattern([
