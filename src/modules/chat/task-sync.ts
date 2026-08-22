@@ -1,5 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { recordRoutingEpisode } from "../routing-policy/episodic-decisions.js";
+import { assessTaskOutcome } from "../tasks/outcome-verdict.js";
 import type { FastifyInstance } from "fastify";
 import { chatMessages, chatSessions, tasks } from "../../db/schema.js";
 import type { TaskStatus } from "../../contracts/domain.js";
@@ -693,6 +694,21 @@ function readTaskPrompt(task: typeof tasks.$inferSelect): string {
   return prompt.trim() || String(task.title ?? "").trim();
 }
 
+/** Sonuçtaki kullanıcıya görünen özet — netleştirme sorusu buradan yakalanır. */
+function readResultSummary(task: typeof tasks.$inferSelect): string {
+  const result = (task.result ?? {}) as Record<string, unknown>;
+  const safeSummary = typeof result.safeSummary === "string" ? result.safeSummary : "";
+  if (safeSummary.trim()) return safeSummary;
+  return String(task.summary ?? "").trim();
+}
+
+/** Görevin beklenen çıktıları — "zorunlu artefakt var mıydı?" sorusu için. */
+function readExpectedOutputs(task: typeof tasks.$inferSelect): unknown {
+  const payload = (task.payload ?? {}) as Record<string, unknown>;
+  const workOrder = (payload.desktopWorkOrder ?? {}) as Record<string, unknown>;
+  return workOrder.expectedOutputs;
+}
+
 /** Kararın kendisi: sunucu mu masaüstü mü çalıştı? */
 function readTaskOperationalRoute(task: typeof tasks.$inferSelect): string {
   const payload = (task.payload ?? {}) as Record<string, unknown>;
@@ -732,17 +748,39 @@ export async function syncChatTaskLifecycle(
   const wasTerminal = TERMINAL_TASK_STATUSES.has(input.originalTask.status);
   const isTerminal = TERMINAL_TASK_STATUSES.has(input.updatedTask.status);
   if (!wasTerminal && isTerminal) {
+    // ETİKET, TAŞIMA BAŞARISI DEĞİL KULLANICI SONUCU.
+    //
+    // Ölçüm bunu zorunlu kıldı: `server_brain → completed` turları çöp PDF
+    // üreten ve netleştirme sorusu soran turlardı. Görev durumuyla
+    // etiketlemek, hafızaya yanlış dersi yazmak olur.
+    const request = readTaskPrompt(input.updatedTask);
+    const assessment = assessTaskOutcome({
+      status: input.updatedTask.status,
+      request,
+      expectedOutputs: readExpectedOutputs(input.updatedTask),
+      result: input.updatedTask.result,
+      // Asistan metni bu noktada henüz normalize edilmedi; görev sonucundaki
+      // güvenli özet aynı bilgiyi taşır ve netleştirme sorusunu da içerir.
+      assistantText: readResultSummary(input.updatedTask),
+      error: input.updatedTask.error ?? null,
+    });
+    app.log?.info?.(
+      {
+        taskId: input.updatedTask.id,
+        status: input.updatedTask.status,
+        verdict: assessment.verdict,
+        reasons: assessment.reasons,
+      },
+      "task outcome assessed",
+    );
     void recordRoutingEpisode(app, {
       userId: input.updatedTask.userId,
       taskId: input.updatedTask.id,
-      message: readTaskPrompt(input.updatedTask),
+      message: request,
       route: readTaskOperationalRoute(input.updatedTask),
-      outcome:
-        input.updatedTask.status === "completed"
-          ? "completed"
-          : input.updatedTask.status === "canceled"
-            ? "canceled"
-            : "failed",
+      outcome: assessment.verdict,
+      status: input.updatedTask.status,
+      reasons: assessment.reasons,
       failureReason: input.updatedTask.error ?? null,
     }).catch(() => false);
   }

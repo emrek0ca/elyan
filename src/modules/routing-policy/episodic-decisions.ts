@@ -80,7 +80,18 @@ export async function recordRoutingEpisode(
     taskId?: string | null;
     message: string;
     route: string;
-    outcome: "completed" | "failed" | "canceled";
+    /**
+     * KULLANICI SONUCU — görev durumu DEĞİL.
+     *
+     * Ölçüm bunu zorunlu kıldı: aynı cümle hem `server_brain → completed` hem
+     * `desktop_runtime → completed` olarak kayıtlıydı, ama server_brain
+     * turları çöp PDF üreten ve netleştirme sorusu soran turlardı. Taşıma
+     * başarısıyla etiketlemek yanlış dersi kalıcılaştırır.
+     */
+    outcome: "fulfilled" | "degraded" | "unfulfilled";
+    /** Ham görev durumu — teşhis için saklanır, etiket olarak KULLANILMAZ. */
+    status?: string;
+    reasons?: string[];
     failureReason?: string | null;
   },
 ): Promise<boolean> {
@@ -101,8 +112,9 @@ export async function recordRoutingEpisode(
       }),
       // Gizlilik: kullanıcı isteği metni epizotta durur, kapsam `user`.
       privacyLevel: "sensitive",
-      confidence: input.outcome === "completed" ? 80 : 60,
-      importanceScore: input.outcome === "completed" ? 50 : 70,
+      confidence: input.outcome === "fulfilled" ? 80 : 60,
+      // Başarısız turlar DAHA ÖNEMLİ: tekrarlanmaması gereken ders onlarda.
+      importanceScore: input.outcome === "fulfilled" ? 50 : 75,
       // vector384 sütunu metin literali bekliyor (bkz. db/schema.ts customType).
       embeddingV2: `[${embedding.join(",")}]`,
       embeddingV2Model: "multilingual-e5-small",
@@ -110,6 +122,10 @@ export async function recordRoutingEpisode(
         contract: "elyan.routing_episode.v1",
         route: input.route,
         outcome: input.outcome,
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.reasons && input.reasons.length > 0
+          ? { reasons: input.reasons.slice(0, 8) }
+          : {}),
         ...(input.failureReason ? { failureReason: input.failureReason.slice(0, 240) } : {}),
       },
     });

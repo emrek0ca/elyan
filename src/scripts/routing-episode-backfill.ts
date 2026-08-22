@@ -6,6 +6,7 @@ import {
   recallRoutingEpisodes,
   recordRoutingEpisode,
 } from "../modules/routing-policy/episodic-decisions.js";
+import { assessTaskOutcome } from "../modules/tasks/outcome-verdict.js";
 
 /**
  * EPİZODİK KARAR HAFIZASINI GEÇMİŞ GÖREVLERLE DOLDUR VE ÖLÇ.
@@ -64,12 +65,22 @@ async function main() {
           taskId: task.id,
           message,
           route: readRoute(task),
-          outcome:
-            task.status === "completed"
-              ? "completed"
-              : task.status === "canceled"
-                ? "canceled"
-                : "failed",
+          // Geçmiş görevler de KULLANICI SONUCUYLA etiketlenir; ham durumla
+          // doldurmak hafızaya yanlış dersi yazardı (ölçüm: `server_brain →
+          // completed` turları çöp PDF üreten turlardı).
+          outcome: assessTaskOutcome({
+            status: task.status,
+            request: message,
+            expectedOutputs: (
+              ((task.payload ?? {}) as Record<string, unknown>).desktopWorkOrder as
+                | Record<string, unknown>
+                | undefined
+            )?.expectedOutputs,
+            result: task.result,
+            assistantText: String(task.summary ?? ""),
+            error: task.error ?? null,
+          }).verdict,
+          status: task.status,
           failureReason: task.error ?? null,
         });
         if (ok) written += 1;
