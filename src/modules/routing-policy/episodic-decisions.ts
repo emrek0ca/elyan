@@ -202,3 +202,67 @@ export async function recallRoutingEpisodes(
     return [];
   }
 }
+
+/**
+ * GEÇMİŞ DENEYİMDEN ROTA ÖNCELİĞİ.
+ *
+ * "Bu ifadeye çok benzeyen turlar hangi rotada işe yaradı?" sorusunun
+ * deterministik cevabı. Karar VERMEZ — kanıt üretir.
+ *
+ * KURALLAR (hepsi ölçülebilir, hiçbiri tahmin değil):
+ *  - yalnız ÇOK benzer turlar sayılır (>= 0.93); "benzer konu" yetmez
+ *  - bir rotanın kazanması için en az 2 gözlem gerekir
+ *  - `fulfilled` +1, `degraded` 0, `unfulfilled` -1 sayılır
+ *  - açık ara önde bir rota yoksa `null` döner
+ *
+ * `null` = "bilgi yok". Bu, "kötü gitti" DEĞİLDİR; çağıran ayırt etmek
+ * zorundadır.
+ */
+export const EPISODE_PRECEDENT_MIN_SIMILARITY = 0.93;
+export const EPISODE_PRECEDENT_MIN_OBSERVATIONS = 2;
+
+export type RoutePrecedent = {
+  route: string;
+  score: number;
+  observations: number;
+  fulfilled: number;
+  unfulfilled: number;
+};
+
+export function summarizeRoutePrecedent(
+  episodes: RoutingEpisode[],
+): RoutePrecedent | null {
+  const close = episodes.filter(
+    (episode) => episode.similarity >= EPISODE_PRECEDENT_MIN_SIMILARITY,
+  );
+  if (close.length === 0) return null;
+
+  const byRoute = new Map<string, RoutePrecedent>();
+  for (const episode of close) {
+    const current = byRoute.get(episode.route) ?? {
+      route: episode.route,
+      score: 0,
+      observations: 0,
+      fulfilled: 0,
+      unfulfilled: 0,
+    };
+    current.observations += 1;
+    if (episode.outcome === "fulfilled") {
+      current.score += 1;
+      current.fulfilled += 1;
+    } else if (episode.outcome === "unfulfilled") {
+      current.score -= 1;
+      current.unfulfilled += 1;
+    }
+    byRoute.set(episode.route, current);
+  }
+
+  const ranked = [...byRoute.values()]
+    .filter((entry) => entry.observations >= EPISODE_PRECEDENT_MIN_OBSERVATIONS)
+    .sort((left, right) => right.score - left.score || right.observations - left.observations);
+  const best = ranked[0];
+  if (!best || best.score <= 0) return null;
+  // İkinci rota da aynı skordaysa emsal yoktur; tarih kararsız kalmış demektir.
+  if (ranked[1] && ranked[1].score === best.score) return null;
+  return best;
+}

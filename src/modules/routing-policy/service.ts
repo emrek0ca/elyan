@@ -1,4 +1,8 @@
 import { decideLocalExecution } from "../tasks/local-execution-decision.js";
+import {
+  recallRoutingEpisodes,
+  summarizeRoutePrecedent,
+} from "./episodic-decisions.js";
 import { trStemPattern } from "../../lib/tr-word-boundary.js";
 import { createHash, randomUUID } from "node:crypto";
 import { startStage } from "../../lib/perf-telemetry.js";
@@ -2867,7 +2871,7 @@ export async function decideCommandRoute(
     .catch(() => semanticClassification)
     .finally(() => endVerifierStage());
   const verifierInvoked = classification !== semanticClassification;
-  const understandingConsensus = buildUnderstandingConsensus({
+  let understandingConsensus = buildUnderstandingConsensus({
     message,
     primary: semanticClassification,
     verifier: verifierInvoked ? classification : null,
@@ -2909,6 +2913,41 @@ export async function decideCommandRoute(
         : []),
     ],
   });
+  if (understandingConsensus.status === "clarification_required") {
+    // KATMAN 1 + 2 BURADA BULUŞUR: karar veremiyorsak DENEYİME bakalım.
+    //
+    // Bu dal, katmanlar ayrıştığında kullanıcıya "tam olarak ne istiyorsun?"
+    // diye sorduğumuz yer. Ama sistem aynı ifadeyi daha önce çalıştırdıysa
+    // sormaya gerek yok — hangi rotanın işe yaradığını biliyor.
+    //
+    // Emsal DAR: yalnız çok benzer turlar (>= 0.93), en az 2 gözlem, açık ara
+    // önde bir rota. Etiket "tamamlandı" değil KULLANICI SONUCU
+    // (`assessTaskOutcome`) — yoksa çöp PDF üreten turlar "başarı" sayılırdı.
+    const precedent = summarizeRoutePrecedent(
+      await recallRoutingEpisodes(app, {
+        userId: input.userId,
+        message,
+        limit: 8,
+      }),
+    );
+    if (precedent && precedent.route === "desktop_runtime") {
+      app.log?.info?.(
+        {
+          userId: input.userId,
+          precedentRoute: precedent.route,
+          observations: precedent.observations,
+          fulfilled: precedent.fulfilled,
+          unfulfilled: precedent.unfulfilled,
+        },
+        "routing precedent resolved a layer disagreement",
+      );
+      understandingConsensus = {
+        ...understandingConsensus,
+        status: "agreed",
+        targetSurface: "desktop",
+      };
+    }
+  }
   if (understandingConsensus.status === "clarification_required") {
     const clarificationReason =
       "Anlama katmanları bu isteğin sunucu mu masaüstü mü çalışması gerektiğinde ayrıştı.";
