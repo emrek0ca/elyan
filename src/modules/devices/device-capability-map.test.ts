@@ -62,3 +62,40 @@ test("yetenek kaynağı bildirilir", () => {
   const map = [device({ deviceId: "phone", capabilities: ["camera"], source: "platform_baseline" })];
   assert.equal(placeCapability(map, "camera")[0].source, "platform_baseline");
 });
+
+// ---------------------------------------------------------------------------
+// CANLI ARIZA (görev 4d1a9de6, 2026-08-22 19:18).
+//
+// Gölge yerleştirmesi: resolved 0 / unresolved 2 —
+//   unresolvedCapabilities: ["file_search", "send_whatsapp_message"]
+// Oysa masaüstü 102 yetenek beyan ediyordu ve içlerinde `file.search` VARDI.
+//
+// Çalışma zamanı NOKTA ile beyan ediyor (`document.write`), planlar ALT ÇİZGİ
+// kullanıyor (`document_write`). İki isimlendirme sözleşmesi, aynı yetenek.
+// ---------------------------------------------------------------------------
+
+test("nokta ve alt çizgi yazımı aynı yeteneği bulur", () => {
+  const map = [
+    device({
+      deviceId: "mac",
+      platform: "macos",
+      kind: "desktop",
+      source: "runtime_declared",
+      capabilities: ["file.search", "document.write", "desktop.operator.observe.screen"],
+    }),
+  ];
+  assert.equal(placeCapability(map, "file_search")[0]?.deviceId, "mac");
+  assert.equal(placeCapability(map, "document_write")[0]?.deviceId, "mac");
+  // Plan adı ikisini birden içerebiliyor; saf çeviri yetmez.
+  assert.equal(
+    placeCapability(map, "desktop_operator.observe_screen")[0]?.deviceId,
+    "mac",
+  );
+});
+
+test("gerçekten olmayan yetenek yine bulunmaz", () => {
+  const map = [
+    device({ deviceId: "mac", kind: "desktop", capabilities: ["file.search"] }),
+  ];
+  assert.deepEqual(placeCapability(map, "send_whatsapp_message"), []);
+});

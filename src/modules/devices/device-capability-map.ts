@@ -49,6 +49,31 @@ export type DeviceCapabilityView = {
   source: "runtime_declared" | "platform_baseline" | "none";
 };
 
+/**
+ * İKİ AYRI YAZIM, AYNI YETENEK.
+ *
+ * CANLI ARIZA (görev 4d1a9de6, 2026-08-22 19:18): gölge yerleştirmesi
+ * `resolved: 0, unresolved: 2` dedi — `file_search` ve `send_whatsapp_message`
+ * hiçbir cihaza yerleştirilemedi. Oysa masaüstü 102 yetenek beyan ediyordu ve
+ * içlerinde `file.search` VARDI.
+ *
+ * Sebep: çalışma zamanı NOKTA ile beyan ediyor (`document.write`,
+ * `desktop.operator.observe.screen`), planlar ise ALT ÇİZGİ kullanıyor
+ * (`document_write`, `desktop_operator.observe_screen`). İki isimlendirme
+ * sözleşmesi, aynı yetenek — bu projenin imza hata sınıfı.
+ *
+ * Saf nokta↔alt çizgi çevirisi YETMEZ: plan adı `desktop_operator.observe_screen`
+ * ikisini birden içeriyor. Bu yüzden her iki ayırıcı da tek bir ayırıcıya
+ * indirgenip karşılaştırılıyor.
+ */
+function canonicalCapabilityKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[._\s]+/g, ".")
+    .replace(/^\.+|\.+$/g, "");
+}
+
 function classifyPlatform(platform: string): DeviceCapabilityView["kind"] {
   const normalized = platform.toLowerCase();
   if (normalized === "ios" || normalized === "android") return "mobile";
@@ -156,8 +181,13 @@ export function placeCapability(
 ): CapabilityPlacement[] {
   const needle = capability.trim();
   if (!needle) return [];
+  const key = canonicalCapabilityKey(needle);
   return map
-    .filter((device) => device.capabilities.includes(needle))
+    .filter((device) =>
+      device.capabilities.some(
+        (capability) => canonicalCapabilityKey(capability) === key,
+      ),
+    )
     .sort((left, right) => Number(right.online) - Number(left.online))
     .map((device) => ({
       capability: needle,
