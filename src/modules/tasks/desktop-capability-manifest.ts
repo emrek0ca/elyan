@@ -5507,7 +5507,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "whenNotToUse": [
       "Ardışık komutlar gerekiyorsa (cd → kur → test) shell_session_* kullan: shell_run her çağrıda dizini ve ortamı UNUTUR.",
       "Dosya okuma/yazma/taşıma için file_* yetenekleri daha güvenli ve doğrulanabilir.",
-      "Git işlemleri için git_* yetenekleri kullan."
+      "Git işlemleri için git_* yetenekleri kullan.",
+      "Komutta &&, |, > gibi operatör varsa use_shell=true vermeden çağırma; aksi hâlde reddedilir."
     ],
     "inputContract": {
       "required": [
@@ -5515,27 +5516,41 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "command": {
-          "type": "STRING"
+          "type": "STRING",
+          "description": "Çalıştırılacak tek komut."
         },
         "mode": {
-          "type": "STRING"
+          "type": "STRING",
+          "description": "read_only verilirse onay istemeden salt-okunur çalışır."
         },
         "timeout": {
-          "type": "NUMBER"
+          "type": "NUMBER",
+          "description": "Saniye cinsinden üst sınır."
         },
         "use_shell": {
-          "type": "BOOLEAN"
+          "type": "BOOLEAN",
+          "description": "Komut &&, ||, |, >, < veya ; içeriyorsa ZORUNLU true. Tek komutta gereksiz."
         },
         "working_dir": {
-          "type": "STRING"
+          "type": "STRING",
+          "description": "Komutun çalışacağı dizin."
         },
         "riskOverride": {
-          "type": "STRING"
+          "type": "STRING",
+          "description": "Kilit eylem sınıfı (upload/share/irreversible_delete...) beyanı."
         }
       },
       "additionalProperties": false,
       "commandMustBeConcrete": true,
-      "workingDirRecommendedForProjectWork": true
+      "workingDirRecommendedForProjectWork": true,
+      "useShellRequiredWhenCommandContainsOperators": [
+        "&&",
+        "||",
+        "|",
+        ">",
+        "<",
+        ";"
+      ]
     },
     "outputContract": {
       "kind": "shell_run",
@@ -5571,6 +5586,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
         "args": {
           "command": "npm run build",
           "working_dir": "~/Desktop/proje"
+        }
+      },
+      {
+        "user": "kur ve test et",
+        "args": {
+          "command": "npm ci && npm test",
+          "use_shell": true
         }
       }
     ],
