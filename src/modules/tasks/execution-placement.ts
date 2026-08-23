@@ -14,15 +14,16 @@ import type { ExecutionDevice, ExecutionStep } from "./execution-step.js";
  *   gerekli capability → hangi cihazlarda var → veri nerede → izin var mı
  *   → cihaz açık mı → en iyi hedef
  *
- * Bu modül o zincirin ilk üç halkasını çözer ve kararı GÖRÜNÜR kılar. Şu an
- * yürütmeyi değiştirmez: plan yine bugünkü yoldan gider, yerleştirme yalnız
- * kaydedilir ve ölçülür.
+ * Bu modül o zincirin ilk üç halkasını çözer ve kararı GÖRÜNÜR kılar. Ölçüm
+ * hazır değilse plan gölgede kalır; yalnızca gerçek çalışma zamanı beyanı ile
+ * tüm adımlar masaüstüne bağlandığında yürütme bağına dönüşür.
  *
- * NEDEN GÖLGEDE
- * -------------
- * Bu oturumda çalışan bir yolu yenisiyle değiştirmek 9 gizli regresyon üretti.
- * Yerleştirme önce kendini kanıtlamalı: kaç adım çözülüyor, kaçı çözülemiyor,
- * hangi yeteneğin evi yok. Sayılar iyi olmadan yürütme buna bağlanmaz.
+ * GÖLGE → BAĞLI
+ * ------------
+ * Eski `planPreview.steps` yolu geriye dönük uyumluluk için korunur. Yeni
+ * `executionSteps` yalnız fail-closed yerleştirme kapısından geçen planlarda
+ * runtime'a verilir; böylece cihaz kararı ölçülmeden yürütme makinesi
+ * değişmez.
  */
 
 export type StepPlacement = {
@@ -49,7 +50,7 @@ export type ExecutionPlacementSummary = {
 };
 
 export type ExecutionPlacementSnapshot = {
-  mode: "shadow";
+  mode: "shadow" | "bound";
   resolvedAt: string;
   summary: ExecutionPlacementSummary;
   unresolvedCapabilities: string[];
@@ -108,6 +109,10 @@ export async function placeExecutionSteps(
       ...(device ? { device } : {}),
       ...(step.dependsOn && step.dependsOn.length > 0 ? { dependsOn: step.dependsOn } : {}),
       ...(step.args !== undefined ? { input: step.args } : {}),
+      ...(step.resourceScope && step.resourceScope.length > 0
+        ? { resourceScope: step.resourceScope }
+        : {}),
+      ...(step.forEach ? { forEach: step.forEach } : {}),
     });
   }
 
@@ -147,9 +152,10 @@ export function summarizePlacements(
 export function buildPlacementSnapshot(
   placements: StepPlacement[],
   resolvedAt = new Date().toISOString(),
+  mode: ExecutionPlacementSnapshot["mode"] = "shadow",
 ): ExecutionPlacementSnapshot {
   return {
-    mode: "shadow",
+    mode,
     resolvedAt,
     summary: summarizePlacements(placements),
     unresolvedCapabilities: placements
@@ -157,6 +163,28 @@ export function buildPlacementSnapshot(
       .map((placement) => placement.capability)
       .slice(0, 32),
   };
+}
+
+/**
+ * Masaüstü yürütmesine bağlanmak için gereken minimum ölçüm kanıtı.
+ *
+ * `platform_baseline` yalnız cihazın teorik yüzeyini anlatır; `client_declared`
+ * mobil yürütme için henüz readiness/izin el sıkışması değildir. Bu nedenle
+ * gerçek desktop dispatch yalnız çalışan masaüstü runtime'ının beyanına
+ * bağlanır.
+ */
+export function isDesktopPlacementReady(input: {
+  placements: StepPlacement[];
+}): boolean {
+  return (
+    input.placements.length > 0 &&
+    input.placements.every(
+      (placement) =>
+        placement.basis === "declared_online" &&
+        placement.device === "desktop" &&
+        placement.online === true,
+    )
+  );
 }
 
 /**

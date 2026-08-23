@@ -11,6 +11,7 @@ import { classifyKnowledgeRecency } from "../../core/understanding/knowledge-rec
 import { pruneUnneededResearchSteps } from "./plan-shortest-path.js";
 import {
   buildPlacementSnapshot,
+  isDesktopPlacementReady,
   placeExecutionSteps,
   unplaceableSteps,
 } from "./execution-placement.js";
@@ -2027,9 +2028,9 @@ type ExecutionPlacementResolution = Awaited<
 /**
  * Resolve device placement for every compiled plan source.
  *
- * This is deliberately measurement-only for now. The existing desktop
- * dispatch path remains authoritative until the persisted shadow evidence is
- * populated from both deterministic and model-materialized plans.
+ * A placement that does not pass the desktop readiness gate remains shadow
+ * evidence; a complete online runtime declaration becomes a bounded
+ * executionSteps binding. The old plan steps remain the compatibility shape.
  */
 async function measureExecutionPlacement(
   app: FastifyInstance,
@@ -2051,11 +2052,20 @@ async function measureExecutionPlacement(
       },
       "execution placement measurement unavailable",
     );
-    return null;
+    // A real Fastify app has a database. If placement cannot be measured
+    // there, let the outer materialization gate fail closed; only the
+    // database-less unit-test compatibility path above may bypass placement.
+    throw error;
   });
   if (!placement) return null;
 
-  const snapshot = buildPlacementSnapshot(placement.placements);
+  const snapshot = buildPlacementSnapshot(
+    placement.placements,
+    undefined,
+    isDesktopPlacementReady({ placements: placement.placements })
+      ? "bound"
+      : "shadow",
+  );
   app.log.info?.(
     {
       taskId: task.id,
@@ -2119,6 +2129,21 @@ export async function maybeMaterializeDesktopPlan(
         return false;
       }
       const placement = await measureExecutionPlacement(app, task, existingSteps);
+      if (
+        placement &&
+        existingSteps.length > 0 &&
+        !isDesktopPlacementReady({ placements: placement.placements })
+      ) {
+        app.log.warn?.(
+          {
+            taskId: task.id,
+            placement: placement.snapshot.summary,
+            unresolvedCapabilities: placement.snapshot.unresolvedCapabilities,
+          },
+          "desktop plan withheld: execution placement is not desktop-ready",
+        );
+        return false;
+      }
       const materializedCapabilityScope = [
         ...new Set(existingSteps.map((step) => step.capability)),
       ];
@@ -2680,12 +2705,11 @@ export async function maybeMaterializeDesktopPlan(
         return false;
       }
 
-      // YERLEŞTİRME — GÖLGE MODU (Notion §4/§5).
+      // YERLEŞTİRME — GÖLGE → BAĞLI (Notion §4/§5).
       //
-      // Her adımın hangi cihazda çalışması gerektiği burada çözülür ve
-      // KAYDEDİLİR; yürütme bugünkü yoldan devam eder. Sayılar iyi olmadan
-      // yürütme buna bağlanmaz — bu oturumda çalışan bir yolu yenisiyle
-      // değiştirmek 9 gizli regresyon üretmişti.
+      // Her adımın hangi cihazda çalışacağı ölçülür. Yalnız çalışan desktop
+      // runtime'ı tüm adımları çevrimiçi beyan ediyorsa executionSteps plana
+      // bağlanır; aksi halde plan gönderilmez.
       const placement = await measureExecutionPlacement(app, task, steps);
       if (placement) {
         const unplaceable = unplaceableSteps({
@@ -2710,6 +2734,17 @@ export async function maybeMaterializeDesktopPlan(
               })),
             },
             "desktop plan withheld: step has no device that can run it",
+          );
+          return false;
+        }
+        if (!isDesktopPlacementReady({ placements: placement.placements })) {
+          app.log.warn(
+            {
+              taskId: task.id,
+              placement: placement.snapshot.summary,
+              unresolvedCapabilities: placement.snapshot.unresolvedCapabilities,
+            },
+            "desktop plan withheld: execution placement is not desktop-ready",
           );
           return false;
         }

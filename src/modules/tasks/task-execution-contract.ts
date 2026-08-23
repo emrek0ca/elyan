@@ -17,6 +17,7 @@ import type {
   DesktopWorkOrder,
   DesktopWorkOrderStep,
 } from "./desktop-work-order.js";
+import type { ExecutionStep } from "./execution-step.js";
 
 /**
  * Tek görev otoritesi.
@@ -67,6 +68,7 @@ export const taskExecutionSkillSchema = z.object({
 
 export const taskExecutionStepSchema = z.object({
   id: z.string().min(1).max(100),
+  device: z.enum(["desktop", "mobile", "control-plane"]).optional(),
   capability: z.string().min(1).max(120),
   args: z.record(z.string(), z.unknown()).default({}),
   dependsOn: z.array(z.string().min(1).max(100)).max(TASK_EXECUTION_MAX_STEPS).default([]),
@@ -167,15 +169,27 @@ function knownSkill(id: string): DesktopSkillManifestEntry | null {
   return skillManifestById.get(id) ?? null;
 }
 
-function stepSnapshot(step: DesktopWorkOrderStep): TaskExecutionStep {
+function stepSnapshot(step: DesktopWorkOrderStep | ExecutionStep): TaskExecutionStep {
+  const executionStep = "stepId" in step;
   return {
-    id: compact(step.id, 100),
+    id: compact(executionStep ? step.stepId : step.id, 100),
+    ...(executionStep && step.device ? { device: step.device } : {}),
     capability: compact(step.capability, 120),
-    args: recordOf(step.args) ?? {},
+    args: recordOf(executionStep ? step.input : step.args) ?? {},
     dependsOn: uniqueStrings(step.dependsOn ?? [], TASK_EXECUTION_MAX_STEPS),
     resourceScope: uniqueStrings(step.resourceScope ?? [], 16),
     ...(step.forEach ? { forEach: compact(step.forEach, 240) } : {}),
   };
+}
+
+function executionStepsForWorkOrder(
+  workOrder: DesktopWorkOrder | null | undefined,
+): Array<DesktopWorkOrderStep | ExecutionStep> {
+  const boundSteps = workOrder?.planPreview?.executionSteps;
+  const placementMode = workOrder?.planPreview?.executionPlacement?.mode;
+  return placementMode === "bound" && boundSteps && boundSteps.length > 0
+    ? boundSteps
+    : workOrder?.planPreview?.steps ?? [];
 }
 
 function safeWorkOrderSnapshot(
@@ -197,9 +211,13 @@ function selectedToolsForInput(input: {
   const selectedTools: TaskExecutionTool[] = [];
   const rejectedToolIds: string[] = [];
   const seen = new Set<string>();
-  const steps = input.workOrder?.planPreview?.steps ?? [];
+  const steps = executionStepsForWorkOrder(input.workOrder);
   const candidates = [
-    ...steps.map((step) => ({ id: step.capability, args: step.args, reason: "server_plan_step" })),
+    ...steps.map((step) => ({
+      id: step.capability,
+      args: "stepId" in step ? step.input : step.args,
+      reason: "server_plan_step",
+    })),
     ...input.routeDecision.capabilities.map((id) => ({ id, args: {}, reason: "route_capability" })),
   ];
   for (const candidate of candidates) {
@@ -294,7 +312,7 @@ export function buildTaskExecutionContract(input: {
     input.understandingEnvelope,
     confidence,
   );
-  const steps = (workOrder?.planPreview?.steps ?? [])
+  const steps = executionStepsForWorkOrder(workOrder)
     .slice(0, TASK_EXECUTION_MAX_STEPS)
     .map(stepSnapshot);
   const risk = workOrder?.semanticGoal?.risk;
@@ -375,7 +393,7 @@ export function syncTaskExecutionContractWithWorkOrder(input: {
   if (!parsed.success) return null;
 
   const contract = parsed.data;
-  const steps = (input.workOrder.planPreview?.steps ?? [])
+  const steps = executionStepsForWorkOrder(input.workOrder)
     .slice(0, TASK_EXECUTION_MAX_STEPS)
     .map(stepSnapshot);
   if (steps.length > contract.execution.maxSteps) return null;

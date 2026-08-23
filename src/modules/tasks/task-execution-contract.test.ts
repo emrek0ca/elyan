@@ -193,11 +193,30 @@ test("materialized work order refreshes the canonical contract steps and tools",
       summary: "Chrome kapanacak",
       privacyClass: "side_effect" as const,
       steps: [{ id: "close_chrome", capability: "close_app", description: "Chrome'u kapat", args: { app_name: "Google Chrome" } }],
+      executionSteps: [{
+        stepId: "close_chrome",
+        device: "desktop" as const,
+        capability: "close_app",
+        input: { app_name: "Google Chrome" },
+      }],
+      executionPlacement: {
+        mode: "bound" as const,
+        resolvedAt: "2030-01-01T00:00:00.000Z",
+        summary: {
+          total: 1,
+          resolved: 1,
+          unresolved: 0,
+          offline: 0,
+          byDevice: { desktop: 1 },
+        },
+        unresolvedCapabilities: [],
+      },
     },
   };
   const synced = syncTaskExecutionContractWithWorkOrder({ contract, workOrder });
   assert.ok(synced);
   assert.equal(synced.execution.steps[0]?.capability, "close_app");
+  assert.equal(synced.execution.steps[0]?.device, "desktop");
   assert.deepEqual(synced.execution.steps[0]?.args, { app_name: "Google Chrome" });
   assert.equal(synced.execution.selectedTools[0]?.reason, "server_plan_step");
   assert.equal(validateTaskExecutionContract(synced).ok, true);

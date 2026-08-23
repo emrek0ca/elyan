@@ -28,6 +28,8 @@ export type ExecutionStep = {
   capability: string;
   dependsOn?: string[];
   input?: unknown;
+  resourceScope?: string[];
+  forEach?: string;
 };
 
 /**

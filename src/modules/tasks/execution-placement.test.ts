@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildPlacementSnapshot,
+  isDesktopPlacementReady,
   summarizePlacements,
   unplaceableSteps,
   type StepPlacement,
@@ -89,6 +90,31 @@ test("shadow snapshot only carries bounded placement evidence", () => {
     },
     unresolvedCapabilities: ["send_whatsapp_message"],
   });
+});
+
+test("yalnız çevrimiçi runtime desktop yerleşimi bağlanabilir", () => {
+  assert.equal(
+    isDesktopPlacementReady({ placements: [placement({})] }),
+    true,
+  );
+  assert.equal(
+    isDesktopPlacementReady({
+      placements: [placement({ basis: "baseline_online" })],
+    }),
+    false,
+  );
+  assert.equal(
+    isDesktopPlacementReady({
+      placements: [placement({ device: "mobile" })],
+    }),
+    false,
+  );
+  assert.equal(
+    isDesktopPlacementReady({
+      placements: [placement({ basis: "declared_offline", online: false })],
+    }),
+    false,
+  );
 });
 
 // ---------------------------------------------------------------------------
