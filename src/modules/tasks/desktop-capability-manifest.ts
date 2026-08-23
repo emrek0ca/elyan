@@ -26,6 +26,7 @@ export type DesktopCapabilityManifestEntry = {
   privacyClass: string;
   sideEffect: boolean;
   mutatesPath: boolean;
+  sideEffectClass: "none" | "read" | "write" | "destructive";
   skillAffinity: string[];
 };
 
@@ -123,6 +124,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -212,6 +214,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -293,6 +296,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_screen",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -359,6 +363,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -467,6 +472,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -528,6 +534,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -579,6 +586,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -617,9 +625,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "additionalProperties": false
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "browser_session.download",
-      "requiresOk": true
+      "kind": "browser_session_download",
+      "primary": "file_artifact"
     },
     "artifactContract": {},
     "verificationPlan": [
@@ -643,6 +650,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -704,6 +712,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -760,6 +769,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -812,6 +822,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -880,6 +891,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -1011,6 +1023,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_write",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": [
       "document.pdf_report",
       "canvas.visual_report"
@@ -1114,6 +1127,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_write",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -1167,6 +1181,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -1220,9 +1235,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "şu metni kopyala da yapıştırayım"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
-    "sideEffect": false,
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -1300,6 +1316,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -1370,6 +1387,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -1439,6 +1457,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "destructive",
     "skillAffinity": []
   },
   {
@@ -1447,7 +1466,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "description": "Kalıcı hafızadan bir kaydı siler.",
     "usage": "Kullanıcı 'şunu unut/hatırlama' dediğinde.",
     "requiredArgs": [],
-    "requiresApproval": false,
+    "requiresApproval": true,
     "whenToUse": [
       "Kullanıcı 'şunu unut/hatırlama' dediğinde."
     ],
@@ -1479,7 +1498,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
     ],
     "liveNarration": [
       "Capability is running.",
@@ -1502,9 +1522,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "şunu çöpe at",
       "unutmayayım, şunu hatırlat"
     ],
-    "privacyClass": "local_runtime",
-    "sideEffect": false,
+    "privacyClass": "local_private_write",
+    "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "destructive",
     "skillAffinity": []
   },
   {
@@ -1565,6 +1586,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_session_control",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -1666,6 +1688,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -1723,6 +1746,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -1788,6 +1812,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_screen",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -1851,6 +1876,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_screen",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -1954,6 +1980,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -2002,6 +2029,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -2055,6 +2083,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -2103,6 +2132,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -2160,6 +2190,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -2207,6 +2238,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -2266,6 +2298,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -2335,6 +2368,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -2417,6 +2451,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -2549,6 +2584,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_write",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": [
       "document.docx_from_context",
       "document.summary_and_save"
@@ -2637,6 +2673,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -2725,6 +2762,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -2831,6 +2869,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -2901,6 +2940,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -2972,6 +3012,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_write",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -3052,6 +3093,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3142,6 +3184,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3221,6 +3264,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_write",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -3292,6 +3336,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3359,6 +3404,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3418,6 +3464,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3478,6 +3525,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3542,6 +3590,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -3609,6 +3658,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -3669,6 +3719,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3726,6 +3777,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -3839,6 +3891,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "external_model_optional",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -3907,9 +3960,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "hayali bir görsel üret",
       "çizim yap"
     ],
-    "privacyClass": "local_runtime",
-    "sideEffect": false,
+    "privacyClass": "local_private_write",
+    "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -4036,6 +4090,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "external_model_optional",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -4106,6 +4161,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -4170,6 +4226,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -4230,6 +4287,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -4313,6 +4371,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_safe_compute",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": [
       "math.solve"
     ]
@@ -4382,6 +4441,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -4451,6 +4511,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "destructive",
     "skillAffinity": []
   },
   {
@@ -4520,6 +4581,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -4599,6 +4661,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -4676,6 +4739,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -4776,6 +4840,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_write",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": [
       "presentation.deck_from_context"
     ]
@@ -4834,6 +4899,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -4894,6 +4960,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -4954,6 +5021,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -5018,6 +5086,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -5086,6 +5155,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -5152,6 +5222,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_mixed",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -5228,9 +5299,10 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "daha önce ne konuşmuştuk",
       "numarayı kişi olarak kaydet"
     ],
-    "privacyClass": "local_runtime",
-    "sideEffect": false,
+    "privacyClass": "local_private_write",
+    "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -5301,6 +5373,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -5379,6 +5452,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "write",
     "skillAffinity": []
   },
   {
@@ -5461,6 +5535,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "permission_gated",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "destructive",
     "skillAffinity": []
   },
   {
@@ -5520,6 +5595,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -5582,6 +5658,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -5655,6 +5732,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_action",
     "sideEffect": true,
     "mutatesPath": false,
+    "sideEffectClass": "destructive",
     "skillAffinity": []
   },
   {
@@ -5715,6 +5793,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "none",
     "skillAffinity": []
   },
   {
@@ -5780,6 +5859,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -5889,6 +5969,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_private_write",
     "sideEffect": true,
     "mutatesPath": true,
+    "sideEffectClass": "write",
     "skillAffinity": [
       "spreadsheet.table_from_context"
     ]
@@ -5959,6 +6040,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -6024,6 +6106,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_or_server_context",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -6092,6 +6175,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "local_runtime",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
@@ -6177,6 +6261,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "privacyClass": "public_web",
     "sideEffect": false,
     "mutatesPath": false,
+    "sideEffectClass": "read",
     "skillAffinity": []
   }
 ];

@@ -1,4 +1,3 @@
-import { trStemPattern } from "../../lib/tr-word-boundary.js";
 import {
   DESKTOP_CAPABILITY_MANIFEST,
   type DesktopCapabilityManifestEntry,
@@ -152,64 +151,21 @@ function cosine(left: SparseEmbedding, right: SparseEmbedding): number {
  * ölmüştü). Doğru araç sınır değil, SINIRLI EK TOLERANSI: `trStemPattern`.
  * İngilizce kökler `\b` ile kalır — orada sorun yok.
  */
-const DESTRUCTIVE_PATTERN = new RegExp(
-  `\\b(?:delete|remove|erase|destructive)\\b|${trStemPattern(["sil", "kaldir"]).source}`,
-  "u",
-);
-const READ_PATTERN = new RegExp(
-  `\\b(?:read|search|list|status|observe|analyze)\\b|${trStemPattern([
-    "oku",
-    "ara",
-    "listele",
-    "gozlemle",
-    "analiz",
-  ]).source}`,
-  "u",
-);
-const WRITE_PATTERN = new RegExp(
-  `\\b(?:write|send|add|save|move|patch|commit|create|update|edit)\\b|${trStemPattern([
-    "yaz",
-    "gonder",
-    "ekle",
-    "kaydet",
-    "tasi",
-    "olustur",
-    "duzenle",
-    "hazirla",
-  ]).source}`,
-  "u",
-);
 
 function sideEffectClassFor(
   entry: DesktopCapabilityManifestEntry,
 ): DesktopCapabilitySideEffectClass {
-  const name = entry.name.toLocaleLowerCase("en-US");
-  const text = normalizeText(
-    [
-      entry.name,
-      entry.displayName,
-      entry.description,
-      entry.usage,
-      entry.privacyClass,
-    ].join(" "),
-  );
-  if (
-    DESTRUCTIVE_PATTERN.test(text) ||
-    name.includes("delete")
-  ) {
-    return "destructive";
-  }
-  if (
-    entry.privacyClass.includes("_read") ||
-    entry.privacyClass.includes("screen") ||
-    READ_PATTERN.test(text)
-  ) {
-    return "read";
-  }
-  if (entry.privacyClass.includes("_write") || WRITE_PATTERN.test(text)) {
-    return "write";
-  }
-  return "none";
+  // SINIF BEYANDAN OKUNUR, DÜZYAZIDAN TAHMİN EDİLMEZ.
+  //
+  // Eski hâli açıklama metninde regex çalıştırıyordu ("oku/yaz/sil" kökleri)
+  // ve ölçüm şunu gösterdi: `document_write` → read, `shell_run` → none,
+  // `desktop_operator.run` → read, `close_app` → none. Yani kabuk komutu
+  // çalıştıran ve ekranı süren işler "yan etkisiz" sayılıyordu; eşleştiricinin
+  // güvenlik cezası da tam bu sınıfa bakıyor.
+  //
+  // Sınıf artık masaüstünde `capability_side_effect_class` ile beyan
+  // alanlarından türetilip manifeste yazılıyor. Burada tahmin yok.
+  return entry.sideEffectClass;
 }
 
 function runtimeNamesFor(name: string): string[] {
