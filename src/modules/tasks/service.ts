@@ -214,6 +214,7 @@ import {
 import type {
   CommandRouteDecision,
   CommandTurnContract,
+  SemanticAgentRouteDecision,
 } from "../routing-policy/service.js";
 import {
   recordUsageLedgerEntry,
@@ -2292,6 +2293,7 @@ function extractRouteDecision(
   const typedRoutingDecision = routingDecision as Record<string, unknown>;
   const taskRoute = readRecord(typedRoutingDecision.taskRoute);
   const semanticDesktopContract = readRecord(taskRoute?.semanticDesktopContract);
+  const semanticDecision = readRecord(taskRoute?.semanticDecision);
   return {
     route:
       typeof typedRoutingDecision.route === "string"
@@ -2331,6 +2333,9 @@ function extractRouteDecision(
                 .map((value: unknown) => String(value ?? "").trim())
                 .filter(Boolean)
             : [],
+          ...(semanticDecision
+            ? { semanticDecision: semanticDecision as SemanticAgentRouteDecision }
+            : {}),
           ...(semanticDesktopContract
             ? {
                 semanticDesktopContract:

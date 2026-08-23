@@ -2001,7 +2001,7 @@ test("decideCommandRoute keeps desktop-word advice on server when model says no 
   assert.equal(decision.requiredRuntime, "server");
 });
 
-test("decideCommandRoute overrides a wrong server model route for explicit desktop app execution", async () => {
+test("decideCommandRoute keeps a valid server model route authoritative over desktop heuristics", async () => {
   const app = createDesktopReadyApp(["browser_control"]);
   Object.assign(app.services, {
     commandRouteModel: {
@@ -2025,13 +2025,180 @@ test("decideCommandRoute overrides a wrong server model route for explicit deskt
     metadata: { desktopDispatch: true },
   });
 
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.targetDeviceId, undefined);
+  assert.equal(
+    decision.taskRoute?.semanticDecision?.source,
+    "legacy_route_compat",
+  );
+});
+
+test("decideCommandRoute does not let regex override a structured server model decision", async () => {
+  const app = createDesktopReadyApp(["close_app"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain" as const,
+        operationalRoute: "server_brain" as const,
+        executionPlan: ["server_brain" as const],
+        reason: "The model selected conversation for this turn.",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDecision: {
+          contract: "elyan.agent_route_decision.v1" as const,
+          intent: "conversation",
+          targetDevice: "control-plane" as const,
+          goalContract: {
+            successCriteria: ["response_generated"],
+          },
+          requiredCapabilities: [],
+          steps: [],
+          verification: {
+            required: false,
+            criteria: ["response_generated"],
+          },
+          confidence: 0.96,
+          missingInformation: [],
+          requiresConfirmation: false,
+        },
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "structured-server-route-user",
+    message: "Music kapat",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.targetDeviceId, undefined);
+  assert.equal(decision.taskRoute?.semanticDecision?.contract, "elyan.agent_route_decision.v1");
+  assert.equal(decision.taskRoute?.semanticDecision?.confidence, 0.96);
+});
+
+test("decideCommandRoute carries a structured desktop plan and approval decision", async () => {
+  const app = createDesktopReadyApp(["close_app"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "desktop_runtime" as const,
+        operationalRoute: "desktop_runtime" as const,
+        executionPlan: ["desktop_runtime" as const],
+        reason: "The request changes the paired desktop app state.",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: true,
+        requiredCapabilities: [],
+        semanticDecision: {
+          contract: "elyan.agent_route_decision.v1" as const,
+          intent: "close_app",
+          targetDevice: "desktop" as const,
+          goalContract: {
+            successCriteria: ["music_process_absent"],
+          },
+          requiredCapabilities: ["close_app"],
+          steps: [
+            {
+              stepId: "close_music",
+              device: "desktop" as const,
+              capability: "close_app",
+            },
+          ],
+          verification: {
+            required: true,
+            criteria: ["process_readback"],
+          },
+          confidence: 0.95,
+          missingInformation: [],
+          requiresConfirmation: true,
+        },
+        semanticDesktopContract: {
+          route: "desktop_runtime" as const,
+          intent: "screen_action" as const,
+          requiredSemanticCapabilities: ["close_app"],
+          requiredLocalContext: ["app"],
+          sideEffectLevel: "destructive" as const,
+          confidence: 0.95,
+          evidence: ["close the selected app"],
+        },
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "structured-desktop-route-user",
+    message: "Music kapat",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
   assert.equal(decision.route, "desktop_runtime");
   assert.equal(decision.targetDeviceId, "desktop-1");
-  assert.equal(decision.taskRoute?.semanticDesktopContract?.intent, "browser_workflow");
-  assert.match(
-    decision.taskRoute?.semanticDesktopContract?.evidence.join("\n") ?? "",
-    /model_server_route_overridden_for_desktop_action/,
+  assert.equal(decision.requiresApproval, true);
+  assert.deepEqual(
+    decision.taskRoute?.executionSteps,
+    [{ stepId: "close_music", device: "desktop", capability: "close_app" }],
   );
+  assert.equal(
+    decision.taskRoute?.semanticDecision?.verification.required,
+    true,
+  );
+});
+
+test("decideCommandRoute keeps a model desktop plan paired-required when offline", async () => {
+  const app = createApp([]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "desktop_runtime" as const,
+        operationalRoute: "desktop_runtime" as const,
+        executionPlan: ["desktop_runtime" as const],
+        reason: "The request needs the user's computer.",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDecision: {
+          contract: "elyan.agent_route_decision.v1" as const,
+          intent: "inspect_app",
+          targetDevice: "desktop" as const,
+          goalContract: { successCriteria: ["state_readback"] },
+          requiredCapabilities: ["process_list"],
+          steps: [
+            { stepId: "observe", device: "desktop" as const, capability: "process_list" },
+          ],
+          verification: { required: true, criteria: ["state_readback"] },
+          confidence: 0.94,
+          missingInformation: [],
+          requiresConfirmation: false,
+        },
+        semanticDesktopContract: {
+          route: "desktop_runtime" as const,
+          intent: "screen_action" as const,
+          requiredSemanticCapabilities: ["process_list"],
+          requiredLocalContext: ["app"],
+          sideEffectLevel: "read" as const,
+          confidence: 0.94,
+          evidence: ["inspect the app state"],
+        },
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "offline-model-desktop-user",
+    message: "Music açık mı?",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "pairing_required");
+  assert.equal(decision.requiredRuntime, "desktop");
+  assert.equal(decision.taskRoute?.semanticDecision?.targetDevice, "desktop");
 });
 
 test("decideCommandRoute rejects string booleans from a malformed model route", async () => {
@@ -2265,12 +2432,7 @@ test("decideCommandRoute still skips the route model when no desktop runtime is 
   assert.equal(consulted, 0);
 });
 
-// Canlı arıza (2026-08-08): "Masaüstünde Emre adında klasör oluştur" turu
-// `intent: computer, requiresLocalRuntime: true` olarak DOĞRU sınıflandı ama
-// rota modeli "server_brain" dedi ve sınıflandırıcının kararı nihai kararda
-// kullanılmadığı için tur sohbete düştü ("dosya sistemine erişemiyorum").
-// Masaüstü GERÇEKTEN bağlıyken modelin yanlış sohbet kararı bağlayıcı olmamalı.
-test("decideCommandRoute overrides a wrong server-brain verdict when the classifier needs local runtime and a desktop is live", async () => {
+test("decideCommandRoute keeps the model server route when classifier needs local runtime", async () => {
   const app = createDesktopReadyApp(["make_directory", "file_write"]);
   Object.assign(app.services, {
     realtimeHub: {
@@ -2298,8 +2460,8 @@ test("decideCommandRoute overrides a wrong server-brain verdict when the classif
     source: "mobile",
   });
 
-  assert.equal(decision.route, "desktop_runtime");
-  assert.equal(decision.taskRoute?.needsDesktop, true);
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
 test("decideCommandRoute keeps a plain chat turn on the server brain even with a live desktop", async () => {
@@ -2341,12 +2503,7 @@ test("decideCommandRoute routes to desktop when the route model cannot decide bu
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
-// Üretimde gözlenen tam senaryo (2026-08-08): `commandRouteModel` servisi yok
-// ama kod doğrudan LLM'e soruyor ve LLM açık bir masaüstü komutunu
-// "server_brain" olarak döndürüyor (fallbackAllowed=false, yani "karar
-// veremedim" bile demiyor). Sınıflandırıcı requiresLocalRuntime=true diyorken
-// ve cihaz hazırken modelin bu kararı bağlayıcı olmamalı.
-test("decideCommandRoute overrides an explicit server_brain model verdict for a ready desktop when the classifier needs local runtime", async () => {
+test("decideCommandRoute keeps an explicit server_brain model verdict authoritative", async () => {
   const app = createDesktopReadyApp();
   Object.assign(app.services, {
     commandRouteModel: {
@@ -2370,8 +2527,8 @@ test("decideCommandRoute overrides an explicit server_brain model verdict for a 
     source: "mobile",
   });
 
-  assert.equal(decision.route, "desktop_runtime");
-  assert.equal(decision.taskRoute?.needsDesktop, true);
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.taskRoute?.needsDesktop, false);
 });
 
 // ---------------------------------------------------------------------------
