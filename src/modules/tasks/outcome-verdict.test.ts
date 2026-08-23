@@ -99,3 +99,42 @@ test("yardımcılar tek tek doğru", () => {
   );
   assert.equal(filenameEchoesRequest("Zurafa-Raporu.docx", REQUEST), false);
 });
+
+// ---------------------------------------------------------------------------
+// TÜM ARTEFAKTLARA BAK, İLKİNE DEĞİL.
+//
+// Canlı arıza (görev 501e9a03, "Masaüstüne poke adında klasör oluştur"):
+// sonuçta iki artefakt vardı — `poke` (klasör, doğru) ve
+// `masaustune-poke-adinda-klasor-olustur.docx` (teslimat kapısının yanlışlıkla
+// eklediği). Kontrol ilk artefakta baktığı için temiz saydı ve görevi
+// `fulfilled` işaretledi; oysa kullanıcıya görünen cevap "DOCX oluşturuldu"ydu.
+// ---------------------------------------------------------------------------
+
+test("ikinci artefakt bozuksa görev tam sayılmaz", () => {
+  const request = "Masaüstüne poke adında klasör oluştur";
+  const result = assessTaskOutcome({
+    status: "completed",
+    request,
+    expectedOutputs: [{ kind: "file_update", required: true }],
+    result: {
+      blocks: [
+        { type: "artifact", artifactName: "poke" },
+        { type: "artifact", artifactName: "masaustune-poke-adinda-klasor-olustur.docx" },
+      ],
+    },
+    assistantText: "DOCX oluşturuldu.",
+  });
+  assert.equal(result.verdict, "degraded");
+  assert.ok(result.reasons.includes("filename_echoes_request"));
+});
+
+test("tek ve doğru artefakt hâlâ tam sayılır", () => {
+  const result = assessTaskOutcome({
+    status: "completed",
+    request: "Masaüstüne poke adında klasör oluştur",
+    expectedOutputs: [{ kind: "file_update", required: true }],
+    result: { blocks: [{ type: "artifact", artifactName: "poke" }] },
+    assistantText: "Klasör oluşturuldu.",
+  });
+  assert.equal(result.verdict, "fulfilled");
+});

@@ -138,7 +138,16 @@ export function assessTaskOutcome(input: {
   const artifactRequired = expected.some(
     (output) => output?.kind === "artifact" && output?.required === true,
   );
-  const artifactBlock = blocks.find((block) => block.type === "artifact");
+  // TÜM ARTEFAKTLARA BAK, İLKİNE DEĞİL.
+  //
+  // Canlı arıza (görev 501e9a03, "Masaüstüne poke adında klasör oluştur"):
+  // sonuçta İKİ artefakt vardı — `poke` (klasör, doğru) ve
+  // `masaustune-poke-adinda-klasor-olustur.docx` (yanlış, teslimat kapısının
+  // eklediği). Bu kontrol ilk artefakta baktığı için klasör adını gördü,
+  // temiz saydı ve görevi `fulfilled` işaretledi. Oysa kullanıcıya görünen
+  // cevap "DOCX oluşturuldu" idi.
+  const artifactBlocks = blocks.filter((block) => block.type === "artifact");
+  const artifactBlock = artifactBlocks[0];
 
   // 1) Zorunlu artefakt yoksa iş yapılmamıştır.
   if (artifactRequired && !artifactBlock) {
@@ -151,10 +160,12 @@ export function assessTaskOutcome(input: {
     reasons.push("answer_is_clarification");
   }
 
-  const artifactName = String(artifactBlock?.artifactName ?? artifactBlock?.title ?? "");
+  const artifactNames = artifactBlocks
+    .map((block) => String(block?.artifactName ?? block?.title ?? ""))
+    .filter((name) => name.length > 0);
 
-  // 3) İstenen biçim ile üretilen biçim uyuşmalı.
-  if (artifactName) {
+  for (const artifactName of artifactNames) {
+    // 3) İstenen biçim ile üretilen biçim uyuşmalı.
     if (PDF_REQUEST.test(input.request) && /\.docx$/i.test(artifactName)) {
       reasons.push("format_mismatch:pdf_requested_docx_produced");
     }
@@ -170,6 +181,11 @@ export function assessTaskOutcome(input: {
       reasons.push("filename_echoes_request");
     }
   }
+
+  // Aynı sebep birden çok artefaktta çıkabilir; tekrarı sadeleştir.
+  const uniqueReasons = [...new Set(reasons)];
+  reasons.length = 0;
+  reasons.push(...uniqueReasons);
 
   if (reasons.some((reason) => reason === "required_artifact_missing" || reason === "answer_is_clarification")) {
     return { verdict: "unfulfilled", reasons };
