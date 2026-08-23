@@ -8,6 +8,11 @@ import {
   evaluateLocalActionEvidence,
   isDesktopCapabilityVectorCacheReady,
 } from "./desktop-capability-embedding-match.js";
+import {
+  CAPABILITY_GAP_ENFORCED,
+  judgeCapabilityEvidence,
+  type CapabilityGapVerdict,
+} from "./capability-gap.js";
 
 /**
  * YEREL YÜRÜTME KARARI — TEK SİNYAL DEĞİL, KANIT UZLAŞMASI.
@@ -43,7 +48,13 @@ export type LocalExecutionDecision = {
     | "speech_act_and_capability_agree"
     | "speech_act_blocks"
     | "capability_not_local_action"
+    | "capability_gap"
     | "evidence_unavailable";
+  /**
+   * Yetenek boşluğu yargısı. `gap: true` iken yürütme AÇILMAZ ve
+   * `verdict.message` kullanıcıya dürüst cevap olarak verilir.
+   */
+  capabilityGap: CapabilityGapVerdict | null;
 };
 
 const BLOCKED: Omit<LocalExecutionDecision, "reason" | "speechAct"> = {
@@ -51,6 +62,7 @@ const BLOCKED: Omit<LocalExecutionDecision, "reason" | "speechAct"> = {
   capability: null,
   capabilityScore: 0,
   capabilityMargin: 0,
+  capabilityGap: null,
 };
 
 export async function decideLocalExecution(input: {
@@ -79,6 +91,7 @@ export async function decideLocalExecution(input: {
     capabilityScore: capabilityEvidence.score,
     capabilityMargin: capabilityEvidence.margin,
     speechAct,
+    capabilityGap: null as CapabilityGapVerdict | null,
   };
 
   // SORU ASLA YÜRÜTME AÇMAZ. Canlı arızanın sınıfı budur.
@@ -101,8 +114,57 @@ export async function decideLocalExecution(input: {
       reason: "capability_not_local_action",
     };
   }
+  // ÜÇÜNCÜ KANIT: SEÇİLEN YETENEK GERÇEKTEN BU İŞ İÇİN Mİ?
+  //
+  // İki kanıt "yürüt" dediğinde bile bir soru kalıyordu: sıralayıcı HER ZAMAN
+  // bir birinci döndürür, "hiçbiri uymuyor" onun sözlüğünde yok. Görev
+  // d83da1f2'de bunun bedeli ölçüldü — silme yeteneği yokken "o klasörü sil"
+  // isteği `delete_memory`ye gitti; sistem dosya yerine hafızayı silmeye
+  // kalkıştı ve hiçbir yerde "yapamıyorum" demedi.
+  //
+  // Ek gömme çağrısı yok: yargı, eşleştiricinin ZATEN ürettiği ham kanıttan
+  // veriliyor (gecikme bütçesi bu projede ölçülüyor).
+  const gapVerdict = judgeCapabilityEvidence({
+    capability: capabilityEvidence.capability,
+    positive: capabilityEvidence.positive,
+    counterEvidence: capabilityEvidence.counterEvidence,
+    query: message,
+  });
+  if (gapVerdict.gap && !CAPABILITY_GAP_ENFORCED) {
+    // GÖZLEM KİPİ: davranış değişmez, yalnız kayıt düşer. Ölçüm bu kayıtlarla
+    // yapılır; kapı ancak ondan sonra açılır.
+    input.logger?.info?.(
+      {
+        query: message,
+        nearestCapability: gapVerdict.capability,
+        reason: gapVerdict.reason,
+        positive: gapVerdict.positive,
+        counterEvidence: gapVerdict.counterEvidence,
+      },
+      "capability gap observed (not enforced)",
+    );
+  }
+  if (gapVerdict.gap && CAPABILITY_GAP_ENFORCED) {
+    input.logger?.info?.(
+      {
+        query: message,
+        nearestCapability: gapVerdict.capability,
+        reason: gapVerdict.reason,
+        positive: gapVerdict.positive,
+        counterEvidence: gapVerdict.counterEvidence,
+      },
+      "local execution blocked by capability gap",
+    );
+    return {
+      ...base,
+      capabilityGap: gapVerdict,
+      requiresLocalExecution: false,
+      reason: "capability_gap",
+    };
+  }
   return {
     ...base,
+    capabilityGap: gapVerdict,
     requiresLocalExecution: true,
     reason: "speech_act_and_capability_agree",
   };

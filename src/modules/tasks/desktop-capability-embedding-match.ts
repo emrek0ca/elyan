@@ -369,6 +369,8 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
       capability: item.candidate.capability,
       score: Number(Math.max(0, combined).toFixed(4)),
       entry: item.candidate.entry,
+      positive: Number(item.positive.toFixed(4)),
+      counterEvidence: Number(item.margin.toFixed(4)),
     };
   });
 
@@ -534,6 +536,10 @@ export async function evaluateLocalActionEvidence(input: {
   capability: string | null;
   score: number;
   margin: number;
+  /** Top-1'in HAM anlamsal skoru — yetenek boşluğu yargısı bunu okur. */
+  positive?: number;
+  /** Top-1'in karşı-örnek üstünlüğü; > 0 ise yetenek "ben bu iş için değilim" diyor. */
+  counterEvidence?: number;
   reason:
     | "confident_local_action"
     | "not_local_action"
@@ -567,6 +573,8 @@ export async function evaluateLocalActionEvidence(input: {
     score: best.score,
     margin,
     localActionCapability,
+    positive: best.positive,
+    counterEvidence: best.counterEvidence,
   };
   if (!localActionCapability) {
     return { ...base, localAction: false, reason: "not_local_action" };

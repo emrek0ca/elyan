@@ -30,6 +30,21 @@ export type DesktopCapabilitySemanticMatch = {
   capability: string;
   score: number;
   entry: DesktopCapabilityOntologyEntry;
+  /**
+   * HAM anlamsal kanıt — harmandan ve normalize etmeden ÖNCE.
+   *
+   * `score` adaylar içinde min-max normalize edilir; yapısı gereği top-1 hep
+   * yüksektir (ölçümde 0.70–1.00). Yani `score` "bu iş yapılabilir mi"
+   * sorusunu CEVAPLAYAMAZ — yalnız "hangisi en yakın" der. Yetenek boşluğu
+   * kararı ham kanıta bakmak zorunda.
+   */
+  positive?: number;
+  /**
+   * Karşı-örnek üstünlüğü: sorgu, yeteneğin "bunun için KULLANMA" örneklerine
+   * kullanıcı-dili örneklerinden DAHA ÇOK benziyorsa pozitif olur. Sıfırdan
+   * büyük olması yapısal bir uyarıdır.
+   */
+  counterEvidence?: number;
 };
 
 type SparseEmbedding = Map<number, number>;
