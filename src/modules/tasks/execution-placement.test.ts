@@ -13,9 +13,8 @@ import type { DeviceCapabilityView } from "../devices/device-capability-map.js";
 // Notion §5: koordinatörün sorması gereken sıra —
 //   gerekli capability → hangi cihazlarda var → veri nerede → izin → cihaz açık
 //
-// Yerleştirme ÖNCE GÖLGEDE çalışır: karar kaydedilir, yürütme değişmez.
-// Sebep: bu oturumda çalışan bir yolu yenisiyle değiştirmek 9 gizli regresyon
-// üretti. Yerleştirme önce kendini sayıyla kanıtlamalı.
+// Yerleştirme ölçülür; yalnız çevrimiçi runtime desktop kararı bound olur.
+// Eksik kanıt gölgede kalır ve yürütme kapısı kapanır.
 // ---------------------------------------------------------------------------
 
 function placement(overrides: Partial<StepPlacement>): StepPlacement {

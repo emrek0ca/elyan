@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { devices, runtimeConnections } from "../../db/schema.js";
 
 /**
@@ -133,9 +133,15 @@ function isUndefinedColumnError(error: unknown): boolean {
  */
 export async function readDeviceCapabilityMap(
   app: FastifyInstance,
-  input: { userId: string },
+  input: { userId: string; deviceId?: string | null },
 ): Promise<DeviceCapabilityView[]> {
   try {
+    const deviceFilter = input.deviceId
+      ? and(
+          eq(devices.id, input.deviceId),
+          or(eq(devices.userId, input.userId), isNull(devices.userId)),
+        )
+      : eq(devices.userId, input.userId);
     let rows: DeviceCapabilityRow[];
     try {
       rows = await app.db
@@ -152,7 +158,7 @@ export async function readDeviceCapabilityMap(
           runtimeConnections,
           eq(runtimeConnections.deviceId, devices.id),
         )
-        .where(and(eq(devices.userId, input.userId)))
+        .where(deviceFilter)
         .orderBy(desc(runtimeConnections.lastHeartbeatAt))
         .limit(50);
     } catch (error) {
@@ -173,7 +179,7 @@ export async function readDeviceCapabilityMap(
           runtimeConnections,
           eq(runtimeConnections.deviceId, devices.id),
         )
-        .where(and(eq(devices.userId, input.userId)))
+        .where(deviceFilter)
         .orderBy(desc(runtimeConnections.lastHeartbeatAt))
         .limit(50);
     }

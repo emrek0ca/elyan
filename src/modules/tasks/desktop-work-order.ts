@@ -214,7 +214,7 @@ export type DesktopWorkOrder = {
     summary: string;
     privacyClass: "public_text" | "local_private" | "side_effect";
     steps: DesktopWorkOrderStep[];
-    /** Adım-cihaz kararı; ilk aşamada yalnız shadow evidence olarak taşınır. */
+    /** Adım-cihaz kararı; shadow ölçümü veya fail-closed bound kanıtı. */
     executionSteps?: ExecutionStep[];
     executionPlacement?: ExecutionPlacementSnapshot;
     dispatchOptimization?: {

@@ -2034,15 +2034,18 @@ type ExecutionPlacementResolution = Awaited<
  */
 async function measureExecutionPlacement(
   app: FastifyInstance,
-  task: Pick<TaskRow, "id" | "userId">,
+  task: Pick<TaskRow, "id" | "userId" | "targetDeviceId">,
   steps: DesktopWorkOrderStep[],
 ): Promise<ExecutionPlacementResolution | null> {
-  // Small unit-test doubles and old callers may not expose the database. In
-  // the real Fastify app this is always present; skipping here preserves the
-  // old fail-open behavior for those non-runtime callers.
-  if (!app.db) return null;
+  if (!app.db) {
+    throw new Error("execution_placement_database_missing");
+  }
+  if (!task.targetDeviceId) {
+    throw new Error("execution_placement_target_device_missing");
+  }
   const placement = await placeExecutionSteps(app, {
     userId: task.userId,
+    targetDeviceId: task.targetDeviceId,
     steps,
   }).catch((error) => {
     app.log.warn?.(
@@ -2075,6 +2078,54 @@ async function measureExecutionPlacement(
     "execution placement resolved",
   );
   return { ...placement, snapshot };
+}
+
+/**
+ * Tek placement admission kapısı. Deterministic, cache, fallback ve model
+ * planları aynı ölçümden geçmeden runtime'a açılmamalı; aksi halde hızlı bir
+ * yol eski `planPreview.steps` alanını kullanarak readiness kanıtını bypass
+ * eder.
+ *
+ * `false` gerçek uygulamadaki fail-closed sonucudur; placement verisi
+ * okunamıyorsa outer materialization catch'i de aynı kapıyı kapatır.
+ */
+async function resolveDesktopPlacementForDispatch(
+  app: FastifyInstance,
+  task: Pick<TaskRow, "id" | "userId" | "targetDeviceId">,
+  steps: DesktopWorkOrderStep[],
+): Promise<ExecutionPlacementResolution | null | false> {
+  const placement = await measureExecutionPlacement(app, task, steps);
+  if (!placement || steps.length === 0) return placement;
+
+  const unplaceable = unplaceableSteps({
+    placements: placement.placements,
+    map: placement.map,
+  });
+  if (unplaceable.length > 0) {
+    app.log.warn(
+      {
+        taskId: task.id,
+        unplaceable: unplaceable.map((entry) => ({
+          stepId: entry.stepId,
+          capability: entry.capability,
+        })),
+      },
+      "desktop plan withheld: step has no device that can run it",
+    );
+    return false;
+  }
+  if (!isDesktopPlacementReady({ placements: placement.placements })) {
+    app.log.warn(
+      {
+        taskId: task.id,
+        placement: placement.snapshot.summary,
+        unresolvedCapabilities: placement.snapshot.unresolvedCapabilities,
+      },
+      "desktop plan withheld: execution placement is not desktop-ready",
+    );
+    return false;
+  }
+  return placement;
 }
 
 export async function maybeMaterializeDesktopPlan(
@@ -2128,22 +2179,12 @@ export async function maybeMaterializeDesktopPlan(
       ) {
         return false;
       }
-      const placement = await measureExecutionPlacement(app, task, existingSteps);
-      if (
-        placement &&
-        existingSteps.length > 0 &&
-        !isDesktopPlacementReady({ placements: placement.placements })
-      ) {
-        app.log.warn?.(
-          {
-            taskId: task.id,
-            placement: placement.snapshot.summary,
-            unresolvedCapabilities: placement.snapshot.unresolvedCapabilities,
-          },
-          "desktop plan withheld: execution placement is not desktop-ready",
-        );
-        return false;
-      }
+      const placement = await resolveDesktopPlacementForDispatch(
+        app,
+        task,
+        existingSteps,
+      );
+      if (placement === false) return false;
       const materializedCapabilityScope = [
         ...new Set(existingSteps.map((step) => step.capability)),
       ];
@@ -2205,6 +2246,12 @@ export async function maybeMaterializeDesktopPlan(
         const materializedCapabilityScope = [
           ...new Set(directSteps.map((step) => step.capability)),
         ];
+        const placement = await resolveDesktopPlacementForDispatch(
+          app,
+          task,
+          directSteps,
+        );
+        if (placement === false) return false;
         await persistTaskPayload(app, task, {
           ...payload,
           desktopWorkOrder: {
@@ -2213,6 +2260,15 @@ export async function maybeMaterializeDesktopPlan(
             planPreview: {
               ...planPreview,
               steps: directSteps,
+              ...(placement
+                ? {
+                    executionSteps: placement.steps,
+                    executionPlacement: placement.snapshot,
+                  }
+                : {
+                    executionSteps: undefined,
+                    executionPlacement: undefined,
+                  }),
               planSource: "deterministic_registry" as const,
               contract: "elyan.compiled_plan.v1" as const,
               materializationSource: "deterministic_registry" as const,
@@ -2264,6 +2320,12 @@ export async function maybeMaterializeDesktopPlan(
       ) {
         return false;
       }
+      const placement = await resolveDesktopPlacementForDispatch(
+        app,
+        task,
+        candidate.steps,
+      );
+      if (placement === false) return false;
       const target = await getUserDevice(app, task.userId, task.targetDeviceId);
       const advertisedCapabilities = normalizeRuntimeCapabilities(
         target?.runtime.capabilities ?? [],
@@ -2296,6 +2358,15 @@ export async function maybeMaterializeDesktopPlan(
           planPreview: {
             ...planPreview,
             steps: candidate.steps,
+            ...(placement
+              ? {
+                  executionSteps: placement.steps,
+                  executionPlacement: placement.snapshot,
+                }
+              : {
+                  executionSteps: undefined,
+                  executionPlacement: undefined,
+                }),
             planSource: "server_materialized" as const,
             contract: "elyan.compiled_plan.v1" as const,
             planCache: candidate.metadata,
@@ -2327,6 +2398,12 @@ export async function maybeMaterializeDesktopPlan(
       const materializedCapabilityScope = [
         ...new Set(fallbackSteps.map((step) => step.capability)),
       ];
+      const placement = await resolveDesktopPlacementForDispatch(
+        app,
+        task,
+        fallbackSteps,
+      );
+      if (placement === false) return false;
       const target = await getUserDevice(app, task.userId, task.targetDeviceId);
       const advertisedCapabilities = normalizeRuntimeCapabilities(
         target?.runtime.capabilities ?? [],
@@ -2359,6 +2436,15 @@ export async function maybeMaterializeDesktopPlan(
           planPreview: {
             ...planPreview,
             steps: fallbackSteps,
+            ...(placement
+              ? {
+                  executionSteps: placement.steps,
+                  executionPlacement: placement.snapshot,
+                }
+              : {
+                  executionSteps: undefined,
+                  executionPlacement: undefined,
+                }),
             planSource: "server_materialized" as const,
             contract: "elyan.compiled_plan.v1" as const,
             materializationSource: "semantic_compiler" as const,
@@ -2710,45 +2796,12 @@ export async function maybeMaterializeDesktopPlan(
       // Her adımın hangi cihazda çalışacağı ölçülür. Yalnız çalışan desktop
       // runtime'ı tüm adımları çevrimiçi beyan ediyorsa executionSteps plana
       // bağlanır; aksi halde plan gönderilmez.
-      const placement = await measureExecutionPlacement(app, task, steps);
-      if (placement) {
-        const unplaceable = unplaceableSteps({
-          placements: placement.placements,
-          map: placement.map,
-        });
-        // HİÇBİR CİHAZDA ÇALIŞAMAYACAK ADIM GÖNDERİLMEZ.
-        //
-        // Canlı arıza (görev 4d1a9de6): plan `send_whatsapp_message` içeriyordu,
-        // masaüstü bu yeteneği beyan etmiyordu, görev FILE_NOT_FOUND ile öldü.
-        // Yerleştirme bunu ÖNCEDEN biliyordu ama kimse okumuyordu.
-        //
-        // `false` görevi anında öldürmez: kuyruk yeniden planlar ve model
-        // elindeki gerçek yeteneklerle farklı bir plan üretebilir.
-        if (unplaceable.length > 0) {
-          app.log.warn(
-            {
-              taskId: task.id,
-              unplaceable: unplaceable.map((entry) => ({
-                stepId: entry.stepId,
-                capability: entry.capability,
-              })),
-            },
-            "desktop plan withheld: step has no device that can run it",
-          );
-          return false;
-        }
-        if (!isDesktopPlacementReady({ placements: placement.placements })) {
-          app.log.warn(
-            {
-              taskId: task.id,
-              placement: placement.snapshot.summary,
-              unresolvedCapabilities: placement.snapshot.unresolvedCapabilities,
-            },
-            "desktop plan withheld: execution placement is not desktop-ready",
-          );
-          return false;
-        }
-      }
+      const placement = await resolveDesktopPlacementForDispatch(
+        app,
+        task,
+        steps,
+      );
+      if (placement === false) return false;
 
       const planCache = await storeDesktopPlanCache({
         app,

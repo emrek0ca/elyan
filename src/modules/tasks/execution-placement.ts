@@ -72,13 +72,20 @@ function toExecutionDevice(kind: DeviceCapabilityView["kind"]): ExecutionDevice 
  */
 export async function placeExecutionSteps(
   app: FastifyInstance,
-  input: { userId: string; steps: DesktopWorkOrderStep[] },
+  input: {
+    userId: string;
+    targetDeviceId: string;
+    steps: DesktopWorkOrderStep[];
+  },
 ): Promise<{
   steps: ExecutionStep[];
   placements: StepPlacement[];
   map: DeviceCapabilityView[];
 }> {
-  const map = await readDeviceCapabilityMap(app, { userId: input.userId });
+  const map = await readDeviceCapabilityMap(app, {
+    userId: input.userId,
+    deviceId: input.targetDeviceId,
+  });
   const placements: StepPlacement[] = [];
   const steps: ExecutionStep[] = [];
 

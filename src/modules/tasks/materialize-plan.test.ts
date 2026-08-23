@@ -52,6 +52,34 @@ function workOrder(
   };
 }
 
+function placementReadyApp(capabilities: string[]) {
+  const query = {
+    from: () => query,
+    leftJoin: () => query,
+    where: () => query,
+    orderBy: () => query,
+    limit: async () => [
+      {
+        deviceId: "desktop-1",
+        platform: "macos",
+        capabilities,
+        clientMetadata: null,
+        status: "online",
+        heartbeat: null,
+      },
+    ],
+  };
+  return {
+    log: { info() {}, warn() {} },
+    db: {
+      select: () => query,
+      update: () => ({
+        set: () => ({ where: async () => undefined }),
+      }),
+    },
+  };
+}
+
 test("an already materialized server plan remains dispatchable on retry", async () => {
   const order = workOrder("Masaüstünü listele", ["directory_tree"]);
   order.planPreview = {
@@ -71,11 +99,12 @@ test("an already materialized server plan remains dispatchable on retry", async 
   const task = {
     id: "task-retry-ready-plan",
     userId: "user-1",
+    targetDeviceId: "desktop-1",
     payload: { desktopWorkOrder: order },
   };
 
   const materialized = await maybeMaterializeDesktopPlan(
-    { log: { warn() { throw new Error("retry must not invoke planning"); } } } as never,
+    placementReadyApp(["directory_tree"]) as never,
     task as never,
   );
 
@@ -106,8 +135,8 @@ test("a deterministic registry plan skips model materialization", async () => {
   order.materializedCapabilityScope = ["close_app"];
 
   const materialized = await maybeMaterializeDesktopPlan(
-    { log: { warn() { throw new Error("deterministic plans must not invoke planning"); } } } as never,
-    { id: "task-deterministic-plan", payload: { desktopWorkOrder: order } } as never,
+    placementReadyApp(["close_app"]) as never,
+    { id: "task-deterministic-plan", userId: "user-1", targetDeviceId: "desktop-1", payload: { desktopWorkOrder: order } } as never,
   );
 
   assert.equal(materialized, true);
@@ -133,6 +162,24 @@ test("a legacy heuristic Chrome command is upgraded to a ready deterministic pla
   const app = {
     log: { info() {}, warn() {} },
     db: {
+      select: () => ({
+        from: () => ({
+          leftJoin: () => ({
+            where: () => ({
+              orderBy: () => ({
+                limit: async () => [{
+                  deviceId: "desktop-1",
+                  platform: "macos",
+                  capabilities: ["close_app"],
+                  clientMetadata: null,
+                  status: "online",
+                  heartbeat: null,
+                }],
+              }),
+            }),
+          }),
+        }),
+      }),
       update() {
         return {
           set(values: { payload: unknown }) {
@@ -149,6 +196,7 @@ test("a legacy heuristic Chrome command is upgraded to a ready deterministic pla
     {
       id: "task-legacy-chrome-command",
       userId: "user-1",
+      targetDeviceId: "desktop-1",
       title: "Chrome u kapat",
       payload: {
         prompt: "Chrome u kapat",
@@ -179,6 +227,32 @@ test("a legacy heuristic Chrome command is upgraded to a ready deterministic pla
   assert.deepEqual(payload.desktopWorkOrder.planPreview.steps?.[0]?.args, {
     app_name: "Chrome",
   });
+});
+
+test("a deterministic plan stays closed when target placement is unresolved", async () => {
+  const order = workOrder("Chrome u kapat", ["close_app"]);
+  order.planPreview = {
+    ...order.planPreview,
+    planSource: "heuristic",
+    planPreparation: { status: "pending" },
+    steps: [],
+  };
+
+  const materialized = await maybeMaterializeDesktopPlan(
+    placementReadyApp([]) as never,
+    {
+      id: "task-unresolved-placement",
+      userId: "user-1",
+      targetDeviceId: "desktop-1",
+      title: "Chrome u kapat",
+      payload: {
+        prompt: "Chrome u kapat",
+        desktopWorkOrder: order,
+      },
+    } as never,
+  );
+
+  assert.equal(materialized, false);
 });
 
 test("a semantic server plan without a current binding is rematerialized", async () => {

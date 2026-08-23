@@ -192,12 +192,21 @@ test("materialized work order refreshes the canonical contract steps and tools",
     planPreview: {
       summary: "Chrome kapanacak",
       privacyClass: "side_effect" as const,
-      steps: [{ id: "close_chrome", capability: "close_app", description: "Chrome'u kapat", args: { app_name: "Google Chrome" } }],
+      steps: [{
+        id: "close_chrome",
+        capability: "close_app",
+        description: "Chrome'u kapat",
+        args: { app_name: "Google Chrome" },
+        resourceScope: ["app:chrome"],
+        forEach: "steps.targets",
+      }],
       executionSteps: [{
         stepId: "close_chrome",
         device: "desktop" as const,
         capability: "close_app",
         input: { app_name: "Google Chrome" },
+        resourceScope: ["app:chrome"],
+        forEach: "steps.targets",
       }],
       executionPlacement: {
         mode: "bound" as const,
@@ -218,6 +227,35 @@ test("materialized work order refreshes the canonical contract steps and tools",
   assert.equal(synced.execution.steps[0]?.capability, "close_app");
   assert.equal(synced.execution.steps[0]?.device, "desktop");
   assert.deepEqual(synced.execution.steps[0]?.args, { app_name: "Google Chrome" });
+  assert.deepEqual(synced.execution.steps[0]?.resourceScope, ["app:chrome"]);
+  assert.equal(synced.execution.steps[0]?.forEach, "steps.targets");
   assert.equal(synced.execution.selectedTools[0]?.reason, "server_plan_step");
   assert.equal(validateTaskExecutionContract(synced).ok, true);
+});
+
+test("desktop contract rejects an explicitly remote execution step", () => {
+  const contract = buildTaskExecutionContract({
+    taskId: "task-1",
+    turnId: "turn-1",
+    routeDecision: route(),
+    turnContract: turn(),
+  });
+  contract.execution.steps = [{
+    id: "remote_step",
+    device: "mobile",
+    capability: "sys_info",
+    args: {},
+    dependsOn: [],
+    resourceScope: [],
+  }];
+
+  const result = validateTaskExecutionContract(contract);
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(
+      result.errors.some((error) => error.code === "TASK_CONTRACT_REMOTE_STEP_DEVICE"),
+      true,
+    );
+  }
 });

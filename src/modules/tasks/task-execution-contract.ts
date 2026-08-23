@@ -502,6 +502,17 @@ export function validateTaskExecutionContract(
       });
     }
     stepIds.add(step.id);
+    if (
+      contract.execution.requiredRuntime === "desktop" &&
+      step.device !== undefined &&
+      step.device !== "desktop"
+    ) {
+      errors.push({
+        code: "TASK_CONTRACT_REMOTE_STEP_DEVICE",
+        path: `execution.steps.${index}.device`,
+        message: "Desktop plan step'i başka bir cihaza bağlanamaz.",
+      });
+    }
     if (!localCapabilities.has(step.capability)) {
       errors.push({
         code: knownCapabilities.has(step.capability)
