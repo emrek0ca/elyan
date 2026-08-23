@@ -130,6 +130,39 @@ export function shouldDispatchAssignedRuntimeTask(
   return false;
 }
 
+/**
+ * Runtime frames for one task are a single ordered stream. The WebSocket
+ * library invokes message listeners concurrently, so awaiting an update in
+ * the listener alone does not preserve the order in which the desktop sent
+ * ack/update/artifact frames. A failed frame must not poison the next frame;
+ * later work for the same task is allowed to continue after the failure is
+ * observed by the caller.
+ */
+export function enqueueRuntimeTaskMessage<T>(
+  queues: Map<string, Promise<unknown>>,
+  taskId: string,
+  operation: () => Promise<T> | T,
+): Promise<T> {
+  const key = String(taskId ?? "").trim();
+  if (!key) {
+    return Promise.resolve().then(operation);
+  }
+
+  const previous = queues.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(key, settled);
+
+  return next.finally(() => {
+    if (queues.get(key) === settled) {
+      queues.delete(key);
+    }
+  });
+}
+
 const activeRealtimeStreamsByUser = new Map<string, number>();
 const SSE_MAX_PENDING_EVENTS = 64;
 const SSE_DROPPED_BACKPRESSURE_METRIC_KEY =
@@ -885,6 +918,8 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      const taskMessageQueues = new Map<string, Promise<unknown>>();
+
       socket.on("message", async (raw: RawData) => {
         try {
           const parsed = runtimeSocketMessageSchema.parse(
@@ -905,47 +940,50 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
             return;
           }
 
-          if (parsed.type === "task.ack") {
-            await acknowledgeTaskDispatchLease(app, payload, {
-              taskId: parsed.taskId,
-              leaseId: parsed.leaseId,
-              state: parsed.state,
-              acceptedAt: parsed.acceptedAt,
-              missingCapabilities: parsed.missingCapabilities,
-              blockedReason: parsed.blockedReason,
-              consumedContractFields: parsed.consumedContractFields,
-            });
-            return;
-          }
+          const taskId = "taskId" in parsed ? parsed.taskId : "";
+          await enqueueRuntimeTaskMessage(taskMessageQueues, taskId, async () => {
+            if (parsed.type === "task.ack") {
+              await acknowledgeTaskDispatchLease(app, payload, {
+                taskId: parsed.taskId,
+                leaseId: parsed.leaseId,
+                state: parsed.state,
+                acceptedAt: parsed.acceptedAt,
+                missingCapabilities: parsed.missingCapabilities,
+                blockedReason: parsed.blockedReason,
+                consumedContractFields: parsed.consumedContractFields,
+              });
+              return;
+            }
 
-          if (parsed.type === "task.update") {
-            await updateTaskFromRuntime(
-              app,
-              payload,
-              parsed.taskId,
-              parsed.body,
-            );
-            return;
-          }
+            if (parsed.type === "task.update") {
+              await updateTaskFromRuntime(
+                app,
+                payload,
+                parsed.taskId,
+                parsed.body,
+              );
+              return;
+            }
 
-          if (parsed.type === "task.artifacts") {
-            await appendTaskArtifacts(
-              app,
-              payload,
-              parsed.taskId,
-              parsed.artifacts,
-            );
-            return;
-          }
+            if (parsed.type === "task.artifacts") {
+              await appendTaskArtifacts(
+                app,
+                payload,
+                parsed.taskId,
+                parsed.artifacts,
+              );
+              return;
+            }
 
-          if (parsed.type === "task.control.ack") {
-            await acknowledgeTaskControl(app, payload, {
-              taskId: parsed.taskId,
-              commandId: parsed.commandId,
-              state: parsed.state,
-              message: parsed.message,
-            });
-          }
+            if (parsed.type === "task.control.ack") {
+              await acknowledgeTaskControl(app, payload, {
+                taskId: parsed.taskId,
+                commandId: parsed.commandId,
+                state: parsed.state,
+                message: parsed.message,
+              });
+            }
+          });
         } catch (error) {
           if (error instanceof AppError && error.statusCode === 401) {
             socket.close(4401, "Runtime session is stale or replaced");
@@ -971,6 +1009,12 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
               type: "error",
               message,
               code: error instanceof ZodError ? "invalid_payload" : "rejected",
+              ...(error instanceof AppError
+                ? {
+                    errorCode: error.code,
+                    statusCode: error.statusCode,
+                  }
+                : {}),
               ...runtimeFrameCorrelation(raw),
             }),
           );

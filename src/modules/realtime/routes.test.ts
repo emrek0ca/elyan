@@ -6,6 +6,7 @@ import {
   acquireRealtimeStreamSlot,
   activeRealtimeStreamCountForUser,
   createSsePendingWriteState,
+  enqueueRuntimeTaskMessage,
   realtimeStreamChannelForUser,
   realtimeRoutes,
   shapeRealtimeEventEnvelope,
@@ -13,6 +14,38 @@ import {
   shouldDropSsePendingWrite,
   shouldDispatchAssignedRuntimeTask,
 } from "./routes.js";
+
+test("runtime task messages are serialized per task and released after completion", async () => {
+  const queues = new Map<string, Promise<unknown>>();
+  const order: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const first = enqueueRuntimeTaskMessage(queues, "task-1", async () => {
+    order.push("first:start");
+    await firstGate;
+    order.push("first:end");
+  });
+  const second = enqueueRuntimeTaskMessage(queues, "task-1", async () => {
+    order.push("second:start");
+    order.push("second:end");
+  });
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["first:start"]);
+
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, [
+    "first:start",
+    "first:end",
+    "second:start",
+    "second:end",
+  ]);
+  assert.equal(queues.has("task-1"), false);
+});
 
 test("realtime stream defaults mobile clients to the user channel", () => {
   assert.equal(realtimeStreamChannelForUser("user-1", {}), "user:user-1");

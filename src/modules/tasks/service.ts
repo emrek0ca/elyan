@@ -13046,6 +13046,26 @@ export async function updateTaskFromRuntime(
     .returning();
   let updatedTask = rows[0];
   if (!updatedTask) {
+    const currentTask = await getTaskById(app, ownedTask.id);
+    app.log.warn(
+      {
+        taskId: ownedTask.id,
+        incomingStatus: input.status,
+        expectedStatus: ownedTask.status,
+        currentStatus: currentTask?.status ?? null,
+        expectedRuntimeConnectionId: auth.connectionId,
+        currentRuntimeConnectionId: currentTask?.runtimeConnectionId ?? null,
+        // tasks has no integer revision column; updatedAt is the optimistic
+        // row snapshot that identifies the observed revision in this path.
+        expectedRevision: ownedTask.updatedAt?.toISOString?.() ?? null,
+        currentRevision: currentTask?.updatedAt?.toISOString?.() ?? null,
+        expectedUpdatedAt: ownedTask.updatedAt?.toISOString?.() ?? null,
+        currentUpdatedAt: currentTask?.updatedAt?.toISOString?.() ?? null,
+        handlerStartedAt,
+        elapsedMs: Date.now() - handlerStartedAt,
+      },
+      "runtime task update status conflict",
+    );
     throw conflict("Task state changed before runtime update");
   }
   const currentBeforeArtifacts = await getTaskById(app, updatedTask.id);
