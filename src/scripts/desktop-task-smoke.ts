@@ -9,6 +9,7 @@ import { pruneUnneededResearchSteps } from "../modules/tasks/plan-shortest-path.
 import { writerBodyRestatesRequest } from "../modules/tasks/writer-content.js";
 import { classifyKnowledgeRecency } from "../core/understanding/knowledge-recency.js";
 import { resetSemanticComputeWorkerForTests } from "../modules/brain/semantic-compute-client.js";
+import { latestDesktopTaskIdQuery } from "./desktop-task-smoke-queries.js";
 import type { CommandRouteDecision } from "../modules/routing-policy/service.js";
 
 /**
@@ -159,7 +160,7 @@ async function runLocal(): Promise<number> {
 function watch(taskId?: string): number {
   const id =
     taskId ??
-    psql("select id::text from tasks order by created_at desc limit 1").trim();
+    psql(latestDesktopTaskIdQuery()).trim();
   if (!id) {
     console.log("görev bulunamadı");
     return 1;
