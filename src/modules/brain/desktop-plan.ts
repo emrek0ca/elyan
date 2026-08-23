@@ -118,6 +118,7 @@ const PLANNER_SYSTEM_PREFIX = [
   "Respond with EXACTLY ONE JSON object that satisfies the response schema in the envelope.",
   "No prose, no markdown fences, no explanations before or after the JSON.",
   "Only use capabilities that exist in the provided tool catalog.",
+  "If the user only asks to observe, list, find, check, or read and forbids changes, deletion, writing, or saving, ignore conflicting artifact metadata and use read-only capabilities only; never add a writer step.",
   "Prefer the smallest correct plan; chain steps with dependsOn when a step consumes a previous step's output.",
 ].join(" ");
 
@@ -165,9 +166,9 @@ export async function generateDesktopPlan(
     // eşleniyor; uzun zarfla birlikte gizli düşünme turu tüm bütçeyi yiyor ve
     // model GÖRÜNÜR çıktıyı hiç üretemiyor → Groq `json_validate_failed` +
     // `failed_generation: ""`. Plan/anlama zarfı sınıflandırma işidir, derin
-    // muhakeme değil: burada effort "medium"da tutulur, bütçe görünür JSON'a
+    // muhakeme değil: burada effort "low"da tutulur, bütçe görünür JSON'a
     // kalır. Kalite kaybı yok — şemayı doldurmak muhakeme derinliği istemez.
-    reasoningEffortOverride: "medium",
+    reasoningEffortOverride: "low",
     // Kapılar zarf ŞABLONUNU değil kullanıcının GERÇEK cümlesini denetlesin:
     // zarf metni ("mesaj, arama+üretim", "dışa gönderim" gibi şema açıklamaları)
     // external_send_request kalıplarına takılıyor ve HER anlama/planlama

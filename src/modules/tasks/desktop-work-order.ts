@@ -512,6 +512,23 @@ const DOCUMENT_NOUN_PATTERN = trStemPattern(
   { exclude: ["belgesel", "belgeseli", "belgeselleri"] },
 );
 
+/** Low-risk registry path for read-only running-application observations. */
+function isReadOnlyProcessObservationRequest(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  const processObservation =
+    /(?<!\p{L})(?:açık|acik|çalışan|calisan)\p{L}*\s+(?:olan\s+)?(?:uygulama|program)\p{L}*\s+(?:listele\p{L}*|gözlemle\p{L}*|gozlemle\p{L}*|göster\p{L}*|goster\p{L}*|söyle\p{L}*|soyle\p{L}*)/iu.test(normalized) ||
+    /(?<!\p{L})hangi\s+(?:uygulama|program)\p{L}*\s+(?:açık|acik)\p{L}*/iu.test(normalized) ||
+    /(?<!\p{L})(?:uygulama|program)\p{L}*\s+(?:açık|acik)\s*(?:mı|mi)?/iu.test(normalized) ||
+    /\b(?:open|active|running)\s+apps?\b/iu.test(normalized);
+  if (!processObservation) return false;
+
+  // Negative Turkish forms (kapatma, değiştirme, silme, kaydetme) do not
+  // match these imperative stems because their next letter is intentional.
+  const activeMutation =
+    /(?<!\p{L})(?:kapat|aç|ac|open|close|quit|başlat|baslat|launch|tıkla|tikla|click|yaz|write|kaydet|save|sil|delete|değiştir|degistir|gönder|gonder)(?!\p{L})/iu.test(normalized);
+  return !activeMutation;
+}
+
 type FileFindKind =
   | "document"
   | "spreadsheet"
@@ -801,8 +818,21 @@ function canonicalSemanticDesktopCapabilities(
     const canonical = canonicalRuntimeCapability(capability);
     if (canonical) capabilities.add(canonical);
   }
+  if (isReadOnlyProcessObservationRequest(message)) {
+    capabilities.add("desktop_os.processes");
+    capabilities.delete("desktop_operator.run");
+    capabilities.delete("desktop_operator_run");
+    capabilities.delete("desktop_operator.observe_screen");
+    capabilities.delete("analyze_screen");
+  }
   if (contract.intent === "screen_action") {
-    capabilities.add("desktop_operator.run");
+    const hasConcreteReadCapability = [
+      "desktop_os.processes",
+      "desktop_os.active_window",
+      "analyze_screen",
+      "desktop_operator.observe_screen",
+    ].some((capability) => capabilities.has(capability));
+    if (!hasConcreteReadCapability) capabilities.add("desktop_operator.run");
   }
   if (contract.intent === "browser_workflow") {
     capabilities.add("browser_control");
@@ -870,6 +900,12 @@ function inferLocalContext(
   }
   if (capabilities.includes("image_fetch") || capabilities.includes("presentation_write")) {
     contexts.add("filesystem");
+  }
+  if (
+    capabilities.includes("desktop_os.processes") ||
+    capabilities.includes("desktop_os.active_window")
+  ) {
+    contexts.add("screen");
   }
   return [...contexts];
 }
@@ -954,6 +990,8 @@ function canonicalRuntimeCapability(value: string): string | null {
     app_control: "desktop_operator.run",
     computer_control: "desktop_operator.run",
     "computer.control": "desktop_operator.run",
+    desktop_os_processes: "desktop_os.processes",
+    desktop_os_active_window: "desktop_os.active_window",
   };
   if (Object.prototype.hasOwnProperty.call(aliases, normalized)) return aliases[normalized] ?? null;
   if (normalized.startsWith("desktop.operator.")) {
@@ -1083,6 +1121,29 @@ function inferCapabilities(
   const semanticCapabilities = new Set(
     semanticCapabilitiesFromEnvelope(envelope),
   );
+  const readOnlyProcessObservationRequested =
+    isReadOnlyProcessObservationRequest(message);
+  const removeReadOnlyConflicts = (capabilities: Set<string>) => {
+    capabilities.add("desktop_os.processes");
+    for (const capability of [
+      "desktop_operator.run",
+      "desktop_operator_run",
+      "desktop_operator.observe_screen",
+      "analyze_screen",
+      "document_write",
+      "spreadsheet_write",
+      "presentation_write",
+      "canvas_write",
+      "text_analyze",
+    ]) {
+      capabilities.delete(capability);
+    }
+  };
+  if (readOnlyProcessObservationRequested) {
+    routeCapabilities.add("desktop_os.processes");
+    removeReadOnlyConflicts(routeCapabilities);
+    removeReadOnlyConflicts(semanticCapabilities);
+  }
   const semanticAuthoritative =
     envelope !== undefined &&
     semanticCapabilities.size > 0 &&
@@ -1100,7 +1161,9 @@ function inferCapabilities(
       envelope.output_contract?.requiresArtifact === true
     );
   if (semanticAuthoritative) {
-    return [...semanticCapabilities].slice(0, 16);
+    return [
+      ...new Set([...routeCapabilities, ...semanticCapabilities]),
+    ].slice(0, 16);
   }
   const capabilities = new Set([
     ...routeCapabilities,
@@ -1204,6 +1267,7 @@ function inferCapabilities(
   }
   if (TERMINAL_CONTEXT_PATTERN.test(normalized)) capabilities.add("shell_run");
   if (unicodeWordPattern(String.raw`\b(ekran|screenshot|görüntü|goruntu)\b`, "i").test(normalized)) capabilities.add("desktop_operator.observe_screen");
+  if (readOnlyProcessObservationRequested) removeReadOnlyConflicts(capabilities);
   return [...capabilities].slice(0, 16);
 }
 
@@ -1303,6 +1367,21 @@ function artifactContractForCapabilities(
     UnderstandingEnvelope["tool_skill_decision"]
   >["surface"];
 } | null {
+  // A PDF request with both legacy canvas and document writer hints must keep
+  // the requested document surface.  Otherwise the canvas hint wins merely
+  // because it appears first and the semantic contract drifts to canvas_write.
+  if (
+    requestedFormat?.toLocaleLowerCase("en-US") === "pdf" &&
+    capabilities.includes("document_write")
+  ) {
+    return {
+      desiredKind: "pdf",
+      outputKind: "document",
+      format: "pdf",
+      selected: "document.write",
+      surface: "document",
+    };
+  }
   if (capabilities.includes("presentation_write")) {
     return {
       desiredKind: "artifact",
@@ -1706,6 +1785,14 @@ function buildSteps(input: {
       args: { query: "all" },
     });
   }
+  if (input.capabilities.includes("desktop_os.processes")) {
+    steps.push({
+      id: "step_processes",
+      capability: "desktop_os.processes",
+      description: "Çalışan uygulamalar salt-okunur olarak listelenip durum kanıtı alınacak.",
+      args: { query: "all", limit: 50 },
+    });
+  }
   if (input.capabilities.includes("file_find")) {
     steps.push({
       id: "step_file_find",
@@ -1971,7 +2058,11 @@ export function buildDesktopWorkOrder(input: {
   const semanticDesktopContract = semanticDesktopContractFromRoute(
     input.routeDecision,
   );
-  const kind = inferKind(input.routeDecision, message);
+  const readOnlyProcessObservationRequested =
+    isReadOnlyProcessObservationRequest(message);
+  const kind = readOnlyProcessObservationRequested
+    ? "desktop_cowork"
+    : inferKind(input.routeDecision, message);
   const capabilities = [
     ...new Set([
       ...inferCapabilities(
@@ -1989,6 +2080,14 @@ export function buildDesktopWorkOrder(input: {
       ...(directRegistryCommand ? [directRegistryCommand.capability] : []),
     ]),
   ];
+  const requestedOutputFormat = String(
+    input.understandingEnvelope?.output_contract?.outputFormat ?? "",
+  ).toLocaleLowerCase("en-US");
+  if (requestedOutputFormat === "pdf" && capabilities.includes("document_write")) {
+    for (let index = capabilities.length - 1; index >= 0; index -= 1) {
+      if (capabilities[index] === "canvas_write") capabilities.splice(index, 1);
+    }
+  }
   // MENÜ, HEDEFLE ÇELİŞMEMELİ.
   //
   // Canlı arıza (görev fd3acf73): "masaüstüne kediler hakkında rapor hazırla ve
@@ -2005,9 +2104,9 @@ export function buildDesktopWorkOrder(input: {
   // Burada iki gerçek aynı anda elimizde: hedefin türü ve önerilen yetenekler.
   // Çelişiyorlarsa hedef kazanır.
   const writerForKind =
-    kind === "document_task"
+    !readOnlyProcessObservationRequested && kind === "document_task"
       ? "document_write"
-      : kind === "presentation_task"
+      : !readOnlyProcessObservationRequested && kind === "presentation_task"
         ? "presentation_write"
         : null;
   if (writerForKind && !capabilities.includes(writerForKind)) {
@@ -2161,6 +2260,12 @@ export function buildDesktopWorkOrder(input: {
     typeof steps[0]?.args?.path === "string" &&
     typeof steps[0]?.args?.max_depth === "number" &&
     typeof steps[0]?.args?.max_results === "number";
+  const deterministicReadOnlyRegistryPlan =
+    steps.length > 0 &&
+    steps.every((step) =>
+      ["desktop_os.processes", "file_find"].includes(step.capability),
+    ) &&
+    steps.some((step) => step.capability === "desktop_os.processes");
   const deterministicRegistryPlan =
     (directRegistryCommand !== null &&
       steps.length === 1 &&
@@ -2168,7 +2273,8 @@ export function buildDesktopWorkOrder(input: {
       Object.keys(steps[0]?.args ?? {}).length === 1 &&
       typeof steps[0]?.args.app_name === "string") ||
     deterministicReadOnlyStep ||
-    deterministicFileFindStep;
+    deterministicFileFindStep ||
+    deterministicReadOnlyRegistryPlan;
   const basePrivacyRouting = executionEnvelope?.privacy_routing ?? {
     mode: localContextNeeded.length > 0 ? "desktop_private" : "server",
     mayUseHostedModels: localContextNeeded.length === 0,

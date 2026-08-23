@@ -112,6 +112,28 @@ function metadataFormat(metadata: Record<string, unknown> | null): OutputFormat 
   return null;
 }
 
+function isOutputFormatMention(
+  text: string,
+  index: number,
+  matchLength: number,
+): boolean {
+  const after = text.slice(index + matchLength, index + matchLength + 96);
+  // A format mentioned as the source of a read request is not a requested
+  // output.  Only accept the format when it is attached to an output relation
+  // or an output verb: "PDF yap", "Word'e çevir", "PDF olarak ver".
+  if (
+    /^(?:\s+|['’]?)(?:e|a|ye|ya|olarak|formatında|formatinda|dosyasına|dosyasina|file|document)\b/iu.test(
+      after,
+    ) ||
+    /^\s*(?:yap|yaz|oluştur|olustur|hazırla|hazirla|üret|uret|dönüştür|donustur|çevir|cevir|export|kaydet|ver|çıkar|cikar|tasarla|create|write|generate|convert|save|make)\p{L}*/iu.test(
+      after,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function inferFormat(text: string, metadata: Record<string, unknown> | null): OutputFormat | null {
   const explicit = metadataFormat(metadata);
   if (explicit) return explicit;
@@ -123,9 +145,13 @@ function inferFormat(text: string, metadata: Record<string, unknown> | null): Ou
     { format: "chart" as const, match: /\b(?:grafik|chart|plot|çizelge|cizelge)\b/iu.exec(text) },
     { format: "svg" as const, match: /\bsvg\b/iu.exec(text) },
   ]
-    .filter((item) => item.match)
+    .filter(
+      (item) =>
+        item.match &&
+        isOutputFormatMention(text, item.match.index ?? 0, item.match[0].length),
+    )
     .sort((left, right) => (left.match?.index ?? 0) - (right.match?.index ?? 0));
-  if (explicitFormatMatches[0]) return explicitFormatMatches[0].format;
+  if (explicitFormatMatches.at(-1)) return explicitFormatMatches.at(-1)!.format;
   if (/\b(?:png|jpg|jpeg|webp)\b/iu.test(text)) {
     const match = text.match(/\b(png|jpg|jpeg|webp)\b/iu);
     return normalize(match?.[1]) as OutputFormat;
@@ -134,8 +160,9 @@ function inferFormat(text: string, metadata: Record<string, unknown> | null): Ou
     return "png";
   }
   const hasDocumentNoun = /(?<!\p{L})(?:rapor\p{L}*|makale\p{L}*|belge\p{L}*|döküman\p{L}*|dokuman\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*|sözleşme\p{L}*|sozlesme\p{L}*)(?!\p{L})/iu.test(text);
-  const asksDocumentCreation = /(?<!\p{L})(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yaz\p{L}{0,8}|tasarla\p{L}*|çıkar\p{L}*|cikar\p{L}*|raporlaştır\p{L}*|raporlastır\p{L}*|raporlastir\p{L}*|kaydet\p{L}*|dosya\p{L}*|olarak ver|formatında|formatinda)(?!\p{L})/iu.test(text);
-  if (hasDocumentNoun && asksDocumentCreation) {
+  const explicitlyForbidsArtifact = /(?<!\p{L})(?:değiştirme\p{L}*|degistirme\p{L}*|silme\p{L}*|kaydetme\p{L}*|yazma\p{L}*|oluşturma\p{L}*|olusturma\p{L}*|üretme\p{L}*|uretme\p{L}*)(?!\p{L})/iu.test(text);
+  const asksDocumentCreation = /(?<!\p{L})(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yaz\p{L}{0,8}|tasarla\p{L}*|çıkar\p{L}*|cikar\p{L}*|raporlaştır\p{L}*|raporlastır\p{L}*|raporlastir\p{L}*|kaydet\p{L}*|olarak ver|formatında|formatinda)(?!\p{L})/iu.test(text);
+  if (hasDocumentNoun && asksDocumentCreation && !explicitlyForbidsArtifact) {
     return "docx";
   }
   return null;
