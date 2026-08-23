@@ -10230,6 +10230,18 @@ export async function createTask(
     ...(livenessGuard ? { livenessGuard } : {}),
     metadata: {
       ...payloadMetadata,
+      // Görev kabul edildiği andaki capability/cihaz gerçeğini episode'a
+      // taşı. Bu snapshot yalnız kayıtlı capability adlarını içerir; özel
+      // dosya, prompt veya runtime çıktısı içermez.
+      runtimeCapabilitySnapshot: {
+        platform: targetDevice.device.platform,
+        kind: targetDevice.device.type,
+        online: Boolean(targetDevice.device.isOnline),
+        capabilities: Array.isArray(targetDevice.device.runtime?.capabilities)
+          ? targetDevice.device.runtime.capabilities.slice(0, 128)
+          : [],
+        source: "task_admission",
+      },
       routeDecision,
       turnContract,
       selectedWorkload: turnContract.selectedWorkload,

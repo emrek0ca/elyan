@@ -99,7 +99,7 @@ test("isInternalRoutingSummary keeps genuine assistant answers", () => {
   }
 });
 
-test("syncChatTaskLifecycle ignores non-chat tasks", async () => {
+test("syncChatTaskLifecycle does not publish non-chat task lifecycle", async () => {
   const updates: Array<Record<string, unknown>> = [];
   const app = {
     config: {

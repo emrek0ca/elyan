@@ -34,6 +34,7 @@ export type ContinuousLearningDatasetOptions = {
 };
 
 type RejectionReason =
+  | "scope_not_global_eligible"
   | "privacy_level_not_safe"
   | "expired"
   | "metadata_not_training_eligible"
@@ -198,6 +199,7 @@ export function buildContinuousLearningDatasetCandidate(
   const replayRatio = clampRatio(options.replayRatio ?? 20);
   const validationRatio = Math.max(0.05, Math.min(0.25, options.validationRatio ?? 0.1));
   const rejectedByReason: Record<RejectionReason, number> = {
+    scope_not_global_eligible: 0,
     privacy_level_not_safe: 0,
     expired: 0,
     metadata_not_training_eligible: 0,
@@ -214,6 +216,14 @@ export function buildContinuousLearningDatasetCandidate(
 
   for (const event of [...events].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
     const metadata = readRecord(event.metadata);
+    // User-scoped memories are personal context, never implicit global
+    // training data. A redacted, explicitly approved record may opt in with
+    // metadata.globalTrainingEligible=true; shared events retain the existing
+    // shared-dataset behavior.
+    if (event.scope !== "shared" && readBoolean(metadata, "globalTrainingEligible") !== true) {
+      reject(rejectedByReason, "scope_not_global_eligible");
+      continue;
+    }
     if (event.privacyLevel !== "safe") {
       reject(rejectedByReason, "privacy_level_not_safe");
       continue;

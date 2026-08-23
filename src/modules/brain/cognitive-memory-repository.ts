@@ -10,6 +10,7 @@ import {
 } from "../../db/schema.js";
 import {
   recordTurnMemoryOpsOnDb,
+  canonicalizeMemoryKey,
   type TurnMemoryOpsWriteResult,
 } from "./memory-fabric.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
@@ -20,6 +21,7 @@ import {
 } from "./dialogue-state.js";
 import { recordCognitiveFoundationSignal } from "./cognitive-foundation-policy.js";
 import { invalidateCanonicalMemoryCache } from "./memory-context-cache.js";
+import { redactAgentTrajectoryRecords } from "../tasks/agent-trajectory.js";
 
 const evidenceSchema = z.object({
   type: z.string().trim().min(1).max(64),
@@ -137,6 +139,24 @@ export class CognitiveMemoryRepository {
           .update(learningEvents)
           .set({ privacyLevel: "restricted", expiresAt: now })
           .where(and(eq(learningEvents.userId, input.userId), eq(learningEvents.key, key)));
+
+        // Explicit trajectory forget is additive to the existing memory
+        // tombstone. The learning dataset must stop seeing the episode too;
+        // retaining a row for audit is fine, but it is no longer trainable.
+        const canonicalKey = canonicalizeMemoryKey(key);
+        const trajectoryTaskId = canonicalKey.startsWith("agent_trajectory:")
+          ? canonicalKey.slice("agent_trajectory:".length) || null
+          : canonicalKey === "trajectory"
+            ? input.taskId ?? null
+            : null;
+        if (canonicalKey === "agent_trajectory" || canonicalKey === "trajectory" || trajectoryTaskId) {
+          await redactAgentTrajectoryRecords(db, {
+            userId: input.userId,
+            taskId: trajectoryTaskId,
+            now,
+            reason: "explicit_user_forget",
+          });
+        }
       }
 
       const memory = await recordTurnMemoryOpsOnDb(db, {

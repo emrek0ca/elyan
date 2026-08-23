@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { learningEvents } from "../../db/schema.js";
 import type { OutcomeAssessment } from "./outcome-verdict.js";
+import { agentTrajectoryEpisodeId } from "./agent-trajectory.js";
 
 /**
  * ADIM DÜZEYİ DENEYİM DEFTERİ — öğrenmenin ham maddesi.
@@ -38,6 +39,27 @@ export type StepOutcomeRecord = {
   latencyMs?: number;
 };
 
+function eventSucceeded(event: Record<string, unknown>): boolean {
+  if (typeof event.ok === "boolean") return event.ok;
+  if (typeof event.errorCode === "string" && event.errorCode.trim()) return false;
+  // Legacy desktop/Gemini events may omit `ok` and only carry their output.
+  return event.output !== undefined || event.result !== undefined;
+}
+
+function safeTaskReasons(reasons: string[]): string[] {
+  return reasons
+    .map((reason) => {
+      const normalized = String(reason ?? "").replace(/\s+/gu, " ").trim();
+      if (!normalized) return null;
+      if (/^error:/iu.test(normalized)) return "error_present";
+      return /^[a-z0-9_.-]{2,100}$/iu.test(normalized)
+        ? normalized
+        : "reason_present";
+    })
+    .filter((reason): reason is string => Boolean(reason))
+    .slice(0, 6);
+}
+
 /** Görev sonucundan araç düzeyi olayları çıkar. */
 export function extractStepOutcomes(result: unknown): StepOutcomeRecord[] {
   const record = (result ?? {}) as Record<string, unknown>;
@@ -50,12 +72,17 @@ export function extractStepOutcomes(result: unknown): StepOutcomeRecord[] {
     return [
       {
         tool,
-        ok: event.ok === true,
+        ok: eventSucceeded(event),
         ...(typeof event.errorCode === "string" && event.errorCode
           ? { errorCode: event.errorCode }
           : {}),
         ...(typeof event.verified === "boolean" ? { verified: event.verified } : {}),
         ...(typeof event.attempt === "number" ? { attempt: event.attempt } : {}),
+        ...(typeof event.latencyMs === "number"
+          ? { latencyMs: event.latencyMs }
+          : typeof event.durationMs === "number"
+            ? { latencyMs: event.durationMs }
+            : {}),
       },
     ];
   });
@@ -94,13 +121,49 @@ export async function recordStepOutcomes(
     assessment: OutcomeAssessment;
     result: unknown;
     latencyMs?: number;
+    episodeId?: string;
   },
 ): Promise<number> {
   const steps = extractStepOutcomes(input.result);
   if (steps.length === 0) return 0;
+  // learning_events'in görev anahtarı araç başına tek satırdır. Aynı araç
+  // retry/replan döngüsünde birden fazla çalışmışsa çağrıları tek satırda
+  // topluyoruz; ayrıntılı sıra/attempt bilgisi metadata.calls içinde kalır,
+  // gerçek episode ise bütün tool olaylarını ayrıca saklar.
+  const grouped = new Map<string, Array<{ step: StepOutcomeRecord; sequence: number }>>();
+  steps.forEach((step, sequence) => {
+    const calls = grouped.get(step.tool) ?? [];
+    calls.push({ step, sequence });
+    grouped.set(step.tool, calls);
+  });
+  const aggregated = [...grouped.entries()].map(([tool, calls]) => {
+    const last = calls[calls.length - 1]?.step ?? { tool, ok: false };
+    const verified = calls.some((call) => call.step.verified === true)
+      ? true
+      : calls.every((call) => call.step.verified === false)
+        ? false
+        : last.verified;
+    return {
+      step: {
+        ...last,
+        tool,
+        ok: calls.some((call) => call.step.ok),
+        ...(typeof verified === "boolean" ? { verified } : {}),
+        ...(calls.some((call) => typeof call.step.attempt === "number")
+          ? {
+              attempt: Math.max(
+                ...calls.map((call) => call.step.attempt ?? 1),
+              ),
+            }
+          : {}),
+      },
+      firstSequence: calls[0]?.sequence ?? 0,
+      calls,
+    };
+  });
   try {
-    await app.db.insert(learningEvents).values(
-      steps.map((step, index) => ({
+    const insertedRows = await app.db.insert(learningEvents).values(
+      aggregated.map(({ step, firstSequence, calls }) => ({
         userId: input.userId,
         taskId: input.taskId,
         type: "tool_outcome",
@@ -112,22 +175,34 @@ export async function recordStepOutcomes(
         privacyLevel: "safe" as const,
         metadata: {
           contract: "elyan.tool_outcome.v1",
-          sequence: index,
+          sequence: firstSequence,
+          callCount: calls.length,
+          hadRetryOrReplan: calls.length > 1,
+          calls: calls.map(({ step: call, sequence }) => ({
+            sequence,
+            ok: call.ok,
+            ...(typeof call.verified === "boolean" ? { verified: call.verified } : {}),
+            ...(typeof call.attempt === "number" ? { attempt: call.attempt } : {}),
+            ...(typeof call.latencyMs === "number" ? { latencyMs: call.latencyMs } : {}),
+            ...(call.errorCode ? { errorCode: call.errorCode } : {}),
+          })),
           route: input.route,
           device: input.device,
           intentKind: input.intentKind,
           taskVerdict: input.assessment.verdict,
           ...(input.assessment.reasons.length > 0
-            ? { taskReasons: input.assessment.reasons.slice(0, 6) }
+            ? { taskReasons: safeTaskReasons(input.assessment.reasons) }
             : {}),
           ...(step.errorCode ? { errorCode: step.errorCode } : {}),
           ...(typeof step.verified === "boolean" ? { verified: step.verified } : {}),
           ...(typeof step.attempt === "number" ? { attempt: step.attempt } : {}),
+          ...(typeof step.latencyMs === "number" ? { stepLatencyMs: step.latencyMs } : {}),
+          episodeId: input.episodeId ?? agentTrajectoryEpisodeId(input.taskId),
           ...(typeof input.latencyMs === "number" ? { latencyMs: input.latencyMs } : {}),
         },
       })),
-    );
-    return steps.length;
+    ).onConflictDoNothing().returning({ id: learningEvents.id });
+    return insertedRows.length;
   } catch (error) {
     app.log?.warn?.(
       { err: error instanceof Error ? error.message : String(error) },

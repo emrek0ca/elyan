@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, ne, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { normalizePersonalName } from "./identity-name.js";
 import { authIdentities, learningEvents, subscriptions, users } from "../../db/schema.js";
@@ -1981,6 +1981,8 @@ export async function buildUserContext(
             and(
               eq(learningEvents.userId, input.userId),
               or(isNull(learningEvents.expiresAt), gt(learningEvents.expiresAt, now)),
+              ne(learningEvents.type, "agent_trajectory"),
+              ne(learningEvents.type, "tool_outcome"),
             ),
           )
           .orderBy(desc(learningEvents.createdAt))
@@ -2051,6 +2053,10 @@ export async function buildUserContext(
       }));
 
   const durableFallbackMemory = fallbackRows
+    // Execution telemetry teaches the planner through the trajectory/dataset
+    // pipeline; it is not personal conversational memory and must not be
+    // injected into a user's next prompt.
+    .filter((row) => row.type !== "agent_trajectory" && row.type !== "tool_outcome")
     .map((row) => learningEventToRetrievedMemory(row))
     .filter((row): row is RetrievedMemory => row != null)
     .filter((row) => !isWorldDerivedMemory(row));

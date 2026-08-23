@@ -2,6 +2,10 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { recordRoutingEpisode } from "../routing-policy/episodic-decisions.js";
 import { assessTaskOutcome } from "../tasks/outcome-verdict.js";
 import { recordStepOutcomes } from "../tasks/step-outcome-ledger.js";
+import {
+  agentTrajectoryEpisodeId,
+  recordAgentTrajectory,
+} from "../tasks/agent-trajectory.js";
 import type { FastifyInstance } from "fastify";
 import { chatMessages, chatSessions, tasks } from "../../db/schema.js";
 import type { TaskStatus } from "../../contracts/domain.js";
@@ -742,9 +746,6 @@ export async function syncChatTaskLifecycle(
   const metadata = extractChatMetadata(input.originalTask);
   const sessionId = metadata?.sessionId;
   const assistantMessageId = metadata?.assistantMessageId;
-  if (!sessionId || !assistantMessageId) {
-    return;
-  }
 
   // EPİZODİK KARAR HAFIZASI — biten görev deneyime dönüşsün.
   //
@@ -784,9 +785,10 @@ export async function syncChatTaskLifecycle(
     );
     // ADIM DÜZEYİ DEFTER — "hangi aracı ne zaman kullanmalı" ancak buradan
     // öğrenilebilir. Görev düzeyi epizot bu soruyu cevaplayamaz.
-    void recordStepOutcomes(app, {
+    await recordStepOutcomes(app, {
       userId: input.updatedTask.userId,
       taskId: input.updatedTask.id,
+      episodeId: agentTrajectoryEpisodeId(input.updatedTask.id),
       route: readTaskOperationalRoute(input.updatedTask),
       device: input.updatedTask.targetDeviceId ? "desktop" : "server",
       intentKind: readTaskGoalKind(input.updatedTask),
@@ -799,6 +801,31 @@ export async function syncChatTaskLifecycle(
           : undefined,
     }).catch(() => 0);
 
+    // Modelin amacı, planı, aracı, onayı ve doğrulama kanıtını birlikte
+    // öğrenebilmesi için görev başına tek redakte edilmiş agent episode'u.
+    // `tool_outcome` bundan bağımsız olarak korunur; episodeId ile bağlanır.
+    await recordAgentTrajectory(app, {
+      task: {
+        id: input.updatedTask.id,
+        userId: input.updatedTask.userId,
+        targetDeviceId: input.updatedTask.targetDeviceId,
+        title: input.updatedTask.title,
+        payload: input.updatedTask.payload,
+        result: input.updatedTask.result,
+        approvalRequest: input.updatedTask.approvalRequest,
+        error: input.updatedTask.error,
+        createdAt: input.updatedTask.createdAt,
+        completedAt: input.updatedTask.completedAt,
+      },
+      assessment,
+      result: input.updatedTask.result,
+      latencyMs:
+        input.updatedTask.completedAt && input.updatedTask.createdAt
+          ? new Date(input.updatedTask.completedAt).getTime() -
+            new Date(input.updatedTask.createdAt).getTime()
+          : undefined,
+    }).catch(() => false);
+
     void recordRoutingEpisode(app, {
       userId: input.updatedTask.userId,
       taskId: input.updatedTask.id,
@@ -809,6 +836,13 @@ export async function syncChatTaskLifecycle(
       reasons: assessment.reasons,
       failureReason: input.updatedTask.error ?? null,
     }).catch(() => false);
+  }
+
+  // Öğrenme/trajectory kaydı chat yüzeyine bağlı değildir. Chat metadata'sı
+  // olmayan API/automation görevleri de aynı terminal geçişten öğrenmelidir;
+  // yalnız aşağıdaki görünür chat lifecycle bu noktadan sonra opsiyoneldir.
+  if (!sessionId || !assistantMessageId) {
+    return;
   }
 
   const assistantStatus = mapTaskStatusToChatStatus(input.updatedTask.status);

@@ -292,6 +292,7 @@ test("processBrainWorkerIteration runs continuous learning only behind its flags
             rawEventValuesIncluded: false,
             promptContentIncluded: false,
             rejectedByReason: {
+              scope_not_global_eligible: 0,
               privacy_level_not_safe: 0,
               expired: 0,
               metadata_not_training_eligible: 0,
