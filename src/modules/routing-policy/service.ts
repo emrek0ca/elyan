@@ -55,6 +55,7 @@ import {
   normalizeRuntimeCapabilities,
   preflightRequestedRuntimeCapabilities,
 } from "../runtime/capabilities.js";
+import { DESKTOP_CAPABILITY_MANIFEST } from "../tasks/desktop-capability-manifest.js";
 import {
   buildUnderstandingConsensus,
   type UnderstandingConsensus,
@@ -1649,6 +1650,17 @@ function isArtifactOutputContract(
   );
 }
 
+function approvalCapabilitiesFromRegistry(
+  capabilities: readonly string[],
+): string[] {
+  const approvalCapabilities = new Set(
+    DESKTOP_CAPABILITY_MANIFEST.filter((entry) => entry.requiresApproval).map(
+      (entry) => entry.name,
+    ),
+  );
+  return [...new Set(capabilities.filter((capability) => approvalCapabilities.has(capability)))];
+}
+
 function buildDecision(input: {
   route: CommandRoute;
   targetDeviceId?: string;
@@ -1684,6 +1696,18 @@ function buildDecision(input: {
   const planIntent =
     input.classification.primaryIntent === "planning" &&
     !isArtifactOutputContract(input.outputContract);
+  const registryApprovalCapabilities = approvalCapabilitiesFromRegistry(
+    input.capabilities,
+  );
+  const requiresApproval =
+    input.requiresApproval || registryApprovalCapabilities.length > 0;
+  const taskRoute = input.taskRoute
+    ? {
+        ...input.taskRoute,
+        needsUserApproval:
+          input.taskRoute.needsUserApproval || requiresApproval,
+      }
+    : input.taskRoute;
   const intent = deriveNormalizedIntent({
     primaryIntent: input.primaryIntent,
     route: input.route,
@@ -1696,7 +1720,7 @@ function buildDecision(input: {
   const routedSemanticContract = finalizeSemanticContractForRoute({
     contract: input.semanticContract,
     route: input.route,
-    requiresApproval: input.requiresApproval,
+    requiresApproval,
     capabilities: input.capabilities,
     reason: input.reason,
   });
@@ -1728,18 +1752,18 @@ function buildDecision(input: {
     ...(input.speechAct ? { speechAct: input.speechAct } : {}),
     route: input.route,
     targetDeviceId: input.targetDeviceId,
-    taskRoute: input.taskRoute ?? undefined,
+    taskRoute: taskRoute ?? undefined,
     mode: input.mode,
     capabilities,
     privacyClass: input.privacyClass,
-    requiresApproval: input.requiresApproval,
+    requiresApproval,
     reason: input.reason,
     userFacingMessage: input.userFacingMessage,
     intent,
     confidence: Number(input.confidence.toFixed(2)),
     requiredRuntime: deriveRequiredRuntime({
       route: input.route,
-      taskRoute: input.taskRoute ?? null,
+      taskRoute: taskRoute ?? null,
       requiresLocalRuntime: input.requiresLocalRuntime,
       capabilities: input.capabilities,
     }),

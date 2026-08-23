@@ -1752,6 +1752,21 @@ test("decideCommandRoute honors explicit desktop capabilities from mobile", asyn
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
+test("decideCommandRoute derives close_app approval from the capability manifest", async () => {
+  const app = createDesktopReadyApp(["close_app"]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "close-app-approval-route-user",
+    message: "Music kapat",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+    requestedCapabilities: ["close_app"],
+  });
+
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.requiresApproval, true);
+  assert.equal(decision.taskRoute?.needsUserApproval, true);
+});
+
 test("decideCommandRoute sends explicit runtime tools and skills to the desktop", async () => {
   const requestedCapabilities = [
     "sys_info",

@@ -10144,6 +10144,19 @@ export async function createTask(
           : "backend_task_route",
       })
     : null;
+  if (desktopWorkOrderBase?.requiresApproval === true) {
+    // Direct registry plans (ör. "Music kapat") route capability listesi
+    // boş olsa bile close_app adımını work order materializer'ında keşfeder.
+    // Route metadata'sı ve turn contract aynı registry kararını taşımalı.
+    routeDecision.requiresApproval = true;
+    if (routeDecision.taskRoute) {
+      routeDecision.taskRoute = {
+        ...routeDecision.taskRoute,
+        needsUserApproval: true,
+      };
+    }
+    turnContract.routeDecision.requiresApproval = true;
+  }
   const desktopWorkOrder = desktopWorkOrderBase
     ? {
         ...desktopWorkOrderBase,

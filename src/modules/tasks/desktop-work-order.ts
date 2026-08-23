@@ -107,6 +107,9 @@ export type DesktopWorkOrder = {
   constraints: string[];
   workType?: "data_workflow" | "screen_action" | "mixed" | "decision_support";
   requiredCapabilities: string[];
+  /** Capability registry'den türetilen additive approval snapshot'ı. */
+  requiresApproval?: boolean;
+  approvalCapabilities?: string[];
   capabilityAuthorization?: {
     source: "semantic_router";
     allowPrivateRead: boolean;
@@ -1121,6 +1124,9 @@ function inferCapabilities(
   if (directAppCommand) {
     capabilities.add(directAppCommand.capability);
     capabilities.delete("desktop_operator.run");
+    // "Chrome'u kapat" bir uygulama yaşam döngüsü komutudur; uygulama adı
+    // browser sözlüğünde geçse bile tarayıcı sekmesi/URL adımı istemez.
+    capabilities.delete("browser_control");
   }
   if (directImageFetch) {
     capabilities.add("image_fetch");
@@ -1189,6 +1195,7 @@ function inferCapabilities(
     capabilities.add("text_analyze");
   }
   if (
+    !directAppCommand &&
     unicodeWordPattern(String.raw`\b(browser|chrome|safari|site|url|link|tarayıcı|tarayici)\b`, "i").test(normalized)
     || (/\bweb\b/iu.test(normalized) && !researchRequested)
     || /https?:\/\//i.test(message)
@@ -2134,6 +2141,15 @@ export function buildDesktopWorkOrder(input: {
   for (const step of steps) {
     if (!capabilities.includes(step.capability)) capabilities.push(step.capability);
   }
+  const approvalCapabilities = [
+    ...new Set([...capabilities, ...steps.map((step) => step.capability)]),
+  ].filter(
+    (capability) =>
+      DESKTOP_CAPABILITY_MANIFEST.find((entry) => entry.name === capability)
+        ?.requiresApproval === true,
+  );
+  const requiresApproval =
+    input.routeDecision.requiresApproval === true || approvalCapabilities.length > 0;
   const sourceReference = input.understandingEnvelope?.source_reference ?? "current_prompt";
   const deterministicReadOnlyStep =
     steps.length === 1 &&
@@ -2290,6 +2306,8 @@ export function buildDesktopWorkOrder(input: {
     constraints,
     workType,
     requiredCapabilities: capabilities,
+    requiresApproval,
+    approvalCapabilities,
     capabilityAuthorization: {
       source: "semantic_router",
       allowPrivateRead: Boolean(

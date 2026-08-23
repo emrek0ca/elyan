@@ -327,6 +327,9 @@ export function buildTaskExecutionContract(input: {
     ...toolSelection.selectedTools
       .filter((tool) => knownCapability(tool.id)?.requiresApproval === true)
       .map((tool) => tool.id),
+    ...(workOrder?.approvalCapabilities ?? []).filter(
+      (capability) => knownCapability(capability)?.requiresApproval === true,
+    ),
     ...(workOrder?.capabilityAuthorization?.sideEffectsRequireApproval ? ["side_effect"] : []),
   ], 32);
   const selectedWorkload: SharedBrainWorkload | string = input.turnContract.selectedWorkload;
@@ -358,7 +361,10 @@ export function buildTaskExecutionContract(input: {
       ),
     },
     approval: {
-      required: input.routeDecision.requiresApproval || approvalScope.length > 0,
+      required:
+        input.routeDecision.requiresApproval === true ||
+        workOrder?.requiresApproval === true ||
+        approvalScope.length > 0,
       scope: approvalScope,
       separateApprovalFor: approvalScope,
       ttlSeconds: 900,

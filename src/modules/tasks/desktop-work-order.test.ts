@@ -420,6 +420,8 @@ test("direct desktop app commands support terse Turkish and skip generic plannin
   assert.ok(closeStep);
   assert.equal(closeStep.args.app_name, "Chrome");
   assert.equal(workOrder.planPreview.steps.some((step) => step.capability === "desktop_operator.run"), false);
+  assert.equal(workOrder.requiresApproval, true);
+  assert.deepEqual(workOrder.approvalCapabilities, ["close_app"]);
   assert.equal(workOrder.planPreview.planSource, "deterministic_registry");
   assert.equal(workOrder.planPreview.contract, "elyan.compiled_plan.v1");
   assert.deepEqual(workOrder.planPreview.planPreparation?.status, "ready");

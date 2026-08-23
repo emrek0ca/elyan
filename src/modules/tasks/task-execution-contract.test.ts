@@ -224,6 +224,8 @@ test("materialized work order refreshes the canonical contract steps and tools",
   };
   const synced = syncTaskExecutionContractWithWorkOrder({ contract, workOrder });
   assert.ok(synced);
+  assert.equal(contract.approval.required, true);
+  assert.equal(contract.approval.scope.includes("close_app"), true);
   assert.equal(synced.execution.steps[0]?.capability, "close_app");
   assert.equal(synced.execution.steps[0]?.device, "desktop");
   assert.deepEqual(synced.execution.steps[0]?.args, { app_name: "Google Chrome" });
