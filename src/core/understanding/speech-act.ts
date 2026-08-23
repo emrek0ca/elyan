@@ -87,6 +87,29 @@ const SPEECH_ACT_EXEMPLARS: Record<SpeechAct, string[]> = {
     "şu dosyayı masaüstüne kaydet",
     "bu klasörü çöp kutusuna at",
     "pazartesi için hatırlatma ekle",
+    // UZUN VE ÇOK FİİLLİ İSTEKLER — ölçümle eklendi (2026-08-23).
+    //
+    // Ölçüm, kök nedenin eksik örnek değil YAPISAL olduğunu gösterdi: tüm
+    // örnekler 2-5 kelimeydi, gerçek istekler ise uzun ve çok cümlecikli.
+    // Uzun bir cümle HİÇBİR kısa örneğe yakın değil ve sıralama gürültüye
+    // dönüyordu. Kanıt — 100 karakterlik gerçek istek:
+    //   statement 0.8529 ← "teşekkürler"     (kazandı!)
+    //   question  0.8481 ← "nasıl eklerim"
+    //   command   0.8409 ← "masaüstünde klasör oluştur"
+    // Yani "testleri çalıştır, başarısızları bul ve özet çıkar" isteği
+    // "teşekkürler"e eşleşiyordu ve yürütme kapısı kapanıyordu.
+    //
+    // Ayrıca teknik sözcük dağarcığı sınıfı ele geçiriyordu: "testleri
+    // çalıştır" → "what does the terminal do" (soru) kazanıyordu. Teknik
+    // kelimeli KOMUT örnekleri o dengeyi kuruyor.
+    "projede testleri çalıştır ve sonucu özetle",
+    "şu klasördeki dosyaları tarayıp bir liste çıkar",
+    "terminalden bağımlılıkları kur ve çıktıyı bana ver",
+    "kod tabanında hatayı bul ve düzelt",
+    "bilgisayarımdaki raporları toplayıp tek dosyada birleştir",
+    "tarayıcıyı aç, sayfayı bul ve linki kopyala",
+    "logları incele, hataları ayıkla ve kısa bir özet hazırla",
+    "run the tests and summarize the failures",
     "play a song",
     "close the browser",
     "create a folder",
@@ -126,6 +149,8 @@ const SPEECH_ACT_EXEMPLARS: Record<SpeechAct, string[]> = {
     "dosya taşımanın yolu nedir",
     "tarayıcı geçmişi nerede tutulur",
     "not defterinin kısayolu nedir",
+    "bir projede testleri çalıştırmanın en pratik yolu nedir",
+    "bilgisayarımdaki dosyaları düzenlemek için ne önerirsin",
     "what does the terminal do",
     "how do I take a screenshot",
     "what is this",
@@ -140,6 +165,10 @@ const SPEECH_ACT_EXEMPLARS: Record<SpeechAct, string[]> = {
     "anladım",
     "fena değil",
     "dün toplantı iyi geçti",
+    // Uzun örnek DENGE içindir: yalnız komut sınıfına uzun cümle eklersek bu
+    // sefer her uzun girdi komut sayılır. Her sınıfın uzun temsilcisi olmalı.
+    "bugün işler yoğundu ama sonunda hepsini bitirdim sayılır",
+    "geçen hafta aldığım karar galiba doğruymuş, işler yoluna girdi",
     "hello",
     "thanks",
     "I am tired today",
