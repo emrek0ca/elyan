@@ -24,6 +24,8 @@ export type DesktopCapabilityManifestEntry = {
   utterances: string[];
   notFor: string[];
   privacyClass: string;
+  sideEffect: boolean;
+  mutatesPath: boolean;
   skillAffinity: string[];
 };
 
@@ -119,6 +121,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "bana hatırlat"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -206,6 +210,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "hatırlatıcılarımı göster"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -285,6 +291,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "klasördeki dosyaları listele"
     ],
     "privacyClass": "local_private_screen",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -348,7 +356,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "browser automation"
     ],
     "notFor": [],
-    "privacyClass": "permission_gated",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -455,6 +465,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "sadece web araştırması raporu yaz"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -513,7 +525,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "kabul et butonuna bas"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -563,6 +577,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "chrome'u kapat"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -624,7 +640,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "dosyayı siteden indir"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -684,6 +702,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -737,7 +757,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "aynı sayfada kalarak bu adrese geç"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -788,6 +810,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -853,7 +877,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "forma bu metni gir ve enter'a bas"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -983,6 +1009,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": [
       "document.pdf_report",
       "canvas.visual_report"
@@ -1084,6 +1112,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "veriyi analiz et yorumla"
     ],
     "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -1135,6 +1165,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1189,6 +1221,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1264,6 +1298,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "ayarlardaki bildirimleri kapat"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1332,6 +1368,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1399,6 +1437,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1463,6 +1503,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "unutmayayım, şunu hatırlat"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1520,7 +1562,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "yaptığın işlemi iptal et"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_session_control",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1620,6 +1664,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1675,6 +1721,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1738,6 +1786,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_screen",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1799,6 +1849,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_screen",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1900,6 +1952,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "uygulamayı kapat"
     ],
     "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1946,6 +2000,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -1997,6 +2053,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2043,6 +2101,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2098,6 +2158,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2143,6 +2205,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2199,7 +2263,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "sessize al"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2267,6 +2333,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "dosya içeriğinde metin ara"
     ],
     "privacyClass": "local_private_read",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2347,6 +2415,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "sayfadan dosya indir"
     ],
     "privacyClass": "local_private_read",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2477,6 +2547,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "excel tablosu oluştur"
     ],
     "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": [
       "document.docx_from_context",
       "document.summary_and_save"
@@ -2563,6 +2635,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "maili şimdi gönder"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2649,6 +2723,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "mail nasıl atılır"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2753,6 +2829,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "dosya içeriğini oku"
     ],
     "privacyClass": "local_private_read",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -2821,6 +2899,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -2889,7 +2969,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "dosyadaki bu ifadeyi şununla değiştir"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -2968,6 +3050,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "dosyaya yaz"
     ],
     "privacyClass": "local_private_read",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3056,6 +3140,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "dosyanın içeriğini oku"
     ],
     "privacyClass": "local_private_read",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3133,6 +3219,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "klasör oluştur"
     ],
     "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -3202,6 +3290,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "etkinliği sil"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3267,6 +3357,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "bana anımsat"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3324,6 +3416,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3382,6 +3476,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3443,7 +3539,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "dal oluştur ve ona geç"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3508,7 +3606,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "git durumuna bak",
       "commit nedir açıkla"
     ],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3567,6 +3667,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3622,6 +3724,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "değişiklikleri commit'le"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -3733,6 +3837,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "external_model_optional",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -3802,6 +3908,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "çizim yap"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -3926,6 +4034,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "bu görselde ne yazıyor"
     ],
     "privacyClass": "external_model_optional",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -3994,6 +4104,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_read",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4056,6 +4168,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4114,6 +4228,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "klasör yapısını göster"
     ],
     "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -4195,6 +4311,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "grafiğini çiz"
     ],
     "privacyClass": "local_safe_compute",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": [
       "math.solve"
     ]
@@ -4262,6 +4380,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4329,6 +4449,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "uygulamayı kapat"
     ],
     "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": []
   },
   {
@@ -4396,6 +4518,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_read",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4473,6 +4597,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "bu adresi aç"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4548,6 +4674,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "müzik uygulaması nasıl kullanılır"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4646,6 +4774,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": [
       "presentation.deck_from_context"
     ]
@@ -4702,6 +4832,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4760,6 +4892,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4818,6 +4952,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4880,6 +5016,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -4946,6 +5084,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5010,6 +5150,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "yeteneklerini anlat"
     ],
     "privacyClass": "local_private_mixed",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5087,6 +5229,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "numarayı kişi olarak kaydet"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5155,6 +5299,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "hakkımda bir bilgi kaydet"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5231,6 +5377,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "e-posta gönder"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5311,6 +5459,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "komut çalıştırmadan anlat"
     ],
     "privacyClass": "permission_gated",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5368,6 +5518,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "terminali kapat"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5428,6 +5580,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5498,7 +5652,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "açık oturumda şu komutu çalıştır"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5557,6 +5713,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5620,6 +5778,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5727,6 +5887,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "tabloyu oku ve analiz et"
     ],
     "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
     "skillAffinity": [
       "spreadsheet.table_from_context"
     ]
@@ -5795,6 +5957,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "açık uygulamaları listele"
     ],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5858,6 +6022,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_or_server_context",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -5924,6 +6090,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "local_runtime",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   },
   {
@@ -6007,6 +6175,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "internete bakma kendi bilginle cevapla"
     ],
     "privacyClass": "public_web",
+    "sideEffect": false,
+    "mutatesPath": false,
     "skillAffinity": []
   }
 ];

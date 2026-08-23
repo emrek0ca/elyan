@@ -56,6 +56,13 @@ test("the local action set stays small and manifest-derived", () => {
   assert.ok(names.includes("play_media"));
   // Manifest büyüdükçe küme de büyür; ama bu küme "her masaüstü yeteneği"
   // olmamalı — öyle olursa yönlendirme kanıtı anlamını yitirir.
-  assert.ok(names.length >= 8 && names.length <= 24, `beklenmedik boyut: ${names.length}`);
+  //
+  // SINIR ÖLÇÜYLE YÜKSELTİLDİ (24 → 32). Sınıflandırma denetimi torbada
+  // duran 8 gerçek makine eylemini ortaya çıkardı (browser_session.*,
+  // desktop_os.volume, git_commit, git_branch, shell_session_run) ve küme
+  // 19 → 27 oldu. Sınırın koruduğu şey sayı değil ANLAM: 27/84 hâlâ üçte
+  // bir ve sunucunun da yapabildiği hiçbir iş içeride değil (aşağıdaki
+  // negatif test onu tutuyor).
+  assert.ok(names.length >= 8 && names.length <= 32, `beklenmedik boyut: ${names.length}`);
   assert.equal(names.includes("get_weather"), false);
 });

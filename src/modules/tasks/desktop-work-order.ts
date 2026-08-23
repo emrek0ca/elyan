@@ -2314,21 +2314,30 @@ export function buildDesktopWorkOrder(input: {
         )
         .map(([, value]) => ({
           root: explicitResourceRoot(String(value)),
-          privacyClass: DESKTOP_CAPABILITY_MANIFEST.find(
+          // YAZMA-LIK BEYANDAN OKUNUR, SINIF ADINDAN TAHMİN EDİLMEZ.
+          //
+          // Eskiden ölçüt `privacyClass.includes("_write")` idi. Diske
+          // yazan `make_directory`, `file_move`, `move_to_trash`
+          // `local_private_action` sınıfında oldukları için OKUMA kökü
+          // sayılıyorlardı; yolları yazma kapsamına hiç girmiyordu ve
+          // varsayılan köklerin (`~/Desktop`, `~/Documents`, `~/Downloads`)
+          // dışındaki bir hedef doğrulayıcıda reddediliyordu. Sınıf adının
+          // içinde alt dize aramak bir kapı değildir.
+          mutatesPath: DESKTOP_CAPABILITY_MANIFEST.find(
             (entry) => entry.name === step.capability,
-          )?.privacyClass,
+          )?.mutatesPath === true,
         })),
   ).filter(
     (
       item,
-    ): item is { root: string; privacyClass: string | undefined } =>
+    ): item is { root: string; mutatesPath: boolean } =>
       Boolean(item.root),
   );
   const stepReadRoots = stepRoots
-    .filter((item) => item.privacyClass?.includes("_write") !== true)
+    .filter((item) => !item.mutatesPath)
     .map((item) => item.root);
   const stepWriteRoots = stepRoots
-    .filter((item) => item.privacyClass?.includes("_write") === true)
+    .filter((item) => item.mutatesPath)
     .map((item) => item.root);
   const desktopOutputRequested = (
     executionEnvelope?.desired_outputs ?? []
