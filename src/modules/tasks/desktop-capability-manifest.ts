@@ -1244,17 +1244,20 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "close_app",
     "displayName": "Uygulama kapatma",
-    "description": "Çalışan bir masaüstü uygulamasını kapatır.",
-    "usage": "Kullanıcı bir uygulamayı KAPATMAK istediğinde — tarayıcılar (Chrome/Safari/Brave/Edge) dahil. 'Chrome'u kapat' isteği BUDUR; browser_control kapatma yapamaz.",
+    "description": "Açık uygulamayı kapatır.",
+    "usage": "Kullanıcı bir uygulamayı kapatmak istediğinde.",
     "requiredArgs": [
       "app_name"
     ],
     "requiresApproval": true,
     "whenToUse": [
-      "Kullanıcı bir uygulamayı KAPATMAK istediğinde — tarayıcılar (Chrome/Safari/Brave/Edge) dahil. 'Chrome'u kapat' isteği BUDUR; browser_control kapatma yapamaz."
+      "chrome'u kapat",
+      "terminali kapat",
+      "şu uygulamadan çık"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (app_name) are missing or ambiguous."
+      "Kaydedilmemiş iş olabilecek durumlarda önce kullanıcıya sor.",
+      "Terminal OTURUMUNU bırakmak için shell_session_close kullan."
     ],
     "inputContract": {
       "required": [
@@ -1262,30 +1265,27 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "app_name": {
-          "type": "STRING",
-          "description": "Kapatılacak uygulamanın tam adı, eksiz: 'Google Chrome', 'Spotify'."
+          "type": "STRING"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "appNameMustBeConcrete": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "close_app",
-      "requiresOk": true
+      "kind": "close_app",
+      "primary": "closed_app"
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported.",
-      "Permission or approval must be verified before the side effect runs."
+      "The app must no longer be running afterwards."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Uygulama kapatılıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "APP_NOT_RUNNING",
+      "PERMISSION_REQUIRED",
+      "CLOSE_REFUSED"
     ],
     "fewShots": [
       {
@@ -2883,10 +2883,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "requiresApproval": false,
     "whenToUse": [
-      "İndirilen dosyaları kullanıcının istediği klasöre toplamak."
+      "bu dosyayı şu klasöre taşı",
+      "indirilenlerdeki dosyayı masaüstüne al",
+      "üretilen dosyayı hedef klasöre yerleştir"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (source, destination) are missing or ambiguous."
+      "Silmek için move_to_trash kullan; taşımak silmek değildir.",
+      "Kopya isteniyorsa taşıma yanlış: kaynak yerinde kalmalıysa bu yetenek uygun değil."
     ],
     "inputContract": {
       "required": [
@@ -2907,27 +2910,36 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "description": "Hedef varsa üzerine yaz (varsayılan hayır)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "sourceMustExist": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "file_move",
-      "requiresOk": true
+      "kind": "file_move",
+      "primary": "moved_path"
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "Destination must exist after the step.",
+      "Source must no longer exist at the old path."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Dosya taşınıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "SOURCE_MISSING",
+      "DESTINATION_EXISTS",
+      "PERMISSION_REQUIRED",
+      "RESOURCE_SCOPE"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "user": "indirilenlerdeki raporu masaüstüne taşı",
+        "args": {
+          "source": "~/Downloads/rapor.pdf",
+          "destination": "~/Desktop"
+        }
+      }
+    ],
     "utterances": [
       "bu dosyayı masaüstüne taşı",
       "dosyanın adını rapor_final yap",
@@ -2946,18 +2958,21 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "file_patch",
     "displayName": "Dosya düzenleme",
-    "description": "Var olan bir dosyada çıpalı bul/değiştir uygular (old_string → new_string).",
-    "usage": "Bir dosyanın küçük bir bölümünü değiştirmek için. Tüm dosyayı yeniden yazmak için file_write.",
+    "description": "Var olan dosyanın içeriğini hedefli biçimde değiştirir; dosyanın tamamını yeniden yazmaz.",
+    "usage": "Kod/metin dosyasında bir bölümü düzeltmek için. Dosyayı sıfırdan üretmek gerekiyorsa file_write kullan.",
     "requiredArgs": [
       "path",
       "old_string"
     ],
     "requiresApproval": false,
     "whenToUse": [
-      "Bir dosyanın küçük bir bölümünü değiştirmek için. Tüm dosyayı yeniden yazmak için file_write."
+      "şu satırı düzelt",
+      "testte kırılan yeri yamala",
+      "dosyadaki değeri güncelle"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (path, old_string) are missing or ambiguous."
+      "Dosya yoksa file_write kullan; yama var olan içeriği varsayar.",
+      "Tüm içerik değişecekse yama yerine file_write daha okunur."
     ],
     "inputContract": {
       "required": [
@@ -2966,8 +2981,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "path": {
-          "type": "STRING",
-          "description": "Düzenlenecek dosyanın tam yolu."
+          "type": "STRING"
         },
         "old_string": {
           "type": "STRING",
@@ -2982,25 +2996,24 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "description": "Tüm eşleşmeleri değiştir."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "pathMustExist": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "file_patch",
-      "requiresOk": true
+      "kind": "file_patch",
+      "primary": "patched_path"
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "File must exist and its hash must differ from the pre-execution state."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Dosya güncelleniyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "FILE_MISSING",
+      "PATCH_DID_NOT_APPLY",
+      "PERMISSION_REQUIRED"
     ],
     "fewShots": [],
     "utterances": [
@@ -4239,10 +4252,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "requiresApproval": false,
     "whenToUse": [
-      "İndirilen/üretilen dosyaları toplamadan önce hedef klasörü hazırlamak veya kullanıcının istediği klasörü açmak."
+      "masaüstünde klasör oluştur",
+      "dosyaları toplamadan önce hedef klasörü hazırla"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (path) are missing or ambiguous."
+      "Dosya YAZMAK istiyorsan file_write zaten üst klasörü açar; ayrı adım gereksiz.",
+      "Var olan bir klasörü taşımak için file_move kullan."
     ],
     "inputContract": {
       "required": [
@@ -4254,27 +4269,33 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "description": "Oluşturulacak klasör yolu (ör. ~/Desktop/youtube-transkript)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "pathMustBeConcrete": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "make_directory",
-      "requiresOk": true
+      "kind": "make_directory",
+      "primary": "directory_state"
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "Directory must exist on disk after the step."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Klasör hazırlanıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "PERMISSION_REQUIRED",
+      "PATH_INVALID",
+      "RESOURCE_SCOPE"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "user": "masaüstüne rapor adında klasör aç",
+        "args": {
+          "path": "~/Desktop/rapor"
+        }
+      }
+    ],
     "utterances": [
       "Masaüstünde Cabir adında klasör oluştur",
       "yeni bir klasör aç adı Arşiv olsun",
@@ -4454,10 +4475,15 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "requiresApproval": false,
     "whenToUse": [
-      "Kullanıcı bir dosyayı/klasörü silmek istediğinde. Kalıcı silme yok; hedef Çöp Kutusu'na taşınır."
+      "bu klasörü sil",
+      "şu dosyayı sil",
+      "az önce oluşturduğun klasörü kaldır",
+      "masaüstündeki dosyayı çöpe at"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (path) are missing or ambiguous."
+      "Hafızadan/hatırlatıcıdan bir kaydı unutmak isteniyorsa delete_memory kullan; bu yetenek DOSYA sistemine dokunur.",
+      "Takvim etkinliği silinecekse delete_calendar_event kullan.",
+      "Dosya başka yere gidecekse silme değil taşıma: file_move."
     ],
     "inputContract": {
       "required": [
@@ -4469,27 +4495,36 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
           "description": "Silinecek dosya ya da klasör yolu (ör. ~/Desktop/poke)."
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "pathMustExist": true,
+      "pathMustNotBeSystemRoot": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "move_to_trash",
-      "requiresOk": true
+      "kind": "move_to_trash",
+      "primary": "trashed_path",
+      "recoverable": true
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "Source path must be gone afterwards.",
+      "The item must be present in Trash: 'deleted' must also mean 'recoverable'."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Çöp Kutusu'na taşınıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "PATH_MISSING",
+      "PROTECTED_ROOT",
+      "PERMISSION_REQUIRED"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "user": "masaüstündeki poke klasörünü sil",
+        "args": {
+          "path": "~/Desktop/poke"
+        }
+      }
+    ],
     "utterances": [
       "o klasörü sil",
       "bu dosyayı sil",
@@ -4587,17 +4622,20 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "open_app",
     "displayName": "Uygulama açma",
-    "description": "Yerel bir masaüstü uygulamasını açar (Safari, Chrome, Notlar, Spotify…).",
-    "usage": "Kullanıcı bir uygulamayı açmak istediğinde. URL/arama için browser_control, medya için play_media kullan.",
+    "description": "Yerel uygulamayı açar ve öne getirir.",
+    "usage": "Kullanıcı bir uygulamayı açmak/öne getirmek istediğinde. Uygulama içinde iş yapılacaksa önce bunu çağır, sonra desktop_operator ile devam et.",
     "requiredArgs": [
       "app_name"
     ],
     "requiresApproval": true,
     "whenToUse": [
-      "Kullanıcı bir uygulamayı açmak istediğinde. URL/arama için browser_control, medya için play_media kullan."
+      "spotify aç",
+      "terminali aç",
+      "şu uygulamayı öne getir"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (app_name) are missing or ambiguous."
+      "Bir web adresi açılacaksa browser_control daha doğrudur.",
+      "Kalıcı kabuk oturumu isteniyorsa shell_session_open kullan; Terminal penceresi açmak aynı şey değildir."
     ],
     "inputContract": {
       "required": [
@@ -4605,30 +4643,27 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "app_name": {
-          "type": "STRING",
-          "description": "Uygulamanın TAM adı, eksiz: 'Google Chrome', 'Safari', 'Notes'. Türkçe ekleri ('Chrome'u') çıkar."
+          "type": "STRING"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "appNameMustBeConcrete": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "open_app",
-      "requiresOk": true
+      "kind": "open_app",
+      "primary": "foreground_app"
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported.",
-      "Permission or approval must be verified before the side effect runs."
+      "The app must actually be frontmost afterwards; a launch attempt alone is not success."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Uygulama açılıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "APP_NOT_FOUND",
+      "PERMISSION_REQUIRED",
+      "LAUNCH_FAILED"
     ],
     "fewShots": [
       {
@@ -5458,17 +5493,21 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "shell_run",
     "displayName": "Terminal komutu",
-    "description": "Yerel terminal komutu çalıştırır (güçlü — açık onay gerekir).",
-    "usage": "Yalnız başka yetenek yokken. Dosya işlemleri için file_* , git için git_* yeteneklerini tercih et.",
+    "description": "Tek seferlik terminal komutu çalıştırır; her çağrı YENİ süreçtir, dizin ve ortam sonraki çağrıya taşınmaz.",
+    "usage": "TEK ve bağımsız bir komut için: sürüm sor, tek script çalıştır, tek build tetikle. Ardışık komutlar gerekiyorsa shell_session_open ile oturum aç.",
     "requiredArgs": [
       "command"
     ],
     "requiresApproval": true,
     "whenToUse": [
-      "Yalnız başka yetenek yokken. Dosya işlemleri için file_* , git için git_* yeteneklerini tercih et."
+      "node --version gibi tek seferlik sorgu",
+      "tek bir script'i çalıştır",
+      "başka bir yetenekle yapılamayan tek komut"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (command) are missing or ambiguous."
+      "Ardışık komutlar gerekiyorsa (cd → kur → test) shell_session_* kullan: shell_run her çağrıda dizini ve ortamı UNUTUR.",
+      "Dosya okuma/yazma/taşıma için file_* yetenekleri daha güvenli ve doğrulanabilir.",
+      "Git işlemleri için git_* yetenekleri kullan."
     ],
     "inputContract": {
       "required": [
@@ -5476,52 +5515,65 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "command": {
-          "type": "STRING",
-          "description": "Çalıştırılacak tam komut. Yıkıcı/geri alınamaz komutlardan kaçın."
+          "type": "STRING"
         },
         "mode": {
-          "type": "STRING",
-          "description": "Yürütme modu (varsa)."
+          "type": "STRING"
         },
         "timeout": {
-          "type": "NUMBER",
-          "description": "Saniye cinsinden zaman aşımı."
+          "type": "NUMBER"
         },
         "use_shell": {
-          "type": "BOOLEAN",
-          "description": "Kabuk (shell) üzerinden çalıştır."
+          "type": "BOOLEAN"
         },
         "working_dir": {
-          "type": "STRING",
-          "description": "Çalışma dizini."
+          "type": "STRING"
         },
         "riskOverride": {
-          "type": "STRING",
-          "description": "Risk onayı geçişi (yalnız gerekli olduğunda)."
+          "type": "STRING"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "commandMustBeConcrete": true,
+      "workingDirRecommendedForProjectWork": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "shell_run",
-      "requiresOk": true
+      "kind": "shell_run",
+      "primary": "command_result",
+      "fields": [
+        "stdout",
+        "stderr",
+        "exitCode"
+      ]
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported.",
-      "Permission or approval must be verified before the side effect runs."
+      "Exit code must be read; non-zero is a failure even when stdout is non-empty."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Komut çalıştırılıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
+      "PERMISSION_REQUIRED",
+      "COMMAND_NOT_FOUND",
+      "NON_ZERO_EXIT",
       "TIMEOUT"
     ],
-    "fewShots": [],
+    "fewShots": [
+      {
+        "user": "python sürümü kaç",
+        "args": {
+          "command": "python3 --version"
+        }
+      },
+      {
+        "user": "şu klasörde build al",
+        "args": {
+          "command": "npm run build",
+          "working_dir": "~/Desktop/proje"
+        }
+      }
+    ],
     "utterances": [
       "npm install çalıştır",
       "şu komutu terminalde koştur",
@@ -5541,17 +5593,18 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "shell_session_close",
     "displayName": "Terminal oturumu kapatma",
-    "description": "Terminal oturumunu kapatır.",
-    "usage": "İş bitince oturumu serbest bırak.",
+    "description": "Terminal oturumunu kapatır ve kaynakları serbest bırakır.",
+    "usage": "Çok adımlı iş bitince oturumu kapat. Terminal UYGULAMASINI kapatmaz.",
     "requiredArgs": [
       "session_id"
     ],
     "requiresApproval": false,
     "whenToUse": [
-      "İş bitince oturumu serbest bırak."
+      "iş bitti, oturumu serbest bırak"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (session_id) are missing or ambiguous."
+      "Kullanıcı 'terminali kapat' derken görünür uygulamayı kastediyorsa close_app kullan.",
+      "Aynı işte hâlâ komut çalıştıracaksan oturumu kapatma."
     ],
     "inputContract": {
       "required": [
@@ -5559,29 +5612,24 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "session_id": {
-          "type": "STRING",
-          "description": "Kapatılacak oturum kimliği."
+          "type": "STRING"
         }
       },
       "additionalProperties": false
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "shell_session_close",
-      "requiresOk": true
+      "kind": "shell_session_close",
+      "primary": "closed"
     },
     "artifactContract": {},
     "verificationPlan": [
       "Structured result must return ok=true before success is reported."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Terminal oturumu kapatılıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "UNKNOWN_SESSION"
     ],
     "fewShots": [],
     "utterances": [
@@ -5592,7 +5640,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "Terminal uygulamasını kapat",
       "terminali kapat"
     ],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_session_control",
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
@@ -5601,47 +5649,50 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "shell_session_open",
     "displayName": "Terminal oturumu açma",
-    "description": "Kalıcı terminal oturumu açar; çalışma dizini ve ortam sonraki komutlarda korunur.",
-    "usage": "Çok adımlı yazılım işleri için (derle/test/düzelt döngüsü). Tek komut yetiyorsa shell_run kullan.",
+    "description": "Kalıcı terminal oturumu açar; çalışma dizini, ortam değişkenleri ve kabuk durumu sonraki komutlarda KORUNUR.",
+    "usage": "Çok adımlı yazılım işinin İLK adımı: derle/test/düzelt döngüsü, sanal ortam kurup içinde çalışma, arka arkaya komut. Dönen sessionId sonraki adımlara verilir.",
     "requiredArgs": [],
     "requiresApproval": false,
     "whenToUse": [
-      "Çok adımlı yazılım işleri için (derle/test/düzelt döngüsü). Tek komut yetiyorsa shell_run kullan."
+      "projede testleri çalıştırıp hatayı düzelt",
+      "bağımlılıkları kur sonra derle",
+      "arka arkaya birkaç komut gerekiyor"
     ],
     "whenNotToUse": [
-      "Do not use when this capability does not directly advance the requested outcome."
+      "Tek bir komut yetiyorsa shell_run daha ucuz — oturum açma/kapatma yükü gereksizdir.",
+      "Terminal UYGULAMASINI açmak istiyorsan open_app kullan; bu yetenek görünür bir pencere açmaz."
     ],
     "inputContract": {
       "required": [],
       "properties": {
         "working_dir": {
-          "type": "STRING",
-          "description": "Başlangıç çalışma dizini."
+          "type": "STRING"
         },
         "root": {
-          "type": "STRING",
-          "description": "İzin verilen kök dizin (dışına cd engellenir)."
+          "type": "STRING"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "workingDirRecommended": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "shell_session_open",
-      "requiresOk": true
+      "kind": "shell_session_open",
+      "primary": "session_id",
+      "fields": [
+        "sessionId",
+        "workingDir"
+      ]
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "Returned sessionId must be passed to every following shell_session_run step."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Terminal oturumu açılıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
-      "TIMEOUT"
+      "SESSION_LIMIT_REACHED",
+      "WORKING_DIR_MISSING"
     ],
     "fewShots": [
       {
@@ -5655,27 +5706,30 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "çalışma dizini korunsun bir kabuk başlat"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_read",
     "sideEffect": false,
     "mutatesPath": false,
-    "sideEffectClass": "none",
+    "sideEffectClass": "read",
     "skillAffinity": []
   },
   {
     "name": "shell_session_run",
     "displayName": "Terminal oturumunda komut",
-    "description": "Açık terminal oturumunda komut çalıştırır; cwd/ortam korunur, çıktı ve exit kodu döner.",
-    "usage": "Testi çalıştır, çıktıyı oku, düzelt, tekrar çalıştır döngüsü için.",
+    "description": "Açık oturumda komut çalıştırır; dizin ve ortam korunur, çıkış kodu ve çıktı döner.",
+    "usage": "Aynı oturumda ardışık komutlar: cd ile konumlan, kur, çalıştır, çıktıyı oku, düzelt, tekrar çalıştır. sessionId shell_session_open'dan gelir.",
     "requiredArgs": [
       "session_id",
       "command"
     ],
     "requiresApproval": false,
     "whenToUse": [
-      "Testi çalıştır, çıktıyı oku, düzelt, tekrar çalıştır döngüsü için."
+      "testi çalıştır ve çıktısını oku",
+      "önceki adımda girdiğim dizinde devam et",
+      "hatayı düzelttim, tekrar çalıştır"
     ],
     "whenNotToUse": [
-      "Do not use when required inputs (session_id, command) are missing or ambiguous."
+      "Oturum yoksa önce shell_session_open çağır; sessionId uydurma.",
+      "Tek seferlik bağımsız komut için shell_run yeterli."
     ],
     "inputContract": {
       "required": [
@@ -5684,43 +5738,48 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "session_id": {
-          "type": "STRING",
-          "description": "shell_session_open'dan dönen oturum kimliği."
+          "type": "STRING"
         },
         "command": {
-          "type": "STRING",
-          "description": "Çalıştırılacak komut."
+          "type": "STRING"
         },
         "timeout": {
-          "type": "NUMBER",
-          "description": "Saniye cinsinden zaman aşımı."
+          "type": "NUMBER"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "sessionIdMustComeFromOpenStep": true
     },
     "outputContract": {
-      "kind": "structured_result",
-      "capability": "shell_session_run",
-      "requiresOk": true
+      "kind": "shell_session_run",
+      "primary": "command_result",
+      "fields": [
+        "stdout",
+        "stderr",
+        "exitCode",
+        "workingDir"
+      ]
     },
     "artifactContract": {},
     "verificationPlan": [
-      "Structured result must return ok=true before success is reported."
+      "Exit code must be read before claiming success.",
+      "Failing output must be shown, not summarised away."
     ],
     "liveNarration": [
-      "Capability is running.",
-      "Result is being verified."
+      "Oturumda komut çalıştırılıyor"
     ],
     "failureModes": [
-      "INVALID_INPUT",
-      "DEPENDENCY_UNAVAILABLE",
+      "PERMISSION_REQUIRED",
+      "UNKNOWN_SESSION",
+      "NON_ZERO_EXIT",
       "TIMEOUT"
     ],
     "fewShots": [
       {
+        "user": "testleri çalıştır",
         "args": {
-          "session_id": "sh_x",
-          "command": "python -m pytest -q"
+          "session_id": "<open adımından gelen>",
+          "command": "pytest -q"
         }
       }
     ],
