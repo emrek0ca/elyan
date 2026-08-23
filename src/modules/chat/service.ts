@@ -2884,6 +2884,7 @@ async function createChatMessageInner(
       idempotencyKey: input.idempotencyKey,
       ephemeralVision: input.ephemeralVision,
       preResolvedChatFast: routeDecision.route === "server_brain",
+      trustedRouteDecision: routeDecision,
       onTaskReady: async ({ task, reused }) => {
         if (routeDecision.route === "server_brain") {
           // The fast chat path publishes exactly once after createTask returns.

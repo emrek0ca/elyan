@@ -567,8 +567,8 @@ const LOCAL_FILE_BENIGN_SAVE_PATTERNS = [
   /\b(kaydet|save|gönder|gonder|indir|export|dışa aktar|disa aktar)\b.*\b(masaüstü|masaustu|desktop|bilgisayar|downloads?|indirilenler)\b/i,
 ];
 const DESKTOP_APP_ACTION_PATTERNS = [
-  /(?<!\p{L})(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme)(?!\p{L}).*(?<!\p{L})(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)(?!\p{L})/iu,
-  /(?<!\p{L})(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)(?!\p{L}).*(?<!\p{L})(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|uygulama|app|pencere|window|tab|sekme)(?!\p{L})/iu,
+  /(?<!\p{L})(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|spotify|music|müzik|apple\s+music|itunes|vlc|uygulama|app|pencere|window|tab|sekme)(?!\p{L}).*(?<!\p{L})(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)(?!\p{L})/iu,
+  /(?<!\p{L})(aç|ac|open|başlat|baslat|launch|kapat|close|quit|tıkla|tikla|click|yaz|type|git|navigate)(?!\p{L}).*(?<!\p{L})(chrome|safari|firefox|browser|tarayıcı|tarayici|finder|terminal|spotify|music|müzik|apple\s+music|itunes|vlc|uygulama|app|pencere|window|tab|sekme)(?!\p{L})/iu,
 ];
 const DESKTOP_SCREEN_GLANCE_PATTERNS = [
   /(?<!\p{L})(?:ekranda|ekranımda|ekranimda|screen(?:imde|de)?|masaüstünde|masaustunde)\s+(?:ne\s+(?:var|görünüyor|gorunuyor|açık|acik)|neler\s+(?:var|görünüyor|gorunuyor)|ne\s+yazıyor|ne\s+yaziyor)(?!\p{L})/iu,
@@ -1032,6 +1032,60 @@ function normalizeSemanticCapabilityName(value: string): string {
     .replace(/[\s.-]+/g, "_");
 }
 
+const AGENT_CAPABILITY_ALIASES: Readonly<Record<string, string>> = {
+  filesystem_read: "file_read",
+  filesystem_write: "file_write",
+  process_list: "sys_info",
+  screen_read: "analyze_screen",
+  computer_control: "desktop_operator.run",
+  browser_automation: "browser_control",
+};
+
+const AGENT_CAPABILITY_BY_KEY = new Map(
+  DESKTOP_CAPABILITY_MANIFEST.map((entry) => [
+    normalizeSemanticCapabilityName(entry.name),
+    entry.name,
+  ]),
+);
+
+function normalizeAgentCapability(value: unknown): string | null {
+  const key = normalizeSemanticCapabilityName(String(value ?? ""));
+  if (!key) return null;
+  const alias = AGENT_CAPABILITY_ALIASES[key];
+  if (alias) return alias;
+  return AGENT_CAPABILITY_BY_KEY.get(key) ?? null;
+}
+
+function agentCapabilityListIsKnown(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => normalizeAgentCapability(item) !== null)
+  );
+}
+
+function agentStepListIsKnown(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => {
+      const record = readRecord(item);
+      return record !== null && normalizeAgentCapability(record.capability) !== null;
+    })
+  );
+}
+
+function redactAgentText(value: unknown, maxLength: number): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[redacted_email]")
+    .replace(/(?:~\/|\/(?:Users|home|private|tmp|var|Volumes)\/|[A-Z]:\\)[^\s"'`()<>]+/giu, "[redacted_path]")
+    .replace(
+      /\b(token|password|passwd|secret|api[_-]?key)\s*[:=]\s*[^\s,;]+/giu,
+      (_match, key: string) => `${key}=[redacted]`,
+    )
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .slice(0, maxLength);
+}
+
 function uniqueSemanticCapabilities(values: string[]): string[] {
   return [
     ...new Set(
@@ -1143,9 +1197,24 @@ function shouldOverrideModelServerRouteForDesktop(input: {
   classification?: IntentClassification;
   hasLiveDesktopRuntime?: boolean;
 }): boolean {
-  // A valid model route is authoritative. Deterministic signals are only a
-  // degraded path when the model produced no route at all.
-  if (input.modelTaskRoute) return false;
+  const typedLocalSafetySignal =
+    input.classification?.requiresLocalRuntime === true ||
+    (input.hasLiveDesktopRuntime === true &&
+      hasConcreteDesktopFallbackSignal(input.message, input.metadata));
+  // A valid model route is authoritative for ordinary turns, but it cannot
+  // downgrade a typed local-runtime/privacy requirement into shared chat. This
+  // is a safety boundary, not a regex route override.
+  if (
+    input.modelTaskRoute &&
+    !(
+      input.modelTaskRoute.operationalRoute === "server_brain" &&
+      input.hasLiveDesktopRuntime === true &&
+      typedLocalSafetySignal &&
+      !isDesktopAdviceOnlyRequest(input.message)
+    )
+  ) {
+    return false;
+  }
 
   // ROTA MODELİ YOKSA "fikri yok" demektir, "sunucu dedi" değil.
   //
@@ -1175,7 +1244,7 @@ function shouldOverrideModelServerRouteForDesktop(input: {
   // diyorken onun "sohbet" kararı bağlayıcı olmamalı.
   if (
     input.hasLiveDesktopRuntime === true &&
-    input.classification?.requiresLocalRuntime === true
+    typedLocalSafetySignal
   ) {
     return true;
   }
@@ -2142,6 +2211,17 @@ function boundedStringList(value: unknown, maxItems: number): string[] {
   ).slice(0, maxItems);
 }
 
+function boundedAgentCapabilityList(value: unknown, maxItems: number): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .map((item) => normalizeAgentCapability(item))
+        .filter((item): item is string => Boolean(item)),
+    ),
+  ].slice(0, maxItems);
+}
+
 function parseSemanticDesktopContract(
   value: unknown,
 ): SemanticDesktopDispatchContract | null {
@@ -2167,12 +2247,12 @@ function parseSemanticDesktopContract(
   ) {
     return null;
   }
-  const requiredSemanticCapabilities = boundedStringList(
+  const requiredSemanticCapabilities = boundedAgentCapabilityList(
     record.requiredSemanticCapabilities,
     16,
   );
-  const requiredLocalContext = boundedStringList(record.requiredLocalContext, 12);
-  const evidence = boundedStringList(record.evidence, 8);
+  const requiredLocalContext = boundedAgentTextList(record.requiredLocalContext, 12);
+  const evidence = boundedAgentTextList(record.evidence, 8);
   if (requiredSemanticCapabilities.length === 0) return null;
   return {
     contract: "elyan.semantic_desktop_dispatch.v1",
@@ -2195,7 +2275,7 @@ function boundedAgentTextList(value: unknown, maxItems: number): string[] {
   return [
     ...new Set(
       value
-        .map((item) => String(item ?? "").trim())
+        .map((item) => redactAgentText(item, 160))
         .filter(
           (item) =>
             item.length > 0 &&
@@ -2207,7 +2287,7 @@ function boundedAgentTextList(value: unknown, maxItems: number): string[] {
 }
 
 function boundedAgentIntent(value: unknown, fallback: string): string {
-  const intent = typeof value === "string" ? value.trim() : "";
+  const intent = typeof value === "string" ? redactAgentText(value, 80) : "";
   if (!intent || intent.length > 80 || /[\u0000-\u001f\u007f]/.test(intent)) {
     return fallback;
   }
@@ -2221,8 +2301,17 @@ function safeAgentStepList(value: unknown): ExecutionStep[] {
   // paths, message bodies, or credentials into route metadata.
   return normalizeExecutionSteps(value)
     .slice(0, 16)
-    .map(({ input: _input, dependsOn, ...step }) =>
-      dependsOn && dependsOn.length > 0 ? { ...step, dependsOn } : step,
+    .flatMap(({ input: _input, dependsOn, ...step }) => {
+      const capability = normalizeAgentCapability(step.capability);
+      if (!capability) return [];
+      return [
+        {
+          ...step,
+          capability,
+          ...(dependsOn && dependsOn.length > 0 ? { dependsOn } : {}),
+        },
+      ];
+    },
     );
 }
 
@@ -2283,9 +2372,10 @@ function parseSemanticAgentRouteDecision(
             ? ["execution_result_verified"]
             : ["response_generated"],
       },
-      requiredCapabilities: uniqueSemanticCapabilities(
+      requiredCapabilities: boundedAgentCapabilityList(
         requiredCapabilitiesFallback,
-      ).slice(0, 16),
+        16,
+      ),
       steps: fallbackSteps,
       verification: {
         required: input.operationalRoute === "desktop_runtime",
@@ -2329,6 +2419,16 @@ function parseSemanticAgentRouteDecision(
     return null;
   }
 
+  // The model may reference only the exported desktop registry (or a bounded
+  // semantic alias). Unknown names are rejected before route authority is
+  // persisted; they cannot become executable capabilities downstream.
+  if (
+    !agentCapabilityListIsKnown(raw.requiredCapabilities) ||
+    !agentStepListIsKnown(raw.steps)
+  ) {
+    return null;
+  }
+
   const intent = boundedAgentIntent(raw.intent, "");
   if (!intent) return null;
   return {
@@ -2341,9 +2441,10 @@ function parseSemanticAgentRouteDecision(
       objectiveHash: objectiveHashForRoute(input.message),
       successCriteria: boundedAgentTextList(goalContract.successCriteria, 8),
     },
-    requiredCapabilities: uniqueSemanticCapabilities(
-      raw.requiredCapabilities.map((item) => String(item ?? "")),
-    ).slice(0, 16),
+      requiredCapabilities: boundedAgentCapabilityList(
+        raw.requiredCapabilities,
+        16,
+      ),
     steps: safeAgentStepList(raw.steps),
     verification: {
       required: verification.required,
@@ -2544,7 +2645,9 @@ function parseTaskRouteFallbackResponse(
         )
       : [];
     const reason =
-      typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+      typeof parsed.reason === "string"
+        ? redactAgentText(parsed.reason, 240)
+        : "";
     if (
       typeof parsed.needsDesktop !== "boolean" ||
       typeof parsed.needsPrivateDesktopData !== "boolean" ||
@@ -2765,7 +2868,10 @@ async function resolveTaskRouteFromModel(
         ? { route: validatedRoute, fallbackAllowed: false, failure: null }
         : {
             route: null,
-            fallbackAllowed: false,
+            // A malformed model response is a model failure, not an
+            // authoritative server-chat decision. Let the typed deterministic
+            // safety gates recover explicit local work or fail closed.
+            fallbackAllowed: true,
             failure: "invalid_response",
           };
     } catch {
@@ -2803,7 +2909,7 @@ async function resolveTaskRouteFromModel(
   if (!parsed) {
     return {
       route: null,
-      fallbackAllowed: false,
+      fallbackAllowed: true,
       failure: "invalid_response",
     };
   }
@@ -2811,7 +2917,7 @@ async function resolveTaskRouteFromModel(
   if (parsed.needsDesktop && parsed.operationalRoute !== "desktop_runtime") {
     return {
       route: null,
-      fallbackAllowed: false,
+      fallbackAllowed: true,
       failure: "invalid_response",
     };
   }
@@ -2819,7 +2925,7 @@ async function resolveTaskRouteFromModel(
   if (!parsed.needsDesktop && parsed.operationalRoute === "desktop_runtime") {
     return {
       route: null,
-      fallbackAllowed: false,
+      fallbackAllowed: true,
       failure: "invalid_response",
     };
   }
@@ -2830,7 +2936,7 @@ async function resolveTaskRouteFromModel(
   ) {
     return {
       route: null,
-      fallbackAllowed: false,
+      fallbackAllowed: true,
       failure: "invalid_response",
     };
   }
@@ -3352,7 +3458,11 @@ export async function decideCommandRoute(
   let liveDesktopTarget: Awaited<
     ReturnType<typeof getDefaultDesktopTaskTarget>
   > = null;
-  if (!hasLiveDesktopRuntime && classification.requiresLocalRuntime === true) {
+  const concreteDesktopTurn = hasConcreteDesktopFallbackSignal(message, metadata);
+  if (
+    !hasLiveDesktopRuntime &&
+    (classification.requiresLocalRuntime === true || concreteDesktopTurn)
+  ) {
     try {
       liveDesktopTarget = await getDefaultDesktopTaskTarget(app, input.userId, []);
       hasLiveDesktopRuntime = Boolean(liveDesktopTarget);
@@ -3503,18 +3613,29 @@ export async function decideCommandRoute(
     classification,
     hasLiveDesktopRuntime,
   });
+  // A valid model route remains authoritative except at this typed safety
+  // boundary: a live desktop request must not be downgraded to shared chat.
+  // This flag is intentionally narrower than the deterministic fallback flag;
+  // it never lets ordinary lexical evidence rewrite a valid model decision.
+  const modelSafetyDesktopOverride =
+    modelServerDesktopOverride &&
+    modelTaskRoute?.operationalRoute === "server_brain" &&
+    (classification.requiresLocalRuntime === true ||
+      hasConcreteDesktopFallbackSignal(message, metadata)) &&
+    hasLiveDesktopRuntime &&
+    !isDesktopAdviceOnlyRequest(message);
   const modelNoDesktopRouteOverride =
     deterministicFallbackAllowed &&
     modelRouteOutcome?.failure === "no_desktop_route" &&
     !isDesktopAdviceOnlyRequest(message) &&
     hasConcreteDesktopFallbackSignal(message, metadata);
   const desktopSemanticOverride =
-    deterministicFallbackAllowed &&
-    (modelServerDesktopOverride || modelNoDesktopRouteOverride);
-  // A valid structured model decision owns the surface. These deterministic
-  // signals are allowed only when no decision exists or the model failed
-  // technically, so regex/classifier evidence cannot rewrite a valid
-  // server_brain answer into a desktop task.
+    modelSafetyDesktopOverride ||
+    (deterministicFallbackAllowed &&
+      (modelServerDesktopOverride || modelNoDesktopRouteOverride));
+  // A valid structured model decision owns the surface. The only exception is
+  // the typed local-runtime safety boundary above; other deterministic
+  // signals remain a degraded path for model absence/technical failure.
   const fallbackScreenGlanceRequested =
     deterministicFallbackAllowed &&
     hasDesktopScreenGlanceSignal(message, metadata);
@@ -3530,7 +3651,7 @@ export async function decideCommandRoute(
     fallbackScreenGlanceRequested ||
     fallbackDesktopActionRequested ||
     fallbackQuantumExecutionRequested;
-  const requestedCapabilities = failClosedDesktopFallback
+  const baseRequestedCapabilities = failClosedDesktopFallback
     ? effectiveRequestedCapabilities(explicitRequestedCapabilities, {
         screenGlanceRequested: fallbackScreenGlanceRequested,
         quantumExecutionRequested: fallbackQuantumExecutionRequested,
@@ -3540,7 +3661,7 @@ export async function decideCommandRoute(
   // capability names are untrusted free-form output and must not make a ready
   // desktop look incompatible. The catalog-grounded materializer selects tools
   // after routing; only explicit system/client capabilities gate admission.
-  const explicitRuntimeCapabilityRequested = requestedCapabilities.some(
+  const explicitRuntimeCapabilityRequested = baseRequestedCapabilities.some(
     (capability) =>
       isDesktopOnlyCapability(capability) ||
       capability.startsWith("mcp_") ||
@@ -3603,7 +3724,7 @@ export async function decideCommandRoute(
   // ("terminal ne işe yarar" → shell_run). Kaçırma zararsız, yanlış yürütme
   // değil — bu yüzden muhafazakâr sürüm seçildi.
   const localExecutionDecision =
-    deterministicFallbackAllowed &&
+    (deterministicFallbackAllowed || modelSafetyDesktopOverride) &&
     hasLiveDesktopRuntime &&
     !desktopDispatchDisabled &&
     !isDesktopAdviceOnlyRequest(message)
@@ -3638,8 +3759,34 @@ export async function decideCommandRoute(
         }
       : undefined;
 
+  // Model capabilities are admitted only after semantic parsing has checked
+  // them against the exported registry. For a server->desktop safety repair,
+  // use those names plus the deterministic local-execution gate's capability;
+  // never accept arbitrary model text as an executable tool.
+  const requestedCapabilities = [
+    ...new Set([
+      ...baseRequestedCapabilities,
+      ...(modelSafetyDesktopOverride
+        ? modelTaskRoute?.requiredCapabilities ?? []
+        : []),
+      ...(modelSafetyDesktopOverride && localExecutionDecision?.capability
+        ? [localExecutionDecision.capability]
+        : []),
+    ]),
+  ];
+  const effectiveDesktopExecutionSteps = modelSafetyDesktopOverride
+    ? undefined
+    : modelTaskRoute?.executionSteps;
+  const effectiveDesktopSemanticDecision = modelSafetyDesktopOverride
+    ? undefined
+    : modelTaskRoute?.semanticDecision;
+  const effectiveSemanticDesktopContract = modelSafetyDesktopOverride
+    ? undefined
+    : modelTaskRoute?.semanticDesktopContract;
+
   const userWantsDesktop =
     modelRequiresDesktop ||
+    modelSafetyDesktopOverride ||
     failClosedDesktopFallback ||
     classifierRequiresReadyDesktop ||
     validatedLocalExecutionRequest ||
@@ -3650,6 +3797,7 @@ export async function decideCommandRoute(
     const needsPrivateDesktopData =
       runtimeMcpRequested ||
       modelTaskRoute?.needsPrivateDesktopData === true ||
+      modelSafetyDesktopOverride ||
       fallbackDesktopActionRequested ||
       fallbackScreenGlanceRequested ||
       requestedCapabilities.some((capability) =>
@@ -3664,16 +3812,19 @@ export async function decideCommandRoute(
       );
     const routeReason = runtimeMcpRequested
       ? "Kullanıcı bağlı uzak MCP hesabındaki veriyi açıkça istedi."
+      : modelSafetyDesktopOverride
+        ? "Model sohbet rotası seçti; ancak tipli istek gerçek masaüstü yürütmesi gerektirdiği için güvenli masaüstü rotasına alındı."
       : failClosedDesktopFallback
         ? "Semantik route modeli karar üretemedi; açık yerel yürütme sinyali güvenli biçimde masaüstüne bağlandı."
         : (modelTaskRoute?.reason ??
           "Semantik route modeli bu isteğin gerçek masaüstü yürütmesi gerektirdiğini belirledi.");
     const routeNeedsApproval =
       modelTaskRoute?.needsUserApproval === true ||
-      modelTaskRoute?.semanticDecision?.requiresConfirmation === true ||
+      effectiveDesktopSemanticDecision?.requiresConfirmation === true ||
+      (modelSafetyDesktopOverride && hasDesktopWriteSideEffectSignal(message)) ||
       (failClosedDesktopFallback && hasDesktopWriteSideEffectSignal(message));
     const semanticDesktopContract =
-      modelTaskRoute?.semanticDesktopContract ??
+      effectiveSemanticDesktopContract ??
       buildFallbackSemanticDesktopContract({
         message,
         capabilities: requestedCapabilities,
@@ -3683,7 +3834,7 @@ export async function decideCommandRoute(
         fallback: failClosedDesktopFallback,
         confidence: classification.confidence,
         evidence: [
-          modelTaskRoute?.reason ?? routeReason,
+          modelSafetyDesktopOverride ? routeReason : modelTaskRoute?.reason ?? routeReason,
           ...(failClosedDesktopFallback
             ? [
           `deterministic fail-closed fallback: ${
@@ -3710,9 +3861,9 @@ export async function decideCommandRoute(
           needsPrivateDesktopData,
           needsUserApproval: routeNeedsApproval,
           requiredCapabilities: requestedCapabilities,
-          executionSteps: modelTaskRoute?.executionSteps,
+          executionSteps: effectiveDesktopExecutionSteps,
           semanticDesktopContract,
-          semanticDecision: modelTaskRoute?.semanticDecision,
+          semanticDecision: effectiveDesktopSemanticDecision,
         }),
         mode: "executable_task",
         capabilities: requestedCapabilities,
@@ -3750,9 +3901,9 @@ export async function decideCommandRoute(
         needsPrivateDesktopData,
         needsUserApproval: routeNeedsApproval,
         requiredCapabilities: requestedCapabilities,
-        executionSteps: modelTaskRoute?.executionSteps,
+        executionSteps: effectiveDesktopExecutionSteps,
         semanticDesktopContract,
-        semanticDecision: modelTaskRoute?.semanticDecision,
+        semanticDecision: effectiveDesktopSemanticDecision,
       });
       return buildDecision({
         route: "desktop_runtime",
@@ -3790,9 +3941,9 @@ export async function decideCommandRoute(
         needsPrivateDesktopData,
         needsUserApproval: routeNeedsApproval,
         requiredCapabilities: requestedCapabilities,
-        executionSteps: modelTaskRoute?.executionSteps,
+        executionSteps: effectiveDesktopExecutionSteps,
         semanticDesktopContract,
-        semanticDecision: modelTaskRoute?.semanticDecision,
+        semanticDecision: effectiveDesktopSemanticDecision,
       }),
       mode: "executable_task",
       capabilities: requestedCapabilities,

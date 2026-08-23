@@ -10,6 +10,7 @@ import {
   tasks,
 } from "../../db/schema.js";
 import { createTask } from "../tasks/service.js";
+import type { CommandRouteDecision } from "../routing-policy/service.js";
 import { DIGEST_KIND, readProactivePolicy } from "./proactive-engine.js";
 import { recordProactiveEvent } from "./proactive-metrics.js";
 
@@ -333,21 +334,23 @@ export async function collectNightWatchCandidates(
  * decide would mean a model gets to choose, at 03:00 with nobody watching,
  * whether this task needs approval.
  */
-function buildNightWatchRouteDecision(capabilities: string[]) {
+function buildNightWatchRouteDecision(
+  capabilities: string[],
+): CommandRouteDecision {
   return {
-    route: "desktop_task",
-    mode: "task",
+    route: "desktop_runtime",
+    mode: "executable_task",
     capabilities,
-    privacyClass: "private_desktop",
+    privacyClass: "local_private",
     requiresApproval: false,
     reason: "night_watch_read_only",
-    intent: "desktop_task",
+    intent: "desktop_cowork",
     confidence: 1,
     requiredRuntime: "desktop",
     privacyLevel: "medium",
     shouldAskClarification: false,
     failClosedReason: null,
-    selectedWorkload: "desktop_task",
+    selectedWorkload: "desktop_handoff",
     taskRoute: {
       target: "desktop_runtime",
       operationalRoute: "desktop_runtime",
@@ -525,6 +528,7 @@ async function dispatchNightWatchJob(
       },
       requestedCapabilities: input.capabilities,
       requestedCapabilitiesResolved: true,
+      trustedRouteDecision: buildNightWatchRouteDecision(input.capabilities),
       requestId: randomUUID(),
       idempotencyKey: `night_watch:${input.jobId}`,
     });

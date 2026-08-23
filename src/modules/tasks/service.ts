@@ -5986,6 +5986,7 @@ async function completeServerBrainTask(
   const persistedTurnContract =
     readCommandTurnContract(readRecord(basePayloadMetadata.routeDecision)?.turnContract) ??
     readCommandTurnContract(basePayloadMetadata.turnContract);
+  const effectiveTurnContract = input.turnContract ?? persistedTurnContract;
   const payloadMetadata =
     (input.sessionArtifacts && input.sessionArtifacts.length > 0) ||
     input.lastVisualArtifact
@@ -6582,6 +6583,43 @@ async function completeServerBrainTask(
       hasVisualDataBlock,
     fallbackUsed: input.fallbackUsed ?? false,
   });
+  const localTaskWithoutExecutionEvidence =
+    input.route === "shared_brain" &&
+    effectiveTurnContract?.intentClassification.requiresLocalRuntime === true &&
+    (input.toolFlow?.count ?? 0) === 0 &&
+    !(
+      Boolean(generatedImageArtifact) ||
+      artifactPipeline.kind === "rendered" ||
+      hasVisualDataBlock
+    );
+  if (localTaskWithoutExecutionEvidence) {
+    const gateUnavailable = actionClaimDecision.reason === "semantics_unavailable";
+    app.log?.warn?.(
+      {
+        gate: "local_execution_evidence",
+        outcome: "blocked",
+        taskId: input.taskId,
+        reason: gateUnavailable
+          ? "action_claim_semantics_unavailable"
+          : "no_tool_or_artifact_evidence",
+      },
+      "local task completion blocked without execution evidence",
+    );
+    throw new AppError(
+      gateUnavailable ? 503 : 502,
+      gateUnavailable
+        ? "action_claim_gate_unavailable"
+        : "local_task_without_execution_evidence",
+      gateUnavailable
+        ? "Yerel görevin doğrulama kapısı hazır değil; görev tamamlanmadı."
+        : "Yerel görev için yürütme kanıtı oluşmadı; görev tamamlanmadı.",
+      {
+        transient: gateUnavailable,
+        retrySuggested: gateUnavailable,
+        failureClass: gateUnavailable ? "unavailable" : "invalid_output",
+      },
+    );
+  }
   if (actionClaimDecision.fabricated) {
     throw new AppError(
       502,
@@ -9777,6 +9815,12 @@ export async function createTask(
      * discovery on the HTTP acceptance path.
      */
     preResolvedChatFast?: boolean;
+    /**
+     * Server-internal callers may pass a route already resolved by the
+     * control-plane. Never hydrate this from client payload metadata: that
+     * metadata is informational and can be forged by mobile/HTTP callers.
+     */
+    trustedRouteDecision?: CommandRouteDecision;
     onTaskReady?: TaskReadyCallback;
   },
 ) {
@@ -9837,7 +9881,7 @@ export async function createTask(
     effectiveRequestedCapabilities.includes("mcp_call_tool");
   const extractedRouteDecision = interventionContext
     ? null
-    : extractRouteDecision(input.payload);
+    : input.trustedRouteDecision ?? null;
   const extractedRouteIsStale = isRemoteMcpRouteDecisionStale(
     extractedRouteDecision,
     effectiveRequestedCapabilities,

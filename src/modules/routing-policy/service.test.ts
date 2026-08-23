@@ -2001,7 +2001,7 @@ test("decideCommandRoute keeps desktop-word advice on server when model says no 
   assert.equal(decision.requiredRuntime, "server");
 });
 
-test("decideCommandRoute keeps a valid server model route authoritative over desktop heuristics", async () => {
+test("decideCommandRoute repairs a valid server model route at the typed local safety boundary", async () => {
   const app = createDesktopReadyApp(["browser_control"]);
   Object.assign(app.services, {
     commandRouteModel: {
@@ -2025,15 +2025,12 @@ test("decideCommandRoute keeps a valid server model route authoritative over des
     metadata: { desktopDispatch: true },
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.targetDeviceId, undefined);
-  assert.equal(
-    decision.taskRoute?.semanticDecision?.source,
-    "legacy_route_compat",
-  );
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.semanticDecision, undefined);
 });
 
-test("decideCommandRoute does not let regex override a structured server model decision", async () => {
+test("decideCommandRoute repairs a structured server verdict for an explicit local action", async () => {
   const app = createDesktopReadyApp(["close_app"]);
   Object.assign(app.services, {
     commandRouteModel: {
@@ -2074,10 +2071,9 @@ test("decideCommandRoute does not let regex override a structured server model d
     metadata: { desktopDispatch: true },
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.targetDeviceId, undefined);
-  assert.equal(decision.taskRoute?.semanticDecision?.contract, "elyan.agent_route_decision.v1");
-  assert.equal(decision.taskRoute?.semanticDecision?.confidence, 0.96);
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.targetDeviceId, "desktop-1");
+  assert.equal(decision.taskRoute?.semanticDecision, undefined);
 });
 
 test("decideCommandRoute carries a structured desktop plan and approval decision", async () => {
@@ -2432,7 +2428,7 @@ test("decideCommandRoute still skips the route model when no desktop runtime is 
   assert.equal(consulted, 0);
 });
 
-test("decideCommandRoute keeps the model server route when classifier needs local runtime", async () => {
+test("decideCommandRoute repairs the model server route when classifier needs local runtime", async () => {
   const app = createDesktopReadyApp(["make_directory", "file_write"]);
   Object.assign(app.services, {
     realtimeHub: {
@@ -2460,8 +2456,8 @@ test("decideCommandRoute keeps the model server route when classifier needs loca
     source: "mobile",
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
 test("decideCommandRoute keeps a plain chat turn on the server brain even with a live desktop", async () => {
@@ -2503,7 +2499,7 @@ test("decideCommandRoute routes to desktop when the route model cannot decide bu
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
-test("decideCommandRoute keeps an explicit server_brain model verdict authoritative", async () => {
+test("decideCommandRoute does not let an explicit server verdict suppress a local task", async () => {
   const app = createDesktopReadyApp();
   Object.assign(app.services, {
     commandRouteModel: {
@@ -2527,8 +2523,8 @@ test("decideCommandRoute keeps an explicit server_brain model verdict authoritat
     source: "mobile",
   });
 
-  assert.equal(decision.route, "server_brain");
-  assert.equal(decision.taskRoute?.needsDesktop, false);
+  assert.equal(decision.route, "desktop_runtime");
+  assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
 // ---------------------------------------------------------------------------

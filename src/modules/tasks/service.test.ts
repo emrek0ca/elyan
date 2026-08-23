@@ -1123,6 +1123,34 @@ test("createTask materializes pairing-required chat tasks without dispatching to
       },
     },
     requestedCapabilities: [],
+    // Payload route metadata is intentionally untrusted. This test models the
+    // internal control-plane caller that already resolved the pairing gate.
+    trustedRouteDecision: {
+      route: "pairing_required",
+      mode: "mixed_task",
+      capabilities: ["web_research", "email_draft", "email_send"],
+      privacyClass: "side_effect",
+      requiresApproval: true,
+      reason: "Yerel runtime gerekli ama bağlı ve yetenekli bir masaüstü bulunamadı.",
+      userFacingMessage: "Bu görev için önce bir masaüstü eşleştirmen gerekiyor.",
+      intent: "unsupported_request",
+      confidence: 1,
+      requiredRuntime: "desktop",
+      privacyLevel: "high",
+      shouldAskClarification: false,
+      failClosedReason: "desktop_runtime_unavailable",
+      selectedWorkload: "desktop_handoff",
+      taskRoute: {
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "Yerel runtime gerekli ama bağlı ve yetenekli bir masaüstü bulunamadı.",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: true,
+        requiredCapabilities: ["web_research", "email_draft", "email_send"],
+      },
+    } satisfies CommandRouteDecision,
     requestId: "req-1",
   });
 
