@@ -467,9 +467,30 @@ const ORCHESTRATION_CAPABILITIES = new Set([
  * Elle tutulan `DESKTOP_ONLY_CAPABILITIES` listesi ayrı bir amaca hizmet eder
  * ve olduğu gibi durur; bu küme yalnız YÖNLENDİRME KANITI içindir.
  */
+/**
+ * "Yalnız kullanıcının GERÇEK makinesinde yapılabilen eylem" kümesi.
+ *
+ * ÖLÇÜLEN ARIZA (2026-08-23, görev d83da1f2 "O klasörü sil geri"): küme
+ * yalnız `permission_gated && requiresApproval` ile türetiliyordu ve sonuç 14
+ * yetenekti — içinde TEK BİR dosya işlemi yoktu. `make_directory`, `file_move`,
+ * `move_to_trash` sınıfsız oldukları için `local_runtime` torbasına düşüyor,
+ * kapı da onları görmüyordu. Yani bu kapı yapısal olarak HİÇBİR dosya/klasör
+ * işine "yerel yürüt" diyemiyordu.
+ *
+ * `local_runtime`'ın tamamını eklemek yanlış olurdu: o torbada `get_weather`,
+ * `data_analyze`, `email_draft` gibi sunucunun da yapabildiği 46 iş var.
+ * `local_private_action` ise tam bu anlamı taşıyor — kullanıcının makinesinde
+ * gerçek bir durumu değiştiren, sunucu eşdeğeri olmayan işler.
+ */
+const LOCAL_ACTION_PRIVACY_CLASSES: ReadonlySet<string> = new Set([
+  "local_private_action",
+]);
+
 const LOCAL_ACTION_CAPABILITIES: ReadonlySet<string> = new Set(
   DESKTOP_CAPABILITY_MANIFEST.filter(
-    (entry) => entry.privacyClass === "permission_gated" && entry.requiresApproval,
+    (entry) =>
+      (entry.privacyClass === "permission_gated" && entry.requiresApproval) ||
+      LOCAL_ACTION_PRIVACY_CLASSES.has(String(entry.privacyClass ?? "")),
   ).map((entry) => entry.name),
 );
 

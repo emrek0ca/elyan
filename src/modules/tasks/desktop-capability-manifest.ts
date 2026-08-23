@@ -1455,7 +1455,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "hakkımdaki şu kaydı sil",
       "o bilgiyi hafızandan çıkar"
     ],
-    "notFor": [],
+    "notFor": [
+      "o klasörü sil",
+      "bu dosyayı sil",
+      "masaüstündeki klasörü sil",
+      "şunu çöpe at",
+      "unutmayayım, şunu hatırlat"
+    ],
     "privacyClass": "local_runtime",
     "skillAffinity": []
   },
@@ -2814,7 +2820,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "rename file"
     ],
     "notFor": [],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
     "skillAffinity": []
   },
   {
@@ -4107,7 +4113,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "klasördeki dosyaları listele",
       "klasör yapısını göster"
     ],
-    "privacyClass": "local_runtime",
+    "privacyClass": "local_private_action",
     "skillAffinity": []
   },
   {
@@ -4256,6 +4262,73 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "notFor": [],
     "privacyClass": "permission_gated",
+    "skillAffinity": []
+  },
+  {
+    "name": "move_to_trash",
+    "displayName": "Çöp Kutusu'na taşıma",
+    "description": "Dosyayı/klasörü Çöp Kutusu'na taşır (geri alınabilir; kalıcı silme değil).",
+    "usage": "Kullanıcı bir dosyayı/klasörü silmek istediğinde. Kalıcı silme yok; hedef Çöp Kutusu'na taşınır.",
+    "requiredArgs": [
+      "path"
+    ],
+    "requiresApproval": false,
+    "whenToUse": [
+      "Kullanıcı bir dosyayı/klasörü silmek istediğinde. Kalıcı silme yok; hedef Çöp Kutusu'na taşınır."
+    ],
+    "whenNotToUse": [
+      "Do not use when required inputs (path) are missing or ambiguous."
+    ],
+    "inputContract": {
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Silinecek dosya ya da klasör yolu (ör. ~/Desktop/poke)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputContract": {
+      "kind": "structured_result",
+      "capability": "move_to_trash",
+      "requiresOk": true
+    },
+    "artifactContract": {},
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported."
+    ],
+    "liveNarration": [
+      "Capability is running.",
+      "Result is being verified."
+    ],
+    "failureModes": [
+      "INVALID_INPUT",
+      "DEPENDENCY_UNAVAILABLE",
+      "TIMEOUT"
+    ],
+    "fewShots": [],
+    "utterances": [
+      "o klasörü sil",
+      "bu dosyayı sil",
+      "masaüstündeki poke klasörünü sil",
+      "şunu çöpe at",
+      "dosyayı çöp kutusuna taşı",
+      "klasörü kaldır",
+      "bu dosyadan kurtul",
+      "delete this file",
+      "move to trash",
+      "remove that folder"
+    ],
+    "notFor": [
+      "hakkımdaki kaydı sil",
+      "o bilgiyi hafızandan çıkar",
+      "sohbet geçmişini temizle",
+      "uygulamayı kapat"
+    ],
+    "privacyClass": "local_private_action",
     "skillAffinity": []
   },
   {
