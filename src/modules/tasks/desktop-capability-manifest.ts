@@ -2959,7 +2959,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "name": "file_patch",
     "displayName": "Dosya düzenleme",
     "description": "Var olan dosyanın içeriğini hedefli biçimde değiştirir; dosyanın tamamını yeniden yazmaz.",
-    "usage": "Kod/metin dosyasında bir bölümü düzeltmek için. Dosyayı sıfırdan üretmek gerekiyorsa file_write kullan.",
+    "usage": "Kod/metin dosyasında bir bölümü düzeltmek için: old_string çıpasını new_string ile değiştirir. Dosyayı sıfırdan üretmek gerekiyorsa file_write kullan.",
     "requiredArgs": [
       "path",
       "old_string"
@@ -2981,23 +2981,25 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       ],
       "properties": {
         "path": {
-          "type": "STRING"
+          "type": "STRING",
+          "description": "Yamalanacak dosyanın yolu."
         },
         "old_string": {
           "type": "STRING",
-          "description": "Değiştirilecek TAM mevcut metin (benzersiz olmalı)."
+          "description": "Değiştirilecek MEVCUT metin (çıpa). Dosyada birebir geçmeli."
         },
         "new_string": {
           "type": "STRING",
-          "description": "Yerine yazılacak yeni metin."
+          "description": "Yerine yazılacak metin. Boş bırakmak silme demektir."
         },
         "replace_all": {
           "type": "BOOLEAN",
-          "description": "Tüm eşleşmeleri değiştir."
+          "description": "Tüm eşleşmeleri değiştir (varsayılan yalnız ilki)."
         }
       },
       "additionalProperties": false,
-      "pathMustExist": true
+      "pathMustExist": true,
+      "oldStringMustMatchFileExactly": true
     },
     "outputContract": {
       "kind": "file_patch",
@@ -5751,7 +5753,8 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ],
     "whenNotToUse": [
       "Oturum yoksa önce shell_session_open çağır; sessionId uydurma.",
-      "Tek seferlik bağımsız komut için shell_run yeterli."
+      "Tek seferlik bağımsız komut için shell_run yeterli.",
+      "Dizin değiştirmek için `cd` AYRI bir adım olmalı: 'cd x && komut' oturumun dizinini kalıcı değiştirmez."
     ],
     "inputContract": {
       "required": [
