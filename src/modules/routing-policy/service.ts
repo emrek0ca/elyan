@@ -1302,6 +1302,7 @@ function typedArtifactFallbackCapabilities(input: {
 
   const capabilities: string[] = [];
   if (
+    input.outputContract.operation === "analyze_then_export" ||
     input.semanticContract.evidence.includes("fresh_public_research") ||
     input.semanticContract.requiredCapabilities.includes("web_research")
   ) {
