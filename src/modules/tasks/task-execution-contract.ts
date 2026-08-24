@@ -131,6 +131,12 @@ export const taskExecutionGrantSchema = z.object({
   effect: z.enum(["read", "write", "control"]),
   resourceScope: z.array(z.string().min(1).max(240)).min(1).max(16),
   source: z.literal("explicit_user_request"),
+  // ADDITIVE BAĞ. Derlenmiş görevde grant, çalıştırılacak ADIMA ve o adımın
+  // hazırlanmış argümanlarının özetine bağlanır; böylece bir yetki, verildiği
+  // adımdan başka bir çağrıya taşınamaz. Eski runtime'lar alanı yok sayar.
+  stepId: z.string().min(1).max(100).optional(),
+  argsHash: z.string().min(1).max(80).optional(),
+  riskClass: z.enum(["low", "elevated"]).optional(),
 });
 
 export const taskExecutionContractSchema = z.object({
@@ -426,6 +432,48 @@ function explicitArtifactWriteGrants(input: {
 const SEPARATE_APPROVAL_CAPABILITY_PATTERN =
   /(?:credential|password|secret|payment|billing|purchase|delete|trash|erase|wipe|overwrite|upload|share|send|message|email|system_settings|settings_write)/iu;
 
+/**
+ * GENERIC YÜRÜTÜCÜLER — adı bir güvenlik kanıtı OLMAYAN capability'ler.
+ *
+ * Bu araçların gerçek etkisi capability adında değil ARGÜMANINDA yaşar:
+ * `desktop_operator.run` bir pencere odaklayabildiği gibi bir dosyayı da
+ * silebilir, `mcp_call_tool` çağırdığı alt araca göre her şeyi yapabilir.
+ * Bu yüzden bunlara ÖNCEDEN cihaz kapsamlı bir yetki verilmez; yetki, adım
+ * gerçekten hazırlandığında runtime tarafında dar kapsamla üretilir.
+ */
+const GENERIC_EXECUTOR_CAPABILITY_PATTERN =
+  /(?:^|[._-])(?:desktop_operator|desktop_agent|browser_control|browser_agent|browser_use|computer_use|computer_control|mcp_call_tool|mcp_call|call_tool|run_skill|run_command|run_script|shell|bash|zsh|sh_exec|terminal|command_line|exec|execute_action|execute_command|applescript|osascript|python_exec|eval)(?:$|[._-])/iu;
+
+/**
+ * Argüman düzeyinde YÜKSELTİLMİŞ risk.
+ *
+ * Ayrı onay gerektiren eylemler capability adına yazılmayabilir; kritik olan
+ * argümanın kendisidir (`{"command": "rm -rf ..."}`, `{"action": "purchase"}`).
+ * Bu tarama, adı temiz görünen bir adımın sessizce yetki almasını engeller.
+ */
+const ELEVATED_RISK_ARGUMENT_PATTERN =
+  /(?:\brm\s+-[rf]|\bsudo\b|\bchmod\b|\bchown\b|\bkillall\b|\bdefaults\s+write\b|\bcurl\b|\bwget\b|\bpip\s+install\b|\bnpm\s+i(?:nstall)?\b|\bbrew\s+install\b|password|passphrase|secret|api[_-]?key|token|credential|payment|purchase|checkout|transfer|delete|erase|wipe|overwrite|uninstall)/iu;
+
+function stableGrantJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableGrantJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableGrantJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function grantArgsHash(args: Record<string, unknown>): string {
+  return createHash("sha256").update(stableGrantJson(args)).digest("hex").slice(0, 32);
+}
+
+function hasElevatedRiskArguments(args: Record<string, unknown>): boolean {
+  const serialized = stableGrantJson(args);
+  return serialized.length > 0 && ELEVATED_RISK_ARGUMENT_PATTERN.test(serialized);
+}
+
 function taskScopedDesktopAccessGrants(input: {
   taskId: string;
   turnId: string;
@@ -436,13 +484,14 @@ function taskScopedDesktopAccessGrants(input: {
   steps: TaskExecutionStep[];
   allowedCapabilities: string[];
   existingGrants: TaskExecutionGrant[];
-}): TaskExecutionGrant[] {
+  mode: "compiled" | "dynamic";
+}): { grants: TaskExecutionGrant[]; withheld: string[] } {
   const access = input.turnContract.authorization?.desktopAccess;
   if (
     access?.mode !== "task" ||
     input.routeDecision.route !== "desktop_runtime" ||
     input.routeDecision.targetDeviceId !== access.targetDeviceId
-  ) return [];
+  ) return { grants: [], withheld: [] };
 
   const existing = new Set(input.existingGrants.map((grant) => grant.capability));
   const selected = uniqueStrings([
@@ -452,32 +501,61 @@ function taskScopedDesktopAccessGrants(input: {
   const readRoots = uniqueStrings(input.workOrder?.resourceScope?.readRoots ?? [], 16);
   const writeRoots = uniqueStrings(input.workOrder?.resourceScope?.writeRoots ?? [], 16);
   const grants: TaskExecutionGrant[] = [];
+  const withheld: string[] = [];
+  const withhold = (capability: string) => {
+    if (!withheld.includes(capability)) withheld.push(capability);
+  };
+
   for (const capability of selected) {
-    if (
-      existing.has(capability) ||
-      !input.allowedCapabilities.includes(capability) ||
-      SEPARATE_APPROVAL_CAPABILITY_PATTERN.test(capability)
-    ) continue;
+    if (existing.has(capability) || !input.allowedCapabilities.includes(capability)) continue;
+    if (SEPARATE_APPROVAL_CAPABILITY_PATTERN.test(capability)) {
+      withhold(capability);
+      continue;
+    }
+    // Generic yürütücü hiçbir modda önceden yetki almaz.
+    if (GENERIC_EXECUTOR_CAPABILITY_PATTERN.test(capability)) {
+      withhold(capability);
+      continue;
+    }
     const manifest = knownCapability(capability);
-    if (!manifest?.requiresApproval || manifest.sideEffectClass === "destructive") continue;
+    if (!manifest?.requiresApproval || manifest.sideEffectClass === "destructive") {
+      if (manifest?.sideEffectClass === "destructive") withhold(capability);
+      continue;
+    }
     const effect = manifest.mutatesPath
       ? "write"
       : manifest.sideEffectClass === "read" || manifest.sideEffectClass === "none"
         ? "read"
         : "control";
+    const capabilitySteps = input.steps.filter((step) => step.capability === capability);
     const stepRoots = uniqueStrings(
-      input.steps
-        .filter((step) => step.capability === capability)
-        .flatMap((step) => step.resourceScope),
+      capabilitySteps.flatMap((step) => step.resourceScope),
       16,
     );
+    // Argümanı riskli olan adım, adı ne olursa olsun ayrı onaya düşer.
+    if (capabilitySteps.some((step) => hasElevatedRiskArguments(step.args))) {
+      withhold(capability);
+      continue;
+    }
     const resourceScope = stepRoots.length > 0
       ? stepRoots
       : effect === "write" && writeRoots.length > 0
         ? writeRoots
         : effect === "read" && readRoots.length > 0
           ? readRoots
-          : [`device:${access.targetDeviceId}`];
+          : effect === "write"
+            // Yazma etkisi için somut kök yoksa yetki verilmez: kapsamsız bir
+            // yazma grant'i "bu cihazda istediğin yere yaz" demekti.
+            ? []
+            : [`device:${access.targetDeviceId}`];
+    if (resourceScope.length === 0) {
+      withhold(capability);
+      continue;
+    }
+    // Derlenmiş görevde yetki TEK adıma ve o adımın argüman özetine bağlanır.
+    const boundStep = input.mode === "compiled" && capabilitySteps.length === 1
+      ? capabilitySteps[0]
+      : null;
     grants.push({
       id: `grant_${compact(access.clientGrantId, 48)}_${grants.length + 1}`,
       taskId: compact(input.taskId, 160),
@@ -486,9 +564,13 @@ function taskScopedDesktopAccessGrants(input: {
       effect,
       resourceScope,
       source: "explicit_user_request",
+      ...(boundStep
+        ? { stepId: boundStep.id, argsHash: grantArgsHash(boundStep.args) }
+        : {}),
+      riskClass: "low",
     });
   }
-  return grants;
+  return { grants, withheld };
 }
 
 function verificationSnapshot(
@@ -780,20 +862,20 @@ export function buildTaskExecutionContract(input: {
     workOrder,
     allowedCapabilities,
   });
-  const grants = [
-    ...explicitGrants,
-    ...taskScopedDesktopAccessGrants({
-      taskId: input.taskId,
-      turnId: input.turnId,
-      turnContract: input.turnContract,
-      routeDecision: input.routeDecision,
-      workOrder,
-      selectedTools: toolSelection.selectedTools,
-      steps,
-      allowedCapabilities,
-      existingGrants: explicitGrants,
-    }),
-  ];
+  const executionMode: "compiled" | "dynamic" = steps.length > 0 ? "compiled" : "dynamic";
+  const taskScopedAccess = taskScopedDesktopAccessGrants({
+    taskId: input.taskId,
+    turnId: input.turnId,
+    turnContract: input.turnContract,
+    routeDecision: input.routeDecision,
+    workOrder,
+    selectedTools: toolSelection.selectedTools,
+    steps,
+    allowedCapabilities,
+    existingGrants: explicitGrants,
+    mode: executionMode,
+  });
+  const grants = [...explicitGrants, ...taskScopedAccess.grants];
   const grantedCapabilities = new Set(grants.map((grant) => grant.capability));
   const risk = workOrder?.semanticGoal?.risk;
   const requiredRuntime = input.routeDecision.requiredRuntime;
@@ -810,6 +892,9 @@ export function buildTaskExecutionContract(input: {
     ...(workOrder?.approvalCapabilities ?? []).filter(
       (capability) => knownCapability(capability)?.requiresApproval === true,
     ),
+    // Yetkisi bilinçli olarak TUTULAN capability'ler ayrı onay listesine düşer;
+    // "yetki verilmedi" sessiz bir boşluk değil, görünür bir onay talebidir.
+    ...taskScopedAccess.withheld,
   ], 32).filter((capability) => !grantedCapabilities.has(capability));
   const selectedWorkload: SharedBrainWorkload | string = input.turnContract.selectedWorkload;
   const contract: Omit<TaskExecutionContract, "binding"> = {
@@ -830,7 +915,7 @@ export function buildTaskExecutionContract(input: {
     }),
     output,
     execution: {
-      mode: steps.length > 0 ? "compiled" : "dynamic",
+      mode: executionMode,
       workload: selectedWorkload,
       requiredRuntime,
       allowedCapabilities,

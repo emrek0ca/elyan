@@ -30,6 +30,158 @@ type TaskTraceSource = {
   runtimeConnectionId?: string | null;
 };
 
+/**
+ * KALICI SOHBET BLOĞUNA NE GİRER — gizlilik süzgeci.
+ *
+ * `dispatch_widget` sohbet geçmişinde kalır ve dışarı taşınabilir. Bu yüzden
+ * yerel mutlak yol, sorgu token'ı taşıyan URL, yığın izi ve ham runtime hata
+ * ayrıntısı bu bloğa GİRMEZ. Kullanıcıya gereken şey zaten daha azıdır:
+ * sahibine bağlı artefakt kimliği, temiz başlık/tür ve güvenli hata kodu.
+ */
+const ABSOLUTE_PATH_PATTERN = /(?:^|\s)(?:\/[^\s"']*|[A-Za-z]:\\[^\s"']*|~\/[^\s"']*)/gu;
+const STACK_TRACE_PATTERN =
+  /(?:\bTraceback \(most recent call last\)|^\s*at\s+\S+\s+\(|\bFile\s+"[^"]+",\s+line\s+\d+)/mu;
+const SECRET_LIKE_PATTERN =
+  /(?:\b(?:sk|pk|ghp|xox[baprs])-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._-]{8,}|\beyJ[A-Za-z0-9._-]{16,})/u;
+
+/**
+ * Artefakt URL'sini güvenli hâle getirir.
+ *
+ * Sorgu ve fragment atılır (imzalı indirme token'ları oradadır), yalnız
+ * http/https ya da köke bağlı göreli yol kabul edilir. `file://` ve kimlik
+ * taşıyan URL'ler tamamen düşer.
+ */
+function safeArtifactUrl(value: string | null | undefined): string | undefined {
+  const raw = compactDetail(value, 2_000);
+  if (!raw) return undefined;
+  if (raw.startsWith("/")) return raw.split(/[?#]/u)[0] || undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+  if (parsed.username || parsed.password) return undefined;
+  parsed.search = "";
+  parsed.hash = "";
+  return compactDetail(parsed.toString(), 2_000);
+}
+
+/** Yığın izi, mutlak yol ve sır benzeri dizileri temizlenmiş hata metni. */
+function safeErrorMessage(value: string | null | undefined): string | undefined {
+  const raw = compactDetail(value, 500);
+  if (!raw) return undefined;
+  if (STACK_TRACE_PATTERN.test(raw) || SECRET_LIKE_PATTERN.test(raw)) return undefined;
+  const redacted = raw.replace(ABSOLUTE_PATH_PATTERN, " …").replace(/\s+/gu, " ").trim();
+  return redacted.length > 0 ? compactDetail(redacted, 500) : undefined;
+}
+
+type TaskVerificationEvidence =
+  | "backend_verifier"
+  | "outcome_verdict"
+  | "artifact"
+  | "state_readback"
+  | "tool_result";
+
+/**
+ * DOĞRULAMA KANITI TOPLAR.
+ *
+ * Görevin `completed` olması taşıma başarısıdır, doğrulama değildir. Bu yüzden
+ * `verification.status = "passed"` yalnız aşağıdaki kanıtlardan en az biri
+ * varken yazılır; hiçbiri yoksa durum `pending` kalır ve mobil "doğrulanmadı"
+ * anlamını görür.
+ */
+function collectVerificationEvidence(
+  result: Record<string, unknown> | null,
+  artifacts: Array<{ id?: string }>,
+): TaskVerificationEvidence[] {
+  const evidence = new Set<TaskVerificationEvidence>();
+
+  const verification = readRecord(result?.verification);
+  const checks = Array.isArray(verification?.checks) ? verification!.checks : [];
+  const passedChecks = checks.filter((value) => {
+    const check = readRecord(value);
+    return check?.passed === true && typeof check.evidence === "string" && check.evidence.trim();
+  });
+  if (readString(verification, "status") === "passed" && passedChecks.length > 0) {
+    evidence.add("backend_verifier");
+  }
+
+  const outcome = readRecord(result?.outcome);
+  const verdict = readString(outcome, "verdict") ?? readString(result, "outcome");
+  if (verdict === "fulfilled") evidence.add("outcome_verdict");
+
+  // Sahibe bağlı artefakt kimliği backend'in kendi kaydıdır; runtime uyduramaz.
+  if (artifacts.some((artifact) => typeof artifact.id === "string" && artifact.id.length > 0)) {
+    evidence.add("artifact");
+  }
+
+  const stateReadback =
+    readRecord(result?.stateReadback) ?? readRecord(readRecord(result?.result)?.stateReadback);
+  if (
+    readBoolean(stateReadback, "observed") === true ||
+    readStringList(stateReadback, "keys").length > 0
+  ) {
+    evidence.add("state_readback");
+  }
+
+  const steps = Array.isArray(result?.steps) ? result!.steps : [];
+  const hasStepEvidence = steps.some((value) => {
+    const step = readRecord(value);
+    if (!step) return false;
+    if (readRecord(step.evidence)) return true;
+    return readString(step, "verificationStatus") === "passed";
+  });
+  const declaredEvidence = Array.isArray(result?.evidence) ? result!.evidence.length > 0 : false;
+  if (hasStepEvidence || declaredEvidence) evidence.add("tool_result");
+  if (
+    !evidence.has("state_readback") &&
+    steps.some((value) => readRecord(readRecord(value)?.evidence)?.stateReadback !== undefined)
+  ) {
+    evidence.add("state_readback");
+  }
+
+  return [...evidence];
+}
+
+/**
+ * Blok doğrulamasını KANITA bağlar.
+ *
+ * Runtime'ın "passed" demesi tek başına yetmez: iddianın yanında en az bir
+ * kanıt kalemi (`checks[].evidence`) olmalıdır. Kanıtsız bir "passed" iddiası
+ * `pending`'e düşürülür — kullanıcıya doğrulanmamış bir işi doğrulanmış gibi
+ * göstermek, yanlış yürütmeyi görünmez yapar.
+ */
+function verificationSnapshotFromEvidence(
+  block: ElyanTaskTraceBlock,
+  result: Record<string, unknown> | null,
+  artifacts: Array<{ id?: string }>,
+): ElyanTaskTraceBlock["verification"] {
+  if (block.status === "failed") {
+    return {
+      status: "failed",
+      ...(block.summary ? { summary: block.summary } : {}),
+    };
+  }
+  const evidence = collectVerificationEvidence(result, artifacts);
+  const claimed = block.verification?.status;
+  if (claimed && claimed !== "passed" && claimed !== "repaired") {
+    return {
+      ...block.verification,
+      status: claimed,
+      ...(evidence.length > 0 ? { evidence } : {}),
+    };
+  }
+  // `passed`/`repaired` iddiası ancak kanıt varken korunur.
+  const evidenceBacked = block.status === "completed" && evidence.length > 0;
+  return {
+    status: evidenceBacked ? (claimed === "repaired" ? "repaired" : "passed") : "pending",
+    ...(block.summary ? { summary: block.summary } : {}),
+    ...(evidence.length > 0 ? { evidence } : {}),
+  };
+}
+
 function decorateLifecycleFields(
   block: ElyanTaskTraceBlock,
   task: TaskTraceSource,
@@ -45,9 +197,8 @@ function decorateLifecycleFields(
   const declaredActions = readStringList(approval, "availableActions");
   const result = readRecord(task.result);
   const resultError = readRecord(result?.error);
-  const errorMessage = compactDetail(
+  const errorMessage = safeErrorMessage(
     readString(resultError, "message") ?? task.error,
-    500,
   );
   const retryable = readBoolean(resultError, "retryable") === true;
   const rawArtifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
@@ -63,13 +214,13 @@ function decorateLifecycleFields(
     if (!title) return [];
     const id = compactDetail(readString(artifact, "id"), 255);
     const artifactKind = compactDetail(readString(artifact, "kind"), 80);
-    const path = compactDetail(readString(artifact, "path"), 1_000);
-    const url = compactDetail(readString(artifact, "url"), 2_000);
+    // Yerel mutlak yol kalıcı sohbet bloğuna GİRMEZ; kullanıcı dosyayı zaten
+    // kendi masaüstünde görür, blok ise dışarı taşınabilir.
+    const url = safeArtifactUrl(readString(artifact, "url"));
     return [{
       ...(id ? { id } : {}),
       title,
       ...(artifactKind ? { kind: artifactKind } : {}),
-      ...(path ? { path } : {}),
       ...(url ? { url } : {}),
     }];
   }).slice(0, 12);
@@ -98,23 +249,18 @@ function decorateLifecycleFields(
           needsApproval: kind === "permission",
         }
       : {}),
-    verification: block.verification ?? {
-      status:
-        block.status === "completed"
-          ? "passed"
-          : block.status === "failed"
-            ? "failed"
-            : "pending",
-      ...(block.summary ? { summary: block.summary } : {}),
-    },
+    verification: verificationSnapshotFromEvidence(block, result, artifacts),
     ...(artifacts.length > 0 ? { artifacts } : {}),
-    ...(block.status === "failed" && errorMessage
+    ...(block.status === "failed"
       ? {
           error: {
             code:
               compactDetail(readString(resultError, "code"), 120) ??
               "TASK_EXECUTION_FAILED",
-            message: errorMessage,
+            // Ham metin güvenli değilse (yığın izi, mutlak yol, sır benzeri
+            // dizi) DÜŞÜRÜLÜR — ama hata kalemi kaybolmaz: kullanıcı bir şeyin
+            // başarısız olduğunu ve tekrar denenebilirliğini görmeye devam eder.
+            message: errorMessage ?? "Görev tamamlanamadı.",
             retryable,
           },
         }
@@ -310,13 +456,49 @@ function runtimeExecutionTraceBlock(input: {
     phase: activeStep?.id ?? input.fallback.phase,
     progressLabel: activeStep?.label ?? input.fallback.progressLabel,
     ...(activeStep ? { activeStepId: activeStep.id } : { activeStepId: undefined }),
-    ...(["pending", "passed", "repaired", "failed"].includes(verificationStatus ?? "")
-      ? { verification: { status: verificationStatus } as ElyanTaskTraceBlock["verification"] }
-      : {}),
+    // Runtime'ın plan izinden gelen doğrulama iddiası da KANIT ister. Kanıtsız
+    // bir "passed", zaten kanıta bağlanmış olan blok doğrulamasını ezmemeli.
+    ...(verificationStatus === "passed" || verificationStatus === "repaired"
+      ? executionTraceVerificationEvidence(verification, steps)
+        ? {
+            verification: {
+              status: verificationStatus,
+              evidence: executionTraceVerificationEvidence(verification, steps),
+            } as ElyanTaskTraceBlock["verification"],
+          }
+        : {}
+      : verificationStatus === "pending" || verificationStatus === "failed"
+        ? { verification: { status: verificationStatus } as ElyanTaskTraceBlock["verification"] }
+        : {}),
     ...(repairAttempts > 0 ? { repairAttempts } : {}),
     ...(stopReason ? { stopReason } : {}),
     steps,
   };
+}
+
+/**
+ * Plan izindeki doğrulama iddiasının arkasında kanıt var mı?
+ *
+ * Kanıt ya `verification.checks` içinde geçmiş ve kanıt türü bildirilmiş bir
+ * kontroldür, ya da adımların kendi `passed` doğrulama durumudur. İkisi de
+ * yoksa iddia taşınmaz.
+ */
+function executionTraceVerificationEvidence(
+  verification: Record<string, unknown> | null,
+  steps: ElyanTaskTraceStep[],
+): string[] | null {
+  const evidence = new Set<string>();
+  const checks = Array.isArray(verification?.checks) ? verification!.checks : [];
+  for (const value of checks) {
+    const check = readRecord(value);
+    if (check?.passed !== true) continue;
+    const kind = readString(check, "evidence");
+    if (kind) evidence.add(kind);
+  }
+  if (steps.some((step) => step.verificationStatus === "passed")) {
+    evidence.add("tool_result");
+  }
+  return evidence.size > 0 ? [...evidence].slice(0, 8) : null;
 }
 
 function describeIntent(intent: string | null): string | undefined {

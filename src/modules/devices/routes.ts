@@ -1,5 +1,4 @@
 import type { FastifyPluginAsync } from "fastify";
-import { randomUUID } from "node:crypto";
 import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth } from "../../lib/request-auth.js";
 import { AppError } from "../../lib/errors.js";
@@ -18,6 +17,11 @@ import {
   updateDevicePushToken,
 } from "./service.js";
 import { reconcileStaleRuntimeTasks } from "../tasks/service.js";
+import {
+  abandonRuntimeAccessCommand,
+  issueRuntimeAccessCommand,
+} from "../runtime/service.js";
+import { RUNTIME_ACCESS_SESSION_TTL_SECONDS } from "../runtime/access-state.js";
 
 export const deviceRoutes: FastifyPluginAsync = async (app) => {
   app.get("/", async (request, reply) => {
@@ -126,17 +130,31 @@ export const deviceRoutes: FastifyPluginAsync = async (app) => {
       throw new AppError(409, "device_offline", "Desktop runtime is offline");
     }
 
-    const commandId = randomUUID();
+    // Komut ÖNCE sunucuya yazılır. Bekleyen kayıt (commandId, action, revision,
+    // issuedAt, beklenen süre sonu) olmadan hiçbir ACK erişim açamaz; süre sonu
+    // da runtime'ın bildirdiği değere değil bu kayda göre kırpılır.
+    const issued = await issueRuntimeAccessCommand(app, {
+      userId: auth.sub,
+      deviceId: device.id,
+      action: body.action,
+    });
     const delivered = await app.services.realtimeHub.sendToRuntimeDistributed(
       device.id,
       {
         type: "runtime.access.command",
-        commandId,
+        commandId: issued.commandId,
         action: body.action,
-        ...(body.action === "grant_session" ? { ttlSeconds: 3600 } : {}),
+        ...(body.action === "grant_session"
+          ? { ttlSeconds: RUNTIME_ACCESS_SESSION_TTL_SECONDS }
+          : {}),
       },
     );
     if (!delivered) {
+      await abandonRuntimeAccessCommand(app, {
+        userId: auth.sub,
+        deviceId: device.id,
+        commandId: issued.commandId,
+      });
       throw new AppError(
         409,
         "runtime_access_delivery_failed",
@@ -146,11 +164,11 @@ export const deviceRoutes: FastifyPluginAsync = async (app) => {
     reply.code(202);
     return {
       accepted: true,
-      commandId,
+      commandId: issued.commandId,
       action: body.action,
       state: "pending",
       ...(body.action === "grant_session"
-        ? { expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
+        ? { expiresAt: issued.expectedExpiresAt }
         : {}),
     };
   });

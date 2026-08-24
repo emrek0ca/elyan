@@ -10,7 +10,9 @@ const inputSchema = z.object({
   intentFamilyCount: z.number().int().min(0).default(0),
   privacyRejectedCount: z.number().int().min(0),
   sensitiveRejectedCount: z.number().int().min(0),
-  sensitiveLeakCount: z.number().int().min(0).default(0),
+  // ÖLÇÜLMEDİ ile SIFIR ayrı şeylerdir. Eksik bir güvenlik ölçümü "temiz"
+  // anlamına gelmez; `null` promotion'ı kapatır.
+  sensitiveLeakCount: z.number().int().min(0).nullable().default(null),
   qualityScore: z.number().min(0).max(1),
   weightTrainingEnabled: z.boolean().default(false),
   securityBenchmarkPassed: z.boolean().nullable().default(null),
@@ -21,7 +23,7 @@ const inputSchema = z.object({
   canaryErrorRate: z.number().min(0).max(1).nullable().default(null),
   canaryTrafficPercent: z.number().min(0).max(100).nullable().default(null),
   rollbackSignalCount: z.number().int().min(0).default(0),
-  criticalWrongExecutionCount: z.number().int().min(0).default(0),
+  criticalWrongExecutionCount: z.number().int().min(0).nullable().default(null),
   manualReleaseApproved: z.boolean().default(false),
 });
 
@@ -99,13 +101,15 @@ export function evaluateContinuousLearningPromotion(
     };
   }
 
-  if (input.criticalWrongExecutionCount > 0 || input.sensitiveLeakCount > 0) {
+  if ((input.criticalWrongExecutionCount ?? 0) > 0 || (input.sensitiveLeakCount ?? 0) > 0) {
     return {
       status: "rollback_required",
       nextAction: "rollback_candidate",
       reasons: [
-        ...(input.criticalWrongExecutionCount > 0 ? ["critical_wrong_execution_detected"] : []),
-        ...(input.sensitiveLeakCount > 0 ? ["sensitive_leak_detected"] : []),
+        ...((input.criticalWrongExecutionCount ?? 0) > 0
+          ? ["critical_wrong_execution_detected"]
+          : []),
+        ...((input.sensitiveLeakCount ?? 0) > 0 ? ["sensitive_leak_detected"] : []),
       ],
       gates: GATES,
     };
@@ -221,6 +225,30 @@ export function evaluateContinuousLearningPromotion(
       status: "canary_ready",
       nextAction: "run_canary",
       reasons: ["candidate_not_ready_for_full_promotion"],
+      gates: GATES,
+    };
+  }
+
+  // FAIL-CLOSED ÖLÇÜM KAPISI.
+  //
+  // Buraya kadarki kontroller yalnız DEĞERİ verilmiş ölçümleri sınıyordu:
+  // `canaryErrorRate` ya da `sensitiveLeakCount` hiç raporlanmamışsa koşullar
+  // atlanıyor ve aday `promotion_ready` olabiliyordu. Ölçülmemiş bir güvenlik
+  // sinyali "geçti" değildir; eksik alan promotion'ı kapatır.
+  const unmeasuredPromotionSignals = [
+    input.canaryErrorRate == null ? "canary_error_rate_not_measured" : null,
+    input.canaryTrafficPercent == null ? "canary_traffic_percent_not_measured" : null,
+    input.sensitiveLeakCount == null ? "sensitive_leak_count_not_measured" : null,
+    input.criticalWrongExecutionCount == null
+      ? "critical_wrong_execution_count_not_measured"
+      : null,
+    input.maxIntentGroupRegression == null ? "intent_group_regression_not_measured" : null,
+  ].filter((reason): reason is string => reason !== null);
+  if (unmeasuredPromotionSignals.length > 0) {
+    return {
+      status: "canary_ready",
+      nextAction: "run_canary",
+      reasons: unmeasuredPromotionSignals,
       gates: GATES,
     };
   }

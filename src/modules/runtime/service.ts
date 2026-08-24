@@ -13,6 +13,18 @@ import {
   summarizeRuntimeCapabilities,
   summarizeRuntimeCapabilityReadiness,
 } from "./capabilities.js";
+import {
+  applyRuntimeAccessAck,
+  clearPendingRuntimeAccessCommand,
+  emptyRuntimeAccessState,
+  readRuntimeAccessStateFromCapabilityStates,
+  RUNTIME_ACCESS_SESSION_TTL_SECONDS,
+  RUNTIME_ACCESS_STATE_KEY,
+  stripServerOwnedCapabilityStates,
+  withPendingRuntimeAccessCommand,
+  type RuntimeAccessAction,
+  type RuntimeAccessState,
+} from "./access-state.js";
 import { activeTaskStatuses } from "../tasks/queue.js";
 import { isDesktopPlanPreparationPending } from "../tasks/desktop-work-order.js";
 import { deriveTaskDeliveryState, extractTaskRouteDecision } from "../tasks/service-helpers.js";
@@ -350,7 +362,18 @@ export async function heartbeatRuntime(
       ...(handshake && shouldUpdateCapabilities
         ? { capabilities: handshake.capabilities }
         : {}),
-      ...(handshake ? { capabilityStates: handshake.capabilityStates } : {}),
+      // SUNUCUYA AİT ANAHTARLAR HANDSHAKE'TEN KORUNUR. `capability_states`
+      // eskiden runtime'ın beyanıyla bütünüyle değiştiriliyordu; bu, runtime'a
+      // hiç komut verilmemişken `runtime.access.session.v1` yazıp erişimi açık
+      // göstermesine izin veriyordu. Runtime beyanı süzülür, sunucunun yazdığı
+      // erişim durumu satırın kendisinden aynı ifadede geri eklenir.
+      ...(handshake
+        ? {
+            capabilityStates: sql`${JSON.stringify(
+              stripServerOwnedCapabilityStates(handshake.capabilityStates),
+            )}::jsonb || jsonb_strip_nulls(jsonb_build_object(${RUNTIME_ACCESS_STATE_KEY}::text, ${runtimeConnections.capabilityStates} -> ${RUNTIME_ACCESS_STATE_KEY}::text))`,
+          }
+        : {}),
       lastHeartbeatAt: new Date(),
       disconnectedAt: null,
     })
@@ -368,7 +391,9 @@ export async function heartbeatRuntime(
     ok: true,
     deviceId: auth.deviceId,
     status: input.status,
-    capabilityStates: handshake?.capabilityStates ?? {},
+    capabilityStates: handshake
+      ? stripServerOwnedCapabilityStates(handshake.capabilityStates)
+      : {},
     capabilityHandshake: handshake?.descriptors ?? [],
     capabilitySummary: summarizeRuntimeCapabilities(handshake?.capabilities ?? []),
     capabilityReadinessSummary: summarizeRuntimeCapabilityReadiness(
@@ -377,61 +402,233 @@ export async function heartbeatRuntime(
   };
 }
 
+type RuntimeAccessConnectionRow = {
+  id: string;
+  deviceId: string;
+  userId: string;
+  capabilityStates: unknown;
+};
+
+async function loadRuntimeAccessConnection(
+  app: FastifyInstance,
+  where: { connectionId?: string; deviceId?: string; userId: string },
+): Promise<RuntimeAccessConnectionRow | null> {
+  const filters = [eq(runtimeConnections.userId, where.userId)];
+  if (where.connectionId) filters.push(eq(runtimeConnections.id, where.connectionId));
+  if (where.deviceId) filters.push(eq(runtimeConnections.deviceId, where.deviceId));
+  const rows = await app.db
+    .select({
+      id: runtimeConnections.id,
+      deviceId: runtimeConnections.deviceId,
+      userId: runtimeConnections.userId,
+      capabilityStates: runtimeConnections.capabilityStates,
+    })
+    .from(runtimeConnections)
+    .where(and(...filters))
+    .orderBy(sql`${runtimeConnections.connectedAt} desc`)
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Erişim durumunu KOŞULLU yazar.
+ *
+ * Koşul, okunan revizyonun hâlâ satırdaki revizyon olmasıdır; isteğe bağlı
+ * `expectedPendingCommandId` ile bekleyen komutun da aradan değişmemiş olması
+ * istenir. Yarışta kaybeden yazma sessizce düşer — erişimi geri açan bir
+ * "son yazan kazanır" davranışı bilinçli olarak imkânsız kılınmıştır.
+ */
+async function writeRuntimeAccessStateCas(
+  app: FastifyInstance,
+  row: RuntimeAccessConnectionRow,
+  input: {
+    expectedRevision: number;
+    expectedPendingCommandId?: string | null;
+    next: RuntimeAccessState;
+  },
+): Promise<boolean> {
+  const filters = [
+    eq(runtimeConnections.id, row.id),
+    eq(runtimeConnections.deviceId, row.deviceId),
+    eq(runtimeConnections.userId, row.userId),
+    sql`coalesce((${runtimeConnections.capabilityStates} -> ${RUNTIME_ACCESS_STATE_KEY}::text ->> 'revision')::int, 0) = ${input.expectedRevision}`,
+  ];
+  if (input.expectedPendingCommandId !== undefined) {
+    filters.push(
+      input.expectedPendingCommandId === null
+        ? sql`${runtimeConnections.capabilityStates} -> ${RUNTIME_ACCESS_STATE_KEY}::text -> 'pending' ->> 'commandId' is null`
+        : sql`${runtimeConnections.capabilityStates} -> ${RUNTIME_ACCESS_STATE_KEY}::text -> 'pending' ->> 'commandId' = ${input.expectedPendingCommandId}`,
+    );
+  }
+  const updated = await app.db
+    .update(runtimeConnections)
+    .set({
+      capabilityStates: sql`coalesce(${runtimeConnections.capabilityStates}, '{}'::jsonb) || ${JSON.stringify(
+        { [RUNTIME_ACCESS_STATE_KEY]: input.next },
+      )}::jsonb`,
+    })
+    .where(and(...filters))
+    .returning({ id: runtimeConnections.id });
+  return updated.length > 0;
+}
+
+async function publishRuntimeAccessState(
+  app: FastifyInstance,
+  row: RuntimeAccessConnectionRow,
+  state: RuntimeAccessState,
+) {
+  const { pending: _pending, ...publicState } = state;
+  await app.services.eventBus.publishVolatile({
+    topic: "device.status_changed",
+    userId: row.userId,
+    deviceId: row.deviceId,
+    payload: {
+      deviceId: row.deviceId,
+      // Native mobile applies device events only when presence is explicit;
+      // keeping this field on access ACKs makes it re-fetch the authoritative
+      // capabilityStates snapshot instead of leaving the one-hour timer stale.
+      isOnline: true,
+      runtimeAccess: publicState,
+      reason: "runtime_access_changed",
+    },
+  });
+}
+
+/**
+ * Kullanıcının erişim komutunu SUNUCU KAYDIYLA birlikte verir.
+ *
+ * Komut sokete gönderilmeden önce bekleyen kayıt yazılır: ACK ancak bu kayda
+ * eşleşirse uygulanabilir, dolayısıyla sunucunun vermediği bir `commandId`
+ * hiçbir zaman erişim açamaz.
+ */
+export async function issueRuntimeAccessCommand(
+  app: FastifyInstance,
+  input: { userId: string; deviceId: string; action: RuntimeAccessAction },
+): Promise<{
+  commandId: string;
+  revision: number;
+  issuedAt: string;
+  expectedExpiresAt: string | null;
+}> {
+  const row = await loadRuntimeAccessConnection(app, {
+    userId: input.userId,
+    deviceId: input.deviceId,
+  });
+  if (!row) {
+    throw conflict("Desktop runtime connection not found");
+  }
+  const now = new Date();
+  const current = readRuntimeAccessStateFromCapabilityStates(row.capabilityStates, now);
+  const { next, pending } = withPendingRuntimeAccessCommand(current, {
+    commandId: randomUUID(),
+    action: input.action,
+    now,
+    ttlSeconds: RUNTIME_ACCESS_SESSION_TTL_SECONDS,
+  });
+  const written = await writeRuntimeAccessStateCas(app, row, {
+    expectedRevision: current.revision,
+    next,
+  });
+  if (!written) {
+    throw conflict("Runtime access state changed concurrently");
+  }
+  return {
+    commandId: pending.commandId,
+    revision: pending.revision,
+    issuedAt: pending.issuedAt,
+    expectedExpiresAt: pending.expectedExpiresAt,
+  };
+}
+
+/** Sokete teslim edilemeyen komutun bekleyen kaydını geri alır. */
+export async function abandonRuntimeAccessCommand(
+  app: FastifyInstance,
+  input: { userId: string; deviceId: string; commandId: string },
+): Promise<void> {
+  const row = await loadRuntimeAccessConnection(app, {
+    userId: input.userId,
+    deviceId: input.deviceId,
+  });
+  if (!row) return;
+  const now = new Date();
+  const current = readRuntimeAccessStateFromCapabilityStates(row.capabilityStates, now);
+  if (current.pending?.commandId !== input.commandId) return;
+  await writeRuntimeAccessStateCas(app, row, {
+    expectedRevision: current.revision,
+    expectedPendingCommandId: input.commandId,
+    next: clearPendingRuntimeAccessCommand(current, input.commandId, now),
+  });
+}
+
 export async function acknowledgeRuntimeAccess(
   app: FastifyInstance,
   auth: RuntimeAuthTokenPayload,
   input: {
     commandId: string;
-    action: "grant_session" | "revoke";
+    action: RuntimeAccessAction;
     state: "applied" | "rejected" | "failed";
     expiresAt?: string | null;
     message?: string;
   },
 ) {
   await getRuntimeConnectionByAuth(app, auth);
-  const now = new Date();
-  const active = input.state === "applied" && input.action === "grant_session";
-  const accessState = {
-    contract: "elyan.runtime_access_state.v1",
-    mode: active ? "session" : "off",
-    active,
-    commandId: input.commandId,
-    action: input.action,
-    state: input.state,
-    expiresAt: active ? input.expiresAt ?? null : null,
-    updatedAt: now.toISOString(),
-    ...(input.message ? { message: input.message } : {}),
-  };
-  await app.db
-    .update(runtimeConnections)
-    .set({
-      capabilityStates: sql`coalesce(${runtimeConnections.capabilityStates}, '{}'::jsonb) || ${JSON.stringify({
-        "runtime.access.session.v1": accessState,
-      })}::jsonb`,
-      lastHeartbeatAt: now,
-    })
-    .where(
-      and(
-        eq(runtimeConnections.id, auth.connectionId),
-        eq(runtimeConnections.deviceId, auth.deviceId),
-        eq(runtimeConnections.userId, auth.sub),
-      ),
-    );
-  await app.services.eventBus.publishVolatile({
-    topic: "device.status_changed",
+  const row = await loadRuntimeAccessConnection(app, {
     userId: auth.sub,
     deviceId: auth.deviceId,
-    payload: {
-      deviceId: auth.deviceId,
-      // Native mobile applies device events only when presence is explicit;
-      // keeping this field on access ACKs makes it re-fetch the authoritative
-      // capabilityStates snapshot instead of leaving the one-hour timer stale.
-      isOnline: true,
-      runtimeAccess: accessState,
-      reason: "runtime_access_changed",
-    },
+    connectionId: auth.connectionId,
   });
-  return accessState;
+  if (!row) {
+    throw unauthorized("Runtime connection not found");
+  }
+  const now = new Date();
+  const current = readRuntimeAccessStateFromCapabilityStates(row.capabilityStates, now);
+  const decision = applyRuntimeAccessAck(current, { ...input, now });
+
+  if (!decision.applied) {
+    // Eşleşmeyen ACK erişimi DEĞİŞTİRMEZ. En sık hâli, revoke sonrasında
+    // gelen geç bir grant ACK'idir; sessizce yutmak yerine telemetriye
+    // yazıyoruz, ama otoriter durum sunucununki olarak kalıyor.
+    app.log.warn(
+      {
+        deviceId: auth.deviceId,
+        commandId: input.commandId,
+        action: input.action,
+        reason: decision.reason,
+      },
+      "runtime access ack ignored",
+    );
+    const { pending: _ignoredPending, ...publicState } = current;
+    return publicState;
+  }
+
+  const written = await writeRuntimeAccessStateCas(app, row, {
+    expectedRevision: current.revision,
+    expectedPendingCommandId: input.commandId,
+    next: decision.next,
+  });
+  if (!written) {
+    app.log.warn(
+      { deviceId: auth.deviceId, commandId: input.commandId },
+      "runtime access ack lost compare-and-set",
+    );
+    const fresh = await loadRuntimeAccessConnection(app, {
+      userId: auth.sub,
+      deviceId: auth.deviceId,
+      connectionId: auth.connectionId,
+    });
+    const { pending: _stalePending, ...publicState } = fresh
+      ? readRuntimeAccessStateFromCapabilityStates(fresh.capabilityStates, now)
+      : emptyRuntimeAccessState(now);
+    return publicState;
+  }
+
+  await app.db
+    .update(runtimeConnections)
+    .set({ lastHeartbeatAt: now })
+    .where(eq(runtimeConnections.id, row.id));
+  await publishRuntimeAccessState(app, row, decision.next);
+  const { pending: _appliedPending, ...publicState } = decision.next;
+  return publicState;
 }
 
 export async function disconnectRuntime(

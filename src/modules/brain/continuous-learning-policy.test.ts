@@ -112,3 +112,45 @@ test("continuous learning promotion requires measured uplift and explicit releas
   });
   assert.equal(approved.status, "promotion_ready");
 });
+
+test("continuous learning promotion stays closed while safety signals are unmeasured", () => {
+  const base = {
+    datasetStatus: "ready" as const,
+    acceptedEventCount: 900,
+    rejectedEventCount: 0,
+    dedupedEventCount: 0,
+    replayRatio: 25,
+    validationRecordCount: 220,
+    intentFamilyCount: 12,
+    privacyRejectedCount: 0,
+    sensitiveRejectedCount: 0,
+    qualityScore: 0.9,
+    weightTrainingEnabled: true,
+    securityBenchmarkPassed: true,
+    latestBenchmarkScore: 0.94,
+    candidateEvaluationScore: 0.92,
+    baselineEvaluationScore: 0.8,
+    maxIntentGroupRegression: 0.01,
+    manualReleaseApproved: true,
+  };
+
+  // Ölçülmemiş güvenlik sinyali "temiz" değildir: alanlar eksikken promotion
+  // açılmamalı.
+  const unmeasured = evaluateContinuousLearningPromotion(base);
+  assert.notEqual(unmeasured.status, "promotion_ready");
+  assert.equal(unmeasured.reasons.includes("canary_error_rate_not_measured"), true);
+  assert.equal(unmeasured.reasons.includes("sensitive_leak_count_not_measured"), true);
+  assert.equal(
+    unmeasured.reasons.includes("critical_wrong_execution_count_not_measured"),
+    true,
+  );
+
+  const measured = evaluateContinuousLearningPromotion({
+    ...base,
+    canaryErrorRate: 0.005,
+    canaryTrafficPercent: 5,
+    sensitiveLeakCount: 0,
+    criticalWrongExecutionCount: 0,
+  });
+  assert.equal(measured.status, "promotion_ready");
+});

@@ -618,3 +618,87 @@ test("buildTaskTraceBlock exposes clarification without manufacturing computer p
   assert.deepEqual(block.availableActions, ["answer"]);
   assert.equal(block.updatedAt, updatedAt.toISOString());
 });
+
+test("dispatch widget verification stays pending without evidence", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-no-evidence",
+      status: "completed",
+      payload: {},
+      result: { summary: "Bitti." },
+      createdAt: new Date("2026-08-24T09:00:00.000Z"),
+      updatedAt: new Date("2026-08-24T09:00:04.000Z"),
+      completedAt: new Date("2026-08-24T09:00:04.000Z"),
+    },
+    assistantContent: "Bitti.",
+  });
+
+  // "completed" taşıma başarısıdır, doğrulama değil.
+  assert.equal(block.verification?.status, "pending");
+});
+
+test("dispatch widget verification passes only on real evidence", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-with-evidence",
+      status: "completed",
+      payload: {},
+      result: {
+        outcome: { verdict: "fulfilled" },
+        verification: {
+          status: "passed",
+          checks: [{ id: "rule:artifact", passed: true, evidence: "artifact" }],
+        },
+        artifacts: [
+          {
+            id: "artifact-1",
+            title: "Kediler raporu.pdf",
+            kind: "document",
+            path: "/Users/emrekoca/Desktop/Kediler raporu.pdf",
+            url: "https://api.elyan.dev/v1/artifacts/artifact-1?token=secret-download-token",
+          },
+        ],
+      },
+      createdAt: new Date("2026-08-24T09:00:00.000Z"),
+      updatedAt: new Date("2026-08-24T09:00:09.000Z"),
+      completedAt: new Date("2026-08-24T09:00:09.000Z"),
+    },
+    assistantContent: "Rapor hazır.",
+  });
+
+  assert.equal(block.verification?.status, "passed");
+  const artifact = block.artifacts?.[0];
+  assert.equal(artifact?.id, "artifact-1");
+  // Yerel mutlak yol kalıcı sohbet bloğuna girmez.
+  assert.equal(artifact?.path, undefined);
+  // İndirme token'ı taşıyan sorgu düşürülür.
+  assert.equal(artifact?.url, "https://api.elyan.dev/v1/artifacts/artifact-1");
+});
+
+test("dispatch widget error never carries a runtime stack trace", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-failed",
+      status: "failed",
+      payload: {},
+      result: {
+        error: {
+          code: "DESKTOP_STEP_FAILED",
+          message:
+            'Traceback (most recent call last):\n  File "/Users/emrekoca/Desktop/elyan/runtime/bridge.py", line 42, in run\n    raise RuntimeError("boom")',
+          retryable: true,
+        },
+      },
+      createdAt: new Date("2026-08-24T09:00:00.000Z"),
+      updatedAt: new Date("2026-08-24T09:00:03.000Z"),
+    },
+    assistantContent: "Görev başarısız.",
+  });
+
+  assert.equal(block.verification?.status, "failed");
+  assert.equal(block.error?.code, "DESKTOP_STEP_FAILED");
+  assert.equal(block.error?.retryable, true);
+  // Yığın izi düşer, hata kalemi kalır.
+  assert.equal(block.error?.message, "Görev tamamlanamadı.");
+  assert.equal(/Traceback|bridge\.py/.test(block.error?.message ?? ""), false);
+});

@@ -150,6 +150,7 @@ test("task desktop access grants only server-selected non-critical capabilities"
       effect: "control",
       resourceScope: [`device:${targetDeviceId}`],
       source: "explicit_user_request",
+      riskClass: "low",
     },
   ]);
   assert.equal(contract.approval.scope.includes("email_send"), true);
@@ -490,4 +491,37 @@ test("desktop contract rejects an explicitly remote execution step", () => {
       true,
     );
   }
+});
+
+test("generic executors never receive a pre-issued task-bound grant", () => {
+  const targetDeviceId = "11111111-1111-4111-8111-111111111111";
+  const clientGrantId = "22222222-2222-4222-8222-222222222222";
+  const contract = buildTaskExecutionContract({
+    taskId: "task-generic",
+    turnId: "turn-generic",
+    message: "Bilgisayarımda şunu hallet",
+    routeDecision: route({
+      targetDeviceId,
+      capabilities: ["desktop_operator.run", "mcp_call_tool", "run_skill", "browser_control"],
+      requiresApproval: true,
+    }),
+    turnContract: turn({
+      authorization: {
+        desktopAccess: { mode: "task", targetDeviceId, clientGrantId },
+      },
+    }),
+  });
+
+  // Adı bir güvenlik kanıtı olmayan yürütücüler yetki almaz.
+  assert.deepEqual(contract.approval.grants, []);
+  for (const capability of ["desktop_operator.run", "mcp_call_tool", "run_skill", "browser_control"]) {
+    if (contract.execution.allowedCapabilities.includes(capability)) {
+      assert.equal(
+        contract.approval.separateApprovalFor.includes(capability),
+        true,
+        `${capability} ayrı onay listesinde olmalı`,
+      );
+    }
+  }
+  assert.equal(contract.approval.required, true);
 });

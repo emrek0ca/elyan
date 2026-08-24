@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { getIdempotencyKey } from "../../lib/idempotency.js";
 import { getRequestContext, sendConditionalJson } from "../../lib/http.js";
 import { recordNumericMetricSample } from "../../lib/reliability/sample-metrics.js";
+import { forbidden } from "../../lib/errors.js";
 import { getUserAuth, getUserScopedAuth } from "../../lib/request-auth.js";
 import {
   clearChatSessionsQuerySchema,
@@ -231,6 +232,15 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
 
     const body = createChatMessageBodySchema.parse(request.body);
     const auth = getUserScopedAuth(request);
+    // GÜVENLİK SINIRI: `desktopAccess` bir KULLANICI yetkilendirmesidir; masaüstü
+    // erişim grant'ini yalnız kullanıcının kendi turu üretebilir. Bu uç aynı
+    // zamanda runtime token'ı da kabul ettiği için, runtime'ın gönderdiği bir
+    // `desktopAccess` gövdesi kendi kendine yetki genişletmek anlamına gelirdi.
+    // Sessizce yok saymak yerine fail-closed reddediyoruz: anomali görünür kalsın.
+    if (auth.kind !== "user" && body.desktopAccess) {
+      throw forbidden("desktopAccess requires a user token");
+    }
+    const desktopAccess = auth.kind === "user" ? body.desktopAccess : undefined;
     const context = getRequestContext(request);
     const idempotencyKey = getIdempotencyKey(request);
     const startedAt = Date.now();
@@ -243,7 +253,7 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
       title: body.title,
       content: body.content,
       requestedCapabilities: body.requestedCapabilities,
-      desktopAccess: body.desktopAccess,
+      desktopAccess,
       metadata: body.metadata,
       ephemeralVision: body.ephemeralVision,
       requestId: context.requestId,
