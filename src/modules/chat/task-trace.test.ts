@@ -585,3 +585,36 @@ test("buildTaskTraceBlock leaves a completed task without any waiting_approval s
     false,
   );
 });
+
+test("buildTaskTraceBlock exposes clarification without manufacturing computer permission", () => {
+  const updatedAt = new Date("2026-08-24T18:00:00.000Z");
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-clarification",
+      status: "waiting_approval",
+      updatedAt,
+      approvalRequest: {
+        kind: "clarification",
+        interaction: { kind: "clarification" },
+        question: "Hangi klasörü kullanmalıyım?",
+        availableActions: ["answer"],
+      },
+      payload: {
+        metadata: {
+          routeDecision: {
+            route: "desktop_runtime",
+            intent: "desktop_cowork",
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(block.interaction, {
+    kind: "clarification",
+    question: "Hangi klasörü kullanmalıyım?",
+  });
+  assert.equal(block.needsApproval, false);
+  assert.deepEqual(block.availableActions, ["answer"]);
+  assert.equal(block.updatedAt, updatedAt.toISOString());
+});

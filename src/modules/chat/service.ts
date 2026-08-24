@@ -2201,6 +2201,11 @@ type CreateChatMessageInput = {
   title?: string;
   content: string;
   requestedCapabilities: string[];
+  desktopAccess?: {
+    mode: "task";
+    targetDeviceId: string;
+    clientGrantId: string;
+  };
   metadata?: Record<string, unknown>;
   ephemeralVision?: EphemeralVisionCarrier;
   requestId: string;
@@ -2270,13 +2275,13 @@ async function createChatMessageInner(
     remoteMcpResolution.requestedCapabilities;
   const routeStartedAt = Date.now();
   const endRouteStage = startStage("chat.route_model");
-  const routeDecision = await routeChatTurn(app, {
+  const baseRouteDecision = await routeChatTurn(app, {
     userId: input.userId,
     message: input.content,
     source: input.source,
     activeChatSessionId: input.sessionId,
     routeContinuity: readRouteContinuity(existingSession?.metadata),
-    selectedDeviceId: input.targetDeviceId,
+    selectedDeviceId: input.desktopAccess?.targetDeviceId ?? input.targetDeviceId,
     metadata: input.metadata,
     desktopAllowed: canUseDesktopConnections(usageAccess.planCode),
     requestedCapabilities: effectiveRequestedCapabilities,
@@ -2284,6 +2289,23 @@ async function createChatMessageInner(
     brainProfile: usageAccess.brainProfile,
     quota: undefined,
   });
+  const desktopAccessAuthorized =
+    input.desktopAccess?.mode === "task" &&
+    baseRouteDecision.route === "desktop_runtime" &&
+    baseRouteDecision.targetDeviceId === input.desktopAccess.targetDeviceId &&
+    baseRouteDecision.turnContract;
+  const routeDecision = desktopAccessAuthorized
+    ? {
+        ...baseRouteDecision,
+        turnContract: {
+          ...baseRouteDecision.turnContract!,
+          authorization: {
+            ...baseRouteDecision.turnContract!.authorization,
+            desktopAccess: input.desktopAccess!,
+          },
+        },
+      }
+    : baseRouteDecision;
   endRouteStage();
   logBrainDecisionObservation(app, {
     taskId: null,

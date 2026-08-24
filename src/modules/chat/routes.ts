@@ -243,6 +243,7 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
       title: body.title,
       content: body.content,
       requestedCapabilities: body.requestedCapabilities,
+      desktopAccess: body.desktopAccess,
       metadata: body.metadata,
       ephemeralVision: body.ephemeralVision,
       requestId: context.requestId,

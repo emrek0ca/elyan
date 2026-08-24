@@ -2066,6 +2066,39 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
   const verificationStatus = String(verificationRecord?.status ?? "")
     .trim()
     .toLowerCase();
+  const interactionRecord =
+    value.interaction && typeof value.interaction === "object" && !Array.isArray(value.interaction)
+      ? (value.interaction as Record<string, unknown>)
+      : null;
+  const interactionKind = String(interactionRecord?.kind ?? "").trim().toLowerCase();
+  const rawArtifacts = Array.isArray(value.artifacts) ? value.artifacts : [];
+  const artifacts = rawArtifacts.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const artifact = item as Record<string, unknown>;
+    const artifactTitle = normalizeTextValue(
+      artifact.title ?? artifact.name ?? artifact.fileName,
+      180,
+    );
+    if (!artifactTitle) return [];
+    return [{
+      ...(normalizeTextValue(artifact.id, 255) ? { id: normalizeTextValue(artifact.id, 255)! } : {}),
+      title: artifactTitle,
+      ...(normalizeTextValue(artifact.kind, 80) ? { kind: normalizeTextValue(artifact.kind, 80)! } : {}),
+      ...(normalizeTextValue(artifact.path, 1_000) ? { path: normalizeTextValue(artifact.path, 1_000)! } : {}),
+      ...(normalizeTextValue(artifact.url, 2_000) ? { url: normalizeTextValue(artifact.url, 2_000)! } : {}),
+    }];
+  }).slice(0, 12);
+  const errorRecord =
+    value.error && typeof value.error === "object" && !Array.isArray(value.error)
+      ? (value.error as Record<string, unknown>)
+      : null;
+  const errorMessage = normalizeTextValue(errorRecord?.message, 500);
+  const availableActions = Array.isArray(value.availableActions)
+    ? value.availableActions.filter(
+        (action): action is "approve" | "reject" | "answer" | "retry" =>
+          typeof action === "string" && ["approve", "reject", "answer", "retry"].includes(action),
+      ).slice(0, 4)
+    : [];
 
   const candidate = {
     type: "dispatch_widget",
@@ -2083,14 +2116,44 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
       : {}),
     ...(routeReason ? { routeReason } : {}),
     ...(activeStepId ? { activeStepId } : {}),
+    ...(typeof value.needsApproval === "boolean"
+      ? { needsApproval: value.needsApproval }
+      : {}),
     ...(["pending", "passed", "repaired", "failed"].includes(verificationStatus)
       ? {
           verification: {
             status: verificationStatus as NonNullable<
               ElyanTaskTraceBlock["verification"]
             >["status"],
+            ...(normalizeTextValue(verificationRecord?.summary, 240)
+              ? { summary: normalizeTextValue(verificationRecord?.summary, 240)! }
+              : {}),
           },
         }
+      : {}),
+    ...(["permission", "clarification"].includes(interactionKind)
+      ? {
+          interaction: {
+            kind: interactionKind as "permission" | "clarification",
+            ...(normalizeTextValue(interactionRecord?.question, 500)
+              ? { question: normalizeTextValue(interactionRecord?.question, 500)! }
+              : {}),
+          },
+        }
+      : {}),
+    ...(artifacts.length > 0 ? { artifacts } : {}),
+    ...(errorRecord && errorMessage
+      ? {
+          error: {
+            code: normalizeTextValue(errorRecord.code, 120) ?? "TASK_EXECUTION_FAILED",
+            message: errorMessage,
+            retryable: errorRecord.retryable === true,
+          },
+        }
+      : {}),
+    ...(availableActions.length > 0 ? { availableActions } : {}),
+    ...(typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt))
+      ? { updatedAt: new Date(value.updatedAt).toISOString() }
       : {}),
     ...(typeof value.repairAttempts === "number" &&
     Number.isInteger(value.repairAttempts) &&

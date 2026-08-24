@@ -35,6 +35,7 @@ import { runtimeSocketMessageSchema } from "../runtime/schemas.js";
 import {
   disconnectRuntime,
   heartbeatRuntime,
+  acknowledgeRuntimeAccess,
   listAssignedRuntimeTasks,
   markRuntimeConnected,
 } from "../runtime/service.js";
@@ -937,6 +938,11 @@ export const realtimeRoutes: FastifyPluginAsync = async (app) => {
                 );
                 return false;
               });
+            return;
+          }
+
+          if (parsed.type === "runtime.access.ack") {
+            await acknowledgeRuntimeAccess(app, payload, parsed);
             return;
           }
 

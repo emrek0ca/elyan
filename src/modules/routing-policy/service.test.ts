@@ -1795,6 +1795,43 @@ test("decideCommandRoute sends explicit runtime tools and skills to the desktop"
   assert.equal(decision.taskRoute?.needsDesktop, true);
 });
 
+test("battery observation bypasses the route model and compiles to sys_info", async () => {
+  let routeModelCalls = 0;
+  const app = createDesktopReadyApp(["sys_info"]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => {
+        routeModelCalls += 1;
+        throw new Error("route model must not run for deterministic system observation");
+      },
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "battery-observation-user",
+    message: "Bilgisayarın şarjı kaç",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(routeModelCalls, 0);
+  assert.equal(decision.route, "desktop_runtime");
+  assert.deepEqual(decision.capabilities, ["sys_info"]);
+  assert.equal(decision.requiresApproval, false);
+  assert.deepEqual(decision.taskRoute?.executionSteps, [
+    {
+      stepId: "step_sys_info",
+      device: "desktop",
+      capability: "sys_info",
+      input: { query: "battery" },
+    },
+  ]);
+  assert.deepEqual(
+    decision.taskRoute?.semanticDesktopContract?.requiredSemanticCapabilities,
+    ["sys_info"],
+  );
+});
+
 test("decideCommandRoute uses the model decision for dispatch-enabled execution", async () => {
   const app = createDesktopReadyApp();
   Object.assign(app.services, {

@@ -66,6 +66,7 @@ export type ContinuousLearningDatasetCandidate = {
     averageConfidence: number;
     minConfidence: number;
     validationRatio: number;
+    intentFamilyCount: number;
     acceptedTypes: Record<string, number>;
     acceptedSources: Record<string, number>;
   };
@@ -111,6 +112,11 @@ function readBoolean(record: Record<string, unknown> | null, key: string): boole
   return typeof value === "boolean" ? value : null;
 }
 
+function readString(record: Record<string, unknown> | null, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function sha256(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -139,9 +145,8 @@ function isMetadataTrainingEligible(metadata: Record<string, unknown> | null): b
   if (
     readBoolean(metadata, "forgotten") === true ||
     readBoolean(metadata, "tombstone") === true ||
-    readBoolean(metadata, "redacted") === true ||
     readBoolean(metadata, "trainingEligible") === false ||
-    readBoolean(metadata, "privacyRedacted") === true
+    readBoolean(metadata, "consentRevoked") === true
   ) {
     return false;
   }
@@ -211,6 +216,7 @@ export function buildContinuousLearningDatasetCandidate(
   const acceptedIdentityHashes: string[] = [];
   const acceptedTypes: Record<string, number> = {};
   const acceptedSources: Record<string, number> = {};
+  const acceptedIntentFamilies = new Set<string>();
   let confidenceTotal = 0;
   let tokenEstimate = 0;
 
@@ -236,6 +242,22 @@ export function buildContinuousLearningDatasetCandidate(
       reject(rejectedByReason, "metadata_not_training_eligible");
       continue;
     }
+    // Outcome/trajectory records are useful only when the runtime verified
+    // what actually happened. Failed episodes may enter as hard negatives,
+    // never as successful demonstrations.
+    if (["tool_outcome", "agent_trajectory", "task_feedback"].includes(event.type)) {
+      const verified =
+        readBoolean(metadata, "verified") === true ||
+        readString(metadata, "verificationStatus") === "verified";
+      const fulfilled =
+        readBoolean(metadata, "fulfilled") === true ||
+        readString(metadata, "verdict") === "fulfilled";
+      const hardNegative = readString(metadata, "trainingLabel") === "hard_negative";
+      if (!verified || (!fulfilled && !hardNegative)) {
+        reject(rejectedByReason, "metadata_not_training_eligible");
+        continue;
+      }
+    }
     if (hasSensitiveValue(event.value)) {
       reject(rejectedByReason, "sensitive_value_detected");
       continue;
@@ -256,6 +278,8 @@ export function buildContinuousLearningDatasetCandidate(
     tokenEstimate += estimateTokens(event.value);
     increment(acceptedTypes, event.type);
     increment(acceptedSources, event.source);
+    const intentFamily = readString(metadata, "intentFamily");
+    if (intentFamily) acceptedIntentFamilies.add(intentFamily);
   }
 
   const acceptedEventCount = acceptedIdentityHashes.length;
@@ -313,6 +337,7 @@ export function buildContinuousLearningDatasetCandidate(
       averageConfidence: Number(averageConfidence.toFixed(2)),
       minConfidence,
       validationRatio,
+      intentFamilyCount: acceptedIntentFamilies.size,
       acceptedTypes,
       acceptedSources,
     },
@@ -397,6 +422,7 @@ export async function processContinuousLearningDailyBuild(
   const candidate = buildContinuousLearningDatasetCandidate(events, {
     now,
     replayRatio: app.config?.ELYAN_CONTINUOUS_LEARNING_REPLAY_RATIO ?? 20,
+    validationRatio: 0.2,
   });
   const datasetStatus = enabled ? candidate.status : "draft";
   const promotionReport = evaluateContinuousLearningPromotion({
@@ -406,14 +432,22 @@ export async function processContinuousLearningDailyBuild(
     dedupedEventCount: candidate.dedupedEventCount,
     replayRatio: candidate.replayReport.replayRatio,
     validationRecordCount: candidate.validationRecordCount,
+    intentFamilyCount: candidate.qualityReport.intentFamilyCount,
     privacyRejectedCount: candidate.privacyReport.privacyRejectedCount,
     sensitiveRejectedCount: candidate.privacyReport.sensitiveRejectedCount,
+    sensitiveLeakCount: 0,
     qualityScore: candidate.qualityReport.qualityScore,
+    weightTrainingEnabled: app.config?.ELYAN_WEIGHT_TRAINING_ENABLED === true,
     securityBenchmarkPassed: null,
     latestBenchmarkScore: null,
     candidateEvaluationScore: null,
     canaryErrorRate: null,
     rollbackSignalCount: 0,
+    criticalWrongExecutionCount: 0,
+    baselineEvaluationScore: null,
+    maxIntentGroupRegression: null,
+    canaryTrafficPercent: null,
+    manualReleaseApproved: false,
   });
   const datasetVersion = `clv2_${windowEnd.toISOString().slice(0, 10)}_${candidate.datasetFingerprint.slice(0, 12)}`;
   const candidateStatus = shadow

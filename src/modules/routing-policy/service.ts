@@ -59,6 +59,7 @@ import {
   preflightRequestedRuntimeCapabilities,
 } from "../runtime/capabilities.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "../tasks/desktop-capability-manifest.js";
+import { parseSystemInfoQuery } from "../tasks/system-observation.js";
 import {
   buildUnderstandingConsensus,
   type UnderstandingConsensus,
@@ -192,6 +193,13 @@ export type CommandTurnContract = {
     requiresApproval: boolean;
   };
   understandingConsensus?: UnderstandingConsensus;
+  authorization?: {
+    desktopAccess?: {
+      mode: "task";
+      targetDeviceId: string;
+      clientGrantId: string;
+    };
+  };
 };
 
 export type CommandRequiredRuntime = "server" | "desktop" | "both";
@@ -3309,6 +3317,110 @@ export async function decideCommandRoute(
       requestedCapabilities: input.requestedCapabilities ?? [],
     },
   });
+  const systemInfoQuery = parseSystemInfoQuery(message);
+  if (systemInfoQuery) {
+    const outputContract = compileOutputContract({
+      message: input.message,
+      metadata,
+    });
+    const semanticContract = buildSemanticContract({
+      classification: deterministicClassification,
+      outputContract,
+    });
+    const reason = "İstek salt-okunur yerel sistem gözlemi olarak modelsiz derlendi.";
+    const executionSteps: ExecutionStep[] = [{
+      stepId: "step_sys_info",
+      device: "desktop",
+      capability: "sys_info",
+      input: { query: systemInfoQuery },
+    }];
+    const semanticDecision: SemanticAgentRouteDecision = {
+      contract: "elyan.agent_route_decision.v1",
+      intent: "system_observation",
+      targetDevice: "desktop",
+      goalContract: {
+        objectiveHash: objectiveHashForRoute(message),
+        successCriteria: ["system_information_returned"],
+      },
+      requiredCapabilities: ["sys_info"],
+      steps: executionSteps,
+      verification: {
+        required: true,
+        criteria: ["tool_result"],
+      },
+      confidence: 1,
+      missingInformation: [],
+      requiresConfirmation: false,
+      source: "legacy_route_compat",
+    };
+    const semanticDesktopContract: SemanticDesktopDispatchContract = {
+      contract: "elyan.semantic_desktop_dispatch.v1",
+      route: "desktop_runtime",
+      intent: "file_workflow",
+      requiredSemanticCapabilities: ["sys_info"],
+      requiredLocalContext: ["system"],
+      sideEffectLevel: "read",
+      confidence: 1,
+      evidence: [`system_observation:${systemInfoQuery}`],
+    };
+    const taskRoute = buildTaskRoute({
+      target: "desktop_runtime",
+      operationalRoute: "desktop_runtime",
+      executionPlan: ["desktop_runtime"],
+      reason,
+      needsDesktop: true,
+      needsPrivateDesktopData: true,
+      needsUserApproval: false,
+      requiredCapabilities: ["sys_info"],
+      executionSteps,
+      semanticDesktopContract,
+      semanticDecision,
+    });
+    const candidates = desktopAllowed
+      ? await resolveDesktopCandidates(
+          app,
+          input.userId,
+          ["sys_info"],
+          input.selectedDeviceId,
+        )
+      : null;
+    const route: CommandRoute = candidates?.canUseSelectedDevice
+      ? "desktop_runtime"
+      : desktopAllowed
+        ? "pairing_required"
+        : "unavailable";
+    return buildDecision({
+      route,
+      ...(candidates?.selectedDevice?.id
+        ? { targetDeviceId: candidates.selectedDevice.id }
+        : {}),
+      taskRoute,
+      mode: "executable_task",
+      capabilities: ["sys_info"],
+      privacyClass: "local_private",
+      requiresApproval: false,
+      reason,
+      userFacingMessage:
+        route === "desktop_runtime"
+          ? "Sistem bilgisi masaüstünden salt-okunur olarak alınacak."
+          : candidates
+            ? resolveDesktopUnavailableMessage(candidates)
+            : "Masaüstü yürütmesi bu tur için kullanılamıyor.",
+      primaryIntent: deterministicClassification.primaryIntent,
+      confidence: 1,
+      requiresLocalRuntime: true,
+      message,
+      brainProfile: input.brainProfile,
+      failClosedReason:
+        route === "desktop_runtime"
+          ? "deterministic_system_observation"
+          : "desktop_runtime_unavailable",
+      semanticContract,
+      outputContract,
+      classification: deterministicClassification,
+      speechAct: { act: "question", margin: 1 },
+    });
+  }
   // The synchronous classifier is a bounded degraded-mode fallback. When it
   // reports a compound turn, use the warm semantic model and (when permitted)
   // the structured route model to decide which intent owns the turn. This is

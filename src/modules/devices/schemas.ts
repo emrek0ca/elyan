@@ -44,3 +44,16 @@ export const updatePushTokenBodySchema = z.object({
 export const deviceParamsSchema = z.object({
   deviceId: z.string().uuid(),
 });
+
+export const runtimeAccessBodySchema = z.object({
+  action: z.enum(["grant_session", "revoke"]),
+  ttlSeconds: z.literal(3600).optional(),
+}).strict().superRefine((input, ctx) => {
+  if (input.action === "grant_session" && input.ttlSeconds !== 3600) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["ttlSeconds"],
+      message: "grant_session requires ttlSeconds=3600",
+    });
+  }
+});

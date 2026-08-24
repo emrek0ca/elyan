@@ -437,6 +437,7 @@ export const elyanTaskTraceBlockSchema = z.object({
   activeStepId: elyanTaskTraceStepIdSchema.optional(),
   verification: z.object({
     status: z.enum(["pending", "passed", "repaired", "failed"]),
+    summary: z.string().min(1).max(240).optional(),
   }).passthrough().optional(),
   repairAttempts: z.number().int().min(0).max(32).optional(),
   stopReason: z.string().min(1).max(160).optional(),
@@ -451,6 +452,24 @@ export const elyanTaskTraceBlockSchema = z.object({
    * değildir: sözleşme burada, açıkça yazılır.
    */
   needsApproval: z.boolean().optional(),
+  interaction: z.object({
+    kind: z.enum(["permission", "clarification"]),
+    question: z.string().min(1).max(500).optional(),
+  }).optional(),
+  artifacts: z.array(z.object({
+    id: z.string().min(1).max(255).optional(),
+    title: z.string().min(1).max(180),
+    kind: z.string().min(1).max(80).optional(),
+    path: z.string().min(1).max(1_000).optional(),
+    url: z.string().min(1).max(2_000).optional(),
+  })).max(12).optional(),
+  error: z.object({
+    code: z.string().min(1).max(120),
+    message: z.string().min(1).max(500),
+    retryable: z.boolean(),
+  }).optional(),
+  availableActions: z.array(z.enum(["approve", "reject", "answer", "retry"])).max(4).optional(),
+  updatedAt: z.string().datetime().optional(),
   steps: z.array(elyanTaskTraceStepSchema).min(1),
 });
 const elyanAssistantBlockBaseSchema = z.object({

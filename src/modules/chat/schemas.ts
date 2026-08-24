@@ -24,6 +24,12 @@ const chatInputBlockSchema = z.object({
   markdown: z.string().trim().min(1).max(20_000),
 }).passthrough();
 
+export const desktopAccessRequestSchema = z.object({
+  mode: z.literal("task"),
+  targetDeviceId: z.string().uuid(),
+  clientGrantId: z.string().uuid(),
+}).strict();
+
 function contentFromInputBlocks(blocks: Array<z.infer<typeof chatInputBlockSchema>> | undefined): string {
   return (blocks ?? [])
     .filter((block) => block.type === "text")
@@ -106,6 +112,7 @@ export const createChatMessageBodySchema = z.preprocess(normalizeAuthorizedLegac
     .max(20)
     .transform((values) => [...new Set(values)])
     .default([]),
+  desktopAccess: desktopAccessRequestSchema.optional(),
   metadata: boundedJsonRecordSchema.optional(),
   ephemeralVision: ephemeralVisionCarrierSchema.optional(),
 })
@@ -127,6 +134,17 @@ export const createChatMessageBodySchema = z.preprocess(normalizeAuthorizedLegac
         code: z.ZodIssueCode.custom,
         path: ["chatSessionId"],
         message: "chatSessionId must match sessionId when both are provided",
+      });
+    }
+    if (
+      input.desktopAccess &&
+      input.targetDeviceId &&
+      input.desktopAccess.targetDeviceId !== input.targetDeviceId
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["desktopAccess", "targetDeviceId"],
+        message: "desktopAccess targetDeviceId must match targetDeviceId",
       });
     }
     if (hasRawBinaryUploadHint(input.metadata)) {

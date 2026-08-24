@@ -35,7 +35,13 @@ function event(overrides: Partial<{
     scope: overrides.scope ?? "shared",
     source: overrides.source ?? "task_feedback",
     privacyLevel: overrides.privacyLevel ?? "safe",
-    metadata: overrides.metadata ?? { approvedByHuman: true },
+    metadata: overrides.metadata ?? {
+      approvedByHuman: true,
+      verified: true,
+      fulfilled: true,
+      privacyRedacted: true,
+      intentFamily: "task_execution",
+    },
     expiresAt: overrides.expiresAt ?? null,
     createdAt: overrides.createdAt ?? new Date("2026-07-04T12:00:00.000Z"),
   };
@@ -103,10 +109,41 @@ test("user-scoped events require explicit global training opt-in", () => {
     event({
       id: "00000000-0000-4000-8000-000000000031",
       scope: "user",
-      metadata: { approvedByHuman: true, globalTrainingEligible: true },
+      metadata: {
+        approvedByHuman: true,
+        globalTrainingEligible: true,
+        verified: true,
+        fulfilled: true,
+        privacyRedacted: true,
+        intentFamily: "task_execution",
+      },
     }),
   ]);
 
   assert.equal(candidate.acceptedEventCount, 1);
   assert.equal(candidate.privacyReport.rejectedByReason.scope_not_global_eligible, 1);
+});
+
+test("failed verified episodes enter only as hard negatives", () => {
+  const candidate = buildContinuousLearningDatasetCandidate([
+    event({
+      id: "00000000-0000-4000-8000-000000000040",
+      metadata: { verified: true, fulfilled: false, intentFamily: "document" },
+    }),
+    event({
+      id: "00000000-0000-4000-8000-000000000041",
+      value: "verified failure trace",
+      metadata: {
+        verified: true,
+        fulfilled: false,
+        trainingLabel: "hard_negative",
+        privacyRedacted: true,
+        intentFamily: "document",
+      },
+    }),
+  ]);
+
+  assert.equal(candidate.acceptedEventCount, 1);
+  assert.equal(candidate.privacyReport.rejectedByReason.metadata_not_training_eligible, 1);
+  assert.equal(candidate.qualityReport.intentFamilyCount, 1);
 });

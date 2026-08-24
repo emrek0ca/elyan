@@ -12,6 +12,8 @@ import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import { matchDesktopCapabilitiesSemantically } from "./desktop-capability-ontology.js";
 import type { ExecutionStep } from "./execution-step.js";
 import type { ExecutionPlacementSnapshot } from "./execution-placement.js";
+import { parseSystemInfoQuery } from "./system-observation.js";
+export { parseSystemInfoQuery } from "./system-observation.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
 // görevler masaüstünde WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu.
@@ -1168,6 +1170,11 @@ function inferCapabilities(
   message: string,
   envelope?: UnderstandingEnvelope,
 ): string[] {
+  // Local system observations are a closed, read-only contract. They must win
+  // before model/semantic candidates so an imprecise desktop.runtime marker
+  // cannot widen the task into desktop_operator or the dynamic 80-tool loop.
+  const systemInfoQuery = parseSystemInfoQuery(message);
+  if (systemInfoQuery && systemInfoQuery !== "all") return ["sys_info"];
   const structuredDecision = routeDecision.taskRoute?.semanticDecision;
   if (structuredDecision?.source === "structured_model") {
     const structuredCapabilities = [
@@ -1859,11 +1866,12 @@ function buildSteps(input: {
     });
   }
   if (input.capabilities.includes("sys_info")) {
+    const systemQuery = parseSystemInfoQuery(input.message) ?? "all";
     steps.push({
       id: "step_sys_info",
       capability: "sys_info",
       description: "Masaüstü sistem durumu salt-okunur olarak alınacak.",
-      args: { query: "all" },
+      args: { query: systemQuery },
     });
   }
   if (input.capabilities.includes("desktop_os.processes")) {
@@ -2365,13 +2373,19 @@ export function buildDesktopWorkOrder(input: {
       DESKTOP_CAPABILITY_MANIFEST.find((entry) => entry.name === capability)
         ?.requiresApproval === true,
   );
-  const requiresApproval =
-    input.routeDecision.requiresApproval === true || approvalCapabilities.length > 0;
-  const sourceReference = input.understandingEnvelope?.source_reference ?? "current_prompt";
-  const deterministicReadOnlyStep =
+  const deterministicSystemObservation =
     steps.length === 1 &&
     steps[0]?.capability === "sys_info" &&
-    steps[0]?.args?.query === "all";
+    typeof steps[0]?.args?.query === "string" &&
+    ["battery", "cpu", "ram", "disk", "network", "time", "date", "all"].includes(
+      steps[0].args.query,
+    );
+  const requiresApproval =
+    (!deterministicSystemObservation && input.routeDecision.requiresApproval === true) ||
+    approvalCapabilities.length > 0;
+  const sourceReference = input.understandingEnvelope?.source_reference ?? "current_prompt";
+  const deterministicReadOnlyStep =
+    deterministicSystemObservation;
   const deterministicFileFindStep =
     steps.length === 1 &&
     steps[0]?.capability === "file_find" &&

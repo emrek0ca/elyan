@@ -7,6 +7,7 @@ import {
   isDesktopPlanPreparationPending,
   parseDirectDesktopAppCommand,
   parseDirectImageFetchCommand,
+  parseSystemInfoQuery,
 } from "./desktop-work-order.js";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
@@ -667,6 +668,53 @@ test("safe system status is a deterministic read-only registry plan", () => {
     workOrder.planPreview.planPreparation?.outcome,
     "deterministic_materialized",
   );
+});
+
+test("Turkish battery observations compile to one approval-free sys_info step", () => {
+  for (const message of [
+    "Bilgisayarın şarjı kaç",
+    "pil yüzde kaç",
+    "MacBook'umun batarya seviyesi ne alemde?",
+  ]) {
+    const workOrder = buildDesktopWorkOrder({
+      message,
+      title: message,
+      routeDecision: routeDecision({
+        capabilities: ["desktop.runtime", "desktop_operator.run"],
+        requiresApproval: true,
+      }),
+      requestedCapabilities: ["desktop.runtime", "desktop_operator.run"],
+    });
+
+    assert.deepEqual(workOrder.requiredCapabilities, ["sys_info"], message);
+    assert.deepEqual(workOrder.planPreview.steps, [
+      {
+        id: "step_sys_info",
+        capability: "sys_info",
+        description: "Masaüstü sistem durumu salt-okunur olarak alınacak.",
+        args: { query: "battery" },
+      },
+    ], message);
+    assert.equal(workOrder.requiresApproval, false, message);
+    assert.equal(workOrder.planPreview.planSource, "deterministic_registry", message);
+    assert.equal(workOrder.planPreview.planPreparation?.status, "ready", message);
+    assert.equal(
+      workOrder.planPreview.planPreparation?.outcome,
+      "deterministic_materialized",
+      message,
+    );
+  }
+});
+
+test("system observation parser covers safe queries without stealing research", () => {
+  assert.equal(parseSystemInfoQuery("CPU kullanımım kaç"), "cpu");
+  assert.equal(parseSystemInfoQuery("Bilgisayarın RAM durumunu göster"), "ram");
+  assert.equal(parseSystemInfoQuery("Diskte ne kadar boş alan var?"), "disk");
+  assert.equal(parseSystemInfoQuery("Bilgisayar hangi Wi-Fi ağına bağlı?"), "network");
+  assert.equal(parseSystemInfoQuery("Bilgisayarın saati kaç?"), "time");
+  assert.equal(parseSystemInfoQuery("Bilgisayarın tarihi nedir?"), "date");
+  assert.equal(parseSystemInfoQuery("Masaüstü sistem durumunu getir"), "all");
+  assert.equal(parseSystemInfoQuery("Güncel batarya trendlerini araştır ve rapor yaz"), null);
 });
 
 test("direct image download becomes an artifact-producing image_fetch plan", () => {

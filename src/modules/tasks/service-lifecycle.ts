@@ -163,20 +163,54 @@ export function normalizeTaskApprovalRequest(
     taskId: string;
     now?: Date;
   },
-) {
+): Record<string, unknown> & {
+  kind: string;
+  source: string;
+  approvalKey: string;
+  revision: number;
+  expiresAt: string;
+  surface: string;
+  permissionSurface?: string;
+  permissionSummary?: string;
+  interaction: { kind: "permission" | "clarification" };
+  availableActions: string[];
+} {
   const now = input.now ?? new Date();
   const request = readRecord(approvalRequest) ?? {};
   const revision = approvalRequestRevision(request);
   const existingKey = approvalRequestKey(request);
   const taskKey = readString(input.taskId) || "task";
-  return {
-    ...request,
+  const kind = readString(request.kind) || "permission";
+  const interaction = readRecord(request.interaction) ?? {};
+  const {
+    surface: _surface,
+    permissionSurface: _permissionSurface,
+    permissionSummary: _permissionSummary,
+    availableActions: _availableActions,
+    ...baseRequest
+  } = request;
+  const common = {
+    ...baseRequest,
+    kind,
     source: readString(request.source) || "desktop_runtime",
     approvalKey: existingKey || `${taskKey}:${revision}`,
     revision,
     expiresAt: approvalRequestExpiresAt(request, now),
+  };
+  if (kind === "clarification") {
+    return {
+      ...common,
+      surface: "clarification",
+      interaction: { ...interaction, kind: "clarification" as const },
+      availableActions: ["answer"],
+    };
+  }
+  return {
+    ...common,
     surface: "full_computer_access",
     permissionSurface: "full_computer_access",
+    interaction: { ...interaction, kind: "permission" as const },
+    availableActions: ["approve", "reject"],
     permissionSummary:
       readString(request.permissionSummary) ||
       "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak.",

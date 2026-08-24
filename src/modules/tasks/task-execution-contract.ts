@@ -32,6 +32,8 @@ export const TASK_EXECUTION_CONTRACT_V1 = "elyan.task_execution_contract.v1" as 
 export const TASK_EXECUTION_CONTRACT = "elyan.task_execution_contract.v2" as const;
 export const TASK_EXECUTION_CONTRACT_VERSION = 2 as const;
 export const TASK_EXECUTION_MAX_STEPS = 16;
+export const TASK_EXECUTION_DIRECT_TOOL_LIMIT = 12;
+export const TASK_EXECUTION_DYNAMIC_MAX_STEPS = 12;
 
 const SERVER_CAPABILITY_IDS = new Set([
   "sys_info",
@@ -126,7 +128,7 @@ export const taskExecutionGrantSchema = z.object({
   taskId: z.string().min(1).max(160),
   turnId: z.string().min(1).max(160),
   capability: z.string().min(1).max(120),
-  effect: z.enum(["read", "write"]),
+  effect: z.enum(["read", "write", "control"]),
   resourceScope: z.array(z.string().min(1).max(240)).min(1).max(16),
   source: z.literal("explicit_user_request"),
 });
@@ -369,15 +371,17 @@ function allowedCapabilitiesForInput(input: {
 }): string[] {
   const compiled = isCompiledWorkOrder(input.workOrder);
   return uniqueStrings([
-    ...(input.workOrder?.requiredCapabilities ?? []),
-    ...(input.workOrder?.materializedCapabilityScope ?? []),
-    // Route capabilities are discovery hints only. Once a trusted compiled
-    // graph exists, retaining rejected route hints would silently widen the
-    // executable contract beyond the one authoritative plan.
-    ...(compiled ? [] : input.routeDecision.capabilities),
+    // Compiled graphs may carry their already-materialized capability scope.
+    // Dynamic routes are different: route capabilities are discovery hints,
+    // not an executable grant. Only the policy-filtered direct shortlist may
+    // become the hard scope; tool_search remains confined to this same set.
+    ...(compiled ? (input.workOrder?.requiredCapabilities ?? []) : []),
+    ...(compiled ? (input.workOrder?.materializedCapabilityScope ?? []) : []),
     ...input.selectedTools.map((tool) => tool.id),
     ...input.steps.map((step) => step.capability),
-  ], 96).filter((capability) => knownTaskCapabilityIds().has(capability));
+  ], compiled ? 96 : TASK_EXECUTION_DIRECT_TOOL_LIMIT).filter((capability) =>
+    knownTaskCapabilityIds().has(capability),
+  );
 }
 
 const EXPLICIT_ARTIFACT_WRITE_CAPABILITIES = new Set([
@@ -417,6 +421,74 @@ function explicitArtifactWriteGrants(input: {
       resourceScope: writeRoots,
       source: "explicit_user_request" as const,
     }));
+}
+
+const SEPARATE_APPROVAL_CAPABILITY_PATTERN =
+  /(?:credential|password|secret|payment|billing|purchase|delete|trash|erase|wipe|overwrite|upload|share|send|message|email|system_settings|settings_write)/iu;
+
+function taskScopedDesktopAccessGrants(input: {
+  taskId: string;
+  turnId: string;
+  turnContract: CommandTurnContract;
+  routeDecision: CommandRouteDecision;
+  workOrder?: DesktopWorkOrder | null;
+  selectedTools: TaskExecutionTool[];
+  steps: TaskExecutionStep[];
+  allowedCapabilities: string[];
+  existingGrants: TaskExecutionGrant[];
+}): TaskExecutionGrant[] {
+  const access = input.turnContract.authorization?.desktopAccess;
+  if (
+    access?.mode !== "task" ||
+    input.routeDecision.route !== "desktop_runtime" ||
+    input.routeDecision.targetDeviceId !== access.targetDeviceId
+  ) return [];
+
+  const existing = new Set(input.existingGrants.map((grant) => grant.capability));
+  const selected = uniqueStrings([
+    ...input.steps.map((step) => step.capability),
+    ...input.selectedTools.map((tool) => tool.id),
+  ], TASK_EXECUTION_DIRECT_TOOL_LIMIT);
+  const readRoots = uniqueStrings(input.workOrder?.resourceScope?.readRoots ?? [], 16);
+  const writeRoots = uniqueStrings(input.workOrder?.resourceScope?.writeRoots ?? [], 16);
+  const grants: TaskExecutionGrant[] = [];
+  for (const capability of selected) {
+    if (
+      existing.has(capability) ||
+      !input.allowedCapabilities.includes(capability) ||
+      SEPARATE_APPROVAL_CAPABILITY_PATTERN.test(capability)
+    ) continue;
+    const manifest = knownCapability(capability);
+    if (!manifest?.requiresApproval || manifest.sideEffectClass === "destructive") continue;
+    const effect = manifest.mutatesPath
+      ? "write"
+      : manifest.sideEffectClass === "read" || manifest.sideEffectClass === "none"
+        ? "read"
+        : "control";
+    const stepRoots = uniqueStrings(
+      input.steps
+        .filter((step) => step.capability === capability)
+        .flatMap((step) => step.resourceScope),
+      16,
+    );
+    const resourceScope = stepRoots.length > 0
+      ? stepRoots
+      : effect === "write" && writeRoots.length > 0
+        ? writeRoots
+        : effect === "read" && readRoots.length > 0
+          ? readRoots
+          : [`device:${access.targetDeviceId}`];
+    grants.push({
+      id: `grant_${compact(access.clientGrantId, 48)}_${grants.length + 1}`,
+      taskId: compact(input.taskId, 160),
+      turnId: compact(input.turnId, 160),
+      capability,
+      effect,
+      resourceScope,
+      source: "explicit_user_request",
+    });
+  }
+  return grants;
 }
 
 function verificationSnapshot(
@@ -492,6 +564,7 @@ function selectedToolsForInput(input: {
       reason: candidate.reason,
       confidence: Math.max(0, Math.min(1, input.confidence)),
     });
+    if (selectedTools.length >= TASK_EXECUTION_DIRECT_TOOL_LIMIT) break;
   }
   return { selectedTools, rejectedToolIds: rejectedToolIds.slice(0, 16) };
 }
@@ -700,13 +773,27 @@ export function buildTaskExecutionContract(input: {
     selectedTools: toolSelection.selectedTools,
     steps,
   });
-  const grants = explicitArtifactWriteGrants({
+  const explicitGrants = explicitArtifactWriteGrants({
     taskId: input.taskId,
     turnId: input.turnId,
     output,
     workOrder,
     allowedCapabilities,
   });
+  const grants = [
+    ...explicitGrants,
+    ...taskScopedDesktopAccessGrants({
+      taskId: input.taskId,
+      turnId: input.turnId,
+      turnContract: input.turnContract,
+      routeDecision: input.routeDecision,
+      workOrder,
+      selectedTools: toolSelection.selectedTools,
+      steps,
+      allowedCapabilities,
+      existingGrants: explicitGrants,
+    }),
+  ];
   const grantedCapabilities = new Set(grants.map((grant) => grant.capability));
   const risk = workOrder?.semanticGoal?.risk;
   const requiredRuntime = input.routeDecision.requiredRuntime;
@@ -751,8 +838,16 @@ export function buildTaskExecutionContract(input: {
       selectedSkills: skillSelection.selectedSkills,
       steps,
       maxSteps: Math.min(
-        TASK_EXECUTION_MAX_STEPS,
-        Math.max(1, workOrder?.execution.maxSteps ?? TASK_EXECUTION_MAX_STEPS),
+        steps.length > 0
+          ? TASK_EXECUTION_MAX_STEPS
+          : TASK_EXECUTION_DYNAMIC_MAX_STEPS,
+        Math.max(
+          1,
+          workOrder?.execution.maxSteps ??
+            (steps.length > 0
+              ? TASK_EXECUTION_MAX_STEPS
+              : TASK_EXECUTION_DYNAMIC_MAX_STEPS),
+        ),
       ),
     },
     approval: {

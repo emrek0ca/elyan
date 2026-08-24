@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { devices, runtimeConnections, tasks } from "../../db/schema.js";
 import { signRuntimeAccessToken } from "../../lib/auth-tokens.js";
@@ -375,6 +375,63 @@ export async function heartbeatRuntime(
       handshake?.capabilityStates ?? {},
     ),
   };
+}
+
+export async function acknowledgeRuntimeAccess(
+  app: FastifyInstance,
+  auth: RuntimeAuthTokenPayload,
+  input: {
+    commandId: string;
+    action: "grant_session" | "revoke";
+    state: "applied" | "rejected" | "failed";
+    expiresAt?: string | null;
+    message?: string;
+  },
+) {
+  await getRuntimeConnectionByAuth(app, auth);
+  const now = new Date();
+  const active = input.state === "applied" && input.action === "grant_session";
+  const accessState = {
+    contract: "elyan.runtime_access_state.v1",
+    mode: active ? "session" : "off",
+    active,
+    commandId: input.commandId,
+    action: input.action,
+    state: input.state,
+    expiresAt: active ? input.expiresAt ?? null : null,
+    updatedAt: now.toISOString(),
+    ...(input.message ? { message: input.message } : {}),
+  };
+  await app.db
+    .update(runtimeConnections)
+    .set({
+      capabilityStates: sql`coalesce(${runtimeConnections.capabilityStates}, '{}'::jsonb) || ${JSON.stringify({
+        "runtime.access.session.v1": accessState,
+      })}::jsonb`,
+      lastHeartbeatAt: now,
+    })
+    .where(
+      and(
+        eq(runtimeConnections.id, auth.connectionId),
+        eq(runtimeConnections.deviceId, auth.deviceId),
+        eq(runtimeConnections.userId, auth.sub),
+      ),
+    );
+  await app.services.eventBus.publishVolatile({
+    topic: "device.status_changed",
+    userId: auth.sub,
+    deviceId: auth.deviceId,
+    payload: {
+      deviceId: auth.deviceId,
+      // Native mobile applies device events only when presence is explicit;
+      // keeping this field on access ACKs makes it re-fetch the authoritative
+      // capabilityStates snapshot instead of leaving the one-hour timer stale.
+      isOnline: true,
+      runtimeAccess: accessState,
+      reason: "runtime_access_changed",
+    },
+  });
+  return accessState;
 }
 
 export async function disconnectRuntime(

@@ -282,9 +282,31 @@ test("normalizeTaskApprovalRequest creates a single expiring full-access surface
   assert.equal(normalized.revision, 1);
   assert.equal(normalized.permissionSurface, "full_computer_access");
   assert.equal(normalized.surface, "full_computer_access");
+  assert.deepEqual(normalized.interaction, { kind: "permission" });
+  assert.deepEqual(normalized.availableActions, ["approve", "reject"]);
   assert.equal(normalized.expiresAt, "2030-01-01T00:01:00.000Z");
   assert.equal(isApprovalRequestExpired(normalized, now), false);
   assert.equal(isApprovalRequestExpired(normalized, new Date("2030-01-01T00:10:00.001Z")), true);
+});
+
+test("normalizeTaskApprovalRequest keeps clarification separate from permissions", () => {
+  const normalized = normalizeTaskApprovalRequest(
+    {
+      kind: "clarification",
+      question: "Hangi klasörü kullanayım?",
+      surface: "full_computer_access",
+      permissionSurface: "full_computer_access",
+      permissionSummary: "Yanlış izin özeti",
+    },
+    { taskId: "task-clarification", now: new Date("2030-01-01T00:00:00.000Z") },
+  );
+
+  assert.equal(normalized.kind, "clarification");
+  assert.equal(normalized.surface, "clarification");
+  assert.deepEqual(normalized.interaction, { kind: "clarification" });
+  assert.deepEqual(normalized.availableActions, ["answer"]);
+  assert.equal("permissionSurface" in normalized, false);
+  assert.equal("permissionSummary" in normalized, false);
 });
 
 test("isApprovalAlreadyResolved detects approved and rejected resolutions", () => {
@@ -319,12 +341,15 @@ test("buildTaskApprovalResumeUpdate keeps approved tasks waiting for runtime res
     title: "Mail gönderilsin mi?",
     message: "Alıcı: ali@example.com",
     summary: "Mail gönderimi onay bekliyor.",
+    kind: "permission",
     source: "desktop_runtime",
     approvalKey: "task:1",
     revision: 1,
     expiresAt: "2030-01-01T00:01:00.000Z",
     surface: "full_computer_access",
     permissionSurface: "full_computer_access",
+    interaction: { kind: "permission" },
+    availableActions: ["approve", "reject"],
     permissionSummary: "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak.",
     resolution: {
       approved: true,

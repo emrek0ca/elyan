@@ -78,11 +78,82 @@ test("buildTaskExecutionContract produces one bounded canonical snapshot", () =>
   assert.equal(contract.contract, "elyan.task_execution_contract.v2");
   assert.equal(contract.taskId, "task-1");
   assert.equal(contract.execution.selectedTools[0]?.id, "sys_info");
-  assert.equal(contract.execution.maxSteps, 16);
+  assert.equal(contract.execution.maxSteps, 12);
   assert.equal(contract.execution.mode, "dynamic");
   assert.equal(contract.execution.allowedCapabilities.includes("sys_info"), true);
   assert.match(contract.binding.hash, /^[a-f0-9]{64}$/u);
   assert.equal(contract.privacy.class, "local_private");
+  assert.equal(validateTaskExecutionContract(contract).ok, true);
+});
+
+test("dynamic contracts never widen beyond the policy-filtered direct shortlist", () => {
+  const contract = buildTaskExecutionContract({
+    taskId: "task-dynamic-scope",
+    turnId: "turn-dynamic-scope",
+    message: "Karmaşık bir yerel görevi çöz",
+    routeDecision: route({
+      capabilities: [
+        "sys_info",
+        "file_read",
+        "file_search",
+        "directory_tree",
+        "document_read",
+        "web_research",
+        "text_analyze",
+        "data_analyze",
+        "ocr_read",
+        "image_read",
+        "open_app",
+        "run_skill",
+        "mcp_call_tool",
+        "document_write",
+        "spreadsheet_write",
+      ],
+    }),
+    turnContract: turn(),
+  });
+
+  assert.equal(contract.execution.mode, "dynamic");
+  assert.equal(contract.execution.allowedCapabilities.length <= 12, true);
+  assert.deepEqual(
+    contract.execution.allowedCapabilities,
+    contract.execution.selectedTools.map((tool) => tool.id),
+  );
+  assert.equal(contract.execution.maxSteps, 12);
+});
+
+test("task desktop access grants only server-selected non-critical capabilities", () => {
+  const targetDeviceId = "11111111-1111-4111-8111-111111111111";
+  const clientGrantId = "22222222-2222-4222-8222-222222222222";
+  const contract = buildTaskExecutionContract({
+    taskId: "task-access",
+    turnId: "turn-access",
+    message: "Music uygulamasını aç",
+    routeDecision: route({
+      targetDeviceId,
+      capabilities: ["open_app", "email_send"],
+      requiresApproval: true,
+    }),
+    turnContract: turn({
+      authorization: {
+        desktopAccess: { mode: "task", targetDeviceId, clientGrantId },
+      },
+    }),
+  });
+
+  assert.deepEqual(contract.approval.grants, [
+    {
+      id: `grant_${clientGrantId}_1`,
+      taskId: "task-access",
+      turnId: "turn-access",
+      capability: "open_app",
+      effect: "control",
+      resourceScope: [`device:${targetDeviceId}`],
+      source: "explicit_user_request",
+    },
+  ]);
+  assert.equal(contract.approval.scope.includes("email_send"), true);
+  assert.equal(contract.approval.required, true);
   assert.equal(validateTaskExecutionContract(contract).ok, true);
 });
 

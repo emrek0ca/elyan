@@ -19,6 +19,7 @@ type TaskTraceSource = {
   status?: TaskStatus;
   payload?: unknown;
   result?: unknown;
+  approvalRequest?: unknown;
   summary?: string | null;
   error?: string | null;
   createdAt?: Date | null;
@@ -28,6 +29,100 @@ type TaskTraceSource = {
   dispatchAckAt?: Date | null;
   runtimeConnectionId?: string | null;
 };
+
+function decorateLifecycleFields(
+  block: ElyanTaskTraceBlock,
+  task: TaskTraceSource,
+): ElyanTaskTraceBlock {
+  const approval = readRecord(task.approvalRequest);
+  const interaction = readRecord(approval?.interaction);
+  const interactionKind = readString(interaction, "kind");
+  const kind = interactionKind === "clarification" ? "clarification" : "permission";
+  const question = compactDetail(
+    readString(approval, "question") ?? readString(approval, "message"),
+    500,
+  );
+  const declaredActions = readStringList(approval, "availableActions");
+  const result = readRecord(task.result);
+  const resultError = readRecord(result?.error);
+  const errorMessage = compactDetail(
+    readString(resultError, "message") ?? task.error,
+    500,
+  );
+  const retryable = readBoolean(resultError, "retryable") === true;
+  const rawArtifacts = Array.isArray(result?.artifacts) ? result.artifacts : [];
+  const artifacts = rawArtifacts.flatMap((value) => {
+    const artifact = readRecord(value);
+    if (!artifact) return [];
+    const title = compactDetail(
+      readString(artifact, "title") ??
+        readString(artifact, "name") ??
+        readString(artifact, "fileName"),
+      180,
+    );
+    if (!title) return [];
+    const id = compactDetail(readString(artifact, "id"), 255);
+    const artifactKind = compactDetail(readString(artifact, "kind"), 80);
+    const path = compactDetail(readString(artifact, "path"), 1_000);
+    const url = compactDetail(readString(artifact, "url"), 2_000);
+    return [{
+      ...(id ? { id } : {}),
+      title,
+      ...(artifactKind ? { kind: artifactKind } : {}),
+      ...(path ? { path } : {}),
+      ...(url ? { url } : {}),
+    }];
+  }).slice(0, 12);
+  const availableActions = block.status === "waiting_approval"
+    ? (declaredActions.length > 0
+        ? declaredActions
+        : kind === "clarification"
+          ? ["answer"]
+          : ["approve", "reject"])
+    : block.status === "failed" && retryable
+      ? ["retry"]
+      : [];
+  const safeActions = availableActions.filter(
+    (action): action is "approve" | "reject" | "answer" | "retry" =>
+      ["approve", "reject", "answer", "retry"].includes(action),
+  );
+  return {
+    ...block,
+    ...(block.status === "waiting_approval"
+      ? {
+          interaction: {
+            kind,
+            ...(question ? { question } : {}),
+          },
+          // A clarification is a question, not a computer permission.
+          needsApproval: kind === "permission",
+        }
+      : {}),
+    verification: block.verification ?? {
+      status:
+        block.status === "completed"
+          ? "passed"
+          : block.status === "failed"
+            ? "failed"
+            : "pending",
+      ...(block.summary ? { summary: block.summary } : {}),
+    },
+    ...(artifacts.length > 0 ? { artifacts } : {}),
+    ...(block.status === "failed" && errorMessage
+      ? {
+          error: {
+            code:
+              compactDetail(readString(resultError, "code"), 120) ??
+              "TASK_EXECUTION_FAILED",
+            message: errorMessage,
+            retryable,
+          },
+        }
+      : {}),
+    ...(safeActions.length > 0 ? { availableActions: safeActions } : {}),
+    ...(isoOrNull(task.updatedAt) ? { updatedAt: isoOrNull(task.updatedAt)! } : {}),
+  };
+}
 
 const STEP_LABELS: Record<ElyanTaskTraceStepId, string> = {
   intent: "İstek analizi",
@@ -1279,10 +1374,13 @@ export function buildTaskTraceBlock(input: {
     ...(activeStep ? { activeStepId: activeStep.id } : {}),
     steps,
   };
-  return withCapabilityStepLabels(
-    ensureWaitingApprovalStep(
-      runtimeExecutionTraceBlock({ task: input.task, fallback }) ?? fallback,
+  return decorateLifecycleFields(
+    withCapabilityStepLabels(
+      ensureWaitingApprovalStep(
+        runtimeExecutionTraceBlock({ task: input.task, fallback }) ?? fallback,
+      ),
     ),
+    input.task,
   );
 }
 

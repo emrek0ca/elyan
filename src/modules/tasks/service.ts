@@ -12587,6 +12587,17 @@ export async function resolveTaskApproval(
     };
   }
   if (task.status !== "waiting_approval") {
+    if (isTerminalTaskStatus(task.status)) {
+      const resolution = readRecord(readRecord(task.approvalRequest)?.resolution);
+      return {
+        taskId: task.id,
+        status: task.status,
+        approved: resolution?.approved === true,
+        duplicate: true,
+        stale: true,
+        task: shapeTaskFeedItem(task),
+      };
+    }
     throw conflict("Task is not waiting for approval");
   }
   if (isApprovalRequestExpired(task.approvalRequest)) {
@@ -12647,6 +12658,16 @@ export async function resolveTaskApproval(
           status: latest.status,
           approved: true,
           duplicate: true,
+          task: shapeTaskFeedItem(latest),
+        };
+      }
+      if (isTerminalTaskStatus(latest.status)) {
+        return {
+          taskId: latest.id,
+          status: latest.status,
+          approved: false,
+          duplicate: true,
+          stale: true,
           task: shapeTaskFeedItem(latest),
         };
       }
@@ -12726,6 +12747,16 @@ export async function resolveTaskApproval(
         status: latest.status,
         approved: resolution?.approved === true,
         duplicate: true,
+        task: shapeTaskFeedItem(latest),
+      };
+    }
+    if (isTerminalTaskStatus(latest.status)) {
+      return {
+        taskId: latest.id,
+        status: latest.status,
+        approved: false,
+        duplicate: true,
+        stale: true,
         task: shapeTaskFeedItem(latest),
       };
     }

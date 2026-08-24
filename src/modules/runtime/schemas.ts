@@ -188,4 +188,12 @@ export const runtimeSocketMessageSchema = z.discriminatedUnion("type", [
     state: z.enum(["accepted", "applied", "rejected", "failed"]),
     message: z.string().trim().max(300).optional(),
   }),
+  z.object({
+    type: z.literal("runtime.access.ack"),
+    commandId: z.string().uuid(),
+    action: z.enum(["grant_session", "revoke"]),
+    state: z.enum(["applied", "rejected", "failed"]),
+    expiresAt: z.string().datetime().nullable().optional(),
+    message: z.string().trim().max(300).optional(),
+  }),
 ]);
