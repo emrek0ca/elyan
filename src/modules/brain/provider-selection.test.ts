@@ -52,6 +52,13 @@ function runtimeSnapshot(
   };
 }
 
+/**
+ * Katı-JSON uyumluluk şeridinin varsayılan modeli. Emekli model listesi tek
+ * kaynaktan (`contracts/model-policy.json`) geldiği için testin kendi sabitini
+ * taşıması bilerek dar tutuldu.
+ */
+const STRUCTURED_JSON_MODEL = "qwen/qwen3.6-27b";
+
 test("getConfiguredProviderApiKey selects the first non-empty Groq key", () => {
   const app = appWithConfig({
     GROQ_API_KEY: " , first-key , second-key ",
@@ -111,7 +118,13 @@ test("buildInferenceProviderCandidates prefers hosted Groq when configured", () 
   assert.equal(candidates[0]?.provider, "groq");
   assert.equal(candidates[0]?.hosted, true);
   assert.equal(candidates[0]?.baseUrl, "https://api.groq.com/openai/v1");
-  assert.deepEqual(candidates[0]?.preferredModels, ["openai/gpt-fast-model", "openai/gpt-reasoning-model"]);
+  // `mobile_chat_balanced` derin modelde BAŞLAR (bkz. groq-models.ts:
+  // routing-policy bu hattı kalite sinyaliyle seçiyor; 20B'ye indirmek doğru
+  // sınıflandırılmış isteği yüzeysel modele vermek olurdu).
+  assert.deepEqual(candidates[0]?.preferredModels, [
+    "openai/gpt-reasoning-model",
+    "openai/gpt-fast-model",
+  ]);
   assert.equal(candidates[1]?.provider, "ollama");
   assert.equal(candidates[1]?.hosted, false);
 });
@@ -136,11 +149,11 @@ test("buildInferenceProviderCandidates keeps Groq first for normal chat when Gem
   });
 
   assert.equal(candidates[0]?.provider, "groq");
-  // Normal sohbet artık doğrudan hızlı lane'de başlar; reasoning model yalnız
-  // gerçek deep/fallback durumunda aday kalır.
+  // Kalite sinyaliyle seçilen `mobile_chat_balanced` hattı derin modelde
+  // başlar; hızlı model fallback olarak zincirde kalır.
   assert.deepEqual(candidates[0]?.preferredModels, [
-    "openai/gpt-groq-fast",
     "openai/gpt-groq-reasoning",
+    "openai/gpt-groq-fast",
   ]);
   assert.equal(candidates[1]?.provider, "gemini");
   assert.deepEqual(candidates[1]?.preferredModels, ["gemini-text", "gemini-fast"]);
@@ -163,7 +176,12 @@ test("buildInferenceProviderCandidates keeps planning on the strict JSON lane", 
   });
 
   assert.equal(candidates[0]?.provider, "groq");
-  assert.deepEqual(candidates[0]?.preferredModels, ["llama-3.1-8b-instant"]);
+  // Planlama derin modelde başlar, katı-JSON uyumluluk modeli sınırlı
+  // fallback olarak zincirde kalır (bkz. groq-models.ts planning notu).
+  assert.deepEqual(candidates[0]?.preferredModels, [
+    "openai/gpt-groq-reasoning",
+    STRUCTURED_JSON_MODEL,
+  ]);
 });
 
 test("buildInferenceProviderCandidates uses Compound mini for public fresh research", () => {
@@ -306,7 +324,9 @@ test("buildInferenceProviderCandidates does not use Groq Compound for document a
   // reasoning-DIŞI modelle başlar. Canlı ölçüm (2026-08-13, görev a4924a76 —
   // "3.sınıf matematik PDF yaz"): bu iş yükünde gpt-oss-20b ve qwen ikisi de
   // 400 json_validate_failed verdi, zincir tükendi ve PDF hiç üretilemedi.
-  assert.deepEqual(candidates[0]?.preferredModels, ["llama-3.1-8b-instant"]);
+  // `llama-3.1-8b-instant` EMEKLİ (contracts/model-policy.json). Katı-JSON
+  // şeridi tek kaynaktan varsayılan uyumluluk modeline düşer.
+  assert.deepEqual(candidates[0]?.preferredModels, [STRUCTURED_JSON_MODEL]);
 });
 
 test("buildInferenceProviderCandidates can isolate primary and fallback workers", () => {
@@ -434,7 +454,9 @@ test("document analysis blocks unvalidated Gemini and stays on strict JSON Groq"
   });
 
   assert.equal(candidates[0]?.provider, "groq");
-  assert.deepEqual(candidates[0]?.preferredModels, ["llama-3.1-8b-instant"]);
+  // `llama-3.1-8b-instant` EMEKLİ (contracts/model-policy.json). Katı-JSON
+  // şeridi tek kaynaktan varsayılan uyumluluk modeline düşer.
+  assert.deepEqual(candidates[0]?.preferredModels, [STRUCTURED_JSON_MODEL]);
   assert.equal(candidates.some((candidate) => candidate.provider === "gemini"), false);
 });
 

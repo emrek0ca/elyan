@@ -5,6 +5,7 @@ import {
   getDatabaseReachability,
   loadEnv,
 } from "./env.js";
+import { GEMINI_MODELS } from "./model-policy.js";
 
 test("loadEnv derives iyzico public base url from app base url", () => {
   const env = loadEnv({
@@ -44,7 +45,9 @@ test("loadEnv derives iyzico public base url from app base url", () => {
     "https://generativelanguage.googleapis.com/v1beta",
   );
   assert.equal(env.GEMINI_TEXT_MODEL, "gemini-3.6-flash");
-  assert.equal(env.GEMINI_FAST_MODEL, "gemini-2.5-flash-lite");
+  // Model kaydı yükseltildiğinde bu iddia BAYATLAMAMALI: sabit sürüm yazmak
+  // yerine varsayılanın kaynağı olan politikayı soruyoruz.
+  assert.equal(env.GEMINI_FAST_MODEL, GEMINI_MODELS.roles.fast_utility);
   assert.equal(env.GEMINI_REASONING_MODEL, "gemini-3.6-flash");
   assert.equal(env.GEMINI_VISION_MODEL, "gemini-3.1-flash-lite");
   assert.equal(env.GEMINI_IMAGE_MODEL, "gemini-3.1-flash-lite-image");

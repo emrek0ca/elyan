@@ -54,6 +54,23 @@ const RENDERABLE_OUTPUTS = new Set([
   "artifact",
 ]);
 
+/**
+ * YEREL/ÖZEL BAĞLAM İŞARETLERİ.
+ *
+ * Buradan ÇIPLAK "dosya" kökü BİLEREK çıkarıldı. Türkçede "dosya" bir konum
+ * değil, bir biçim sözcüğüdür: "Word dosyası olarak oluştur", "PDF dosyası
+ * hazırla" tamamen sunucuda üretilebilen isteklerdir. Kök listede durduğu
+ * sürece bu istekler `local_private` işaretleniyor, zarfa `desktop.file_access`
+ * ve `desktop.runtime` yetenekleri ekleniyor ve artefakt hattı daha ilk kapıda
+ * `desktop_required` dönüp belgeyi HİÇ üretmiyordu.
+ *
+ * Kardeş dedektör (`artifacts/utils.ts:hasLocalPrivateDataRequest`) zaten
+ * çıplak kökü taşımıyor, yalnız konuma/aidiyete bağlı biçimleri sayıyordu;
+ * iki dedektörün ayrışması bu hatanın ta kendisiydi.
+ *
+ * "dosya" ancak bir KONUMA ya da AİDİYETE bağlandığında yerel-özel kanıtı olur;
+ * o biçimler aşağıdaki ikinci kalıpta tutulur.
+ */
 const LOCAL_PRIVATE_TARGET_PATTERN = trStemPattern([
   "masaüstü",
   "masaustu",
@@ -64,10 +81,16 @@ const LOCAL_PRIVATE_TARGET_PATTERN = trStemPattern([
   "download",
   "klasör",
   "klasor",
-  "dosya",
   "local file",
   "yerel dosya",
 ]);
+
+/**
+ * Konuma/aidiyete bağlanmış dosya referansları. Bunlar gerçekten kullanıcının
+ * kendi makinesindeki bir şeyi işaret eder.
+ */
+const LOCAL_PRIVATE_FILE_REFERENCE_PATTERN =
+  /(?<!\p{L})(?:dosyalar[ıi]m\p{L}{0,4}|dosyam\p{L}{0,4}|son\s+dosya\p{L}{0,6}|son\s+belge\p{L}{0,6}|son\s+pdf|(?:yerel|local)\s+dosya\p{L}{0,6}|dosya\s+yolu|file\s+path)(?!\p{L})/iu;
 const WRITE_SIDE_EFFECT_PATTERN = trStemPattern(
   ["kaydet", "kayded", "save", "indir", "download", "üzerine yaz", "uzerine yaz"],
   {
@@ -589,7 +612,10 @@ function detectLocalPrivateRequest(text: string, metadata?: Record<string, unkno
   if (source === "desktop") {
     return true;
   }
-  return LOCAL_PRIVATE_TARGET_PATTERN.test(text);
+  return (
+    LOCAL_PRIVATE_TARGET_PATTERN.test(text) ||
+    LOCAL_PRIVATE_FILE_REFERENCE_PATTERN.test(text)
+  );
 }
 
 function detectSideEffectRequest(text: string): boolean {

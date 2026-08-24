@@ -18,10 +18,30 @@ const SYSTEM_OBSERVATION_CUE_PATTERN = trStemPattern([
 const LOCAL_DEVICE_PATTERN = trStemPattern([
   "bilgisayar", "laptop", "macbook", "mac", "cihaz", "makine", "sistem",
 ]);
+/**
+ * Gözlem OLMAYAN fiiller.
+ *
+ * Bir sistem gözlemi turun ASIL EYLEMİ olmalıdır. Canlı hata (2026-08-24):
+ * "Bugünkü sağlık, takvim, saat, cihaz durumu ve bildirim bağlamına göre kısa
+ * ama tam bir çalışma planı çıkar." cümlesi yalnız "saat" geçtiği için
+ * `sys_info(time)` olarak derleniyordu; masaüstü eşleşmemişse kullanıcı bir
+ * PLANLAMA sorusuna karşılık "önce bilgisayar eşle" cevabı alıyordu.
+ *
+ * Üretici/yaratıcı bir fiil varsa istek gözlem değildir.
+ */
 const NON_OBSERVATION_SYSTEM_PATTERN = trStemPattern([
   "araştır", "arastir", "trend", "makale", "rapor", "kaydet", "karşılaştır",
   "karsilastir", "satın", "satin",
+  "plan", "hazırla", "hazirla", "oluştur", "olustur", "yaz", "özetle",
+  "ozetle", "öner", "oner", "çıkar", "cikar", "analiz", "değerlendir",
+  "degerlendir", "taslak", "liste",
 ]);
+
+/**
+ * Çıplak gözlem KISADIR. Birden çok bağlamı sayan uzun bir cümle, içinde
+ * "saat" ya da "durum" geçse bile tek bir sistem okuması değildir.
+ */
+const MAX_OBSERVATION_WORDS = 12;
 
 /**
  * Shared, model-free compiler for read-only local system observations.
@@ -35,6 +55,7 @@ export function parseSystemInfoQuery(message: string): SystemInfoQuery | null {
     .slice(0, 320)
     .toLocaleLowerCase("tr-TR");
   if (!normalized || NON_OBSERVATION_SYSTEM_PATTERN.test(normalized)) return null;
+  if (normalized.split(" ").filter(Boolean).length > MAX_OBSERVATION_WORDS) return null;
 
   const hasDeviceContext = LOCAL_DEVICE_PATTERN.test(normalized);
   const hasObservationCue =

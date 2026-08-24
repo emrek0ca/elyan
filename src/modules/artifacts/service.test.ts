@@ -858,7 +858,11 @@ test("PDF başlığı cevabın kendi başlığından türer", async () => {
 // ---------------------------------------------------------------------------
 
 test("netleştirme sorusu belge gövdesi olamaz", async () => {
-  const userRequest = "masaüstüne zürafalar hakkında bir pdf hazırla ve kaydet";
+  // İstek SUNUCU tarafında kalmalı: masaüstüne kaydetme isteyen bir cümle
+  // hattın ilk kapısında `desktop_required` döner ve netleştirme kapısı hiç
+  // çalışmazdı. Ölçmek istediğimiz değişmez şu: cevap metni bir SORU ise
+  // belge gövdesi olamaz.
+  const userRequest = "Zürafalar hakkında bir pdf hazırla";
   const result = await buildArtifactPipeline({
     userRequest,
     responseText: "Netleştireyim: tam olarak neyi yapmamı istiyorsun?",

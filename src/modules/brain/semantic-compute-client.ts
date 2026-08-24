@@ -162,10 +162,47 @@ function stopWorker(): void {
   const current = worker;
   worker = null;
   workerWarm = false;
+  clearIdleWorkerTimer();
   if (current) {
     expectedWorkerExits.add(current);
     void current.terminate().catch(() => undefined);
   }
+}
+
+/**
+ * BOŞTA KALAN WORKER KAPANIR.
+ *
+ * `Worker.unref()` worker'ın kendi handle'ını serbest bırakır ama worker'ın
+ * stdio boruları ve MessagePort'u olay döngüsünü AÇIK TUTMAYA devam ediyor:
+ * ölçümde (`process.getActiveResourcesInfo()`) iş bittikten sonra geriye
+ * `["PipeWrap","PipeWrap","MessagePort"]` kalıyordu. Sonuç, işini bitirmiş bir
+ * sürecin hiç çıkmaması — test koşusu tamamlanıp asılı kalıyordu ve aynı
+ * sızıntı üretimde de her süreçte bir iş parçacığını boşuna canlı tutuyor.
+ *
+ * Bekleyen istek kalmadığında worker belirli bir süre sonra kapatılır; bir
+ * sonraki istek onu yeniden başlatır (`getWorker` zaten tembel).
+ */
+const IDLE_WORKER_SHUTDOWN_MS = Math.max(
+  1_000,
+  Number(process.env.ELYAN_SEMANTIC_WORKER_IDLE_MS ?? 30_000) || 30_000,
+);
+let idleWorkerTimer: NodeJS.Timeout | null = null;
+
+function clearIdleWorkerTimer(): void {
+  if (idleWorkerTimer) {
+    clearTimeout(idleWorkerTimer);
+    idleWorkerTimer = null;
+  }
+}
+
+function scheduleIdleWorkerShutdown(): void {
+  clearIdleWorkerTimer();
+  if (!worker || pending.size > 0) return;
+  idleWorkerTimer = setTimeout(() => {
+    idleWorkerTimer = null;
+    if (pending.size === 0) stopWorker();
+  }, IDLE_WORKER_SHUTDOWN_MS);
+  idleWorkerTimer.unref?.();
 }
 
 export function resolveSemanticComputeWorkerUrl(
@@ -188,6 +225,7 @@ function getWorker(logger?: SemanticComputeLogger): Worker | null {
       if (!entry) return;
       clearTimeout(entry.timer);
       pending.delete(message.id);
+      scheduleIdleWorkerShutdown();
       if (message.ok && Array.isArray(message.vectors)) {
         recordSuccess();
         entry.resolve(message.vectors);

@@ -32,8 +32,14 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
     "const imageGenerationRequested =",
     processStart,
   );
+  // ÇAPA, GERÇEK ÇAĞRI YERİ OLMALI. Metin çıkarımı `const inference = await
+  // generateGovernedSharedBrainReply(app, { ... })` biçiminden istek nesnesi
+  // dışarı alınmış `let inference = await generateGovernedSharedBrainReply(...)`
+  // biçimine taşındı. Eski çapa artık DAHA GERİDEKİ bir eşleşmeyi buluyor ve
+  // "görüntü dalı" dilimi gerçek çıkarım mantığını da içine alıyordu; test
+  // kodu değil kendi çapasını ölçer hâle gelmişti.
   const inferenceStart = serviceSource.indexOf(
-    "const inference = await generateGovernedSharedBrainReply(app, {",
+    "let inference = await generateGovernedSharedBrainReply(",
     processStart,
   );
   assert.ok(imageBranchStart > processStart);
@@ -46,7 +52,12 @@ test("hosted image chat requests bypass text inference and streaming prose", () 
     imageBranch.includes("isHostedImageGenerationRequest(input.prompt)"),
   );
   assert.ok(imageBranch.includes("imageEditIntent"));
-  assert.equal(imageBranch.includes("generateGovernedSharedBrainReply"), false);
+  // Ölçülen değişmez: görüntü dalı metin çıkarımını ÇAĞIRMAZ. Tip referansı
+  // (`typeof generateGovernedSharedBrainReply`) bir çağrı değildir.
+  assert.equal(
+    imageBranch.includes("await generateGovernedSharedBrainReply("),
+    false,
+  );
   assert.ok(imageBranch.includes('event: "message.delta"'));
   assert.ok(imageBranch.includes('delta: ""'));
   assert.ok(imageBranch.includes("reset: true"));
