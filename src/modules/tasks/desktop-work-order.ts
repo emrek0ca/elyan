@@ -263,12 +263,14 @@ export type DesktopWorkOrder = {
     planSource?:
       | "heuristic"
       | "server_materialized"
-      | "deterministic_registry";
+      | "deterministic_registry"
+      | "dynamic_contract";
     materializationSource?:
       | "model"
       | "model_transport_repair"
       | "semantic_compiler"
-      | "deterministic_registry";
+      | "deterministic_registry"
+      | "dynamic_contract";
     /**
      * New tasks are not deliverable while model planning is pending. Older
      * work orders without this field remain ready for backward compatibility.
@@ -278,6 +280,7 @@ export type DesktopWorkOrder = {
       outcome?:
         | "materialized"
         | "deterministic_materialized"
+        | "dynamic_ready"
         | "planning"
         | "model_plan_unavailable";
       preparedAt?: string;
@@ -1030,7 +1033,11 @@ function canonicalRuntimeCapability(value: string): string | null {
     "image.edit": "image_edit",
     "svg.generate": "canvas_write",
     "browser.read": "browser_control",
-    "desktop.file_access": "document_read",
+    // Placement/privacy marker, not an executable read. A destination such
+    // as "masaüstüne kaydet" is local-private too, but it does not authorize
+    // or require reading any existing file. Concrete local reads arrive as
+    // document.read/file capabilities from the typed route.
+    "desktop.file_access": null,
     // Placement is not a tool. Converting the desktop target marker into the
     // generic operator widened approval scope and forced otherwise trivial
     // read-only work through the heavy planner.
@@ -1146,7 +1153,10 @@ function semanticCapabilitiesFromEnvelope(
     capabilities.add("text_analyze");
   }
   if (
-    (envelope.intent_graph?.nodes ?? []).some((node) => node.kind === "analyze")
+    (envelope.intent_graph?.nodes ?? []).some((node) => node.kind === "analyze") &&
+    ["document", "writing", "research", "math", "analysis"].includes(
+      envelope.intent.name,
+    )
   ) {
     capabilities.add("text_analyze");
   }
@@ -1816,9 +1826,9 @@ function buildSteps(input: {
   const calculationRequested = input.capabilities.includes("math_solve");
   const analysisRequested = input.capabilities.includes("text_analyze");
   const desktopArtifactTarget =
-    input.envelope?.desired_outputs.some(
+    (input.envelope?.desired_outputs.some(
       (output) => output.target === "desktop",
-    ) ??
+    ) ?? false) ||
     unicodeWordPattern(
       String.raw`\b(?:masaüstü\p{L}*|masaustu\p{L}*|desktop)\b`,
       "i",
@@ -2151,9 +2161,22 @@ export function buildDesktopWorkOrder(input: {
   );
   const readOnlyProcessObservationRequested =
     isReadOnlyProcessObservationRequest(message);
+  const typedOutputKind = String(
+    input.understandingEnvelope?.output_contract?.outputKind ?? "",
+  ).toLocaleLowerCase("en-US");
+  const typedOutputFormat = String(
+    input.understandingEnvelope?.output_contract?.outputFormat ?? "",
+  ).toLocaleLowerCase("en-US");
   const kind = readOnlyProcessObservationRequested
     ? "desktop_cowork"
-    : inferKind(input.routeDecision, message);
+    : typedOutputFormat === "pptx" || typedOutputKind === "presentation"
+      ? "presentation_task"
+      : input.understandingEnvelope?.output_contract?.requiresArtifact === true &&
+          ["document", "docx", "pdf"].includes(
+            typedOutputFormat || typedOutputKind,
+          )
+        ? "document_task"
+        : inferKind(input.routeDecision, message);
   const capabilities = [
     ...new Set([
       ...inferCapabilities(

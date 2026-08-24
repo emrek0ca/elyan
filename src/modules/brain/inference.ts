@@ -2962,8 +2962,8 @@ export function buildSocialChatSystemPrompt(
   ).length;
   const greetingLine =
     preferredName && priorConversationTurns === 0
-      ? `Greeting policy: this is the first greeting in the session and the user's preferred name is ${preferredName}. You may use it once only if it makes the greeting more natural; otherwise omit it. Greet like a friend who is genuinely glad to see them: one short, alive sentence with personality — a playful touch is welcome. Do not default to a customer-service offer such as "How can I help?". Shared history is fair game when it genuinely fits — a project, something they told you, a running joke; that is what separates a friend from a service desk. But never mention health, steps, battery, calendar, weather, location or device state, and never narrate that you are recalling.`
-      : "Greeting policy: match the user's energy like a quick-witted friend — one short, alive sentence; playful is fine, formal is not. For slang or a one-word call-out, banter back naturally instead of resetting with a formal greeting. Do not default to a customer-service offer such as 'How can I help?'. Shared history is fair game when it genuinely fits — a project, something they told you, a running joke; that is what separates a friend from a service desk. But never mention health, steps, battery, calendar, weather, location or device state, and never narrate that you are recalling.";
+      ? `Greeting policy: this is the first greeting in the session and the user's preferred name is ${preferredName}. You may use it once only if it makes the greeting more natural; otherwise omit it. Greet like a friend who is genuinely glad to see them: one short, alive sentence with personality — a playful touch is welcome. Do not default to a customer-service offer such as "How can I help?". Shared history is fair game when it genuinely fits — a project, something they told you, a running joke; that is what separates a friend from a service desk. Do NOT mention health metrics, steps, battery, calendar, weather, location, device state, memory contents, or any system context. Never narrate that you are recalling.`
+      : "Greeting policy: match the user's energy like a quick-witted friend in one short, alive sentence; playful is fine, formal is not. Banter back to slang or a one-word call-out. Shared history is fair game when it genuinely fits. Do NOT mention health metrics, steps, battery, calendar, weather, location, device state, memory contents, or any system context. Never narrate recall.";
 
   return [
     basePrompt,
@@ -7657,6 +7657,12 @@ export async function generateSharedBrainReply(
     // json_schema'sı dayatılınca model iki şema arasında sıkışıp hiçbir şey
     // üretemiyor (Groq `json_validate_failed`, `failed_generation: ""`).
     const machineJsonRoute = isDesktopPlanMachineJsonRoute(input.route);
+    // Machine-plan callers own the single schema/transport repair turn. An
+    // inference-level retry would resend the same large prompt before that
+    // repair and turned one malformed 2xx into three near-identical calls.
+    const providerMaxRetries = machineJsonRoute
+      ? 0
+      : SHARED_BRAIN_PROVIDER_MAX_RETRIES;
     // İÇ KONTROL-DÜZLEMİ TURU ZARF PROTOKOLÜNÜ ASLA KULLANMAZ.
     //
     // Semantik yönlendirici kendi rota JSON'unu döndürür; TurnEnvelope
@@ -7964,7 +7970,7 @@ export async function generateSharedBrainReply(
         }
         let modelHadProviderOutageFailure = false;
         const allCandidateAttempts: SharedBrainRequestAttempt[] =
-          candidate.provider === "ollama"
+          candidate.provider === "ollama" && !machineJsonRoute
             ? [
                 buildSharedBrainRequestAttempt({
                   provider: candidate.provider,
@@ -7990,9 +7996,19 @@ export async function generateSharedBrainReply(
                 attemptedModel,
                 false,
               );
-        const candidateAttempts = isVisionProviderTurn
-          ? selectVisionRequestAttempt(allCandidateAttempts)
-          : allCandidateAttempts;
+        const candidateAttempts = machineJsonRoute
+          ? allCandidateAttempts.length > 0
+            ? [
+                allCandidateAttempts[
+                  input.route === "desktop_plan_transport_repair"
+                    ? Math.min(1, allCandidateAttempts.length - 1)
+                    : 0
+                ],
+              ]
+            : []
+          : isVisionProviderTurn
+            ? selectVisionRequestAttempt(allCandidateAttempts)
+            : allCandidateAttempts;
         let geminiCooldownTriggered = false;
 
         for (const attempt of candidateAttempts) {
@@ -8002,7 +8018,7 @@ export async function generateSharedBrainReply(
           for (
             let retryIndex = 0;
             retryIndex <=
-            (isVisionProviderTurn ? 0 : SHARED_BRAIN_PROVIDER_MAX_RETRIES);
+            (isVisionProviderTurn ? 0 : providerMaxRetries);
             retryIndex += 1
           ) {
             if (input.shouldAbort && (await input.shouldAbort())) {
@@ -8883,7 +8899,7 @@ export async function generateSharedBrainReply(
               !attemptRetryable ||
               attemptHadDelta ||
               retryIndex >=
-                (isVisionProviderTurn ? 0 : SHARED_BRAIN_PROVIDER_MAX_RETRIES)
+                (isVisionProviderTurn ? 0 : providerMaxRetries)
             ) {
               break;
             }
@@ -9542,77 +9558,86 @@ export async function generateSharedBrainReply(
       prompt: input.prompt,
       workload,
     });
-    if (turnEnvelope) {
-      extractedTypedBlocks.push(...turnEnvelope.blocks);
-    } else {
-      const extracted = extractTypedJsonBlocksFromText(text);
-      if (extracted.blocks.length > 0) {
-        finalText = extracted.visibleText;
-        const fallbackText: string[] = [];
-        for (const block of extracted.blocks) {
-          if (
-            shouldAcceptExtractedTypedBlock({
-              block,
-              prompt: input.prompt,
-              selectedWorkload: workload,
-            })
-          ) {
-            extractedTypedBlocks.push(block);
-            continue;
-          }
-          if (block && typeof block === "object" && !Array.isArray(block)) {
-            const type = String((block as Record<string, unknown>).type ?? "")
-              .trim()
-              .toLowerCase();
-            if (type === "table") {
-              const fallback = tableBlockToPlainFallback(
-                block as Record<string, unknown>,
-              );
-              if (fallback) fallbackText.push(fallback);
+    // Makine rotasının JSON'u kullanıcı sunumu değildir. `{"type":...}`
+    // taşıyan geçerli plan objesi typed-widget çıkarıcısından geçirilirse obje
+    // blok sanılıp görünür metinden tamamen siliniyordu. Machine consumer ham
+    // provider payload'ını alır; blok/persona/vision/sohbet temizliği yalnız
+    // kullanıcıya gösterilecek cevaplarda çalışır.
+    if (!machineJsonRoute) {
+      if (turnEnvelope) {
+        extractedTypedBlocks.push(...turnEnvelope.blocks);
+      } else {
+        const extracted = extractTypedJsonBlocksFromText(text);
+        if (extracted.blocks.length > 0) {
+          finalText = extracted.visibleText;
+          const fallbackText: string[] = [];
+          for (const block of extracted.blocks) {
+            if (
+              shouldAcceptExtractedTypedBlock({
+                block,
+                prompt: input.prompt,
+                selectedWorkload: workload,
+              })
+            ) {
+              extractedTypedBlocks.push(block);
+              continue;
+            }
+            if (block && typeof block === "object" && !Array.isArray(block)) {
+              const type = String((block as Record<string, unknown>).type ?? "")
+                .trim()
+                .toLowerCase();
+              if (type === "table") {
+                const fallback = tableBlockToPlainFallback(
+                  block as Record<string, unknown>,
+                );
+                if (fallback) fallbackText.push(fallback);
+              }
             }
           }
+          if (fallbackText.length > 0) {
+            finalText = [finalText, ...fallbackText]
+              .map((part) => part.trim())
+              .filter(Boolean)
+              .join("\n\n");
+          }
         }
-        if (fallbackText.length > 0) {
-          finalText = [finalText, ...fallbackText]
-            .map((part) => part.trim())
-            .filter(Boolean)
-            .join("\n\n");
+        // Savunma: envelope parse edilemediğinde model bazen ham/çitli tool-call
+        // JSON'u (`[{"tool":..,"args":..}]`) görünür yanıta bırakıyor — mobilde
+        // bozuk kod bloğu olarak görünüyordu. Bunu ASLA kullanıcıya gösterme.
+        if (looksLikeLeakedToolCallText(finalText)) {
+          finalText =
+            "Bu isteği güvenli biçimde tamamlayamadım. Lütfen tekrar dene.";
         }
       }
-      // Savunma: envelope parse edilemediğinde model bazen ham/çitli tool-call
-      // JSON'u (`[{"tool":..,"args":..}]`) görünür yanıta bırakıyor — mobilde
-      // bozuk kod bloğu olarak görünüyordu. Bunu ASLA kullanıcıya gösterme.
-      if (looksLikeLeakedToolCallText(finalText)) {
-        finalText =
-          "Bu isteği güvenli biçimde tamamlayamadım. Lütfen tekrar dene.";
-      }
-    }
 
-    if (cloudVisionActive) {
-      finalText = gateVisionAnswer({
+      if (cloudVisionActive) {
+        finalText = gateVisionAnswer({
+          text: finalText,
+          prompt: mediaIntentPrompt,
+          task: visionTaskDecision,
+          media: visionMediaDecision,
+          imageCount: clientVisionImages.length,
+          expectedPhysicalImageCount: physicalVisionImageCount,
+          verifiedPhysicalImageCount,
+          inputQualityScore: visionQualityScore,
+          preprocessingWarnings: preprocessedVision.warnings,
+          criticalConflict: visionCriticalConflict,
+        }).text;
+      }
+      finalText = sanitizeFinalAssistantResponse({
+        prompt: input.prompt,
         text: finalText,
-        prompt: mediaIntentPrompt,
-        task: visionTaskDecision,
-        media: visionMediaDecision,
-        imageCount: clientVisionImages.length,
-        expectedPhysicalImageCount: physicalVisionImageCount,
-        verifiedPhysicalImageCount,
-        inputQualityScore: visionQualityScore,
-        preprocessingWarnings: preprocessedVision.warnings,
-        criticalConflict: visionCriticalConflict,
-      }).text;
+        workload,
+        allowVerificationLanguage: webGroundingUsed,
+        imageGenerationRequested: responseContract.intent === "image_generation",
+        artifactRequired: responseContract.artifactRequired,
+        hasRenderableOutput: hasElyanRenderableArtifact(extractedTypedBlocks),
+        freshData: webGrounding.freshData,
+      });
     }
-    finalText = sanitizeFinalAssistantResponse({
-      prompt: input.prompt,
-      text: finalText,
-      workload,
-      allowVerificationLanguage: webGroundingUsed,
-      imageGenerationRequested: responseContract.intent === "image_generation",
-      artifactRequired: responseContract.artifactRequired,
-      hasRenderableOutput: hasElyanRenderableArtifact(extractedTypedBlocks),
-      freshData: webGrounding.freshData,
-    });
-    const finalTextBlocks = buildAssistantMessageBlocks(finalText);
+    const finalTextBlocks = machineJsonRoute
+      ? []
+      : buildAssistantMessageBlocks(finalText);
     // "Kaynak güveni düşük" uyarı kutusu KALDIRILDI: neredeyse her cevabın
     // başında beliriyor, ekranı kaplıyor ve gerçek bir eylem önermiyordu.
     // Düşük kapsama hâlâ `retrievalOrchestration.lowConfidence` üzerinden

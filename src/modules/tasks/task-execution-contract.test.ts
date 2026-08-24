@@ -9,6 +9,7 @@ import {
   syncTaskExecutionContractWithWorkOrder,
   validateTaskExecutionContract,
 } from "./task-execution-contract.js";
+import type { DesktopWorkOrder } from "./desktop-work-order.js";
 
 function route(overrides: Partial<CommandRouteDecision> = {}): CommandRouteDecision {
   return {
@@ -38,7 +39,16 @@ function turn(overrides: Partial<CommandTurnContract> = {}): CommandTurnContract
     intentClassification: {} as CommandTurnContract["intentClassification"],
     selectedWorkload: "desktop_handoff",
     planIntent: false,
-    outputContract: {} as CommandTurnContract["outputContract"],
+    outputContract: {
+      operation: "answer",
+      sourceReference: "current_prompt",
+      outputKind: "chat_reply",
+      outputFormat: null,
+      pageCount: null,
+      requiresArtifact: false,
+      confidence: 0.8,
+      reasons: ["operation:answer"],
+    },
     understandingEnvelope: {
       source: "typed_extractor",
       confidence: 0.92,
@@ -65,11 +75,158 @@ test("buildTaskExecutionContract produces one bounded canonical snapshot", () =>
     turnContract: turn(),
   });
 
-  assert.equal(contract.contract, "elyan.task_execution_contract.v1");
+  assert.equal(contract.contract, "elyan.task_execution_contract.v2");
   assert.equal(contract.taskId, "task-1");
   assert.equal(contract.execution.selectedTools[0]?.id, "sys_info");
   assert.equal(contract.execution.maxSteps, 16);
+  assert.equal(contract.execution.mode, "dynamic");
+  assert.equal(contract.execution.allowedCapabilities.includes("sys_info"), true);
+  assert.match(contract.binding.hash, /^[a-f0-9]{64}$/u);
   assert.equal(contract.privacy.class, "local_private");
+  assert.equal(validateTaskExecutionContract(contract).ok, true);
+});
+
+test("explicit Turkish research save compiles to a two-tool desktop grant contract", () => {
+  const message = "Kedilerin yaşamı hakkında araştırma yapıp masaüstüne kaydet";
+  const workOrder: DesktopWorkOrder = {
+    schema: "elyan.desktop_work_order.v1",
+    source: "mobile_chat_dispatch",
+    goal: {
+      kind: "document_task",
+      summary: message,
+      language: "tr",
+      sourceTextHash: "abcdef1234567890abcdef12",
+    },
+    semanticGoal: {
+      contract: "elyan.semantic_task_contract.v1",
+      objective: message,
+      constraints: [],
+      successCriteria: ["DOCX artifact masaüstünde oluşturuldu."],
+      requiredCapabilities: ["web_research", "document_write"],
+      forbiddenCapabilities: ["desktop_operator.run"],
+      ambiguityPolicy: "safe_assumption",
+      risk: { localPrivate: true, sideEffect: true, irreversible: false },
+    },
+    entities: [],
+    constraints: [],
+    workType: "data_workflow",
+    requiredCapabilities: ["web_research", "document_write"],
+    materializedCapabilityScope: ["web_research", "document_write"],
+    requiresApproval: true,
+    approvalCapabilities: ["document_write"],
+    capabilityAuthorization: {
+      source: "semantic_router",
+      allowPrivateRead: false,
+      sideEffectsRequireApproval: true,
+    },
+    localContextNeeded: ["filesystem"],
+    resourceScope: {
+      contract: "elyan.resource_scope.v1",
+      readRoots: ["workspace"],
+      writeRoots: ["~/Desktop"],
+    },
+    expectedOutputs: [
+      { kind: "artifact", format: "docx", required: true },
+      { kind: "file_update", format: "state_readback", required: true },
+    ],
+    verificationRules: [
+      { id: "artifact", description: "DOCX var.", evidence: "artifact" },
+      { id: "readback", description: "Dosya okunabildi.", evidence: "state_readback" },
+    ],
+    execution: {
+      mode: "cowork_dispatch",
+      approvalPolicy: "single_full_access_surface",
+      maxSteps: 16,
+    },
+    planPreview: {
+      summary: message,
+      privacyClass: "side_effect",
+      contract: "elyan.compiled_plan.v1",
+      planSource: "server_materialized",
+      materializationSource: "semantic_compiler",
+      planPreparation: { status: "ready", outcome: "materialized" },
+      steps: [
+        {
+          id: "research",
+          capability: "web_research",
+          description: "Kedilerin yaşamını araştır.",
+          args: { query: "kedilerin yaşamı" },
+        },
+        {
+          id: "write",
+          capability: "document_write",
+          description: "Araştırmayı DOCX olarak yaz.",
+          args: {
+            title: "Kedilerin Yaşamı",
+            sourceContext: "{{steps.research.output}}",
+            outputPath: "~/Desktop/Kedilerin Yaşamı.docx",
+          },
+          dependsOn: ["research"],
+          resourceScope: ["~/Desktop"],
+        },
+      ],
+    },
+  };
+  const contract = buildTaskExecutionContract({
+    taskId: "task-cats",
+    turnId: "turn-cats",
+    message,
+    routeDecision: route({
+      capabilities: ["web_research", "document_write", "desktop_operator.run"],
+      privacyClass: "side_effect",
+      requiresApproval: true,
+    }),
+    turnContract: turn({
+      outputContract: {
+        operation: "analyze_then_export",
+        sourceReference: "current_prompt",
+        outputKind: "document",
+        outputFormat: "docx",
+        pageCount: null,
+        requiresArtifact: true,
+        confidence: 0.96,
+        reasons: ["explicit_local_save"],
+      },
+    }),
+    workOrder,
+  });
+
+  assert.equal(contract.execution.mode, "compiled");
+  assert.deepEqual(contract.execution.allowedCapabilities, [
+    "web_research",
+    "document_write",
+  ]);
+  assert.deepEqual(
+    contract.execution.steps.map((step) => step.capability),
+    ["web_research", "document_write"],
+  );
+  assert.equal(
+    contract.execution.selectedTools.some(
+      (tool) => tool.id === "desktop_operator.run",
+    ),
+    false,
+  );
+  assert.deepEqual(contract.output, {
+    operation: "analyze_then_export",
+    kind: "document",
+    format: "docx",
+    target: "desktop",
+    artifactRequired: true,
+  });
+  assert.equal(contract.approval.required, false);
+  assert.deepEqual(contract.approval.grants, [
+    {
+      id: "grant_task-cats_1",
+      taskId: "task-cats",
+      turnId: "turn-cats",
+      capability: "document_write",
+      effect: "write",
+      resourceScope: ["~/Desktop"],
+      source: "explicit_user_request",
+    },
+  ]);
+  assert.equal(contract.verification.artifactRequired, true);
+  assert.equal(contract.verification.stateReadbackRequired, true);
   assert.equal(validateTaskExecutionContract(contract).ok, true);
 });
 
@@ -127,6 +284,8 @@ test("server-only capabilities cannot become desktop execution steps", () => {
       planPreview: {
         summary: "Bir belge oluştur",
         privacyClass: "local_private",
+        contract: "elyan.compiled_plan.v1",
+        planSource: "deterministic_registry",
         steps: [{ id: "create", capability: "document_create", description: "Bir belge oluştur", args: {} }],
       },
     },

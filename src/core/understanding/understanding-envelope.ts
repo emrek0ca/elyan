@@ -22,11 +22,13 @@ import {
 import { isNegatedVisualActionRequest } from "../../modules/brain/visual-intent-contract.js";
 import {
   compileOutputContract,
+  hasExplicitLocalArtifactTarget,
   workloadFromOutputContract,
   type OutputContract,
   type OutputReference,
 } from "./output-contract.js";
 import { selectToolSkillForTurn } from "./tool-skill-selector.js";
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 
 type BuildEnvelopeInput = TaskUnderstandingInput & {
   intent: IntentClassification;
@@ -50,6 +52,61 @@ const RENDERABLE_OUTPUTS = new Set([
   "image",
   "svg",
   "artifact",
+]);
+
+const LOCAL_PRIVATE_TARGET_PATTERN = trStemPattern([
+  "masaüstü",
+  "masaustu",
+  "desktop",
+  "bilgisayar",
+  "computer",
+  "indirilenler",
+  "download",
+  "klasör",
+  "klasor",
+  "dosya",
+  "local file",
+  "yerel dosya",
+]);
+const WRITE_SIDE_EFFECT_PATTERN = trStemPattern(
+  ["kaydet", "kayded", "save", "indir", "download", "üzerine yaz", "uzerine yaz"],
+  {
+    exclude: [
+      "kaydetme",
+      "kaydetmeyin",
+      "indirim",
+      "indirimi",
+      "indirimli",
+      "indirgeme",
+    ],
+  },
+);
+const MUTATING_SIDE_EFFECT_PATTERN = trStemPattern([
+  "gönder",
+  "gonder",
+  "sil",
+  "delete",
+  "overwrite",
+  "mail at",
+  "mesaj gönder",
+  "mesaj gonder",
+  "satın al",
+  "satin al",
+  "ödeme",
+  "odeme",
+  "takvim oluştur",
+  "takvime ekle",
+  "hatırlatıcı kur",
+  "hatirlatici kur",
+]);
+const NEGATED_WRITE_PATTERN = trStemPattern([
+  "kaydetme",
+  "kaydetmeyin",
+  "yazma",
+  "oluşturma",
+  "olusturma",
+  "üretme",
+  "uretme",
 ]);
 
 function compactText(value: unknown): string {
@@ -532,11 +589,17 @@ function detectLocalPrivateRequest(text: string, metadata?: Record<string, unkno
   if (source === "desktop") {
     return true;
   }
-  return /\b(masaüstümde\w*|masaustumde\w*|bilgisayarımda\w*|bilgisayarimda\w*|indirilenler\w*|downloads|desktop|local file|yerel dosya|klasör\w*|klasor\w*|dosyalarımı\w*|dosyalarimi\w*)\b/iu.test(text);
+  return LOCAL_PRIVATE_TARGET_PATTERN.test(text);
 }
 
 function detectSideEffectRequest(text: string): boolean {
-  return /\b(gönder|gonder|sil|delete|overwrite|üzerine yaz|uzerine yaz|mail at|mesaj gönder|mesaj gonder|satın al|satin al|ödeme|odeme|takvim oluştur|takvime ekle|hatırlatıcı kur|hatirlatici kur)\b/i.test(text);
+  if (NEGATED_WRITE_PATTERN.test(text)) {
+    return MUTATING_SIDE_EFFECT_PATTERN.test(text);
+  }
+  return (
+    WRITE_SIDE_EFFECT_PATTERN.test(text) ||
+    MUTATING_SIDE_EFFECT_PATTERN.test(text)
+  );
 }
 
 function detectAction(text: string, outputs: UnderstandingDesiredOutput[]): string {
@@ -703,19 +766,22 @@ function buildDesiredOutputs(input: {
   const requestedFormats = explicitExport
     ? detectRequestedFormatsInOrder(input.text, input.format)
     : [];
+  const artifactTarget = hasExplicitLocalArtifactTarget(input.text)
+    ? "desktop" as const
+    : "artifact" as const;
 
   for (const requestedFormat of requestedFormats) {
     if (requestedFormat === "pdf") {
-      addDesiredOutput(outputs, { kind: "pdf", format: "pdf", target: "artifact", confidence: 0.94, constraints: ["output_format"] });
+      addDesiredOutput(outputs, { kind: "pdf", format: "pdf", target: artifactTarget, confidence: 0.94, constraints: ["output_format"] });
     } else if (requestedFormat === "docx") {
-      addDesiredOutput(outputs, { kind: "docx", format: "docx", target: "artifact", confidence: 0.92, constraints: ["output_format"] });
+      addDesiredOutput(outputs, { kind: "docx", format: "docx", target: artifactTarget, confidence: 0.92, constraints: ["output_format"] });
     } else if (requestedFormat === "xlsx") {
-      addDesiredOutput(outputs, { kind: "xlsx", format: "xlsx", target: "artifact", confidence: 0.94, constraints: ["output_format", "table_required"] });
+      addDesiredOutput(outputs, { kind: "xlsx", format: "xlsx", target: artifactTarget, confidence: 0.94, constraints: ["output_format", "table_required"] });
       addDesiredOutput(outputs, { kind: "table", format: "table", target: "widget", confidence: 0.88, constraints: ["columns", "include_totals"] });
     } else if (requestedFormat === "svg") {
-      addDesiredOutput(outputs, { kind: "svg", format: "svg", target: "artifact", confidence: 0.92, constraints: ["output_format"] });
+      addDesiredOutput(outputs, { kind: "svg", format: "svg", target: artifactTarget, confidence: 0.92, constraints: ["output_format"] });
     } else if (IMAGE_FORMATS.has(requestedFormat)) {
-      addDesiredOutput(outputs, { kind: "image", format: requestedFormat, target: "artifact", confidence: 0.9, constraints: ["output_format"] });
+      addDesiredOutput(outputs, { kind: "image", format: requestedFormat, target: artifactTarget, confidence: 0.9, constraints: ["output_format"] });
     }
   }
 
@@ -750,7 +816,7 @@ function buildDesiredOutputs(input: {
       addDesiredOutput(outputs, {
         kind: format === "docx" ? "docx" : "pdf",
         format: format === "docx" ? "docx" : "pdf",
-        target: "artifact",
+        target: artifactTarget,
         confidence: input.outputContract.confidence,
         constraints: [
           "output_contract",
@@ -761,7 +827,7 @@ function buildDesiredOutputs(input: {
       addDesiredOutput(outputs, {
         kind: format === "xlsx" ? "xlsx" : "table",
         format: format === "xlsx" ? "xlsx" : "table",
-        target: format === "xlsx" ? "artifact" : "widget",
+        target: format === "xlsx" ? artifactTarget : "widget",
         confidence: input.outputContract.confidence,
         constraints: ["output_contract", "table_required"],
       });
@@ -784,7 +850,7 @@ function buildDesiredOutputs(input: {
       addDesiredOutput(outputs, {
         kind: "svg",
         format: "svg",
-        target: "artifact",
+        target: artifactTarget,
         confidence: input.outputContract.confidence,
         constraints: ["output_contract"],
       });
@@ -801,7 +867,7 @@ function buildDesiredOutputs(input: {
       addDesiredOutput(outputs, {
         kind: "image",
         format: format ?? "png",
-        target: "artifact",
+        target: artifactTarget,
         confidence: input.outputContract.confidence,
         constraints: ["output_contract"],
       });

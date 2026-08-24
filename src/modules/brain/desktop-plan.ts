@@ -36,7 +36,7 @@ export type DesktopPlanInput = {
 export type DesktopPlanResult = {
   ok: boolean;
   contract: string;
-  /** Yanıttan çıkarılan ilk JSON nesnesi; bulunamazsa null. */
+  /** Yanıttan çıkarılan son plan-şekilli JSON nesnesi; bulunamazsa null. */
   plan: Record<string, unknown> | null;
   /** Ham model çıktısı — masaüstü tarafı kendi kurtarma mantığını koşabilsin. */
   text: string;
@@ -99,16 +99,11 @@ export function extractFirstJsonObject(
       }
     }
   }
-  return (
-    candidates.find(
-      (candidate) =>
-        typeof candidate.contract === "string" &&
-        Array.isArray(candidate.steps),
-    ) ??
-    candidates.find((candidate) => Array.isArray(candidate.steps)) ??
-    candidates[0] ??
-    null
-  );
+  // Reasoning providers can emit a draft plan inside <think> and the final
+  // corrected plan afterwards. The last plan-shaped object is authoritative;
+  // selecting the first silently executes the discarded draft.
+  const plans = candidates.filter((candidate) => Array.isArray(candidate.steps));
+  return plans.at(-1) ?? candidates.at(-1) ?? null;
 }
 
 const PLANNER_SYSTEM_PREFIX = [

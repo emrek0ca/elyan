@@ -90,6 +90,7 @@ test("all desktop planning routes use the machine JSON protocol", () => {
     "desktop_plan",
     "desktop_plan_repair",
     "desktop_plan_materialize",
+    "desktop_plan_transport_repair",
     "desktop_plan_critique",
   ]) {
     assert.equal(isDesktopPlanMachineJsonRoute(route), true, route);
@@ -607,6 +608,84 @@ async function withMockedFetch<T>(
 
 let withMockedFetchQueue = Promise.resolve();
 
+test("machine JSON routes do not resend an empty 2xx response internally", async () => {
+  let generationCalls = 0;
+  const generationAttempts: string[] = [];
+  const app = {
+    db: createQuotaReadyDb([[], []]),
+    config: {
+      APP_BASE_URL: "https://api.elyan.dev",
+      ELYAN_SHARED_BRAIN_PROVIDER: "ollama",
+      ELYAN_SHARED_BRAIN_BASE_URL: "http://127.0.0.1:11434",
+      ELYAN_SHARED_BRAIN_MODEL: "qwen2.5:7b-instruct-q5_K_M",
+      ELYAN_SHARED_BRAIN_KEEP_ALIVE: "30m",
+      ELYAN_SHARED_BRAIN_SYSTEM_PROMPT: "Return only valid JSON.",
+      ELYAN_SHARED_BRAIN_FALLBACK_PROVIDER: undefined,
+      ELYAN_SHARED_BRAIN_FALLBACK_BASE_URL: undefined,
+    },
+    services: { reliability: undefined },
+    log: { info() {}, warn() {}, debug() {} },
+  };
+
+  await assert.rejects(() =>
+    withMockedFetch(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        if (url.endsWith("/api/tags")) {
+          return new Response(JSON.stringify({ models: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        const body = String(init?.body ?? "");
+        if (body.includes("Build a machine execution plan.")) {
+          generationCalls += 1;
+          generationAttempts.push(url);
+        }
+        return new Response(
+          JSON.stringify({
+            model: "qwen2.5:7b-instruct-q5_K_M",
+            message: { role: "assistant", content: "" },
+            done: true,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      () =>
+        generateSharedBrainReply(app as never, {
+          userId: "user-1",
+          taskId: "task-machine-empty",
+          prompt: "Build a machine execution plan.",
+          workload: "planning",
+          route: "desktop_plan_materialize",
+          responseSchemaOverride: {
+            name: "desktop_plan",
+            schema: {
+              type: "object",
+              required: ["steps"],
+              properties: { steps: { type: "array", items: {} } },
+              additionalProperties: false,
+            },
+          },
+          internalEvaluation: {
+            skipUsageValidation: true,
+            skipConsentValidation: true,
+            skipInvocationLogging: true,
+            skipReviewLogging: true,
+            refinementPass: true,
+          },
+        }),
+    ),
+  );
+
+  assert.equal(generationCalls, 1, generationAttempts.join(", "));
+});
+
 test("generateSharedBrainReply warms Ollama and serves chat without a promoted shared artifact", async () => {
   const requestedBodies: Array<Record<string, unknown>> = [];
   const app = {
@@ -947,7 +1026,9 @@ test("generateSharedBrainReply uses TurnEnvelope response_format behind the flag
   assert.equal(result.metadata.followUpsCount, 1);
   assert.equal(
     (requestedBodies[0].response_format as Record<string, unknown>).type,
-    "json_schema",
+    // gpt-oss uses the compact TurnEnvelope constitution because provider
+    // json_schema enforcement has produced empty/invalid generations live.
+    "json_object",
   );
   assert.ok(
     (
@@ -1604,7 +1685,7 @@ test("generateSharedBrainReply consumes a semantic connector hint in its TurnEnv
   assert.equal(result.metadata.connectorSemanticHintTool, "gmail.search");
   assert.equal(
     (requestedBodies[0].response_format as Record<string, unknown>).type,
-    "json_schema",
+    "json_object",
   );
   const allMessageContent = (
     requestedBodies[0].messages as Array<{ content?: string }>
@@ -2244,7 +2325,7 @@ test("generateSharedBrainReply streams only TurnEnvelope reply.text deltas", asy
   assert.equal(deltas.join("").includes("memory_ops"), false);
   assert.equal(
     (requestedBodies[0].response_format as Record<string, unknown>).type,
-    "json_schema",
+    "json_object",
   );
 });
 
@@ -7249,7 +7330,10 @@ test("greeting policy allows shared history but still bans sensor context", () =
     baseInput({ prompt: "Selam nasılsın?" }),
   );
   assert.match(prompt, /Shared history is fair game/u);
-  assert.match(prompt, /never mention health, steps, battery/u);
+  assert.match(
+    prompt,
+    /Do NOT mention health metrics, steps, battery, calendar, weather, location, device state, memory contents, or any system context/i,
+  );
 });
 
 test("prompt gating: greeting turns get the lean social profile", () => {
@@ -8399,7 +8483,8 @@ test("gatePromptOverride lets boundary gates judge the user's words, not the pla
             model: "qwen2.5:7b-instruct-q5_K_M",
             message: {
               role: "assistant",
-              content: '{"intent":"task","confidence":0.9}',
+              content:
+                '{"type":"task_plan","steps":[{"id":"step_1","capability":"directory_tree","args":{"path":"~/Desktop"}}]}',
             },
             done: true,
           }),
@@ -8424,6 +8509,10 @@ test("gatePromptOverride lets boundary gates judge the user's words, not the pla
       }),
   );
   assert.equal(result.answerSource, "model");
+  assert.equal(
+    result.text,
+    '{"type":"task_plan","steps":[{"id":"step_1","capability":"directory_tree","args":{"path":"~/Desktop"}}]}',
+  );
 
   // Override'ın kendisi tehlikeliyse kapı YİNE kapanır — bypass yolu değildir.
   const stillGated = await generateGovernedSharedBrainReply(app as never, {

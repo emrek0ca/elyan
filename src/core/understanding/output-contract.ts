@@ -1,4 +1,5 @@
 import type { SharedBrainWorkload } from "../../modules/brain/workloads.js";
+import { trStemPattern } from "../../lib/tr-word-boundary.js";
 
 export type OutputOperation =
   | "answer"
@@ -60,6 +61,58 @@ const IMAGE_FORMATS = new Set<OutputFormat>([
   "jpeg",
   "webp",
 ]);
+
+const RESEARCH_REQUEST_PATTERN = trStemPattern([
+  "araştır",
+  "arastir",
+  "incele",
+  "research",
+]);
+const SAVE_REQUEST_PATTERN = trStemPattern(
+  ["kaydet", "kayded", "save", "indir", "download"],
+  {
+    exclude: [
+      "indirim",
+      "indirimi",
+      "indirimli",
+      "indirime",
+      "indirgeme",
+      "indirgemeli",
+    ],
+  },
+);
+const LOCAL_OUTPUT_TARGET_PATTERN = trStemPattern([
+  "masaüstü",
+  "masaustu",
+  "desktop",
+  "bilgisayar",
+  "computer",
+]);
+const NEGATED_ARTIFACT_PATTERN = trStemPattern([
+  "kaydetme",
+  "yazma",
+  "oluşturma",
+  "olusturma",
+  "üretme",
+  "uretme",
+  "silme",
+  "değiştirme",
+  "degistirme",
+]);
+
+/**
+ * Shared destination decision for the understanding envelope and execution
+ * contract. A local noun alone is not enough: the user must also explicitly
+ * request a save/write and must not negate artifact creation.
+ */
+export function hasExplicitLocalArtifactTarget(value: string): boolean {
+  const text = normalize(value);
+  return (
+    SAVE_REQUEST_PATTERN.test(text) &&
+    LOCAL_OUTPUT_TARGET_PATTERN.test(text) &&
+    !NEGATED_ARTIFACT_PATTERN.test(text)
+  );
+}
 
 function normalize(value: unknown): string {
   return String(value ?? "")
@@ -160,9 +213,20 @@ function inferFormat(text: string, metadata: Record<string, unknown> | null): Ou
     return "png";
   }
   const hasDocumentNoun = /(?<!\p{L})(?:rapor\p{L}*|makale\p{L}*|belge\p{L}*|döküman\p{L}*|dokuman\p{L}*|dilekçe\p{L}*|dilekce\p{L}*|savunma\p{L}*|sözleşme\p{L}*|sozlesme\p{L}*)(?!\p{L})/iu.test(text);
-  const explicitlyForbidsArtifact = /(?<!\p{L})(?:değiştirme\p{L}*|degistirme\p{L}*|silme\p{L}*|kaydetme\p{L}*|yazma\p{L}*|oluşturma\p{L}*|olusturma\p{L}*|üretme\p{L}*|uretme\p{L}*)(?!\p{L})/iu.test(text);
+  const explicitlyForbidsArtifact = NEGATED_ARTIFACT_PATTERN.test(text);
   const asksDocumentCreation = /(?<!\p{L})(?:hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|üret\p{L}*|uret\p{L}*|yaz\p{L}{0,8}|tasarla\p{L}*|çıkar\p{L}*|cikar\p{L}*|raporlaştır\p{L}*|raporlastır\p{L}*|raporlastir\p{L}*|kaydet\p{L}*|olarak ver|formatında|formatinda)(?!\p{L})/iu.test(text);
   if (hasDocumentNoun && asksDocumentCreation && !explicitlyForbidsArtifact) {
+    return "docx";
+  }
+  // Kullanıcı biçim söylemeden bir konuyu araştırıp kendi bilgisayarına
+  // kaydetmemizi isterse ürün sözleşmesi varsayılan olarak DOCX araştırma
+  // raporudur. Hedef ekli Türkçe biçimlerde de gelebilir: "masaüstüne",
+  // "bilgisayarıma". Bu karar yalnız açık kaydetme + yerel hedef birlikte
+  // bulunduğunda verilir; "araştır ama kaydetme, burada anlat" chat kalır.
+  if (
+    RESEARCH_REQUEST_PATTERN.test(text) &&
+    hasExplicitLocalArtifactTarget(text)
+  ) {
     return "docx";
   }
   return null;
@@ -209,7 +273,18 @@ function inferOperation(text: string, format: OutputFormat | null, reference: Ou
     /\b(?:kullanma|istemiyorum|olmas[ıi]n|yapma|çıkarma|cikarma|without|no)\b.{0,40}\b(?:tablo|table|grafik|chart|pdf|docx|excel|xlsx)\b/iu.test(text) ||
     /\b(?:tablo|table|grafik|chart|pdf|docx|excel|xlsx)\b.{0,40}\b(?:kullanma|istemiyorum|olmas[ıi]n|yapma|çıkarma|cikarma|without|no)\b/iu.test(text);
   if (asksConceptQuestion || negatesArtifact) return "answer";
-  const hasAnalysis = /\b(?:analiz|incele|yorumla|özetle|ozetle|araştır|arastir|research|analyze|summarize)\b/iu.test(text);
+  const hasAnalysis = trStemPattern([
+    "analiz",
+    "incele",
+    "yorumla",
+    "özetle",
+    "ozetle",
+    "araştır",
+    "arastir",
+    "research",
+    "analyze",
+    "summarize",
+  ]).test(text);
   const hasTransform = /\b(?:dönüştür|donustur|çevir|cevir|aktar|export|convert)\b/iu.test(text);
   const hasEdit = /\b(?:düzenle|duzenle|değiştir|degistir|revize|iyileştir|iyilestir)\b/iu.test(text);
   const hasCreate = /\b(?:hazırla|hazirla|oluştur|olustur|üret|uret|yap|yaz\p{L}{0,8}|tasarla|kur)\b/iu.test(text);

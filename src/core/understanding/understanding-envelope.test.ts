@@ -219,6 +219,39 @@ test("buildTypedUnderstandingEnvelope marks local private file requests for desk
   assert.equal(preferredWorkloadFromUnderstandingEnvelope(envelope), "desktop_handoff");
 });
 
+test("buildTypedUnderstandingEnvelope recognizes directional Turkish local write targets", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: "Kedilerin yaşamı hakkında araştırma yapıp masaüstüne kaydet",
+    intent: intent("computer"),
+  });
+
+  assert.equal(envelope.risk.local_private, true);
+  assert.equal(envelope.risk.side_effect, true);
+  assert.equal(envelope.output_contract?.outputKind, "document");
+  assert.equal(envelope.output_contract?.outputFormat, "docx");
+  assert.equal(envelope.output_contract?.requiresArtifact, true);
+  assert.deepEqual(
+    envelope.desired_outputs.map((output) => [output.kind, output.format, output.target]),
+    [["docx", "docx", "desktop"]],
+  );
+});
+
+test("buildTypedUnderstandingEnvelope keeps negated local research saves read-only", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    userId: "user_1",
+    message: "Kedilerin yaşamını araştır ama kaydetme, burada anlat",
+    intent: intent("research"),
+  });
+
+  assert.equal(envelope.risk.side_effect, false);
+  assert.equal(envelope.output_contract?.requiresArtifact, false);
+  assert.deepEqual(
+    envelope.desired_outputs.map((output) => output.kind),
+    ["chat_reply"],
+  );
+});
+
 test("buildTypedUnderstandingEnvelope marks external account mutations as side effects", () => {
   for (const message of [
     "Ayşe'ye yarınki toplantı için e-posta gönder",

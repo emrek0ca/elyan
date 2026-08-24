@@ -107,6 +107,10 @@ export async function estimateToolSuccess(
     eq(learningEvents.type, "tool_outcome"),
     eq(learningEvents.key, tool),
     gte(learningEvents.createdAt, since),
+    // Yalnız görev verdict'iyle bağlanmış tool_outcome kayıtları öğrenmeye
+    // girer. Ham "tool ok" olayı, kullanıcı sonucu karşılanmadan başarı
+    // kanıtı değildir.
+    sql`${learningEvents.metadata}->>'taskVerdict' is not null`,
   ];
 
   try {

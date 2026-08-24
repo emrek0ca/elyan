@@ -57,6 +57,12 @@ import {
   validateMaterializedPlanContracts,
 } from "./plan-validators.js";
 import { normalizeTaskApprovalRequest } from "./service-lifecycle.js";
+import {
+  estimateToolSuccessBatch,
+  TOOL_SUCCESS_MIN_OBSERVATIONS,
+  type ToolSuccessEstimate,
+} from "./tool-success-model.js";
+import { buildSelfModel } from "./self-model.js";
 
 export {
   buildAllowedCapabilities,
@@ -65,34 +71,22 @@ export {
 } from "./plan-validators.js";
 
 /**
- * Hibrit sunucu-materyalizasyonu — dispatch worker'da (HTTP create yolundan
- * UZAK) çalışır.
+ * Tek-otorite sunucu materyalizasyonu dispatch worker'da çalışır.
  *
- * Bugün karmaşık görev iki kez planlanıyordu: (1) backend görev yaratımında
- * regex/keyword heuristik work-order üretir (dependsOn yok, karmaşık görev tek
- * jenerik `desktop_operator.run` adımına çöker), (2) desktop bu heuristik plana
- * güvenmeyip çok-adımlı her görevde sunucuya İKİNCİ bir planlama round-trip'i
- * yapar. Bu modül, KARMAŞIK görevlerde sunucu beynine (120b "planning" workload)
- * tam bağımlılık-graflı bir planı ÖNCEDEN derletip work-order'a VERİ olarak
- * yazar ve `planSource:"server_materialized"` ile işaretler. Desktop bu işareti
- * görünce plana güvenir ve ekstra round-trip olmadan yürütür.
+ * V2 görevlerde doğrulanmış semantic contract önce modelsiz bir DAG üretir.
+ * Compiler eksiksiz bir plan kuramıyorsa görev `dynamic` kalır ve karar yalnız
+ * masaüstündeki policy-filtered AgentLoop'a geçer; backend ve desktop aynı ham
+ * kullanıcı metnini yeniden sınıflandırıp üçüncü bir plan üretmez.
  *
- * Güvenlik: fail-CLOSED. Yeni desktop görevleri model planı doğrulanmadan
- * yürütülmez. Hata/timeout/zayıf çıktı görev yaşam döngüsünde güvenli ve tekrar
- * denenebilir bir planlama hatasına dönüşür; heuristik taslak dispatch edilmez.
- * Vokabüler = desktop'un TAM kataloğu
- * (DESKTOP_CAPABILITY_MANIFEST — runtime TOOL_DECLARATIONS'tan üretilir) ve
- * skill kataloğu (DESKTOP_SKILL_MANIFEST — runtime skill_catalog'tan üretilir);
- * desktop planı yine KENDİ kataloğuna karşı doğrular, geçmezse mevcut delegasyon
- * davranışına düşer (regresyon yok).
+ * Aşağıdaki model planner ve tam manifest kodu yalnız bir sürümlük V1 geçiş
+ * adaptörünü destekler. Ürettiği plan yine capability, output, readiness ve
+ * placement kapılarından fail-closed geçmeden dispatch edilmez.
  */
 
-// Sunucunun önerebileceği yetenekler = desktop'un TAM kataloğu (manifest).
-// Onay gerektirenler (mail/shell/dosya-sil/takvim…) modele "risk: onay ister"
-// notuyla sunulur ama planlanabilir — güvenlik sınırı DESKTOP'tadır (grant +
-// REMOTE_APPROVAL_CAPABILITIES onay kapısı). Böylece sunucu planı desktop'un
-// geniş yetenek/araç setinin TAMAMINI kullanabilir; kısa görev + planlama
-// aşamaları iki uçta bire bir uyumlu kalır.
+// Registry manifesti V2'nin model bağlamı değildir. Semantic compiler onu
+// doğrulama/yerleştirme için kullanır; yalnız V1 geçiş planner'ı tam katalog
+// prompt'u oluşturur. Dynamic V2 AgentLoop ise en fazla 12 policy-filtered kısa
+// manifest görür ve schema'yı tool_describe ile ihtiyaç anında açar.
 const MATERIALIZABLE_CAPABILITIES = DESKTOP_CAPABILITY_MANIFEST.map(
   (entry) => entry.name,
 );
@@ -102,6 +96,113 @@ const CAPABILITY_MANIFEST_BY_NAME = new Map(
 const SKILL_MANIFEST_BY_ID = new Map(
   DESKTOP_SKILL_MANIFEST.map((entry) => [entry.id, entry] as const),
 );
+
+// Structural similarity is not semantic equivalence. A previous generic key
+// grouped browser_session.click with desktop_os.volume merely because both
+// had no required args and returned a structured result. Learning may only
+// break ties inside these deliberately reviewed substitute families.
+const LEARNING_EQUIVALENCE_GROUPS = [
+  ["analyze_screen", "desktop_operator.observe_screen"],
+] as const;
+const LEARNING_EQUIVALENCE_BY_CAPABILITY = new Map<string, string>(
+  LEARNING_EQUIVALENCE_GROUPS.flatMap((group, index) =>
+    group.map((capability) => [capability, `equivalent_${index}`] as const),
+  ),
+);
+
+function learningEquivalenceKey(capability: string): string | null {
+  return LEARNING_EQUIVALENCE_BY_CAPABILITY.get(capability) ?? null;
+}
+
+export function applyVerifiedLearningTieBreak(input: {
+  capabilities: string[];
+  estimates: ToolSuccessEstimate[];
+  brokenTools?: Iterable<string>;
+}): string[] {
+  const original = [...input.capabilities];
+  const estimateByTool = new Map(
+    input.estimates
+      .filter((item) => item.observations >= TOOL_SUCCESS_MIN_OBSERVATIONS)
+      .map((item) => [item.tool, item] as const),
+  );
+  const brokenTools = new Set(input.brokenTools ?? []);
+  const byGroup = new Map<string, string[]>();
+  for (const capability of original) {
+    const key = learningEquivalenceKey(capability);
+    if (!key) continue;
+    const group = byGroup.get(key) ?? [];
+    group.push(capability);
+    byGroup.set(key, group);
+  }
+  const result = [...original];
+  for (const group of byGroup.values()) {
+    if (group.length < 2) continue;
+    const viable = group.filter((tool) => !brokenTools.has(tool));
+    const candidates = viable.length > 0 ? viable : group;
+    const ranked = [...candidates].sort((left, right) => {
+      const leftEstimate = estimateByTool.get(left);
+      const rightEstimate = estimateByTool.get(right);
+      // Missing data is not a neutral score. Both alternatives need enough
+      // verified observations before their established semantic order moves.
+      if (!leftEstimate || !rightEstimate) {
+        return group.indexOf(left) - group.indexOf(right);
+      }
+      return (
+        rightEstimate.probability - leftEstimate.probability ||
+        group.indexOf(left) - group.indexOf(right)
+      );
+    });
+    const groupIndexes = group
+      .map((tool) => result.indexOf(tool))
+      .sort((left, right) => left - right);
+    groupIndexes.forEach((index, offset) => {
+      result[index] = ranked[offset] ?? group[offset]!;
+    });
+    if (viable.length > 0 && viable.length < group.length) {
+      for (const suppressed of group.filter((tool) => brokenTools.has(tool))) {
+        const index = result.indexOf(suppressed);
+        if (index >= 0) result.splice(index, 1);
+      }
+    }
+  }
+  return [...new Set(result)];
+}
+
+async function prioritizeEquivalentCapabilitiesFromLearning(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    intentKind: string;
+    capabilities: string[];
+  },
+): Promise<string[]> {
+  const original = [...input.capabilities];
+  if (original.length < 2) return original;
+  try {
+    const [estimates, selfModel] = await Promise.all([
+      estimateToolSuccessBatch(app, {
+        userId: input.userId,
+        tools: original,
+        intentKind: input.intentKind,
+        device: "desktop",
+      }),
+      buildSelfModel(app, { userId: input.userId }),
+    ]);
+    const brokenTools = new Set(
+      selfModel
+        .filter((claim) => claim.kind === "broken_tool")
+        .map((claim) => /^"([^"]+)"/u.exec(claim.statement)?.[1] ?? "")
+        .filter(Boolean),
+    );
+    return applyVerifiedLearningTieBreak({
+      capabilities: original,
+      estimates,
+      brokenTools,
+    });
+  } catch {
+    return original;
+  }
+}
 
 const CAPABILITY_NAME_RE = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$/;
 const STEP_TEMPLATE_RE = /\{\{\s*steps\.([A-Za-z0-9_-]+)/g;
@@ -1255,6 +1356,17 @@ function readPlanStepArray(rawPlan: Record<string, unknown>): unknown[] {
       if (Array.isArray(inner) && inner.length > 0) return inner;
     }
   }
+  // Some structured providers return the single requested step as the root
+  // object instead of wrapping it in {steps:[...]}. Keep the tolerance narrow:
+  // it must still declare a tool-shaped field and normalization below still
+  // enforces the advertised capability and argument contract.
+  if (
+    ["capability", "tool", "name", "action"].some(
+      (key) => typeof rawPlan[key] === "string",
+    )
+  ) {
+    return [rawPlan];
+  }
   return [];
 }
 
@@ -1299,7 +1411,7 @@ export function normalizeMaterializedSteps(
     // Tolerans DAR: `id` ancak KATALOGDA GERÇEKTEN VAR OLAN bir yetenek adıysa
     // kabul edilir. Uydurma bir id yetenek yerine geçemez.
     const declared = String(
-      readStepField(step, ["capability", "tool", "name"]) ?? "",
+      readStepField(step, ["capability", "tool", "name", "action"]) ?? "",
     ).trim();
     const rawId = String(step.id ?? "").trim();
     const capability =
@@ -2142,7 +2254,7 @@ export async function maybeMaterializeDesktopPlan(
     if (!workOrder) return false;
     const planPreview = asRecord(workOrder.planPreview);
     if (!planPreview) return false;
-    const allowed = await withoutUnreadyDeviceCapabilities(
+    let allowed = await withoutUnreadyDeviceCapabilities(
       app,
       task,
       buildAllowedCapabilities(workOrder),
@@ -2296,7 +2408,8 @@ export async function maybeMaterializeDesktopPlan(
       }
     }
 
-    const cachedPlan = await readDesktopPlanCache(workOrder, allowed, app);
+    type CachedPlan = Awaited<ReturnType<typeof readDesktopPlanCache>>;
+    let cachedPlan: CachedPlan = null;
     const recordAvoidedPlannerCost = () => {
       const promptBytes = Buffer.byteLength(
         buildPlanningPrompt(workOrder, allowed),
@@ -2308,7 +2421,7 @@ export async function maybeMaterializeDesktopPlan(
       });
     };
     const persistCachedPlan = async (
-      candidate: NonNullable<typeof cachedPlan>,
+      candidate: NonNullable<CachedPlan>,
     ): Promise<boolean> => {
       const cacheValidationIssues = validateMaterializedPlanContracts(
         candidate.steps,
@@ -2327,30 +2440,10 @@ export async function maybeMaterializeDesktopPlan(
         candidate.steps,
       );
       if (placement === false) return false;
-      const target = await getUserDevice(app, task.userId, task.targetDeviceId);
-      const advertisedCapabilities = normalizeRuntimeCapabilities(
-        target?.runtime.capabilities ?? [],
-      );
-      if (
-        advertisedCapabilities.length > 0 &&
-        !supportsRequestedCapabilities(
-          advertisedCapabilities,
-          candidate.materializedCapabilityScope,
-        )
-      ) {
-        app.log.info?.(
-          {
-            taskId: task.id,
-            keyHash: candidate.metadata.keyHash,
-            missingCapabilities: missingRuntimeCapabilities(
-              advertisedCapabilities,
-              candidate.materializedCapabilityScope,
-            ),
-          },
-          "cached desktop plan skipped because target runtime lacks required capabilities",
-        );
-        return false;
-      }
+      // Placement already resolves every step against the target runtime's
+      // declared capabilities and online state. Re-reading the same device
+      // row here created a second readiness authority and added a full DB
+      // round trip to the compiler-first path.
       await persistTaskPayload(app, task, {
         ...payload,
         desktopWorkOrder: {
@@ -2405,30 +2498,7 @@ export async function maybeMaterializeDesktopPlan(
         fallbackSteps,
       );
       if (placement === false) return false;
-      const target = await getUserDevice(app, task.userId, task.targetDeviceId);
-      const advertisedCapabilities = normalizeRuntimeCapabilities(
-        target?.runtime.capabilities ?? [],
-      );
-      if (
-        advertisedCapabilities.length > 0 &&
-        !supportsRequestedCapabilities(
-          advertisedCapabilities,
-          materializedCapabilityScope,
-        )
-      ) {
-        app.log.warn(
-          {
-            taskId: task.id,
-            reason,
-            missingCapabilities: missingRuntimeCapabilities(
-              advertisedCapabilities,
-              materializedCapabilityScope,
-            ),
-          },
-          "semantic desktop fallback skipped because target runtime lacks required capabilities",
-        );
-        return false;
-      }
+      // The bound placement above is the single capability/readiness proof.
       await persistTaskPayload(app, task, {
         ...payload,
         desktopWorkOrder: {
@@ -2449,6 +2519,11 @@ export async function maybeMaterializeDesktopPlan(
             planSource: "server_materialized" as const,
             contract: "elyan.compiled_plan.v1" as const,
             materializationSource: "semantic_compiler" as const,
+            planPreparation: {
+              status: "ready" as const,
+              outcome: "materialized" as const,
+              preparedAt: new Date().toISOString(),
+            },
             contextPackConsumption: buildContextPackConsumption(
               workOrder,
               fallbackSteps,
@@ -2467,6 +2542,62 @@ export async function maybeMaterializeDesktopPlan(
       );
       return true;
     };
+    // Typed semantic contract tam ve doğrulanabiliyorsa model planlayıcısı
+    // karar otoritesi değildir. Compiler-first yol hem aynı görevi tek kez
+    // yorumlar hem de 120B planlama/critique çağrılarını sıfıra indirir.
+    if (await persistSemanticFallbackPlan("compiler_complete")) {
+      return true;
+    }
+    const taskContract = asRecord(payload.taskExecutionContract);
+    const taskContractExecution = asRecord(taskContract?.execution);
+    if (
+      taskContract?.contract === "elyan.task_execution_contract.v2" &&
+      taskContractExecution?.mode === "dynamic"
+    ) {
+      // V2 has exactly two execution authorities. If the semantic compiler
+      // cannot produce a complete DAG, the desktop AgentLoop observes and
+      // decides inside this policy-filtered capability ceiling. Do not ask a
+      // remote one-shot planner to invent a third graph.
+      await persistTaskPayload(app, task, {
+        ...payload,
+        desktopWorkOrder: {
+          ...workOrder,
+          materializedCapabilityScope: allowed,
+          planPreview: {
+            ...planPreview,
+            steps: [],
+            executionSteps: undefined,
+            executionPlacement: undefined,
+            contract: undefined,
+            planSource: "dynamic_contract" as const,
+            materializationSource: "dynamic_contract" as const,
+            planPreparation: {
+              status: "ready" as const,
+              outcome: "dynamic_ready" as const,
+              preparedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+      app.log.info?.(
+        {
+          taskId: task.id,
+          capabilityScopeSize: allowed.length,
+        },
+        "desktop task admitted to bounded v2 dynamic agent loop",
+      );
+      return true;
+    }
+    // Öğrenme güvenlik/contract kararını değiştirmez. Yalnız semantic olarak
+    // eşdeğer ve zaten izinli adayların sırasını, her iki tarafta da >=5
+    // doğrulanmış gözlem varsa kırar; üç ardışık hata yalnız alternatifi olan
+    // eşdeğer aracı geçici olarak bastırır.
+    allowed = await prioritizeEquivalentCapabilitiesFromLearning(app, {
+      userId: task.userId,
+      intentKind: workOrder.goal.kind,
+      capabilities: allowed,
+    });
+    cachedPlan = await readDesktopPlanCache(workOrder, allowed, app);
     if (cachedPlan && (await persistCachedPlan(cachedPlan))) {
       return true;
     }
@@ -2578,11 +2709,20 @@ export async function maybeMaterializeDesktopPlan(
             provider: inference?.provider,
             model: inference?.model,
             textLength: inference?.text.length ?? 0,
-            // `textLength: 262, rawStepCount: 0` tek başına teşhis edilemez:
-            // model şemaya uydu ama adım mı üretmedi, yoksa düzyazı mı
-            // döndürdü ayırt edilemiyordu. Örnek SINIRLI ve modelin plan
-            // çıktısıdır — kullanıcı istemi değil.
-            outputSample: (inference?.text ?? "").slice(0, 300),
+            // Shape telemetry only: machine payload may contain private task
+            // data, so neither the prompt nor an output sample is logged.
+            outputShape: {
+              empty: (inference?.text.trim().length ?? 0) === 0,
+              jsonObjectFound: parsedPlan !== null,
+              topLevelKeys: parsedPlan
+                ? Object.keys(parsedPlan).sort().slice(0, 16)
+                : [],
+              stepsType: Array.isArray(parsedPlan?.steps)
+                ? "array"
+                : parsedPlan && "steps" in parsedPlan
+                  ? typeof parsedPlan.steps
+                  : "missing",
+            },
             jsonObjectFound: parsedPlan !== null,
             parsedStepCount: Array.isArray(parsedPlan?.steps)
               ? parsedPlan.steps.length
@@ -2926,8 +3066,17 @@ export async function markDesktopPlanPrepared(
   const isTrustedPlan =
     planPreview.planSource === "server_materialized" ||
     planPreview.planSource === "deterministic_registry";
+  const taskContract = asRecord(payload.taskExecutionContract);
+  const taskContractExecution = asRecord(taskContract?.execution);
+  const isTrustedDynamicContract =
+    planPreview.planSource === "dynamic_contract" &&
+    taskContract?.contract === "elyan.task_execution_contract.v2" &&
+    taskContractExecution?.mode === "dynamic" &&
+    Array.isArray(planPreview.steps) &&
+    planPreview.steps.length === 0;
   const keepPlanning = !materialized &&
     !isTrustedPlan &&
+    !isTrustedDynamicContract &&
     existingPreparation?.status === "pending";
   const preparationStatus = materialized
     ? ("ready" as const)
@@ -2935,7 +3084,9 @@ export async function markDesktopPlanPrepared(
       ? ("pending" as const)
       : ("failed" as const);
   const preparationOutcome = materialized
-    ? (planPreview.planSource === "deterministic_registry"
+    ? (isTrustedDynamicContract
+      ? ("dynamic_ready" as const)
+      : planPreview.planSource === "deterministic_registry"
       ? ("deterministic_materialized" as const)
       : ("materialized" as const))
     : keepPlanning

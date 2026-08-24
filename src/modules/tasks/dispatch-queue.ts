@@ -30,8 +30,10 @@ type TaskDispatchResources = {
 };
 
 const TASK_DISPATCH_QUEUE_NAME = "elyan-task-dispatch";
-const MAX_PLAN_MATERIALIZATION_ATTEMPTS = 3;
-const LOCAL_DISPATCH_RETRY_DELAYS_MS = [5_000, 10_000] as const;
+// One initial planner call plus one immediate fallback. Provider-level retry
+// remains inside the planner; blind 5/10-second sleeps only hid the failure
+// class and inflated a simple task to 30+ seconds.
+const MAX_PLAN_MATERIALIZATION_ATTEMPTS = 2;
 const QUEUED_DISPATCH_RECOVERY_LIMIT = 100;
 const dispatchResources = new WeakMap<FastifyInstance, TaskDispatchResources>();
 const localDispatches = new WeakMap<FastifyInstance, Set<string>>();
@@ -90,6 +92,15 @@ type DispatchAttemptOptions = {
   planningAttempt?: number;
 };
 
+class PlanningDeferredError extends Error {
+  readonly code = "desktop_planning_deferred";
+
+  constructor() {
+    super("desktop_planning_deferred");
+    this.name = "PlanningDeferredError";
+  }
+}
+
 function createRedisConnectionOptions(redisUrl: string) {
   return {
     url: redisUrl,
@@ -116,7 +127,12 @@ export async function dispatchClaimedTask(
   },
   options: DispatchAttemptOptions = {},
 ): Promise<
-  "dispatched" | "awaiting_approval" | "planning_failed" | "not_dispatched"
+  | "dispatched"
+  | "awaiting_approval"
+  | "planning_deferred"
+  | "planning_failed"
+  | "lease_unavailable"
+  | "runtime_unavailable"
 > {
   let planPendingStatusAttempted = false;
   const announcePlanPending = async (): Promise<void> => {
@@ -161,7 +177,7 @@ export async function dispatchClaimedTask(
           "pending desktop plan could not be synced to chat",
         );
       });
-    return "not_dispatched";
+    return "planning_deferred";
   }
 
   const approvalTask = operations.gatePlanApproval
@@ -202,11 +218,11 @@ export async function dispatchClaimedTask(
     runtimeConnectionId: task.runtimeConnectionId ?? null,
   });
   if (!leaseResult) {
-    return "not_dispatched";
+    return "lease_unavailable";
   }
   const lease = leaseResult.lease;
   if (!lease) {
-    return "not_dispatched";
+    return "lease_unavailable";
   }
 
   const sent = await operations.sendToRuntime(task.targetDeviceId, {
@@ -222,7 +238,7 @@ export async function dispatchClaimedTask(
     taskId: task.id,
     leaseId: lease.leaseId,
   });
-  return "not_dispatched";
+  return "runtime_unavailable";
 }
 
 async function processTaskDispatch(
@@ -273,8 +289,18 @@ async function processTaskDispatch(
         );
       });
     }
-    if (outcome === "not_dispatched") {
-      throw new Error("runtime_offline_or_lease_unavailable");
+    if (outcome === "planning_deferred") {
+      throw new PlanningDeferredError();
+    }
+    if (outcome === "lease_unavailable" || outcome === "runtime_unavailable") {
+      app.log.warn(
+        {
+          taskId: task.id,
+          dispatchFailureClass: outcome,
+          planningAttempt,
+        },
+        "desktop dispatch deferred; connection-triggered and HTTP fallback remain available",
+      );
     }
   } finally {
     if (!keepClaim) {
@@ -325,32 +351,39 @@ function scheduleLocalTaskDispatch(
       finish();
     } catch (error) {
       const nextAttempt = planningAttempt + 1;
-      const delay = LOCAL_DISPATCH_RETRY_DELAYS_MS[planningAttempt];
-      if (delay !== undefined && nextAttempt < MAX_PLAN_MATERIALIZATION_ATTEMPTS) {
+      if (
+        error instanceof PlanningDeferredError &&
+        nextAttempt < MAX_PLAN_MATERIALIZATION_ATTEMPTS
+      ) {
         app.log.warn(
           {
             taskId,
             planningAttempt,
             nextAttempt,
-            retryInMs: delay,
-            // Ham `error` nesnesi pino tarafından `{}` olarak yazılıyordu:
-            // canlıda 5sn'lik geri çekilmenin NEDENİ hiç görünmedi.
+            dispatchFailureClass: error.code,
             errorMessage:
               error instanceof Error ? error.message : String(error),
             errorName: error instanceof Error ? error.name : undefined,
-            error,
           },
-          "local task dispatch attempt failed; scheduling bounded retry",
+          "desktop planning deferred; running the single immediate fallback",
         );
-        const timer = setTimeout(() => {
+        setImmediate(() => {
           void run(nextAttempt);
-        }, delay);
-        timer.unref?.();
+        });
         return;
       }
       app.log.warn(
-        { taskId, planningAttempt, error },
-        "local task dispatch attempts exhausted; runtime polling remains available",
+        {
+          taskId,
+          planningAttempt,
+          dispatchFailureClass:
+            error instanceof PlanningDeferredError
+              ? error.code
+              : "unexpected_dispatch_failure",
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorName: error instanceof Error ? error.name : undefined,
+        },
+        "desktop dispatch stopped after its bounded retry budget; fallback remains available",
       );
       finish();
     }
@@ -404,11 +437,7 @@ export async function ensureTaskDispatchWorker(
   const queue = new Queue<TaskDispatchJobData>(TASK_DISPATCH_QUEUE_NAME, {
     connection: createRedisConnectionOptions(app.config.REDIS_URL) as never,
     defaultJobOptions: {
-      attempts: 12,
-      backoff: {
-        type: "exponential",
-        delay: 5_000,
-      },
+      attempts: MAX_PLAN_MATERIALIZATION_ATTEMPTS,
       removeOnComplete: true,
       removeOnFail: false,
     },

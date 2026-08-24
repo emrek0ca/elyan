@@ -222,7 +222,7 @@ test("desktop dispatch keeps a task planning when the server cannot materialize 
     },
   );
 
-  assert.equal(dispatched, "not_dispatched");
+  assert.equal(dispatched, "planning_deferred");
   assert.deepEqual(order, ["materialize", "prepare", "send_planning", "sync"]);
 });
 
@@ -273,7 +273,7 @@ test("desktop dispatch announces an already-pending plan before slow materializa
     },
   );
 
-  assert.equal(outcome, "not_dispatched");
+  assert.equal(outcome, "planning_deferred");
   assert.deepEqual(order, ["send_planning", "materialize", "prepare", "sync"]);
 });
 
@@ -322,7 +322,7 @@ test("desktop plan materialization fails closed after the bounded planning budge
         return true;
       },
     },
-    { planningAttempt: 2 },
+    { planningAttempt: 1 },
   );
 
   assert.equal(outcome, "planning_failed");
@@ -372,11 +372,35 @@ test("desktop dispatch releases an unaccepted lease when runtime send fails", as
       },
     },
   );
-  assert.equal(outcome, "not_dispatched");
+  assert.equal(outcome, "runtime_unavailable");
   assert.deepEqual(order, [
     "send",
     "release:task-send-failed:lease-send-failed",
   ]);
+});
+
+test("desktop dispatch classifies lease admission separately from planning and runtime delivery", async () => {
+  const task = {
+    id: "task-lease-unavailable",
+    targetDeviceId: "desktop-1",
+    runtimeConnectionId: "runtime-1",
+    payload: {},
+  };
+  const outcome = await dispatchClaimedTask(
+    { log: { warn() {} } } as never,
+    task as never,
+    {
+      async materialize() { return true; },
+      async markPrepared() {},
+      async failPlanning() { throw new Error("unexpected planning failure"); },
+      async syncLifecycle() {},
+      async issueLease() { return null; },
+      async releaseLease() { throw new Error("no lease exists to release"); },
+      sendToRuntime() { throw new Error("lease failure must not reach runtime"); },
+    },
+  );
+
+  assert.equal(outcome, "lease_unavailable");
 });
 
 test("desktop dispatch resends a queued unacknowledged lease on retry", async () => {

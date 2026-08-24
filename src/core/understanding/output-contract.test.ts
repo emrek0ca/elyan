@@ -106,6 +106,29 @@ test("output contract keeps local read-only lookups out of artifact generation",
   );
 });
 
+test("output contract defaults explicit local research saves to a DOCX artifact", () => {
+  for (const message of [
+    "Kedilerin yaşamı hakkında araştırma yapıp masaüstüne kaydet",
+    "Kedilerin yaşamını araştırıp bilgisayarıma kaydeder misin?",
+  ]) {
+    const contract = compileOutputContract({ message });
+    assert.equal(contract.operation, "analyze_then_export", message);
+    assert.equal(contract.outputKind, "document", message);
+    assert.equal(contract.outputFormat, "docx", message);
+    assert.equal(contract.requiresArtifact, true, message);
+  }
+});
+
+test("output contract does not grant an artifact for an explicitly negated save", () => {
+  const contract = compileOutputContract({
+    message: "Kedilerin yaşamını araştır ama kaydetme, burada anlat",
+  });
+  assert.equal(contract.operation, "answer");
+  assert.equal(contract.outputKind, "chat_reply");
+  assert.equal(contract.outputFormat, null);
+  assert.equal(contract.requiresArtifact, false);
+});
+
 test("reference resolver carries previous assistant answer for 'bunu pdf yap'", () => {
   const resolved = resolveConversationReference({
     message: "bunu pdf yap",

@@ -9989,6 +9989,7 @@ export async function createTask(
       if (plannerCapabilitySeed.includes(capability)) return true;
       const policy = resolveDesktopCapabilityExecutionPolicy(capability);
       if (!policy) return false;
+      if (!policy.fallbackExecutionEligible) return false;
       const sideEffectLevel =
         routeDecision.taskRoute?.semanticDesktopContract?.sideEffectLevel;
       if (

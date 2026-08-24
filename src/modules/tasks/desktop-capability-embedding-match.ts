@@ -14,6 +14,7 @@ import type { SpeechAct } from "../../core/understanding/speech-act.js";
 import {
   capabilityAllowsSpeechActExecution,
   isDesktopExecutionCapability,
+  resolveDesktopCapabilityExecutionPolicy,
 } from "./desktop-capability-execution-policy.js";
 import {
   getDesktopCapabilityOntology,
@@ -385,6 +386,12 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
 
 /** Anlamsal sıralamanın ipucu listesine yansıması için gereken güven eşiği. */
 const HINT_CONFIDENCE = 0.55;
+// Cold-start lexical matches use the production routing corpus's existing
+// confidence gate. This is deliberately separate from the blended semantic
+// score above: while vectors warm, the lexical matcher still has useful,
+// measured evidence and request handling must not become capability-blind.
+const LEXICAL_HINT_CONFIDENCE = 0.34;
+const LEXICAL_HINT_MARGIN = 0.2;
 
 /**
  * Hızlı yol için gereken AYRIŞMA (top-1 ile top-2 arasındaki fark).
@@ -714,9 +721,7 @@ export async function refineDesktopCapabilityHints(input: {
   const current = input.capabilities
     .map((capability) => String(capability ?? "").trim())
     .filter(Boolean);
-  if (!isDesktopCapabilityVectorCacheReady()) {
-    return current;
-  }
+  const semanticVectorsReady = isDesktopCapabilityVectorCacheReady();
   const ranked = await matchDesktopCapabilitiesWithEmbeddings({
     query: input.query,
     intent: input.intent,
@@ -738,10 +743,19 @@ export async function refineDesktopCapabilityHints(input: {
   // eşleşme başa eklenebilir. Structured model kararında capability kümesi
   // kapalıdır; embedding yalnız mevcut üyeleri sıralar.
   const best = ranked[0];
+  const bestMargin = best ? best.score - (ranked[1]?.score ?? 0) : 0;
+  const bestPolicy = best
+    ? resolveDesktopCapabilityExecutionPolicy(best.capability)
+    : null;
+  const expansionConfident = semanticVectorsReady
+    ? (best?.score ?? 0) >= HINT_CONFIDENCE
+    : (best?.score ?? 0) >= LEXICAL_HINT_CONFIDENCE &&
+      bestMargin >= LEXICAL_HINT_MARGIN;
   if (
     input.allowExpansion !== false &&
     best &&
-    best.score >= HINT_CONFIDENCE &&
+    bestPolicy?.fallbackExecutionEligible === true &&
+    expansionConfident &&
     !existing.has(best.capability)
   ) {
     return [best.capability, ...reordered].slice(0, 16);

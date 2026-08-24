@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { buildDesktopWorkOrder } from "../modules/tasks/desktop-work-order.js";
 import {
+  buildAllowedCapabilities,
   buildPlanningPrompt,
+  compileValidatedSemanticFallback,
   normalizeMaterializedSteps,
   readPlanningGatePrompt,
 } from "../modules/tasks/materialize-plan.js";
@@ -93,9 +95,16 @@ type LocalCase = {
   expectWriter: string;
   expectResearch: boolean;
   expectFormat?: "pdf";
+  explicitResearch?: boolean;
 };
 
 const LOCAL_CASES: LocalCase[] = [
+  {
+    message: "Kedilerin yaşamı hakkında araştırma yapıp masaüstüne kaydet",
+    expectWriter: "document_write",
+    expectResearch: true,
+    explicitResearch: true,
+  },
   {
     message: "masaüstüne zürafalar hakkında bir pdf hazırla ve kaydet",
     expectWriter: "document_write",
@@ -135,20 +144,29 @@ async function runLocal(): Promise<number> {
 
     // 2) Tazelik kararı ve budama
     const recency = await classifyKnowledgeRecency(readPlanningGatePrompt(order as never));
-    const needsResearch = recency?.recency === "current_facts";
+    const needsResearch = testCase.explicitResearch === true || recency?.recency === "current_facts";
     if (needsResearch !== testCase.expectResearch) {
       problems.push(
         `tazelik beklenen ${testCase.expectResearch ? "current_facts" : "stable_knowledge"}, gelen ${recency?.recency ?? "karar yok"}`,
       );
     }
+    const draftSteps = [
+      { id: "s1", capability: "web_research", description: "", args: { query: "x" }, dependsOn: [] },
+      { id: "s2", capability: "document_write", description: "", args: { prompt: "{{steps.s1.output}}" }, dependsOn: ["s1"] },
+    ] as never;
     const pruned = pruneUnneededResearchSteps({
-      steps: [
-        { id: "s1", capability: "web_research", description: "", args: { query: "x" }, dependsOn: [] },
-        { id: "s2", capability: "document_write", description: "", args: { prompt: "{{steps.s1.output}}" }, dependsOn: ["s1"] },
-      ] as never,
+      steps: draftSteps,
       recency: recency?.recency ?? null,
     });
-    const researchSurvived = pruned.steps.some((s) => s.capability === "web_research");
+    const compilerSteps = testCase.explicitResearch
+      ? compileValidatedSemanticFallback(
+          order,
+          buildAllowedCapabilities(order),
+        )
+      : null;
+    const researchSurvived = (compilerSteps ?? pruned.steps).some(
+      (s) => s.capability === "web_research",
+    );
     if (researchSurvived !== testCase.expectResearch) {
       problems.push(
         `budama beklenen ${testCase.expectResearch ? "araştırma kalsın" : "araştırma düşsün"}, sonuç tersi`,

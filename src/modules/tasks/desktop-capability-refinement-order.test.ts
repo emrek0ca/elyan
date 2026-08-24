@@ -41,4 +41,5 @@ test("refinement keeps the route contract immutable and only feeds planner hints
   assert.ok(service.includes("routeDecision: workOrderRouteDecision"));
   assert.ok(service.includes("requestedCapabilities: plannerCapabilityHints"));
   assert.ok(service.includes("...contractCapabilities"));
+  assert.ok(service.includes("!policy.fallbackExecutionEligible"));
 });

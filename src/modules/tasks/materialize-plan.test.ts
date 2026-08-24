@@ -4,6 +4,7 @@ import {
   buildMaterializedPlanResponseSchema,
   buildAllowedCapabilities,
   buildPlanningPrompt,
+  applyVerifiedLearningTieBreak,
   clearPlanningCatalogCacheForTests,
   compileValidatedSemanticFallback,
   getPlanningCatalogCacheStats,
@@ -19,6 +20,8 @@ import {
 import type { DesktopWorkOrder } from "./desktop-work-order.js";
 import { buildDesktopWorkOrder } from "./desktop-work-order.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
+import { buildTypedUnderstandingEnvelope } from "../../core/understanding/understanding-envelope.js";
+import { buildTaskExecutionContract } from "./task-execution-contract.js";
 
 function workOrder(
   summary: string,
@@ -79,6 +82,281 @@ function placementReadyApp(capabilities: string[]) {
     },
   };
 }
+
+test("verified learning only breaks ties inside reviewed equivalent families", () => {
+  const estimate = (
+    tool: string,
+    probability: number,
+    observations = 5,
+  ) => ({
+    tool,
+    probability,
+    observations,
+    meanScore: probability,
+    basis: "tool" as const,
+  });
+
+  assert.deepEqual(
+    applyVerifiedLearningTieBreak({
+      capabilities: ["analyze_screen", "desktop_operator.observe_screen"],
+      estimates: [
+        estimate("analyze_screen", 0.3),
+        estimate("desktop_operator.observe_screen", 0.9),
+      ],
+    }),
+    ["desktop_operator.observe_screen", "analyze_screen"],
+  );
+  assert.deepEqual(
+    applyVerifiedLearningTieBreak({
+      capabilities: ["analyze_screen", "desktop_operator.observe_screen"],
+      estimates: [
+        estimate("analyze_screen", 0.3, 4),
+        estimate("desktop_operator.observe_screen", 0.9),
+      ],
+    }),
+    ["analyze_screen", "desktop_operator.observe_screen"],
+  );
+  assert.deepEqual(
+    applyVerifiedLearningTieBreak({
+      capabilities: ["browser_session.click", "desktop_os.volume"],
+      estimates: [
+        estimate("browser_session.click", 0.1),
+        estimate("desktop_os.volume", 0.99),
+      ],
+    }),
+    ["browser_session.click", "desktop_os.volume"],
+  );
+  assert.deepEqual(
+    applyVerifiedLearningTieBreak({
+      capabilities: ["analyze_screen", "desktop_operator.observe_screen"],
+      estimates: [],
+      brokenTools: ["analyze_screen"],
+    }),
+    ["desktop_operator.observe_screen"],
+  );
+});
+
+test("exact Turkish research-save task is compiler-first with two steps and no planner dependency", async () => {
+  const message = "Kedilerin yaşamı hakkında araştırma yapıp masaüstüne kaydet";
+  const routeDecision = {
+    route: "desktop_runtime",
+    mode: "executable_task",
+    capabilities: ["web_research", "document_write", "desktop_operator.run"],
+    privacyClass: "side_effect",
+    requiresApproval: true,
+    reason: "typed contract",
+    intent: "desktop_cowork",
+    confidence: 0.96,
+    requiredRuntime: "desktop",
+    privacyLevel: "high",
+    shouldAskClarification: false,
+    failClosedReason: null,
+    selectedWorkload: "desktop_handoff",
+    taskRoute: {
+      target: "desktop_runtime",
+      operationalRoute: "desktop_runtime",
+      executionPlan: ["desktop_runtime"],
+      reason: "typed contract",
+      needsDesktop: true,
+      needsPrivateDesktopData: true,
+      needsUserApproval: false,
+      requiredCapabilities: ["web_research", "document_write"],
+    },
+  } as never;
+  const understandingEnvelope = buildTypedUnderstandingEnvelope({
+    userId: "user-1",
+    message,
+    intent: {
+      primaryIntent: "computer",
+      secondaryIntents: ["research", "document"],
+      confidence: 0.96,
+      reason: "test",
+    } as never,
+  });
+  const order = buildDesktopWorkOrder({
+    message,
+    title: message,
+    routeDecision,
+    requestedCapabilities: [],
+    understandingEnvelope,
+  });
+  let persistedPayload: Record<string, unknown> | null = null;
+  const base = placementReadyApp(["web_research", "document_write"]);
+  const app = {
+    ...base,
+    db: {
+      ...base.db,
+      update: () => ({
+        set: (values: { payload: Record<string, unknown> }) => {
+          persistedPayload = values.payload;
+          return { where: async () => undefined };
+        },
+      }),
+    },
+  };
+  const startedAt = performance.now();
+  const materialized = await maybeMaterializeDesktopPlan(
+    app as never,
+    {
+      id: "task-exact-cats",
+      userId: "user-1",
+      targetDeviceId: "desktop-1",
+      title: message,
+      payload: { prompt: message, desktopWorkOrder: order },
+    } as never,
+  );
+  const elapsedMs = performance.now() - startedAt;
+  assert.equal(materialized, true);
+  assert.ok(elapsedMs <= 500, `contract-to-plan ${elapsedMs.toFixed(1)}ms`);
+  assert.ok(persistedPayload);
+  const persistedOrder = (persistedPayload as unknown as Record<string, unknown>)
+    .desktopWorkOrder as DesktopWorkOrder;
+  assert.equal(persistedOrder.planPreview.materializationSource, "semantic_compiler");
+  assert.deepEqual(
+    persistedOrder.planPreview.steps.map((step) => step.capability),
+    ["web_research", "document_write"],
+  );
+  assert.match(
+    String(persistedOrder.planPreview.steps[1]?.args.outputPath ?? ""),
+    /^~\/Desktop\/.+\.docx$/u,
+  );
+  assert.equal(
+    persistedOrder.planPreview.steps.some((step) => step.capability.startsWith("desktop_operator")),
+    false,
+  );
+  assert.deepEqual(persistedOrder.planPreview.planPreparation?.status, "ready");
+});
+
+test("v2 novel observation work is admitted as dynamic without a remote planner graph", async () => {
+  const message = "Açık tasarım uygulamasını gözlemle ve doğru katmanı bularak düzenle";
+  const routeDecision = {
+    route: "desktop_runtime",
+    mode: "executable_task",
+    capabilities: ["desktop_operator.run", "desktop_operator.observe_screen"],
+    privacyClass: "side_effect",
+    requiresApproval: true,
+    reason: "novel observation task",
+    intent: "computer_control",
+    confidence: 0.94,
+    requiredRuntime: "desktop",
+    privacyLevel: "high",
+    shouldAskClarification: false,
+    failClosedReason: null,
+    selectedWorkload: "desktop_handoff",
+  } as never;
+  const turnContract = {
+    version: "elyan.turn_contract.v1",
+    normalizedIntent: "computer_control",
+    primaryIntent: "computer",
+    secondaryIntents: [],
+    intentClassification: {},
+    selectedWorkload: "desktop_handoff",
+    planIntent: false,
+    outputContract: {
+      operation: "edit",
+      sourceReference: "current_prompt",
+      outputKind: "chat_reply",
+      outputFormat: null,
+      pageCount: null,
+      requiresArtifact: false,
+      confidence: 0.9,
+      reasons: ["observation_required"],
+    },
+    understandingEnvelope: {
+      source: "typed_extractor",
+      confidence: 0.9,
+      intent: { name: "computer", action: "edit" },
+    },
+    routeDecision: {
+      route: "desktop_runtime",
+      mode: "executable_task",
+      intent: "computer_control",
+      selectedWorkload: "desktop_handoff",
+      requiredRuntime: "desktop",
+      requiresApproval: true,
+    },
+  } as never;
+  const order = workOrder(message, [
+    "desktop_operator.observe_screen",
+    "desktop_operator.run",
+  ]);
+  order.workType = "screen_action";
+  order.semanticGoal = {
+    contract: "elyan.semantic_task_contract.v1",
+    objective: message,
+    constraints: [],
+    successCriteria: ["Son ekran durumu doğrulandı."],
+    requiredCapabilities: [...order.requiredCapabilities],
+    forbiddenCapabilities: [],
+    ambiguityPolicy: "safe_assumption",
+    risk: { localPrivate: true, sideEffect: true, irreversible: false },
+  };
+  order.planPreview.steps = [];
+  order.planPreview.planSource = "heuristic";
+  order.planPreview.planPreparation = { status: "pending" };
+  const taskExecutionContract = buildTaskExecutionContract({
+    taskId: "task-dynamic",
+    turnId: "turn-dynamic",
+    message,
+    routeDecision,
+    turnContract,
+    workOrder: order,
+  });
+  assert.equal(taskExecutionContract.execution.mode, "dynamic");
+
+  let persistedPayload: Record<string, unknown> | null = null;
+  const base = placementReadyApp(order.requiredCapabilities);
+  const app = {
+    ...base,
+    db: {
+      ...base.db,
+      update: () => ({
+        set: (values: { payload: Record<string, unknown> }) => {
+          persistedPayload = values.payload;
+          return { where: async () => undefined };
+        },
+      }),
+    },
+  };
+  const startedAt = performance.now();
+  const materialized = await maybeMaterializeDesktopPlan(
+    app as never,
+    {
+      id: "task-dynamic",
+      userId: "user-1",
+      targetDeviceId: "desktop-1",
+      title: message,
+      payload: {
+        prompt: message,
+        desktopWorkOrder: order,
+        taskExecutionContract,
+      },
+    } as never,
+  );
+
+  assert.equal(materialized, true);
+  assert.ok(performance.now() - startedAt <= 500);
+  assert.ok(persistedPayload);
+  const persistedOrder = (persistedPayload as Record<string, unknown>)
+    .desktopWorkOrder as DesktopWorkOrder;
+  assert.equal(persistedOrder.planPreview.planSource, "dynamic_contract");
+  assert.equal(persistedOrder.planPreview.planPreparation?.outcome, "dynamic_ready");
+  assert.deepEqual(persistedOrder.planPreview.steps, []);
+  const persistedContract = (persistedPayload as Record<string, unknown>)
+    .taskExecutionContract as {
+      execution: {
+        mode: string;
+        steps: unknown[];
+        selectedTools: Array<{ id: string }>;
+      };
+    };
+  assert.equal(persistedContract.execution.mode, "dynamic");
+  assert.deepEqual(persistedContract.execution.steps, []);
+  assert.deepEqual(
+    persistedContract.execution.selectedTools.map((tool) => tool.id),
+    taskExecutionContract.execution.selectedTools.map((tool) => tool.id),
+  );
+});
 
 test("an already materialized server plan remains dispatchable on retry", async () => {
   const order = workOrder("Masaüstünü listele", ["directory_tree"]);
@@ -758,6 +1036,36 @@ test("a single-step plan is materialized, not discarded", () => {
   assert.ok(steps, "tek adımlı plan atıldı");
   assert.equal(steps?.length, 1);
   assert.equal(steps?.[0]?.capability, "directory_tree");
+});
+
+test("a provider's root-level action object is normalized as one advertised step", () => {
+  const steps = normalizeMaterializedSteps(
+    {
+      step: 1,
+      action: "directory_tree",
+      args: {
+        path: "~/Desktop",
+        max_depth: 1,
+        max_entries: 1000,
+      },
+      description: "Masaüstü klasörlerini listele.",
+    },
+    ["directory_tree"],
+  );
+
+  assert.deepEqual(steps, [
+    {
+      id: "s1",
+      capability: "directory_tree",
+      args: {
+        path: "~/Desktop",
+        max_depth: 1,
+        max_entries: 1000,
+      },
+      description: "Masaüstü klasörlerini listele.",
+      dependsOn: [],
+    },
+  ]);
 });
 
 test("planning prompt no longer demands two steps", () => {

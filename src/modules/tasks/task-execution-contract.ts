@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 import type { SharedBrainWorkload } from "../brain/workloads.js";
 import type {
@@ -27,8 +28,9 @@ import type { ExecutionStep } from "./execution-step.js";
  * kayıtları için bu alan additive'tir ve contract yokluğu legacy adapter ile
  * desteklenmeye devam eder.
  */
-export const TASK_EXECUTION_CONTRACT = "elyan.task_execution_contract.v1" as const;
-export const TASK_EXECUTION_CONTRACT_VERSION = 1 as const;
+export const TASK_EXECUTION_CONTRACT_V1 = "elyan.task_execution_contract.v1" as const;
+export const TASK_EXECUTION_CONTRACT = "elyan.task_execution_contract.v2" as const;
+export const TASK_EXECUTION_CONTRACT_VERSION = 2 as const;
 export const TASK_EXECUTION_MAX_STEPS = 16;
 
 const SERVER_CAPABILITY_IDS = new Set([
@@ -76,8 +78,8 @@ export const taskExecutionStepSchema = z.object({
   forEach: z.string().max(240).optional(),
 });
 
-export const taskExecutionContractSchema = z.object({
-  contract: z.literal(TASK_EXECUTION_CONTRACT),
+const taskExecutionContractV1Schema = z.object({
+  contract: z.literal(TASK_EXECUTION_CONTRACT_V1),
   taskId: z.string().min(1).max(160),
   goalId: z.string().max(160).nullable().default(null),
   turnId: z.string().min(1).max(160),
@@ -119,9 +121,94 @@ export const taskExecutionContractSchema = z.object({
   }).default({}),
 }).passthrough();
 
+export const taskExecutionGrantSchema = z.object({
+  id: z.string().min(1).max(160),
+  taskId: z.string().min(1).max(160),
+  turnId: z.string().min(1).max(160),
+  capability: z.string().min(1).max(120),
+  effect: z.enum(["read", "write"]),
+  resourceScope: z.array(z.string().min(1).max(240)).min(1).max(16),
+  source: z.literal("explicit_user_request"),
+});
+
+export const taskExecutionContractSchema = z.object({
+  contract: z.literal(TASK_EXECUTION_CONTRACT),
+  taskId: z.string().min(1).max(160),
+  goalId: z.string().max(160).nullable().default(null),
+  turnId: z.string().min(1).max(160),
+  planRevision: z.number().int().positive(),
+  intent: z.object({
+    normalized: z.string().min(1).max(120),
+    primary: z.string().min(1).max(120),
+    secondary: z.array(z.string().min(1).max(120)).max(12).default([]),
+  }),
+  goal: z.object({
+    objective: z.string().min(1).max(1_000),
+    constraints: z.array(z.string().max(240)).max(48).default([]),
+    successCriteria: z.array(z.string().max(300)).max(16).default([]),
+    ambiguityPolicy: z.enum(["ask", "safe_assumption", "fail_closed"]),
+  }),
+  output: z.object({
+    operation: z.enum([
+      "answer",
+      "create",
+      "transform",
+      "export",
+      "edit",
+      "analyze_then_export",
+    ]),
+    kind: z.enum(["chat_reply", "document", "table", "chart", "image", "svg"]),
+    format: z.string().min(1).max(40).nullable(),
+    target: z.enum(["chat", "artifact", "desktop"]),
+    artifactRequired: z.boolean(),
+  }),
+  execution: z.object({
+    mode: z.enum(["compiled", "dynamic"]),
+    workload: z.string().min(1).max(100),
+    requiredRuntime: z.enum(["server", "desktop", "both"]),
+    allowedCapabilities: z.array(z.string().min(1).max(120)).max(96),
+    selectedTools: z.array(taskExecutionToolSchema).max(32),
+    selectedSkills: z.array(taskExecutionSkillSchema).max(16),
+    steps: z.array(taskExecutionStepSchema).max(TASK_EXECUTION_MAX_STEPS),
+    maxSteps: z.number().int().min(1).max(TASK_EXECUTION_MAX_STEPS),
+  }),
+  approval: z.object({
+    required: z.boolean(),
+    scope: z.array(z.string().max(120)).max(32).default([]),
+    separateApprovalFor: z.array(z.string().max(120)).max(32).default([]),
+    grants: z.array(taskExecutionGrantSchema).max(32).default([]),
+    ttlSeconds: z.number().int().min(1).max(86_400),
+  }),
+  verification: z.object({
+    artifactRequired: z.boolean(),
+    stateReadbackRequired: z.boolean(),
+    successPolicy: z.literal("all_required"),
+    criteria: z.array(z.object({
+      id: z.string().min(1).max(120),
+      description: z.string().min(1).max(300),
+      evidence: z.enum(["runtime_status", "tool_result", "artifact", "state_readback"]),
+    })).max(16),
+  }),
+  privacy: z.object({
+    class: z.enum(["public", "local_private", "side_effect"]),
+    localContextRequired: z.boolean(),
+    maySendPrivateContextToServer: z.boolean(),
+  }),
+  desktopWorkOrder: z.record(z.string(), z.unknown()).nullable().default(null),
+  selectionAudit: z.object({
+    rejectedToolIds: z.array(z.string().max(120)).max(16).default([]),
+    rejectedSkillIds: z.array(z.string().max(160)).max(16).default([]),
+  }).default({}),
+  binding: z.object({
+    algorithm: z.literal("sha256"),
+    hash: z.string().regex(/^[a-f0-9]{64}$/u),
+  }),
+}).passthrough();
+
 export type TaskExecutionTool = z.output<typeof taskExecutionToolSchema>;
 export type TaskExecutionSkill = z.output<typeof taskExecutionSkillSchema>;
 export type TaskExecutionStep = z.output<typeof taskExecutionStepSchema>;
+export type TaskExecutionGrant = z.output<typeof taskExecutionGrantSchema>;
 export type TaskExecutionContract = z.output<typeof taskExecutionContractSchema>;
 
 export type TaskExecutionContractValidation =
@@ -161,6 +248,59 @@ function recordOf(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+  const record = recordOf(value);
+  if (record) {
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function authoritySnapshot(
+  contract: Omit<TaskExecutionContract, "binding">,
+): Record<string, unknown> {
+  return {
+    contract: contract.contract,
+    taskId: contract.taskId,
+    goalId: contract.goalId,
+    turnId: contract.turnId,
+    planRevision: contract.planRevision,
+    intent: contract.intent,
+    goal: contract.goal,
+    output: contract.output,
+    execution: contract.execution,
+    approval: contract.approval,
+    verification: contract.verification,
+    privacy: contract.privacy,
+  };
+}
+
+export function taskExecutionContractHash(
+  contract: Omit<TaskExecutionContract, "binding">,
+): string {
+  return createHash("sha256")
+    .update(stableJson(authoritySnapshot(contract)), "utf8")
+    .digest("hex");
+}
+
+function bindTaskExecutionContract(
+  contract: Omit<TaskExecutionContract, "binding">,
+): TaskExecutionContract {
+  return {
+    ...contract,
+    binding: {
+      algorithm: "sha256",
+      hash: taskExecutionContractHash(contract),
+    },
+  } as TaskExecutionContract;
+}
+
 function knownCapability(id: string): DesktopCapabilityManifestEntry | null {
   return capabilityManifestById.get(id) ?? null;
 }
@@ -192,6 +332,117 @@ function executionStepsForWorkOrder(
     : workOrder?.planPreview?.steps ?? [];
 }
 
+function isCompiledWorkOrder(
+  workOrder: DesktopWorkOrder | null | undefined,
+): boolean {
+  const source = workOrder?.planPreview?.planSource;
+  return (
+    workOrder?.planPreview?.contract === "elyan.compiled_plan.v1" &&
+    (source === "server_materialized" || source === "deterministic_registry")
+  );
+}
+
+function outputSnapshot(input: {
+  turnContract: CommandTurnContract;
+  workOrder?: DesktopWorkOrder | null;
+}): TaskExecutionContract["output"] {
+  const contract = input.turnContract.outputContract;
+  const writeRoots = input.workOrder?.resourceScope?.writeRoots ?? [];
+  return {
+    operation: contract.operation,
+    kind: contract.outputKind,
+    format: contract.outputFormat,
+    target: contract.requiresArtifact
+      ? writeRoots.length > 0
+        ? "desktop"
+        : "artifact"
+      : "chat",
+    artifactRequired: contract.requiresArtifact,
+  };
+}
+
+function allowedCapabilitiesForInput(input: {
+  routeDecision: CommandRouteDecision;
+  workOrder?: DesktopWorkOrder | null;
+  selectedTools: TaskExecutionTool[];
+  steps: TaskExecutionStep[];
+}): string[] {
+  const compiled = isCompiledWorkOrder(input.workOrder);
+  return uniqueStrings([
+    ...(input.workOrder?.requiredCapabilities ?? []),
+    ...(input.workOrder?.materializedCapabilityScope ?? []),
+    // Route capabilities are discovery hints only. Once a trusted compiled
+    // graph exists, retaining rejected route hints would silently widen the
+    // executable contract beyond the one authoritative plan.
+    ...(compiled ? [] : input.routeDecision.capabilities),
+    ...input.selectedTools.map((tool) => tool.id),
+    ...input.steps.map((step) => step.capability),
+  ], 96).filter((capability) => knownTaskCapabilityIds().has(capability));
+}
+
+const EXPLICIT_ARTIFACT_WRITE_CAPABILITIES = new Set([
+  "document_write",
+  "spreadsheet_write",
+  "presentation_write",
+  "canvas_write",
+]);
+
+function explicitArtifactWriteGrants(input: {
+  taskId: string;
+  turnId: string;
+  output: TaskExecutionContract["output"];
+  workOrder?: DesktopWorkOrder | null;
+  allowedCapabilities: string[];
+}): TaskExecutionGrant[] {
+  const writeRoots = uniqueStrings(
+    input.workOrder?.resourceScope?.writeRoots ?? [],
+    16,
+  );
+  if (
+    !input.output.artifactRequired ||
+    input.output.target !== "desktop" ||
+    writeRoots.length === 0
+  ) {
+    return [];
+  }
+  return input.allowedCapabilities
+    .filter((capability) => EXPLICIT_ARTIFACT_WRITE_CAPABILITIES.has(capability))
+    .slice(0, 8)
+    .map((capability, index) => ({
+      id: `grant_${compact(input.taskId, 48)}_${index + 1}`,
+      taskId: compact(input.taskId, 160),
+      turnId: compact(input.turnId, 160),
+      capability,
+      effect: "write" as const,
+      resourceScope: writeRoots,
+      source: "explicit_user_request" as const,
+    }));
+}
+
+function verificationSnapshot(
+  workOrder: DesktopWorkOrder | null | undefined,
+  artifactRequired: boolean,
+): TaskExecutionContract["verification"] {
+  const criteria = (workOrder?.verificationRules ?? []).slice(0, 16).map((rule) => ({
+    id: compact(rule.id, 120),
+    description: compact(rule.description, 300),
+    evidence: rule.evidence,
+  }));
+  if (artifactRequired && !criteria.some((criterion) => criterion.evidence === "artifact")) {
+    criteria.push({
+      id: "artifact_exists",
+      description: "Requested artifact exists and matches the requested output contract.",
+      evidence: "artifact",
+    });
+  }
+  return {
+    artifactRequired,
+    stateReadbackRequired: criteria.some((criterion) => criterion.evidence === "state_readback"),
+    successPolicy: "all_required",
+    criteria,
+  };
+}
+
 function safeWorkOrderSnapshot(
   workOrder: DesktopWorkOrder | null | undefined,
 ): Record<string, unknown> | null {
@@ -212,13 +463,20 @@ function selectedToolsForInput(input: {
   const rejectedToolIds: string[] = [];
   const seen = new Set<string>();
   const steps = executionStepsForWorkOrder(input.workOrder);
+  const compiled = isCompiledWorkOrder(input.workOrder);
   const candidates = [
     ...steps.map((step) => ({
       id: step.capability,
       args: "stepId" in step ? step.input : step.args,
       reason: "server_plan_step",
     })),
-    ...input.routeDecision.capabilities.map((id) => ({ id, args: {}, reason: "route_capability" })),
+    ...(compiled
+      ? []
+      : input.routeDecision.capabilities.map((id) => ({
+          id,
+          args: {},
+          reason: "route_capability",
+        }))),
   ];
   for (const candidate of candidates) {
     const id = compact(candidate.id, 120);
@@ -290,6 +548,121 @@ function deriveGoal(input: {
   return { objective, constraints, successCriteria, ambiguityPolicy };
 }
 
+function upgradeV1TaskExecutionContract(
+  legacy: z.output<typeof taskExecutionContractV1Schema>,
+): TaskExecutionContract {
+  const workOrder = recordOf(legacy.desktopWorkOrder);
+  const contextPack = recordOf(workOrder?.contextPack);
+  const legacyOutput = recordOf(contextPack?.outputContract);
+  const resourceScope = recordOf(workOrder?.resourceScope);
+  const writeRoots = Array.isArray(resourceScope?.writeRoots)
+    ? uniqueStrings(resourceScope.writeRoots, 16)
+    : [];
+  const expectedOutputs = Array.isArray(workOrder?.expectedOutputs)
+    ? workOrder.expectedOutputs.map(recordOf).filter(Boolean)
+    : [];
+  const artifactRequired =
+    legacyOutput?.requiresArtifact === true ||
+    expectedOutputs.some(
+      (item) =>
+        item?.required === true &&
+        (item?.kind === "artifact" || item?.kind === "file_update"),
+    );
+  const rawKind = compact(legacyOutput?.outputKind, 40);
+  const kind: TaskExecutionContract["output"]["kind"] =
+    rawKind === "document" ||
+    rawKind === "table" ||
+    rawKind === "chart" ||
+    rawKind === "image" ||
+    rawKind === "svg"
+      ? rawKind
+      : artifactRequired
+        ? "document"
+        : "chat_reply";
+  const rawOperation = compact(legacyOutput?.operation, 40);
+  const operation: TaskExecutionContract["output"]["operation"] =
+    rawOperation === "create" ||
+    rawOperation === "transform" ||
+    rawOperation === "export" ||
+    rawOperation === "edit" ||
+    rawOperation === "analyze_then_export"
+      ? rawOperation
+      : artifactRequired
+        ? "create"
+        : "answer";
+  const allowedCapabilities = uniqueStrings([
+    ...legacy.execution.selectedTools.map((tool) => tool.id),
+    ...legacy.execution.steps.map((step) => step.capability),
+    ...(Array.isArray(workOrder?.requiredCapabilities)
+      ? workOrder.requiredCapabilities
+      : []),
+  ], 96);
+  const criteria = Array.isArray(workOrder?.verificationRules)
+    ? workOrder.verificationRules
+        .map(recordOf)
+        .filter(Boolean)
+        .slice(0, 16)
+        .map((rule, index) => ({
+          id: compact(rule?.id, 120) || `criterion_${index + 1}`,
+          description:
+            compact(rule?.description, 300) || "Görev sonucu doğrulanmalı.",
+          evidence:
+            rule?.evidence === "runtime_status" ||
+            rule?.evidence === "artifact" ||
+            rule?.evidence === "state_readback"
+              ? rule.evidence
+              : ("tool_result" as const),
+        }))
+    : [];
+  const upgraded: Omit<TaskExecutionContract, "binding"> = {
+    ...legacy,
+    contract: TASK_EXECUTION_CONTRACT,
+    output: {
+      operation,
+      kind,
+      format: compact(legacyOutput?.outputFormat, 40) || null,
+      target: artifactRequired
+        ? writeRoots.length > 0
+          ? "desktop"
+          : "artifact"
+        : "chat",
+      artifactRequired,
+    },
+    execution: {
+      ...legacy.execution,
+      mode: legacy.execution.steps.length > 0 ? "compiled" : "dynamic",
+      allowedCapabilities,
+    },
+    approval: {
+      ...legacy.approval,
+      grants: [],
+    },
+    verification: {
+      artifactRequired,
+      stateReadbackRequired: criteria.some(
+        (criterion) => criterion.evidence === "state_readback",
+      ),
+      successPolicy: "all_required",
+      criteria,
+    },
+  };
+  return bindTaskExecutionContract(upgraded);
+}
+
+function parseCompatibleTaskExecutionContract(
+  value: unknown,
+):
+  | { success: true; data: TaskExecutionContract }
+  | { success: false; error: z.ZodError } {
+  const current = taskExecutionContractSchema.safeParse(value);
+  if (current.success) return current;
+  const legacy = taskExecutionContractV1Schema.safeParse(value);
+  if (legacy.success) {
+    return { success: true, data: upgradeV1TaskExecutionContract(legacy.data) };
+  }
+  return { success: false, error: current.error };
+}
+
 export function buildTaskExecutionContract(input: {
   taskId: string;
   turnId: string;
@@ -312,9 +685,29 @@ export function buildTaskExecutionContract(input: {
     input.understandingEnvelope,
     confidence,
   );
-  const steps = executionStepsForWorkOrder(workOrder)
-    .slice(0, TASK_EXECUTION_MAX_STEPS)
-    .map(stepSnapshot);
+  const steps = isCompiledWorkOrder(workOrder)
+    ? executionStepsForWorkOrder(workOrder)
+        .slice(0, TASK_EXECUTION_MAX_STEPS)
+        .map(stepSnapshot)
+    : [];
+  const output = outputSnapshot({
+    turnContract: input.turnContract,
+    workOrder,
+  });
+  const allowedCapabilities = allowedCapabilitiesForInput({
+    routeDecision: input.routeDecision,
+    workOrder,
+    selectedTools: toolSelection.selectedTools,
+    steps,
+  });
+  const grants = explicitArtifactWriteGrants({
+    taskId: input.taskId,
+    turnId: input.turnId,
+    output,
+    workOrder,
+    allowedCapabilities,
+  });
+  const grantedCapabilities = new Set(grants.map((grant) => grant.capability));
   const risk = workOrder?.semanticGoal?.risk;
   const requiredRuntime = input.routeDecision.requiredRuntime;
   const privacyClass =
@@ -330,10 +723,9 @@ export function buildTaskExecutionContract(input: {
     ...(workOrder?.approvalCapabilities ?? []).filter(
       (capability) => knownCapability(capability)?.requiresApproval === true,
     ),
-    ...(workOrder?.capabilityAuthorization?.sideEffectsRequireApproval ? ["side_effect"] : []),
-  ], 32);
+  ], 32).filter((capability) => !grantedCapabilities.has(capability));
   const selectedWorkload: SharedBrainWorkload | string = input.turnContract.selectedWorkload;
-  return {
+  const contract: Omit<TaskExecutionContract, "binding"> = {
     contract: TASK_EXECUTION_CONTRACT,
     taskId: compact(input.taskId, 160),
     goalId: input.goalId ? compact(input.goalId, 160) : null,
@@ -349,9 +741,12 @@ export function buildTaskExecutionContract(input: {
       workOrder,
       envelope: input.understandingEnvelope,
     }),
+    output,
     execution: {
+      mode: steps.length > 0 ? "compiled" : "dynamic",
       workload: selectedWorkload,
       requiredRuntime,
+      allowedCapabilities,
       selectedTools: toolSelection.selectedTools,
       selectedSkills: skillSelection.selectedSkills,
       steps,
@@ -362,13 +757,15 @@ export function buildTaskExecutionContract(input: {
     },
     approval: {
       required:
-        input.routeDecision.requiresApproval === true ||
-        workOrder?.requiresApproval === true ||
+        (input.routeDecision.requiresApproval === true && grants.length === 0) ||
+        (workOrder?.requiresApproval === true && approvalScope.length > 0) ||
         approvalScope.length > 0,
       scope: approvalScope,
       separateApprovalFor: approvalScope,
+      grants,
       ttlSeconds: 900,
     },
+    verification: verificationSnapshot(workOrder, output.artifactRequired),
     privacy: {
       class: privacyClass,
       localContextRequired:
@@ -382,6 +779,7 @@ export function buildTaskExecutionContract(input: {
       rejectedSkillIds: skillSelection.rejectedSkillIds,
     },
   };
+  return bindTaskExecutionContract(contract);
 }
 
 /**
@@ -395,7 +793,7 @@ export function syncTaskExecutionContractWithWorkOrder(input: {
   workOrder: DesktopWorkOrder;
   planRevision?: number;
 }): TaskExecutionContract | null {
-  const parsed = taskExecutionContractSchema.safeParse(input.contract);
+  const parsed = parseCompatibleTaskExecutionContract(input.contract);
   if (!parsed.success) return null;
 
   const contract = parsed.data;
@@ -404,49 +802,102 @@ export function syncTaskExecutionContractWithWorkOrder(input: {
     .map(stepSnapshot);
   if (steps.length > contract.execution.maxSteps) return null;
 
-  const stepCapabilities = new Set(steps.map((step) => step.capability));
   const existingToolsById = new Map(
     contract.execution.selectedTools.map((tool) => [tool.id, tool] as const),
   );
-  const selectedTools: TaskExecutionTool[] = [];
-  for (const step of steps) {
-    const existing = existingToolsById.get(step.capability);
-    selectedTools.push({
-      id: step.capability,
-      args: step.args,
-      reason: "server_plan_step",
-      ...(typeof existing?.confidence === "number"
-        ? { confidence: existing.confidence }
-        : {}),
-    });
+  let selectedTools: TaskExecutionTool[] = [];
+  if (steps.length > 0) {
+    for (const step of steps) {
+      const existing = existingToolsById.get(step.capability);
+      selectedTools.push({
+        id: step.capability,
+        args: step.args,
+        reason: "server_plan_step",
+        ...(typeof existing?.confidence === "number"
+          ? { confidence: existing.confidence }
+          : {}),
+      });
+    }
+  } else {
+    // Dynamic mode has no server-owned graph yet, but it still needs the
+    // contract's initial evidence-backed shortlist. Clearing it here forced
+    // the AgentLoop to rediscover every tool from the full allowed ceiling.
+    selectedTools = contract.execution.selectedTools.map((tool) => ({
+      ...tool,
+      args: { ...tool.args },
+    }));
   }
-  // Route-level tools that are not concrete desktop steps remain useful as
-  // server-side context, but a materialized step always wins its args/order.
-  for (const tool of contract.execution.selectedTools) {
-    if (!stepCapabilities.has(tool.id)) selectedTools.push(tool);
-  }
-
   const planRevision =
     input.planRevision == null
       ? contract.planRevision
       : Math.max(1, Math.floor(input.planRevision));
-  return {
-    ...contract,
+  const allowedCapabilities = uniqueStrings([
+    ...selectedTools.map((tool) => tool.id),
+    ...steps.map((step) => step.capability),
+    ...(input.workOrder.requiredCapabilities ?? []),
+    ...(input.workOrder.materializedCapabilityScope ?? []),
+  ], 96).filter((capability) => knownTaskCapabilityIds().has(capability));
+  if (steps.length === 0) {
+    const allowedSet = new Set(allowedCapabilities);
+    selectedTools = selectedTools.filter((tool) => allowedSet.has(tool.id));
+  }
+  const output: TaskExecutionContract["output"] = {
+    ...contract.output,
+    target: contract.output.artifactRequired
+      ? (input.workOrder.resourceScope?.writeRoots.length ?? 0) > 0
+        ? "desktop"
+        : "artifact"
+      : "chat",
+  };
+  const grants = explicitArtifactWriteGrants({
+    taskId: contract.taskId,
+    turnId: contract.turnId,
+    output,
+    workOrder: input.workOrder,
+    allowedCapabilities,
+  });
+  const grantedCapabilities = new Set(grants.map((grant) => grant.capability));
+  const approvalScope = uniqueStrings([
+    ...selectedTools
+      .filter((tool) => knownCapability(tool.id)?.requiresApproval === true)
+      .map((tool) => tool.id),
+    ...(input.workOrder.approvalCapabilities ?? []).filter(
+      (capability) => knownCapability(capability)?.requiresApproval === true,
+    ),
+  ], 32).filter((capability) => !grantedCapabilities.has(capability));
+  const { binding: _previousBinding, ...unboundContract } = contract;
+  const updated: Omit<TaskExecutionContract, "binding"> = {
+    ...unboundContract,
     planRevision,
+    output,
     execution: {
       ...contract.execution,
+      mode: steps.length > 0 ? "compiled" : "dynamic",
+      allowedCapabilities,
       selectedTools,
       steps,
     },
+    approval: {
+      ...contract.approval,
+      required: approvalScope.length > 0,
+      scope: approvalScope,
+      separateApprovalFor: approvalScope,
+      grants,
+    },
+    verification: verificationSnapshot(
+      input.workOrder,
+      contract.output.artifactRequired,
+    ),
     desktopWorkOrder: safeWorkOrderSnapshot(input.workOrder),
   };
+  return bindTaskExecutionContract(updated);
 }
 
 export function validateTaskExecutionContract(
   value: unknown,
   options: { taskId?: string; planRevision?: number } = {},
 ): TaskExecutionContractValidation {
-  const parsed = taskExecutionContractSchema.safeParse(value);
+  const parsed = parseCompatibleTaskExecutionContract(value);
   if (!parsed.success) {
     return {
       ok: false,
@@ -480,12 +931,29 @@ export function validateTaskExecutionContract(
   const knownCapabilities = knownTaskCapabilityIds();
   const localCapabilities = knownTaskLocalCapabilityIds();
   const knownSkills = knownTaskSkillIds();
+  const allowedCapabilities = new Set(contract.execution.allowedCapabilities);
+  for (const [index, capability] of contract.execution.allowedCapabilities.entries()) {
+    if (!knownCapabilities.has(capability)) {
+      errors.push({
+        code: "TASK_CONTRACT_UNKNOWN_ALLOWED_CAPABILITY",
+        path: `execution.allowedCapabilities.${index}`,
+        message: "Capability registry dışında bir yürütme yetkisi verildi.",
+      });
+    }
+  }
   for (const [index, tool] of contract.execution.selectedTools.entries()) {
     if (!knownCapabilities.has(tool.id)) {
       errors.push({
         code: "TASK_CONTRACT_UNKNOWN_TOOL",
         path: `execution.selectedTools.${index}.id`,
         message: "Capability registry dışında bir tool seçildi.",
+      });
+    }
+    if (!allowedCapabilities.has(tool.id)) {
+      errors.push({
+        code: "TASK_CONTRACT_TOOL_OUTSIDE_SCOPE",
+        path: `execution.selectedTools.${index}.id`,
+        message: "Seçili tool görev capability sınırının dışında.",
       });
     }
   }
@@ -530,12 +998,65 @@ export function validateTaskExecutionContract(
           : "Plan step capability registry dışında.",
       });
     }
+    if (!allowedCapabilities.has(step.capability)) {
+      errors.push({
+        code: "TASK_CONTRACT_STEP_OUTSIDE_SCOPE",
+        path: `execution.steps.${index}.capability`,
+        message: "Plan step görev capability sınırının dışında.",
+      });
+    }
+  }
+  if (
+    contract.execution.mode === "compiled" &&
+    contract.execution.requiredRuntime !== "server" &&
+    contract.execution.steps.length === 0
+  ) {
+    errors.push({
+      code: "TASK_CONTRACT_COMPILED_PLAN_EMPTY",
+      path: "execution.steps",
+      message: "Compiled yürütme yolu boş bir step grafiği taşıyamaz.",
+    });
   }
   if (contract.execution.steps.length > contract.execution.maxSteps) {
     errors.push({
       code: "TASK_CONTRACT_STEP_BUDGET_EXCEEDED",
       path: "execution.steps",
       message: "Plan step sayısı maxSteps sınırını aşıyor.",
+    });
+  }
+  for (const [index, grant] of contract.approval.grants.entries()) {
+    if (grant.taskId !== contract.taskId || grant.turnId !== contract.turnId) {
+      errors.push({
+        code: "TASK_CONTRACT_GRANT_BINDING_MISMATCH",
+        path: `approval.grants.${index}`,
+        message: "İzin grant'i task/turn bağıyla eşleşmiyor.",
+      });
+    }
+    if (!allowedCapabilities.has(grant.capability)) {
+      errors.push({
+        code: "TASK_CONTRACT_GRANT_OUTSIDE_SCOPE",
+        path: `approval.grants.${index}.capability`,
+        message: "İzin grant'i görev capability sınırının dışında.",
+      });
+    }
+  }
+  if (
+    contract.output.artifactRequired &&
+    (!contract.verification.artifactRequired ||
+      !contract.verification.criteria.some((criterion) => criterion.evidence === "artifact"))
+  ) {
+    errors.push({
+      code: "TASK_CONTRACT_ARTIFACT_VERIFICATION_MISSING",
+      path: "verification.criteria",
+      message: "Zorunlu artifact çıktısı artifact kanıtıyla doğrulanmalı.",
+    });
+  }
+  const { binding: _binding, ...unboundContract } = contract;
+  if (taskExecutionContractHash(unboundContract) !== contract.binding.hash) {
+    errors.push({
+      code: "TASK_CONTRACT_HASH_MISMATCH",
+      path: "binding.hash",
+      message: "Task contract hash doğrulaması başarısız.",
     });
   }
   return errors.length > 0
