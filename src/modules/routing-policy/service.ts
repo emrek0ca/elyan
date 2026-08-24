@@ -1280,6 +1280,39 @@ function effectiveRequestedCapabilities(
   return uniqueSemanticCapabilities(capabilities);
 }
 
+/**
+ * Route-model failure must not erase the typed output contract that was
+ * already compiled for this turn. In particular, an explicit local document
+ * request is a document workflow even when the client did not preselect a
+ * capability. Falling back to the generic desktop operator here creates a
+ * dynamic screen task and an unnecessary approval instead of the bounded
+ * document DAG.
+ */
+function typedArtifactFallbackCapabilities(input: {
+  message: string;
+  semanticContract: SemanticContract;
+  outputContract: ReturnType<typeof compileOutputContract>;
+}): string[] {
+  if (
+    !input.outputContract.requiresArtifact ||
+    !hasDesktopSaveExportSignal(input.message)
+  ) {
+    return [];
+  }
+
+  const capabilities: string[] = [];
+  if (
+    input.semanticContract.evidence.includes("fresh_public_research") ||
+    input.semanticContract.requiredCapabilities.includes("web_research")
+  ) {
+    capabilities.push("web_research");
+  }
+  if (input.outputContract.outputKind === "document") {
+    capabilities.push("document_write");
+  }
+  return uniqueSemanticCapabilities(capabilities);
+}
+
 // Capabilities that can ONLY be satisfied on the user's desktop runtime.
 // Cloud-doable capabilities (document_write, web_research, document_read for
 // in-message attachments, data_analyze, generate_response, reason, summarize,
@@ -3651,11 +3684,21 @@ export async function decideCommandRoute(
     fallbackScreenGlanceRequested ||
     fallbackDesktopActionRequested ||
     fallbackQuantumExecutionRequested;
-  const baseRequestedCapabilities = failClosedDesktopFallback
-    ? effectiveRequestedCapabilities(explicitRequestedCapabilities, {
-        screenGlanceRequested: fallbackScreenGlanceRequested,
-        quantumExecutionRequested: fallbackQuantumExecutionRequested,
+  const typedFallbackCapabilities = failClosedDesktopFallback
+    ? typedArtifactFallbackCapabilities({
+        message,
+        semanticContract,
+        outputContract,
       })
+    : [];
+  const baseRequestedCapabilities = failClosedDesktopFallback
+    ? effectiveRequestedCapabilities(
+        [...explicitRequestedCapabilities, ...typedFallbackCapabilities],
+        {
+          screenGlanceRequested: fallbackScreenGlanceRequested,
+          quantumExecutionRequested: fallbackQuantumExecutionRequested,
+        },
+      )
     : explicitRequestedCapabilities;
   // The route model chooses the execution surface, not concrete tools. Model
   // capability names are untrusted free-form output and must not make a ready
