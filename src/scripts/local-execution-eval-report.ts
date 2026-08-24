@@ -64,8 +64,11 @@ async function score(list: Row[]) {
     if (got === row.want) correct += 1;
     else if (got && !row.want) {
       dangerous += 1;
+      const gap = decision.capabilityGap;
       details.push(
-        `  TEHLİKELİ  "${row.utterance}" → masaüstü (${decision.capability}, ${decision.reason})`,
+        `  TEHLİKELİ  "${row.utterance}" → masaüstü (${decision.capability}, ${decision.reason}, ` +
+          `gap=${gap?.gap ?? "-"}/${gap?.reason ?? "-"}, positive=${gap?.positive?.toFixed(3) ?? "-"}, ` +
+          `counter=${gap?.counterEvidence?.toFixed(3) ?? "-"})`,
       );
     } else {
       missed += 1;

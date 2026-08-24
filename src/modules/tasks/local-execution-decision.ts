@@ -1,6 +1,5 @@
 import {
   classifySpeechAct,
-  speechActAllowsExecution,
   type SpeechActDecision,
 } from "../../core/understanding/speech-act.js";
 import type { FastifyBaseLogger } from "fastify";
@@ -13,6 +12,12 @@ import {
   judgeCapabilityEvidence,
   type CapabilityGapVerdict,
 } from "./capability-gap.js";
+import {
+  capabilityAllowsSpeechActExecution,
+  isDesktopExecutionCapability,
+} from "./desktop-capability-execution-policy.js";
+
+export { capabilityAllowsSpeechActExecution } from "./desktop-capability-execution-policy.js";
 
 /**
  * YEREL YÜRÜTME KARARI — TEK SİNYAL DEĞİL, KANIT UZLAŞMASI.
@@ -94,8 +99,22 @@ export async function decideLocalExecution(input: {
     capabilityGap: null as CapabilityGapVerdict | null,
   };
 
-  // SORU ASLA YÜRÜTME AÇMAZ. Canlı arızanın sınıfı budur.
-  if (!speechActAllowsExecution(speechAct.act)) {
+  if (!isDesktopExecutionCapability(capabilityEvidence.capability ?? "")) {
+    return {
+      ...base,
+      requiresLocalExecution: false,
+      reason: "capability_not_local_action",
+    };
+  }
+  // Soru biçimi global yasak değildir: canlı yerel durumu gözlemleyen,
+  // manifestte salt-okuma ve onaysız beyan edilmiş bir capability soruyu
+  // gerçekten cevaplamak için çalışabilir. Yazma/yıkıcı araçlar yine kapanır.
+  if (
+    !capabilityAllowsSpeechActExecution(
+      speechAct.act,
+      capabilityEvidence.capability ?? "",
+    )
+  ) {
     return { ...base, requiresLocalExecution: false, reason: "speech_act_blocks" };
   }
   // MARJ EŞİĞİ KALIYOR — ÖLÇÜM KARAR VERDİ.

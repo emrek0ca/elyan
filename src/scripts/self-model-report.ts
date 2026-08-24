@@ -63,4 +63,12 @@ async function main() {
   }
 }
 
-void main();
+void main().then(
+  () => process.exit(0),
+  (error) => {
+    console.error(
+      error instanceof Error ? error.message : "self-model report failed",
+    );
+    process.exit(1);
+  },
+);

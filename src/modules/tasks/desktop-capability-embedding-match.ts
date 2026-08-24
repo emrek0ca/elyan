@@ -10,10 +10,11 @@ import {
   embedQueryForStorage,
   embedTextsForStorage,
 } from "../brain/semantic-embedder.js";
+import type { SpeechAct } from "../../core/understanding/speech-act.js";
 import {
-  speechActAllowsExecution,
-  type SpeechAct,
-} from "../../core/understanding/speech-act.js";
+  capabilityAllowsSpeechActExecution,
+  isDesktopExecutionCapability,
+} from "./desktop-capability-execution-policy.js";
 import {
   getDesktopCapabilityOntology,
   matchDesktopCapabilitiesSemantically,
@@ -533,6 +534,8 @@ export async function evaluateLocalActionEvidence(input: {
    * kapatıyor. Uzlaşma kuralı bu alanı kullanır.
    */
   localActionCapability: boolean;
+  /** Top-1 requires the user's desktop, including safe local observations. */
+  localExecutionCapability: boolean;
   capability: string | null;
   score: number;
   margin: number;
@@ -549,6 +552,7 @@ export async function evaluateLocalActionEvidence(input: {
   const empty = {
     localAction: false,
     localActionCapability: false,
+    localExecutionCapability: false,
     capability: null,
     score: 0,
     margin: 0,
@@ -568,15 +572,17 @@ export async function evaluateLocalActionEvidence(input: {
   if (!best) return empty;
   const margin = best.score - (ranked[1]?.score ?? 0);
   const localActionCapability = isLocalActionCapability(best.capability);
+  const localExecutionCapability = isDesktopExecutionCapability(best.capability);
   const base = {
     capability: best.capability,
     score: best.score,
     margin,
     localActionCapability,
+    localExecutionCapability,
     positive: best.positive,
     counterEvidence: best.counterEvidence,
   };
-  if (!localActionCapability) {
+  if (!localExecutionCapability) {
     return { ...base, localAction: false, reason: "not_local_action" };
   }
   if (margin < LOCAL_ACTION_MARGIN) {
@@ -668,7 +674,12 @@ export async function evaluateDesktopFastPath(input: {
   // Bu cümleler üretimde `isDesktopRoute` olmadan buraya ULAŞMIYOR — yani
   // arıza gizil, canlı değil. Kapı yine de burada: aynı sinyalin bir kapıda
   // okunup diğerinde okunmaması bu projede tekrar eden hata sınıfı.
-  if (speechAct && !speechActAllowsExecution(speechAct)) {
+  if (
+    speechAct &&
+    !capabilityAllowsSpeechActExecution(speechAct, best.capability, {
+      desktopRouteConfirmed: true,
+    })
+  ) {
     return { ...base, fastPath: false, reason: "speech_act_blocks" };
   }
   if (margin < FAST_PATH_MARGIN) {
@@ -680,10 +691,10 @@ export async function evaluateDesktopFastPath(input: {
 /**
  * Planlayıcıya giden yetenek İPUCU listesini anlamsal sıralamayla düzeltir.
  *
- * `requiredCapabilities` bir beyaz liste değil, tercih sırasıdır (güvenlik
- * kapıları — yasaklı liste, otonomi zarfı, gizlilik ve masaüstü onayı —
- * ayrıca ve değişmeden uygulanır). Bu yüzden burada hem yeniden sıralamak
- * hem eksik olan doğru adayı eklemek güvenlidir.
+ * `requiredCapabilities` degraded/legacy kararda bir tercih sırasıdır;
+ * yapılandırılmış model kararında ise yetkili capability kümesidir. Bu
+ * yüzden mevcut adayları her zaman yeniden sıralayabiliriz, fakat eksik bir
+ * capability yalnız degraded fallback açıkça izin verirse eklenebilir.
  *
  * Neden gerekli: sezgisel katman "Chrome'u kapat" turunda "Chrome" kelimesini
  * görüp tarayıcı işi sanmış ve close_app'i hiç önermemişti. Planlayıcı yine
@@ -697,6 +708,7 @@ export async function refineDesktopCapabilityHints(input: {
   capabilities: string[];
   intent?: string | null;
   sideEffectLevel?: DesktopCapabilitySideEffectClass | null;
+  allowExpansion?: boolean;
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
 }): Promise<string[]> {
   const current = input.capabilities
@@ -722,10 +734,16 @@ export async function refineDesktopCapabilityHints(input: {
     return leftRank - rightRank;
   });
 
-  // Yeterince güvenli bir eşleşme listede hiç yoksa başa eklenir. Yetki
-  // genişlemez: manifest zaten izinli, kapılar ayrı çalışıyor.
+  // Degraded/legacy karar açıkça izin verdiyse yeterince güvenli, eksik bir
+  // eşleşme başa eklenebilir. Structured model kararında capability kümesi
+  // kapalıdır; embedding yalnız mevcut üyeleri sıralar.
   const best = ranked[0];
-  if (best && best.score >= HINT_CONFIDENCE && !existing.has(best.capability)) {
+  if (
+    input.allowExpansion !== false &&
+    best &&
+    best.score >= HINT_CONFIDENCE &&
+    !existing.has(best.capability)
+  ) {
     return [best.capability, ...reordered].slice(0, 16);
   }
   return reordered;

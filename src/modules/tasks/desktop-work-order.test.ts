@@ -190,6 +190,203 @@ test("buildDesktopWorkOrder materializes a latest desktop report lookup without 
   );
 });
 
+test("desktop folder question becomes one read-only directory_tree step without planner or approval", () => {
+  // Canlı regresyon (2026-08-24, task 4d5118e4): semantic karar doğru
+  // capability'yi bulduğu halde `desktop.runtime` genel operatöre çevrildi,
+  // work order ağır planner'a düştü ve 30 saniye sonra dispatch edilmeden
+  // `model_plan_unavailable` ile bitti.
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstünde hangi klasörler var?",
+    title: "Masaüstü klasörlerini listele",
+    routeDecision: routeDecision({
+      capabilities: ["desktop.runtime", "directory_tree"],
+      taskRoute: {
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "Private local directory observation",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: ["desktop.runtime", "directory_tree"],
+        semanticDesktopContract: {
+          contract: "elyan.semantic_desktop_dispatch.v1",
+          route: "desktop_runtime",
+          intent: "file_workflow",
+          requiredSemanticCapabilities: ["desktop.runtime", "directory_tree"],
+          requiredLocalContext: ["filesystem"],
+          sideEffectLevel: "read",
+          confidence: 0.98,
+          evidence: ["User asks to observe private local directory state"],
+        },
+      },
+    }),
+    requestedCapabilities: ["desktop.runtime", "directory_tree"],
+  });
+
+  assert.deepEqual(workOrder.requiredCapabilities, ["directory_tree"]);
+  assert.deepEqual(workOrder.planPreview.steps, [
+    {
+      id: "step_directory_tree",
+      capability: "directory_tree",
+      description: "Masaüstü klasörleri salt-okunur ve sınırlı olarak listelenecek.",
+      args: { path: "~/Desktop", max_depth: 1, max_entries: 200 },
+    },
+  ]);
+  assert.equal(workOrder.requiresApproval, false);
+  assert.deepEqual(workOrder.approvalCapabilities, []);
+  assert.deepEqual(workOrder.resourceScope?.writeRoots, []);
+  assert.equal(workOrder.planPreview.planSource, "deterministic_registry");
+  assert.equal(workOrder.planPreview.planPreparation?.status, "ready");
+  assert.equal(
+    workOrder.planPreview.planPreparation?.outcome,
+    "deterministic_materialized",
+  );
+  assert.match(
+    String(workOrder.planPreview.planPreparation?.preparedAt ?? ""),
+    /^\d{4}-\d{2}-\d{2}T/u,
+  );
+});
+
+test("directory_tree keeps the model-selected tool but scopes the requested folder", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "İndirilenler klasöründe ne var?",
+    title: "İndirilenleri listele",
+    routeDecision: routeDecision({ capabilities: ["directory_tree"] }),
+    requestedCapabilities: ["directory_tree"],
+  });
+
+  assert.deepEqual(workOrder.planPreview.steps[0]?.args, {
+    path: "~/Downloads",
+    max_depth: 1,
+    max_entries: 200,
+  });
+  assert.equal(
+    workOrder.resourceScope?.readRoots.includes("~/Downloads"),
+    true,
+  );
+  assert.deepEqual(workOrder.resourceScope?.writeRoots, []);
+});
+
+test("structured model capabilities outrank stale legacy planner hints", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstünde hangi klasörler var?",
+    title: "Masaüstü klasörlerini listele",
+    routeDecision: routeDecision({
+      capabilities: ["desktop.runtime"],
+      taskRoute: {
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "Structured local observation",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: ["desktop.runtime"],
+        semanticDesktopContract: {
+          contract: "elyan.semantic_desktop_dispatch.v1",
+          route: "desktop_runtime",
+          intent: "file_workflow",
+          requiredSemanticCapabilities: ["desktop_operator.run"],
+          requiredLocalContext: ["filesystem"],
+          sideEffectLevel: "read",
+          confidence: 0.98,
+          evidence: ["legacy compatibility hint"],
+        },
+        semanticDecision: {
+          contract: "elyan.agent_route_decision.v1",
+          intent: "observe_directory",
+          targetDevice: "desktop",
+          goalContract: {
+            objectiveHash: "measured",
+            successCriteria: ["bounded directory tree returned"],
+          },
+          requiredCapabilities: ["directory_tree"],
+          steps: [
+            {
+              stepId: "observe_tree",
+              device: "desktop",
+              capability: "directory_tree",
+            },
+          ],
+          verification: {
+            required: true,
+            criteria: ["tree root and entry count reported"],
+          },
+          confidence: 0.98,
+          missingInformation: [],
+          requiresConfirmation: false,
+          source: "structured_model",
+        },
+      },
+    }),
+    requestedCapabilities: ["desktop.runtime"],
+  });
+
+  assert.deepEqual(workOrder.requiredCapabilities, ["directory_tree"]);
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["directory_tree"],
+  );
+  assert.equal(workOrder.requiresApproval, false);
+});
+
+test("ambiguous, negated, or custom folder targets never become a wrong deterministic scan", () => {
+  for (const message of [
+    "İndirilenlere bakma, sadece workspace klasörünü göster",
+    "Cabir klasöründe ne var?",
+  ]) {
+    const workOrder = buildDesktopWorkOrder({
+      message,
+      title: "Klasörü listele",
+      routeDecision: routeDecision({ capabilities: ["directory_tree"] }),
+      requestedCapabilities: ["directory_tree"],
+    });
+
+    assert.deepEqual(workOrder.planPreview.steps, [], message);
+    assert.equal(workOrder.planPreview.planPreparation?.status, "pending", message);
+  }
+});
+
+test("non-authoritative capability hints cannot grant write roots", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstünde hangi klasörler var?",
+    title: "Masaüstü klasörlerini listele",
+    routeDecision: routeDecision({
+      capabilities: ["directory_tree", "shell_run"],
+      taskRoute: {
+        target: "desktop_runtime",
+        operationalRoute: "desktop_runtime",
+        executionPlan: ["desktop_runtime"],
+        reason: "Read-only local observation",
+        needsDesktop: true,
+        needsPrivateDesktopData: true,
+        needsUserApproval: false,
+        requiredCapabilities: ["directory_tree", "shell_run"],
+        semanticDesktopContract: {
+          contract: "elyan.semantic_desktop_dispatch.v1",
+          route: "desktop_runtime",
+          intent: "file_workflow",
+          requiredSemanticCapabilities: ["directory_tree", "shell_run"],
+          requiredLocalContext: ["filesystem"],
+          sideEffectLevel: "read",
+          confidence: 0.7,
+          evidence: ["legacy noisy hint"],
+        },
+      },
+    }),
+    requestedCapabilities: ["directory_tree", "shell_run"],
+  });
+
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["directory_tree"],
+  );
+  assert.deepEqual(workOrder.resourceScope?.writeRoots, []);
+  assert.equal(workOrder.requiresApproval, false);
+  assert.deepEqual(workOrder.approvalCapabilities, []);
+});
+
 test("desktop plan preparation gate blocks pending v1.7 work without an age escape", () => {
   const payload = {
     desktopWorkOrder: {

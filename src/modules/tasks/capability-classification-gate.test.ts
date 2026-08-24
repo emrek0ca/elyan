@@ -41,6 +41,25 @@ test("every manifest entry carries a privacy class from the closed vocabulary", 
   assert.deepEqual(unknown, [], `sözlükte olmayan gizlilik sınıfı: ${unknown}`);
 });
 
+test("placement and question-safe execution are explicit manifest metadata", () => {
+  const invalidAuthority = DESKTOP_CAPABILITY_MANIFEST.filter(
+    (entry) => !["desktop", "hybrid"].includes(entry.executionAuthority),
+  ).map((entry) => entry.name);
+  assert.deepEqual(invalidAuthority, []);
+
+  const directoryTree = DESKTOP_CAPABILITY_MANIFEST.find(
+    (entry) => entry.name === "directory_tree",
+  );
+  const shellSessionOpen = DESKTOP_CAPABILITY_MANIFEST.find(
+    (entry) => entry.name === "shell_session_open",
+  );
+  assert.equal(directoryTree?.executionAuthority, "desktop");
+  assert.equal(directoryTree?.questionSafeObservation, true);
+  assert.equal(directoryTree?.fallbackExecutionEligible, true);
+  assert.equal(shellSessionOpen?.questionSafeObservation, false);
+  assert.equal(shellSessionOpen?.requiresApproval, true);
+});
+
 test("no side-effecting capability is left in the bag class", () => {
   // Torba bir karar değil, sınıflandırma kaçağıdır. Yan etkili bir iş oraya
   // düşerse yönlendirme onu bir daha yerel eylem olarak göremez.

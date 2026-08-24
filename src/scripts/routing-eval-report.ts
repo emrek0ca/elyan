@@ -111,13 +111,20 @@ type PipelineResult = Awaited<ReturnType<typeof runFullPipelineEval>>;
 let productionCorpus: PipelineResult | null = null;
 let productionHeldout: PipelineResult | null = null;
 let embeddingsReady = false;
+const evalLogger = {
+  warn(value: unknown, message?: string) {
+    console.error(`[routing-eval] ${message ?? "semantic warning"}`, value);
+  },
+  info() {},
+  debug() {},
+};
 
 if (!lexicalOnly) {
   try {
     // The production app warms this asynchronously. The evaluator is the
     // explicit opt-in caller allowed to wait once before scoring the corpus;
     // every measured request below uses the already-ready cache.
-    await warmDesktopCapabilityVectors();
+    await warmDesktopCapabilityVectors(evalLogger);
     embeddingsReady = isDesktopCapabilityVectorCacheReady();
     if (embeddingsReady) {
       productionCorpus = await runFullPipelineEval(ROUTING_EVAL_CORPUS);
@@ -200,4 +207,3 @@ if (asJson) {
     );
   }
 }
-

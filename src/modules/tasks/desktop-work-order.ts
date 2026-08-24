@@ -18,6 +18,9 @@ import type { ExecutionPlacementSnapshot } from "./execution-placement.js";
 // Desktop planner MAX_PLAN_STEPS=16 ile hizalandı (runtime/desktop_work_order.py
 // MAX_STEPS ile birlikte güncellenir).
 export const MAX_WORK_ORDER_STEPS = 16;
+const DESKTOP_CAPABILITY_NAMES = new Set(
+  DESKTOP_CAPABILITY_MANIFEST.map((entry) => entry.name),
+);
 export function isDesktopPlanPreparationPending(
   payload: unknown,
 ): boolean {
@@ -537,15 +540,10 @@ type FileFindKind =
   | "archive"
   | "any";
 
-function fileFindArgsForRequest(message: string): Record<string, unknown> {
+function fileFindArgsForRequest(message: string): Record<string, unknown> | null {
   const normalized = message.toLocaleLowerCase("tr-TR");
-  const path = trStemPattern(["indirilenler", "download"]).test(normalized)
-    ? "~/Downloads"
-    : trStemPattern(["belgeler", "document"]).test(normalized)
-      ? "~/Documents"
-      : /\bworkspace\b|\brepo(?:su|sitory)?\b/iu.test(normalized)
-        ? "workspace"
-        : "~/Desktop";
+  const path = localFilesystemRootForRequest(message, "~/Desktop");
+  if (!path) return null;
 
   const nameMatchers: Array<{
     pattern: RegExp;
@@ -568,6 +566,52 @@ function fileFindArgsForRequest(message: string): Record<string, unknown> {
   if (match?.name) args.name_contains = match.name;
   if (match) args.kind = match.kind;
   return args;
+}
+
+function localFilesystemRootForRequest(
+  message: string,
+  fallback: "workspace" | "~/Desktop" | null,
+): "workspace" | "~/Desktop" | "~/Documents" | "~/Downloads" | null {
+  const normalized = message.toLocaleLowerCase("tr-TR");
+  const roots = new Set<
+    "workspace" | "~/Desktop" | "~/Documents" | "~/Downloads"
+  >();
+  if (trStemPattern(["indirilenler", "download"]).test(normalized)) {
+    roots.add("~/Downloads");
+  }
+  if (
+    /(?:belgeler(?:im)?|documents?)(?:\s+klasör\p{L}*)?/iu.test(normalized)
+  ) {
+    roots.add("~/Documents");
+  }
+  if (trStemPattern(["masaüstü", "masaustu", "desktop"]).test(normalized)) {
+    roots.add("~/Desktop");
+  }
+  if (
+    /\bworkspace\b|\brepo(?:su|sitory)?\b|\bproje(?:de|nin|si)?\b|\bbu\s+(?:klasör|klasor|dizin)\b/iu.test(
+      normalized,
+    )
+  ) {
+    roots.add("workspace");
+  }
+  const negatedOrExcluded =
+    /\b(?:bakma|gösterme|gosterme|listeleme|değil|degil|hariç|haric|except|do\s+not|don't|not)\b/iu.test(
+      normalized,
+    );
+  if (negatedOrExcluded || roots.size > 1) return null;
+  return roots.values().next().value ?? fallback;
+}
+
+function directoryTreeArgsForRequest(
+  message: string,
+): Record<string, unknown> | null {
+  const path = localFilesystemRootForRequest(message, null);
+  if (!path) return null;
+  return {
+    path,
+    max_depth: 1,
+    max_entries: 200,
+  };
 }
 
 export function parseDirectImageFetchCommand(message: string): DirectImageFetchCommand | null {
@@ -969,6 +1013,10 @@ function inferKind(routeDecision: CommandRouteDecision, message: string): string
 
 function canonicalRuntimeCapability(value: string): string | null {
   const normalized = value.trim().toLocaleLowerCase("en-US").replace(/\s+/g, "_");
+  // Registry names containing dots are already canonical. Replacing every
+  // dot with an underscore turned structured `desktop_os.processes` into a
+  // nonexistent tool and silently erased the model-selected capability.
+  if (DESKTOP_CAPABILITY_NAMES.has(normalized)) return normalized;
   const aliases: Record<string, string | null> = {
     "chat.reply": null,
     "document.read": "document_read",
@@ -983,7 +1031,10 @@ function canonicalRuntimeCapability(value: string): string | null {
     "svg.generate": "canvas_write",
     "browser.read": "browser_control",
     "desktop.file_access": "document_read",
-    "desktop.runtime": "desktop_operator.run",
+    // Placement is not a tool. Converting the desktop target marker into the
+    // generic operator widened approval scope and forced otherwise trivial
+    // read-only work through the heavy planner.
+    "desktop.runtime": null,
     filesystem_read: "document_read",
     filesystem_write: "document_write",
     screen_context: "desktop_operator.observe_screen",
@@ -1107,6 +1158,20 @@ function inferCapabilities(
   message: string,
   envelope?: UnderstandingEnvelope,
 ): string[] {
+  const structuredDecision = routeDecision.taskRoute?.semanticDecision;
+  if (structuredDecision?.source === "structured_model") {
+    const structuredCapabilities = [
+      ...new Set([
+        ...structuredDecision.requiredCapabilities,
+        ...structuredDecision.steps.map((step) => step.capability),
+      ]),
+    ]
+      .map(canonicalRuntimeCapability)
+      .filter((capability): capability is string => Boolean(capability));
+    if (structuredCapabilities.length > 0) {
+      return structuredCapabilities.slice(0, 16);
+    }
+  }
   const semanticDesktopContract = semanticDesktopContractFromRoute(routeDecision);
   const contractCapabilities =
     canonicalSemanticDesktopCapabilities(semanticDesktopContract, message);
@@ -1693,6 +1758,12 @@ function explicitResourceRoot(value: string): string | null {
   ) {
     return "~/Downloads";
   }
+  if (
+    normalized === "~/Documents" ||
+    normalized.startsWith("~/Documents/")
+  ) {
+    return "~/Documents";
+  }
   const lastSlash = normalized.lastIndexOf("/");
   if (
     normalized.startsWith("/") ||
@@ -1793,13 +1864,30 @@ function buildSteps(input: {
       args: { query: "all", limit: 50 },
     });
   }
+  if (input.capabilities.includes("directory_tree")) {
+    const args = directoryTreeArgsForRequest(input.message);
+    if (args) {
+      steps.push({
+        id: "step_directory_tree",
+        capability: "directory_tree",
+        description:
+          args.path === "~/Desktop"
+            ? "Masaüstü klasörleri salt-okunur ve sınırlı olarak listelenecek."
+            : "İstenen klasör yapısı salt-okunur ve sınırlı olarak listelenecek.",
+        args,
+      });
+    }
+  }
   if (input.capabilities.includes("file_find")) {
-    steps.push({
-      id: "step_file_find",
-      capability: "file_find",
-      description: "İzinli yerel klasörde dosya adları ve tarihleri aranıp en yeni eşleşme seçilecek.",
-      args: fileFindArgsForRequest(input.message),
-    });
+    const args = fileFindArgsForRequest(input.message);
+    if (args) {
+      steps.push({
+        id: "step_file_find",
+        capability: "file_find",
+        description: "İzinli yerel klasörde dosya adları ve tarihleri aranıp en yeni eşleşme seçilecek.",
+        args,
+      });
+    }
   }
   for (const capability of ["open_app", "close_app"] as const) {
     if (!input.capabilities.includes(capability)) continue;
@@ -2055,6 +2143,9 @@ export function buildDesktopWorkOrder(input: {
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
   const directRegistryCommand = parseDirectDesktopAppCommand(message);
+  const structuredRouteDecision =
+    input.routeDecision.taskRoute?.semanticDecision?.source ===
+    "structured_model";
   const semanticDesktopContract = semanticDesktopContractFromRoute(
     input.routeDecision,
   );
@@ -2077,7 +2168,9 @@ export function buildDesktopWorkOrder(input: {
       // not a free-form model decision. It prevents a low-confidence semantic
       // envelope from dropping the one capability needed for the exact local
       // action while leaving advice/questions outside this path.
-      ...(directRegistryCommand ? [directRegistryCommand.capability] : []),
+      ...(directRegistryCommand && !structuredRouteDecision
+        ? [directRegistryCommand.capability]
+        : []),
     ]),
   ];
   const requestedOutputFormat = String(
@@ -2240,9 +2333,11 @@ export function buildDesktopWorkOrder(input: {
   for (const step of steps) {
     if (!capabilities.includes(step.capability)) capabilities.push(step.capability);
   }
-  const approvalCapabilities = [
-    ...new Set([...capabilities, ...steps.map((step) => step.capability)]),
-  ].filter(
+  const approvalScopeCapabilities =
+    steps.length > 0
+      ? steps.map((step) => step.capability)
+      : capabilities;
+  const approvalCapabilities = [...new Set(approvalScopeCapabilities)].filter(
     (capability) =>
       DESKTOP_CAPABILITY_MANIFEST.find((entry) => entry.name === capability)
         ?.requiresApproval === true,
@@ -2260,6 +2355,12 @@ export function buildDesktopWorkOrder(input: {
     typeof steps[0]?.args?.path === "string" &&
     typeof steps[0]?.args?.max_depth === "number" &&
     typeof steps[0]?.args?.max_results === "number";
+  const deterministicDirectoryTreeStep =
+    steps.length === 1 &&
+    steps[0]?.capability === "directory_tree" &&
+    typeof steps[0]?.args?.path === "string" &&
+    typeof steps[0]?.args?.max_depth === "number" &&
+    typeof steps[0]?.args?.max_entries === "number";
   const deterministicReadOnlyRegistryPlan =
     steps.length > 0 &&
     steps.every((step) =>
@@ -2273,6 +2374,7 @@ export function buildDesktopWorkOrder(input: {
       Object.keys(steps[0]?.args ?? {}).length === 1 &&
       typeof steps[0]?.args.app_name === "string") ||
     deterministicReadOnlyStep ||
+    deterministicDirectoryTreeStep ||
     deterministicFileFindStep ||
     deterministicReadOnlyRegistryPlan;
   const basePrivacyRouting = executionEnvelope?.privacy_routing ?? {
@@ -2342,14 +2444,7 @@ export function buildDesktopWorkOrder(input: {
   const desktopOutputRequested = (
     executionEnvelope?.desired_outputs ?? []
   ).some((output) => output.target === "desktop") ||
-    steps.some((step) =>
-      Object.entries(step.args).some(
-        ([key, value]) =>
-          /path$/iu.test(key) &&
-          typeof value === "string" &&
-          (value === "~/Desktop" || value.startsWith("~/Desktop/")),
-      ),
-    );
+    stepWriteRoots.includes("~/Desktop");
   // YAZMA KAPSAMI PLANDAN ÖNCE DONDURULUYOR.
   //
   // Kapsam, iş emri kurulurken belirleniyor; gerçek planı model SONRA üretiyor
@@ -2369,7 +2464,27 @@ export function buildDesktopWorkOrder(input: {
   // makinesinde çalıştırıyor ve her yazma adımı ayrıca masaüstündeki
   // izin/onay kapısından geçiyor. Kapsamın işi rastgele SİSTEM yollarını
   // engellemek; kullanıcının Masaüstü/Belgeler/İndirilenler klasörünü değil.
-  const defaultWriteRoots = ["workspace", "~/Desktop", "~/Documents", "~/Downloads"];
+  const materializedStepEntries = steps.map((step) =>
+    DESKTOP_CAPABILITY_MANIFEST.find((entry) => entry.name === step.capability),
+  );
+  const materializedStepsAreReadOnly =
+    materializedStepEntries.length > 0 &&
+    materializedStepEntries.every(
+      (entry) =>
+        entry !== undefined &&
+        (entry.sideEffectClass === "none" || entry.sideEffectClass === "read"),
+    );
+  const typedReadOnlyScope =
+    semanticDesktopContract?.sideEffectLevel === "none" ||
+    semanticDesktopContract?.sideEffectLevel === "read";
+  // Resource authority comes from executable steps (or the typed contract
+  // while planning is still pending), never from reorderable capability
+  // hints. A noisy hint cannot grant broad write roots or revoke a valid one.
+  const readOnlyExecutionScope =
+    materializedStepsAreReadOnly || (steps.length === 0 && typedReadOnlyScope);
+  const defaultWriteRoots = readOnlyExecutionScope
+    ? []
+    : ["workspace", "~/Desktop", "~/Documents", "~/Downloads"];
   const resourceScope = {
     contract: "elyan.resource_scope.v1" as const,
     readRoots: [

@@ -301,6 +301,7 @@ import {
   evaluateDesktopFastPath,
   refineDesktopCapabilityHints,
 } from "./desktop-capability-embedding-match.js";
+import { resolveDesktopCapabilityExecutionPolicy } from "./desktop-capability-execution-policy.js";
 import {
   enqueueTaskDispatch,
   sendPendingDesktopPlanStatus,
@@ -9886,7 +9887,7 @@ export async function createTask(
     extractedRouteDecision,
     effectiveRequestedCapabilities,
   );
-  const routeDecision =
+  let routeDecision =
     (!extractedRouteIsStale ? extractedRouteDecision : null) ??
     (await decideCommandRoute(app, {
       userId: input.userId,
@@ -9923,9 +9924,121 @@ export async function createTask(
       brainProfile: usageAccess.brainProfile,
       quota: undefined,
     }));
-  const routeCapabilities = routeDecision?.capabilities?.length
-    ? routeDecision.capabilities
-    : effectiveRequestedCapabilities;
+  // Device admission uses only explicit client/system requirements plus
+  // registry-validated desktop tools from the structured model decision.
+  // Planner hints remain separate: embedding expansion must never make a
+  // device appear compatible.
+  const originalRouteCapabilities = routeDecision?.capabilities?.length
+    ? [...routeDecision.capabilities]
+    : [...effectiveRequestedCapabilities];
+  const desktopRouteSelected =
+    routeDecision.route === "desktop_runtime" ||
+    routeDecision.taskRoute?.operationalRoute === "desktop_runtime";
+  const structuredRouteDecision =
+    routeDecision.taskRoute?.semanticDecision?.source === "structured_model";
+  const structuredCapabilities = structuredRouteDecision
+    ? [
+        ...new Set([
+          ...(routeDecision.taskRoute?.semanticDecision
+            ?.requiredCapabilities ?? []),
+          ...(routeDecision.taskRoute?.semanticDecision?.steps ?? []).map(
+            (step) => step.capability,
+          ),
+        ]),
+      ]
+    : [];
+  const routeCapabilities = [
+    ...new Set([
+      ...originalRouteCapabilities,
+      ...structuredCapabilities.filter(
+        (capability) =>
+          resolveDesktopCapabilityExecutionPolicy(capability)?.authority ===
+          "desktop",
+      ),
+    ]),
+  ];
+  const contractCapabilities =
+    routeDecision.taskRoute?.semanticDesktopContract
+      ?.requiredSemanticCapabilities ?? [];
+  const plannerCapabilitySeed = [
+    ...new Set([
+      ...(structuredCapabilities.length > 0
+        ? structuredCapabilities
+        : contractCapabilities),
+      ...routeCapabilities,
+    ]),
+  ];
+  // Refine before work-order materialization, but only the planner's local
+  // view. Nonempty contract capabilities are always preserved. A degraded
+  // expansion must also match the typed side-effect/approval envelope.
+  const refinedPlannerCapabilityHints = desktopRouteSelected
+    ? await refineDesktopCapabilityHints({
+        query: planningPrompt,
+        capabilities: plannerCapabilitySeed,
+        intent:
+          routeDecision.taskRoute?.semanticDesktopContract?.intent ?? null,
+        sideEffectLevel:
+          routeDecision.taskRoute?.semanticDesktopContract?.sideEffectLevel ??
+          null,
+        allowExpansion: !structuredRouteDecision,
+        logger: app.log,
+      }).catch(() => plannerCapabilitySeed)
+    : plannerCapabilitySeed;
+  const plannerCapabilityHints = refinedPlannerCapabilityHints.filter(
+    (capability) => {
+      if (plannerCapabilitySeed.includes(capability)) return true;
+      const policy = resolveDesktopCapabilityExecutionPolicy(capability);
+      if (!policy) return false;
+      const sideEffectLevel =
+        routeDecision.taskRoute?.semanticDesktopContract?.sideEffectLevel;
+      if (
+        (sideEffectLevel === "none" || sideEffectLevel === "read") &&
+        (policy.requiresApproval ||
+          !["none", "read"].includes(policy.sideEffectClass))
+      ) {
+        return false;
+      }
+      return !(
+        routeDecision.requiresApproval === false && policy.requiresApproval
+      );
+    },
+  );
+  const workOrderRouteDecision =
+    desktopRouteSelected && !structuredRouteDecision
+      ? {
+          ...routeDecision,
+          capabilities: plannerCapabilityHints,
+          ...(routeDecision.taskRoute
+            ? {
+                taskRoute: {
+                  ...routeDecision.taskRoute,
+                  requiredCapabilities: [
+                    ...new Set([
+                      ...routeDecision.taskRoute.requiredCapabilities,
+                      ...plannerCapabilityHints,
+                    ]),
+                  ],
+                  ...(routeDecision.taskRoute.semanticDesktopContract
+                    ? {
+                        semanticDesktopContract: {
+                          ...routeDecision.taskRoute.semanticDesktopContract,
+                          requiredSemanticCapabilities: [
+                            ...new Set([
+                              ...contractCapabilities,
+                              ...plannerCapabilityHints.filter(
+                                (capability) =>
+                                  capability !== "desktop.runtime",
+                              ),
+                            ]),
+                          ],
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+        }
+      : routeDecision;
   const routeOrigin = normalizeRouteOrigin(input.payload.source);
   const routeSelectedTargetDeviceId =
     input.requestedTargetDeviceId ?? preferredDesktopTargetDeviceId;
@@ -10165,8 +10278,8 @@ export async function createTask(
     ? buildDesktopWorkOrder({
         message: planningPrompt,
         title: canonicalTitle,
-        routeDecision,
-        requestedCapabilities: routeCapabilities,
+        routeDecision: workOrderRouteDecision,
+        requestedCapabilities: plannerCapabilityHints,
         remoteMcpSelection: remoteMcpSelection ?? undefined,
         dispatchOptimization: dispatchOptimization ?? undefined,
         responsiveExecution: responsiveExecution ?? undefined,
@@ -10197,13 +10310,18 @@ export async function createTask(
     // Direct registry plans (ör. "Music kapat") route capability listesi
     // boş olsa bile close_app adımını work order materializer'ında keşfeder.
     // Route metadata'sı ve turn contract aynı registry kararını taşımalı.
-    routeDecision.requiresApproval = true;
-    if (routeDecision.taskRoute) {
-      routeDecision.taskRoute = {
-        ...routeDecision.taskRoute,
-        needsUserApproval: true,
-      };
-    }
+    routeDecision = {
+      ...routeDecision,
+      requiresApproval: true,
+      ...(routeDecision.taskRoute
+        ? {
+            taskRoute: {
+              ...routeDecision.taskRoute,
+              needsUserApproval: true,
+            },
+          }
+        : {}),
+    };
     turnContract.routeDecision.requiresApproval = true;
   }
   const desktopWorkOrder = desktopWorkOrderBase
@@ -10212,23 +10330,6 @@ export async function createTask(
         turnContract,
       }
     : null;
-  if (desktopWorkOrder) {
-    // Yetenek ipuçlarını gerçek anlamsal sıralamayla düzelt. Sezgisel katman
-    // sözcüksel: "şarj"ı "pil"e, "ajanda"yı "takvim"e bağlayamıyor ve yanlış
-    // sıralanmış ipucu planlayıcıyı yanlış araca itiyor. Ölçüm: görülmemiş
-    // ifadelerde top-1 %48.8 → %73.2, kritik yanlış seçim 11 → 2.
-    //
-    // Yetki genişlemez: ipucu beyaz liste değil, güvenlik kapıları ayrı.
-    // Embedder yoksa liste olduğu gibi kalır.
-    desktopWorkOrder.requiredCapabilities = await refineDesktopCapabilityHints({
-      query: planningPrompt,
-      capabilities: desktopWorkOrder.requiredCapabilities,
-      intent: routeDecision.taskRoute?.semanticDesktopContract?.intent ?? null,
-      sideEffectLevel:
-        routeDecision.taskRoute?.semanticDesktopContract?.sideEffectLevel ?? null,
-      logger: app.log,
-    }).catch(() => desktopWorkOrder.requiredCapabilities);
-  }
   const taskTitle = desktopWorkOrder?.goal.summary ?? canonicalTitle;
   const geminiExecutionValidation = desktopWorkOrder
     ? await validateExecutionPlanWithGeminiFree(app, {

@@ -27,6 +27,9 @@ export type DesktopCapabilityManifestEntry = {
   sideEffect: boolean;
   mutatesPath: boolean;
   sideEffectClass: "none" | "read" | "write" | "destructive";
+  executionAuthority: "desktop" | "hybrid";
+  questionSafeObservation: boolean;
+  fallbackExecutionEligible: boolean;
   skillAffinity: string[];
 };
 
@@ -125,6 +128,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -215,6 +221,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -297,6 +306,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -364,6 +376,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -473,6 +488,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -535,6 +553,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -587,6 +608,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -651,6 +675,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -713,6 +740,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -770,6 +800,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -823,6 +856,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -892,6 +928,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -1024,6 +1063,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": [
       "document.pdf_report",
       "canvas.visual_report"
@@ -1128,6 +1170,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -1182,6 +1227,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -1239,6 +1287,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -1317,6 +1368,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -1388,6 +1442,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -1458,6 +1515,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "destructive",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -1526,6 +1586,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "destructive",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -1587,6 +1650,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -1689,6 +1755,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -1747,6 +1816,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -1813,6 +1885,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -1877,6 +1952,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -1981,6 +2059,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -2030,6 +2111,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -2084,6 +2168,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -2133,6 +2220,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -2191,6 +2281,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -2239,6 +2332,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -2299,6 +2395,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -2369,6 +2468,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -2452,6 +2554,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -2585,6 +2690,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": [
       "document.docx_from_context",
       "document.summary_and_save"
@@ -2674,6 +2782,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -2763,6 +2874,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -2870,6 +2984,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -2953,6 +3070,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -3028,6 +3148,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3109,6 +3232,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -3200,6 +3326,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -3280,6 +3409,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3352,6 +3484,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3420,6 +3555,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3480,6 +3618,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3541,6 +3682,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3606,6 +3750,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -3674,6 +3821,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -3735,6 +3885,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3793,6 +3946,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3907,6 +4063,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -3979,6 +4138,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -4106,6 +4268,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -4177,6 +4342,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -4242,6 +4410,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -4311,6 +4482,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -4395,6 +4569,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": [
       "math.solve"
     ]
@@ -4465,6 +4642,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -4549,6 +4729,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "destructive",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -4619,6 +4802,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -4699,6 +4885,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -4777,6 +4966,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -4878,6 +5070,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": [
       "presentation.deck_from_context"
     ]
@@ -4937,6 +5132,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -4998,6 +5196,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5059,6 +5260,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5124,6 +5328,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5193,6 +5400,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5260,6 +5470,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5340,6 +5553,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5411,6 +5627,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -5490,6 +5709,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": true,
     "skillAffinity": []
   },
   {
@@ -5612,6 +5834,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "destructive",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5668,6 +5893,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5676,7 +5904,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "description": "Kalıcı terminal oturumu açar; çalışma dizini, ortam değişkenleri ve kabuk durumu sonraki komutlarda KORUNUR.",
     "usage": "Çok adımlı yazılım işinin İLK adımı: derle/test/düzelt döngüsü, sanal ortam kurup içinde çalışma, arka arkaya komut. Dönen sessionId sonraki adımlara verilir.",
     "requiredArgs": [],
-    "requiresApproval": false,
+    "requiresApproval": true,
     "whenToUse": [
       "projede testleri çalıştırıp hatayı düzelt",
       "bağımlılıkları kur sonra derle",
@@ -5730,10 +5958,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "çalışma dizini korunsun bir kabuk başlat"
     ],
     "notFor": [],
-    "privacyClass": "local_private_read",
-    "sideEffect": false,
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
     "mutatesPath": false,
-    "sideEffectClass": "read",
+    "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5745,7 +5976,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
       "session_id",
       "command"
     ],
-    "requiresApproval": false,
+    "requiresApproval": true,
     "whenToUse": [
       "testi çalıştır ve çıktısını oku",
       "önceki adımda girdiğim dizinde devam et",
@@ -5817,6 +6048,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": false,
     "sideEffectClass": "destructive",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5878,6 +6112,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "none",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -5944,6 +6181,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -6054,6 +6294,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": true,
     "mutatesPath": true,
     "sideEffectClass": "write",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": [
       "spreadsheet.table_from_context"
     ]
@@ -6125,6 +6368,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": true,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -6191,6 +6437,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -6260,6 +6509,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   },
   {
@@ -6346,6 +6598,9 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "sideEffect": false,
     "mutatesPath": false,
     "sideEffectClass": "read",
+    "executionAuthority": "hybrid",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
     "skillAffinity": []
   }
 ];

@@ -71,6 +71,7 @@ const MAX_CACHE_ENTRIES = 1_024;
 const MAX_LATENCY_SAMPLES = 512;
 
 let worker: Worker | null = null;
+const expectedWorkerExits = new WeakSet<Worker>();
 let workerWarm = false;
 let nextRequestId = 1;
 let consecutiveFailures = 0;
@@ -82,6 +83,10 @@ let testDispatcher: SemanticComputeDispatcher | null = null;
 const pending = new Map<number, PendingRequest>();
 const queuedByBatchKey = new Map<string, QueuedText[]>();
 const computationsByCacheKey = new Map<string, Set<QueuedText>>();
+const queueCapacityWaiters = new Set<{
+  resolve: (available: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
 let schedulerTimer: ReturnType<typeof setTimeout> | null = null;
 let schedulerDueAt: number | null = null;
 let schedulerGeneration = 0;
@@ -158,8 +163,17 @@ function stopWorker(): void {
   worker = null;
   workerWarm = false;
   if (current) {
+    expectedWorkerExits.add(current);
     void current.terminate().catch(() => undefined);
   }
+}
+
+export function resolveSemanticComputeWorkerUrl(
+  moduleUrl: string | URL = import.meta.url,
+): URL {
+  const current = new URL(moduleUrl);
+  const extension = current.pathname.endsWith(".ts") ? ".ts" : ".js";
+  return new URL(`./semantic-compute-worker${extension}`, current);
 }
 
 function getWorker(logger?: SemanticComputeLogger): Worker | null {
@@ -167,7 +181,7 @@ function getWorker(logger?: SemanticComputeLogger): Worker | null {
   if (worker) return worker;
 
   try {
-    const created = new Worker(new URL("./semantic-compute-worker.js", import.meta.url));
+    const created = new Worker(resolveSemanticComputeWorkerUrl());
     created.unref();
     created.on("message", (message: WorkerResponse) => {
       const entry = pending.get(message.id);
@@ -193,13 +207,16 @@ function getWorker(logger?: SemanticComputeLogger): Worker | null {
       stopWorker();
     });
     created.on("exit", (code) => {
-      workerWarm = false;
-      if (code !== 0) {
+      const expectedExit = expectedWorkerExits.delete(created);
+      if (code !== 0 && !expectedExit) {
         logger?.warn?.({ code }, "semantic compute worker exited unexpectedly");
         recordFailure();
       }
-      resolveAllPending(null);
-      worker = null;
+      if (worker === created) {
+        workerWarm = false;
+        resolveAllPending(null);
+        worker = null;
+      }
     });
     worker = created;
     return created;
@@ -275,6 +292,32 @@ function removeComputation(entry: QueuedText): void {
   if (entries.size === 0) computationsByCacheKey.delete(entry.cacheKey);
 }
 
+function notifyQueueCapacityAvailable(): void {
+  if (queuedTextCount >= MAX_QUEUED_TEXTS) return;
+  for (const waiter of queueCapacityWaiters) {
+    clearTimeout(waiter.timer);
+    queueCapacityWaiters.delete(waiter);
+    waiter.resolve(true);
+  }
+}
+
+function waitForQueueCapacity(deadlineAt: number): Promise<boolean> {
+  if (queuedTextCount < MAX_QUEUED_TEXTS) return Promise.resolve(true);
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const waiter = {
+      resolve,
+      timer: setTimeout(() => {
+        queueCapacityWaiters.delete(waiter);
+        resolve(false);
+      }, remainingMs),
+    };
+    waiter.timer.unref?.();
+    queueCapacityWaiters.add(waiter);
+  });
+}
+
 function expireQueuedTexts(now: number): void {
   for (const [batchKey, queue] of queuedByBatchKey) {
     for (let index = queue.length - 1; index >= 0; index -= 1) {
@@ -282,6 +325,7 @@ function expireQueuedTexts(now: number): void {
       if (entry.deadlineAt > now) continue;
       queue.splice(index, 1);
       queuedTextCount -= 1;
+      notifyQueueCapacityAvailable();
       metricCounts.timeouts += 1;
       removeComputation(entry);
       entry.resolve(null);
@@ -296,6 +340,7 @@ function takeNextBatch(): QueuedText[] | null {
   const [batchKey, queue] = next.value;
   const entries = queue.splice(0, MAX_BATCH_TEXTS);
   queuedTextCount -= entries.length;
+  notifyQueueCapacityAvailable();
   queuedByBatchKey.delete(batchKey);
   if (queue.length > 0) queuedByBatchKey.set(batchKey, queue);
   for (const entry of entries) entry.state = "active";
@@ -418,7 +463,10 @@ function queueText(input: {
     resolveVector = resolve;
   });
 
-  const batchKey = `${input.modelName}\0${input.timeoutMs}`;
+  // Deadline is per entry and dispatchBatch already uses the earliest one.
+  // Including millisecond-level remaining timeout in the batch key split
+  // otherwise identical concurrent callers into separate worker requests.
+  const batchKey = input.modelName;
   const queue = queuedByBatchKey.get(batchKey) ?? [];
   const entry: QueuedText = {
     ...input,
@@ -457,18 +505,42 @@ export async function embedTextsWithSemanticWorker(input: {
   const cacheScope = cacheable
     ? requestedCacheScope
     : `uncached:${nextUncachedScopeId++}`;
-  const vectors = await Promise.all(
-    input.texts.map((text) => queueText({
-      modelName: input.modelName,
-      text,
-      cacheScope,
-      cacheable,
-      timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      logger: input.logger,
-    })),
-  );
+  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadlineAt = Date.now() + timeoutMs;
+  const vectors: Array<number[] | null> = [];
+  // A catalogue can legitimately exceed the live queue ceiling. Enqueue it
+  // in bounded windows so startup warmup does not reject the tail and then
+  // discard every vector. The original caller deadline still covers all
+  // windows; this is backpressure, not an unbounded retry.
+  let offset = 0;
+  while (offset < input.texts.length) {
+    const capacityAvailable = await waitForQueueCapacity(deadlineAt);
+    const remainingMs = deadlineAt - Date.now();
+    if (!capacityAvailable || remainingMs <= 0) break;
+    const availableSlots = MAX_QUEUED_TEXTS - queuedTextCount;
+    if (availableSlots <= 0) continue;
+    const window = input.texts.slice(offset, offset + availableSlots);
+    const windowVectors = await Promise.all(
+      window.map((text) =>
+        queueText({
+          modelName: input.modelName,
+          text,
+          cacheScope,
+          cacheable,
+          timeoutMs: remainingMs,
+          logger: input.logger,
+        }),
+      ),
+    );
+    vectors.push(...windowVectors);
+    if (windowVectors.some((vector) => !Array.isArray(vector))) break;
+    offset += window.length;
+  }
   recordLatency(startedAt);
-  return vectors.every((vector): vector is number[] => Array.isArray(vector)) ? vectors : null;
+  return vectors.length === input.texts.length &&
+    vectors.every((vector): vector is number[] => Array.isArray(vector))
+    ? vectors
+    : null;
 }
 
 let warmupPromise: Promise<boolean> | null = null;
@@ -608,6 +680,11 @@ export function resetSemanticComputeWorkerForTests(): void {
     for (const entry of entries) entry.resolve(null);
   }
   queuedByBatchKey.clear();
+  for (const waiter of queueCapacityWaiters) {
+    clearTimeout(waiter.timer);
+    waiter.resolve(false);
+  }
+  queueCapacityWaiters.clear();
   queuedTextCount = 0;
   activeBatchCount = 0;
   computationsByCacheKey.clear();

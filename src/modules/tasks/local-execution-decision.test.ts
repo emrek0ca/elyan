@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decideLocalExecution } from "./local-execution-decision.js";
+import {
+  capabilityAllowsSpeechActExecution,
+  decideLocalExecution,
+} from "./local-execution-decision.js";
 
 // ---------------------------------------------------------------------------
 // KANIT UZLAŞMASI. Tek sinyal yetmiyor — ikisi de ölçüldü:
@@ -39,4 +42,67 @@ test("the decision shape always carries its reason", async () => {
     ].includes(decision.reason),
   );
   assert.equal(typeof decision.requiresLocalExecution, "boolean");
+});
+
+test("fallback questions require private-local evidence; confirmed desktop routes may use safe observations", () => {
+  assert.equal(
+    capabilityAllowsSpeechActExecution("question", "directory_tree"),
+    true,
+  );
+  for (const capability of ["desktop_os.processes", "sys_info"]) {
+    assert.equal(
+      capabilityAllowsSpeechActExecution("question", capability),
+      false,
+      `${capability} model rotası olmadan fallback yürütmeye açıldı`,
+    );
+    assert.equal(
+      capabilityAllowsSpeechActExecution("question", capability, {
+        desktopRouteConfirmed: true,
+      }),
+      true,
+      `${capability} doğrulanmış masaüstü rotasında salt-okumaya açılmadı`,
+    );
+  }
+
+  for (const capability of ["close_app", "shell_run", "get_weather"]) {
+    assert.equal(
+      capabilityAllowsSpeechActExecution("question", capability),
+      false,
+      `${capability} soru biçiminde yanlışlıkla yürütmeye açıldı`,
+    );
+  }
+  assert.equal(
+    capabilityAllowsSpeechActExecution("question", "shell_session_open", {
+      desktopRouteConfirmed: true,
+    }),
+    false,
+    "soru kalıcı shell oturumu açabildi",
+  );
+});
+
+test("commands still require a real desktop execution capability", () => {
+  assert.equal(capabilityAllowsSpeechActExecution("command", "close_app"), true);
+  assert.equal(
+    capabilityAllowsSpeechActExecution("command", "directory_tree"),
+    true,
+  );
+  assert.equal(capabilityAllowsSpeechActExecution("command", "get_weather"), false);
+  assert.equal(capabilityAllowsSpeechActExecution("command", "sys_info"), false);
+  assert.equal(
+    capabilityAllowsSpeechActExecution("command", "sys_info", {
+      desktopRouteConfirmed: true,
+    }),
+    true,
+  );
+  assert.equal(capabilityAllowsSpeechActExecution("statement", "close_app"), false);
+  assert.equal(
+    capabilityAllowsSpeechActExecution("confirmation", "close_app"),
+    false,
+  );
+  assert.equal(
+    capabilityAllowsSpeechActExecution("confirmation", "close_app", {
+      desktopRouteConfirmed: true,
+    }),
+    true,
+  );
 });

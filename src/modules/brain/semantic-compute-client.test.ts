@@ -6,9 +6,21 @@ import {
   getSemanticComputeMetrics,
   isSemanticComputeWorkerUnavailable,
   resetSemanticComputeWorkerForTests,
+  resolveSemanticComputeWorkerUrl,
   setSemanticComputeDispatcherForTests,
 } from "./semantic-compute-client.js";
 import { rerankSemanticCandidates } from "./semantic-rerank.js";
+
+test("semantic worker entry follows source and compiled module formats", () => {
+  assert.equal(
+    resolveSemanticComputeWorkerUrl("file:///app/src/modules/brain/semantic-compute-client.ts").href,
+    "file:///app/src/modules/brain/semantic-compute-worker.ts",
+  );
+  assert.equal(
+    resolveSemanticComputeWorkerUrl("file:///app/dist/modules/brain/semantic-compute-client.js").href,
+    "file:///app/dist/modules/brain/semantic-compute-worker.js",
+  );
+});
 
 test("production semantic model is baked as q8 and warmed only by the API process", async () => {
   const [dockerfile, workerSource, buildAppSource, indexSource] = await Promise.all([
@@ -206,6 +218,78 @@ test("semantic compute keeps worker micro-batches bounded", async () => {
   } finally {
     resetSemanticComputeWorkerForTests();
   }
+});
+
+test("semantic catalogue warmup streams inputs larger than the queue ceiling", async () => {
+  resetSemanticComputeWorkerForTests();
+  setSemanticComputeDispatcherForTests(async ({ texts }) =>
+    texts.map((_, index) => [index, 1]),
+  );
+
+  try {
+    // Canlı katalog 534 metin; eski Promise.all hepsini aynı anda kuyruğa
+    // koyup 512'den sonrasını overload olarak reddediyor, böylece tüm e5
+    // önbelleği sessizce null oluyordu.
+    const vectors = await embedTextsWithSemanticWorker({
+      modelName: "test-model",
+      cacheScope: "catalogue-v1",
+      texts: Array.from({ length: 534 }, (_, index) => `catalogue-${index}`),
+      timeoutMs: 10_000,
+    });
+
+    assert.equal(vectors?.length, 534);
+    assert.equal(getSemanticComputeMetrics().overloadFallbacks, 0);
+  } finally {
+    resetSemanticComputeWorkerForTests();
+  }
+});
+
+test("concurrent large catalogue callers wait for global queue capacity", async () => {
+  resetSemanticComputeWorkerForTests();
+  setSemanticComputeDispatcherForTests(async ({ texts }) => {
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    return texts.map((_, index) => [index, 1]);
+  });
+
+  try {
+    const texts = Array.from({ length: 534 }, (_, index) => `item-${index}`);
+    const [first, second] = await Promise.all([
+      embedTextsWithSemanticWorker({
+        modelName: "test-model",
+        cacheScope: "catalogue-a",
+        texts,
+        timeoutMs: 10_000,
+      }),
+      embedTextsWithSemanticWorker({
+        modelName: "test-model",
+        cacheScope: "catalogue-b",
+        texts,
+        timeoutMs: 10_000,
+      }),
+    ]);
+
+    assert.equal(first?.length, 534);
+    assert.equal(second?.length, 534);
+    assert.equal(getSemanticComputeMetrics().overloadFallbacks, 0);
+  } finally {
+    resetSemanticComputeWorkerForTests();
+  }
+});
+
+test("a stale worker exit cannot clear replacement readiness", async () => {
+  const source = await readFile(
+    "src/modules/brain/semantic-compute-client.ts",
+    "utf8",
+  );
+  const exitHandler = source.indexOf('created.on("exit"');
+  const ownershipGuard = source.indexOf("if (worker === created)", exitHandler);
+  const readinessClear = source.indexOf("workerWarm = false", exitHandler);
+  assert.ok(exitHandler > -1);
+  assert.ok(ownershipGuard > exitHandler);
+  assert.ok(
+    readinessClear > ownershipGuard,
+    "stale worker exit replacement worker'ın readiness durumunu temizliyor",
+  );
 });
 
 test("semantic compute caps concurrent worker batches under burst load", async () => {

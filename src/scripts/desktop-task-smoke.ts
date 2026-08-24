@@ -66,6 +66,28 @@ function desktopRoute(): CommandRouteDecision {
   } as unknown as CommandRouteDecision;
 }
 
+function desktopDirectoryQuestionRoute(): CommandRouteDecision {
+  return {
+    ...desktopRoute(),
+    capabilities: ["desktop.runtime", "directory_tree"],
+    requiresApproval: false,
+    taskRoute: {
+      operationalRoute: "desktop_runtime",
+      requiredCapabilities: ["desktop.runtime", "directory_tree"],
+      semanticDesktopContract: {
+        contract: "elyan.semantic_desktop_dispatch.v1",
+        route: "desktop_runtime",
+        intent: "file_workflow",
+        requiredSemanticCapabilities: ["directory_tree"],
+        requiredLocalContext: ["filesystem"],
+        sideEffectLevel: "read",
+        confidence: 0.98,
+        evidence: ["private local directory observation"],
+      },
+    },
+  } as unknown as CommandRouteDecision;
+}
+
 type LocalCase = {
   message: string;
   expectWriter: string;
@@ -150,6 +172,41 @@ async function runLocal(): Promise<number> {
     if (!restates) problems.push("içerik kapısı hedefin kopyasını gövde sayıyor");
 
     console.log(`${problems.length === 0 ? "✓" : "✗"} "${testCase.message}"`);
+    for (const problem of problems) console.log(`    ${problem}`);
+    failures += problems.length > 0 ? 1 : 0;
+  }
+
+  // 5) Canlı salt-okuma regresyonu: doğru capability ağır planner'a
+  // düşmeden tek, onaysız ve yazma kapsamı olmayan adıma dönüşmeli.
+  {
+    const message = "Masaüstünde hangi klasörler var?";
+    const order = buildDesktopWorkOrder({
+      message,
+      title: "Masaüstü klasörlerini listele",
+      routeDecision: desktopDirectoryQuestionRoute(),
+      requestedCapabilities: ["desktop.runtime", "directory_tree"],
+    } as never);
+    const problems: string[] = [];
+    const stepCapabilities = order.planPreview.steps.map(
+      (step) => step.capability,
+    );
+    if (JSON.stringify(stepCapabilities) !== JSON.stringify(["directory_tree"])) {
+      problems.push(`tek directory_tree adımı bekleniyordu: ${stepCapabilities.join(", ")}`);
+    }
+    if (order.planPreview.planSource !== "deterministic_registry") {
+      problems.push(`ağır planner yolu açık: ${order.planPreview.planSource ?? "yok"}`);
+    }
+    if (order.planPreview.planPreparation?.status !== "ready") {
+      problems.push(`plan hazır değil: ${order.planPreview.planPreparation?.status ?? "yok"}`);
+    }
+    const approvalCapabilities = order.approvalCapabilities ?? [];
+    if (order.requiresApproval || approvalCapabilities.length > 0) {
+      problems.push(`salt-okuma görevi onay istiyor: ${approvalCapabilities.join(", ")}`);
+    }
+    if ((order.resourceScope?.writeRoots ?? []).length > 0) {
+      problems.push(`salt-okuma görevi yazma kapsamı taşıyor: ${order.resourceScope?.writeRoots.join(", ")}`);
+    }
+    console.log(`${problems.length === 0 ? "✓" : "✗"} "${message}"`);
     for (const problem of problems) console.log(`    ${problem}`);
     failures += problems.length > 0 ? 1 : 0;
   }

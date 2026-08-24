@@ -35,14 +35,14 @@ const service = readFileSync(
 
 test("hızlı yol kararı söz edimi kapısını içerir", () => {
   assert.ok(
-    matcher.includes("speechActAllowsExecution"),
+    matcher.includes("capabilityAllowsSpeechActExecution"),
     "evaluateDesktopFastPath söz edimi kapısını okumuyor",
   );
   assert.ok(matcher.includes('reason: "speech_act_blocks"'));
 });
 
 test("söz edimi kapısı marj kapısından ÖNCE gelir", () => {
-  const gate = matcher.indexOf("!speechActAllowsExecution(speechAct)");
+  const gate = matcher.indexOf("!capabilityAllowsSpeechActExecution(");
   const margin = matcher.indexOf("margin < FAST_PATH_MARGIN", gate);
   assert.ok(gate > -1, "söz edimi kapısı bulunamadı");
   assert.ok(margin > gate, "marj kapısı söz ediminden önce dönüyor");
