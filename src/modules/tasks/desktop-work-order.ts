@@ -12,8 +12,8 @@ import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import { matchDesktopCapabilitiesSemantically } from "./desktop-capability-ontology.js";
 import type { ExecutionStep } from "./execution-step.js";
 import type { ExecutionPlacementSnapshot } from "./execution-placement.js";
-import { parseSystemInfoQuery } from "./system-observation.js";
-export { parseSystemInfoQuery } from "./system-observation.js";
+import { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
+export { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
 // görevler masaüstünde WORK_ORDER_STEP_BUDGET_EXCEEDED ile reddediliyordu.
@@ -1175,6 +1175,11 @@ function inferCapabilities(
   // cannot widen the task into desktop_operator or the dynamic 80-tool loop.
   const systemInfoQuery = parseSystemInfoQuery(message);
   if (systemInfoQuery && systemInfoQuery !== "all") return ["sys_info"];
+  // İKİNCİ KAPALI ŞERİT: yerel klasör okuma. Sistem gözlemiyle aynı gerekçe —
+  // hedef bellidir, eylem tektir, yan etkisi yoktur; planner modeli çağırmak
+  // için hiçbir sebep yok. (Ölçüm 2026-08-25: bu isteklerin 5/5'i dinamik
+  // döngüye düşüyordu.)
+  if (parseLocalListingQuery(message)) return ["directory_tree"];
   const structuredDecision = routeDecision.taskRoute?.semanticDecision;
   if (structuredDecision?.source === "structured_model") {
     const structuredCapabilities = [
