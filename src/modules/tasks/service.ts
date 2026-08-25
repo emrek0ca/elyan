@@ -284,6 +284,7 @@ import {
   MAX_WORK_ORDER_STEPS,
   readAutonomyEnvelope,
 } from "./desktop-work-order.js";
+import { resolvePreferredWriteRoots } from "./write-preference.js";
 import { buildTaskExecutionContract } from "./task-execution-contract.js";
 import { buildTaskExecutionEvent } from "./task-execution-events.js";
 import { verifyTaskGoal } from "./goal-verification.js";
@@ -10275,8 +10276,14 @@ export async function createTask(
     understandingInput,
     turnContract,
   );
+  // Doğrulanmış yazma tercihi ("raporları hep Masaüstü/Raporlar'a kaydet")
+  // burada çözülür; yetki genişletemez, yalnız izinli kökün altını sıralar.
+  const preferredWriteRoots = isDesktopRoute
+    ? await resolvePreferredWriteRoots(app, { userId: input.userId })
+    : [];
   const desktopWorkOrderBase = isDesktopRoute
     ? buildDesktopWorkOrder({
+        preferredWriteRoots,
         message: planningPrompt,
         title: canonicalTitle,
         routeDecision: workOrderRouteDecision,

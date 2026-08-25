@@ -2158,6 +2158,12 @@ export function buildDesktopWorkOrder(input: {
   desktopPlanningEvidence?: NonNullable<
     DesktopWorkOrder["contextPack"]
   >["desktopPlanningEvidence"];
+  /**
+   * Kullanıcının doğrulanmış yazma tercihi. Yetki GENİŞLETMEZ: yalnız zaten
+   * izinli bir kökün altını işaret edebilir (bkz. `write-preference.ts`) ve
+   * salt-okuma kapsamında hiç uygulanmaz.
+   */
+  preferredWriteRoots?: string[];
 }): DesktopWorkOrder {
   const message = compactText(input.message, 4_000);
   const directRegistryCommand = parseDirectDesktopAppCommand(message);
@@ -2529,6 +2535,12 @@ export function buildDesktopWorkOrder(input: {
     ],
     writeRoots: [
       ...new Set([
+        // Tercih ÖNCE gelir: aynı küme içinde kullanıcının söylediği klasör
+        // varsayılanların önünde sıralanır. Salt-okuma kapsamında hiç
+        // uygulanmaz — orada `defaultWriteRoots` zaten boştur.
+        ...(readOnlyExecutionScope
+          ? []
+          : (input.preferredWriteRoots ?? []).slice(0, 4)),
         ...(desktopOutputRequested ? ["~/Desktop"] : []),
         ...defaultWriteRoots,
         ...stepWriteRoots,
