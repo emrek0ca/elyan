@@ -230,10 +230,17 @@ export type TaskExecutionContractValidation =
   | { ok: false; value: null; errors: Array<{ code: string; path: string; message: string }> };
 
 export function knownTaskCapabilityIds(): Set<string> {
-  return new Set([...capabilityManifestById.keys(), ...SERVER_CAPABILITY_IDS]);
+  return new Set([
+    ...capabilityManifestById.keys(),
+    ...SERVER_CAPABILITY_IDS,
+    ...mcpCapabilityIndex.keys(),
+  ]);
 }
 
 export function knownTaskLocalCapabilityIds(): Set<string> {
+  // MCP araçları YEREL değildir: masaüstü adım havuzuna girmezler, uzak
+  // sunucuda çalışırlar. Bu ayrım korunmalı, yoksa bir MCP aracı masaüstü
+  // yürütme adımı olarak planlanabilirdi.
   return new Set(capabilityManifestById.keys());
 }
 
@@ -315,8 +322,28 @@ function bindTaskExecutionContract(
   } as TaskExecutionContract;
 }
 
+/**
+ * TURA ÖZGÜ MCP CAPABILITY'LERİ.
+ *
+ * Capability manifesti derleme zamanında sabittir; kullanıcının bağladığı MCP
+ * araçları orada olamaz. Bu yüzden `mcp:<sunucu>:<araç>` adları "bilinmeyen
+ * araç" diye düşürülüyor ve MCP araçları generic `mcp_call_tool` altında
+ * kalıyordu — dar yetki alamıyor, her çağrıda ayrı onay istiyorlardı.
+ *
+ * Harita tur başına kurulur ve manifestin YANINDA sorulur; manifest sabit
+ * kalır. Kayıt, sunucunun beyanı değil backend'in fail-closed
+ * sınıflandırmasıdır.
+ */
+let mcpCapabilityIndex = new Map<string, DesktopCapabilityManifestEntry>();
+
+export function setMcpCapabilityIndex(
+  index: Map<string, DesktopCapabilityManifestEntry>,
+): void {
+  mcpCapabilityIndex = index;
+}
+
 function knownCapability(id: string): DesktopCapabilityManifestEntry | null {
-  return capabilityManifestById.get(id) ?? null;
+  return capabilityManifestById.get(id) ?? mcpCapabilityIndex.get(id) ?? null;
 }
 
 function knownSkill(id: string): DesktopSkillManifestEntry | null {

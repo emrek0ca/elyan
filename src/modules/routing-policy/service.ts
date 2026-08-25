@@ -1597,6 +1597,68 @@ function isEducationalReasoningMessage(message: string): boolean {
   return EDUCATIONAL_REASONING_PATTERN.test(message);
 }
 
+/**
+ * GERÇEK BİLGİ SORUSU — hızlı şerit bunu kaldıramaz.
+ *
+ * Canlı arıza (2026-08-25, görev fb131ded): "Osmanlının son padişahı kimdi
+ * biraz anlatır mısın" sorusu `mobile_chat_fast` şeridine düştü ve cevap
+ * geldi: "Osmanlı Devleti'nin son padişahı III. Mehmet, yani 'Koca' Mehmet
+ * V." — üç ayrı padişah adı tek cümlede karışmış, hepsi yanlış (doğrusu
+ * Mehmed VI / Vahdettin). Düzeltme turu da bozuk çıktı.
+ *
+ * Sebep yapısaldı: yükseltme kuralları matematik, hata ayıklama, eğitimsel
+ * akıl yürütme ve sistem programlamayı kapsıyor ama GERÇEK BİLGİ sorularını
+ * kapsamıyordu. Hızlı şerit 384 token tavanlı ve küçük bir model için
+ * tasarlandı; kod kendi yorumunda onu "selamlaşma, small-talk, yaratıcı
+ * cevap" için ayırıyor. Tarihsel bir olguyu oraya göndermek, modeli
+ * bilmediği bir şeyi kısa sürede uydurmaya zorlamaktır.
+ *
+ * Kapı DAR: soru biçimi ŞART, ve yanında ya olgusal bir soru zamiri ya da
+ * açıklama isteği aranır. "Nasılsın" gibi sosyal kalıplar zaten muaf.
+ */
+const FACTUAL_INTERROGATIVE_PATTERN =
+  /(?<!\p{L})(kim|kimdi|kimdir|kimler|ne\s*zaman|hangi\s*yıl|hangi\s*yil|kaç\s*yılında|kac\s*yilinda|nerede|nereli|nedir|neydi|kaçıncı|kacinci|who|when|where|which\s*year)\p{L}*(?!\p{L})/iu;
+
+/**
+ * DAHA FAZLA derinlik isteyen belirteçler.
+ *
+ * "kısaca" ve "briefly" bilinçli olarak DIŞARIDA: onlar daha AZ derinlik
+ * ister ve hızlı şerit tam olarak bunun içindir. İlk kurgumda listedeydiler
+ * ve "Bu konuyu kısaca anlat" turunu yanlışlıkla yükseltiyorlardı —
+ * kullanıcının kısa istediği yerde uzun model çalıştırmak, isteği görmezden
+ * gelmektir.
+ */
+const DEPTH_QUALIFIER_PATTERN =
+  /(?<!\p{L})(biraz|detaylı|detayli|ayrıntılı|ayrintili|derinlemesine|kapsamlı|kapsamli|in\s*detail)\p{L}*(?!\p{L})/iu;
+
+const ELABORATION_REQUEST_PATTERN =
+  /(?<!\p{L})(anlat|açıkla|acikla|bahset|özetle|ozetle|detay|ayrıntı|ayrinti|explain|describe|tell\s*me\s*about)\p{L}*(?!\p{L})/iu;
+
+export function isFactualKnowledgeQuestion(message: string): boolean {
+  const normalized = String(message ?? "").trim();
+  if (!normalized) return false;
+  // KAPI ÇOK DAR TUTULUYOR — iki koşul birden.
+  //
+  // Canlı hatanın ayırt edici yanı, sorunun bir VARLIK/TARİH HATIRLAMA
+  // sorusu olmasıydı: "son padişah kimdi". Küçük model böyle bir olguyu
+  // bilmiyorsa uydurur ve üç padişah adını tek cümlede karıştırır. Kavramsal
+  // açıklama ("veri normalizasyonu ne işe yarar") aynı riski taşımaz ve
+  // ürün kararı onu hızlı şeritte tutuyor.
+  //
+  // Bu yüzden yalnız "hatırlanacak bir olgu" + "anlatım isteği" birlikte
+  // geldiğinde yükseltilir. Tek başına soru işareti yeterli değildir —
+  // öyle olsaydı sıradan sohbetin yarısı balanced'a kayardı.
+  if (!ELABORATION_REQUEST_PATTERN.test(normalized)) return false;
+  if (!FACTUAL_INTERROGATIVE_PATTERN.test(normalized)) return false;
+  // Derinlik belirteci ya da soru biçimi, isteğin gerçekten açıklama
+  // olduğunu doğrular ("kimdi biraz anlatır mısın").
+  return (
+    /\?/u.test(normalized) ||
+    /(?<!\p{L})(mı|mi|mu|mü|misin|mısın|musun|müsün)(?!\p{L})/iu.test(normalized) ||
+    DEPTH_QUALIFIER_PATTERN.test(normalized)
+  );
+}
+
 function isReferentialRewritePrompt(message: string): boolean {
   return /(?<!\p{L})(onu|bunu|şunu|sunu|it|this|that)\p{L}*[\s\S]{0,80}(daha\s+(?:k[ıi]sa|uzun|net|sade)|ayn[ıi]\s+anlam|same meaning|yeniden yaz|tekrar yaz|rewrite|paraphrase)(?!\p{L})/iu.test(
     message,
@@ -1748,6 +1810,11 @@ function deriveSelectedWorkloadWithGuard(input: {
     return { selectedWorkload: "mobile_chat_balanced" };
   }
   if (isEducationalReasoningMessage(input.message)) {
+    return { selectedWorkload: "mobile_chat_balanced" };
+  }
+  // Gerçek bilgi sorusu hızlı şeride DÜŞMEZ. 384 token tavanlı küçük model,
+  // bilmediği bir olguyu kısa sürede uydurmaya zorlanıyordu.
+  if (!isSocialChatPrompt(input.message) && isFactualKnowledgeQuestion(input.message)) {
     return { selectedWorkload: "mobile_chat_balanced" };
   }
   // C/C++ ve sistem programlama soruları fast profile düşerse yüzeysel,

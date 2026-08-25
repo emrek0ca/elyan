@@ -5,6 +5,11 @@ import { badRequest, notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
 import { probeMcpServer } from "../integrations/mcp-probe.js";
 import { describeMcpTools } from "../integrations/mcp-capability.js";
+import {
+  buildMcpCapabilityIndex,
+  collectStoredMcpTools,
+} from "../tasks/mcp-capability-bridge.js";
+import { setMcpCapabilityIndex } from "../tasks/task-execution-contract.js";
 
 const MCP_SHELL_CONTROL_PATTERN = /[\0\r\n;&|`$<>]/u;
 const MCP_INLINE_SECRET_ARG_PATTERN =
@@ -298,4 +303,30 @@ export async function probeUserMcpServer(
     approvalToolCount: descriptors.filter((item) => item.requiresApproval).length,
     tools: descriptors,
   };
+}
+
+/**
+ * Bu turda derleyicinin göreceği MCP capability'lerini kaydeder.
+ *
+ * Fail-open: sunucu listesi okunamazsa katalog yalnız yerel araçlarla kalır.
+ * Öğrenme ya da gösterim değil, YÜRÜTME katalogudur; bir hata turu
+ * durdurmamalı ama sessizce yanlış araç da tanıtmamalı.
+ */
+export async function registerMcpCapabilitiesForTurn(
+  app: FastifyInstance,
+  userId: string,
+): Promise<number> {
+  try {
+    const servers = await listMcpServers(app, userId);
+    const tools = collectStoredMcpTools(servers);
+    setMcpCapabilityIndex(buildMcpCapabilityIndex(tools));
+    return tools.length;
+  } catch (error) {
+    app.log?.warn?.(
+      { err: error instanceof Error ? error.message : String(error) },
+      "mcp capability index not refreshed",
+    );
+    setMcpCapabilityIndex(new Map());
+    return 0;
+  }
 }

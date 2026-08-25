@@ -62,6 +62,7 @@ import { startStage } from "../../lib/perf-telemetry.js";
 import { listFreshWorldSignals } from "../mobile/service.js";
 import { fuseWorldSignalRecordsByKind } from "../../core/understanding/context-packets.js";
 import { resolveRemoteMcpRequest } from "../integrations/service.js";
+import { registerMcpCapabilitiesForTurn } from "../mcp/service.js";
 import {
   type AssistantMessageBlock,
   normalizeAssistantMessageBlocks,
@@ -2256,6 +2257,15 @@ async function createChatMessageInner(
       "composer context fields dropped after ownership validation",
     );
   }
+  // MCP ARAÇLARINI DERLEYİCİYE TANIT.
+  //
+  // Kullanıcının bağladığı MCP sunucularının yoklanmış araçları tura özgü
+  // capability olarak kaydedilir. Bu olmadan `mcp:<sunucu>:<araç>` adları
+  // sözleşme doğrulamasında "bilinmeyen araç" diye düşüyor ve araçlar generic
+  // `mcp_call_tool` altında kalıyordu — dar yetki alamadan, her çağrıda ayrı
+  // onay isteyerek. Fail-open: okunamazsa katalog yalnız yerel araçlarla kalır.
+  await registerMcpCapabilitiesForTurn(app, input.userId);
+
   const remoteMcpResolution = await (shouldResolveRemoteMcpForChat({
     requestedCapabilities: input.requestedCapabilities,
     metadata: input.metadata,
