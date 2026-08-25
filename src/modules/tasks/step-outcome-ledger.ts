@@ -180,11 +180,85 @@ export function scoreStepOutcome(input: {
 }
 
 /**
+ * BAŞARISIZLIĞIN TÜRÜ — hepsi aynı ders değildir.
+ *
+ * Bugün her `ok:false` çağrı araç başarısızlığı sayılıyor ve tahminciye
+ * negatif olarak giriyor. Ama üç farklı şey aynı kutuya düşüyordu:
+ *
+ *   `needs_approval`  → araç ÇALIŞIR, yalnız kullanıcı onayı bekliyordu.
+ *                       Bunu başarısızlık saymak, onay gerektiren her aracı
+ *                       zamanla "bozuk" ilan etmek demektir.
+ *   `user_cancel`     → kullanıcı vazgeçti; araç hakkında hiçbir şey söylemez.
+ *   `plan_mismatch`   → planlama/sözleşme uyuşmazlığı; aracın kendi kusuru
+ *                       değil, seçim katmanının.
+ *
+ * Yalnız gerçek araç hatası negatif kanıt sayılır; diğerleri `evidenceBacked`
+ * kapısıyla tahminciden tamamen dışlanır — ne artı ne eksi.
+ */
+export type StepFailureClass =
+  | "tool_failure"
+  | "permission_gate"
+  | "user_cancel"
+  | "plan_mismatch";
+
+const PERMISSION_GATE_PATTERN =
+  /(?:needs_approval|approval_required|permission|unauthorized|forbidden|consent|grant)/iu;
+const USER_CANCEL_PATTERN = /(?:cancel|abort|user_stopped|interrupted)/iu;
+const PLAN_MISMATCH_PATTERN =
+  /(?:plan_mismatch|server_plan|contract_mismatch|capability_grant_binding|no_progress|step_budget)/iu;
+
+export function classifyStepFailure(input: {
+  errorCode?: string | null;
+  stopReason?: string | null;
+}): StepFailureClass {
+  const signal = `${input.errorCode ?? ""} ${input.stopReason ?? ""}`.trim();
+  if (!signal) return "tool_failure";
+  if (PERMISSION_GATE_PATTERN.test(signal)) return "permission_gate";
+  if (USER_CANCEL_PATTERN.test(signal)) return "user_cancel";
+  if (PLAN_MISMATCH_PATTERN.test(signal)) return "plan_mismatch";
+  return "tool_failure";
+}
+
+/**
+ * Bu çağrı tahminciye GİREBİLİR mi?
+ *
+ * Başarılı çağrı için kanıt şartı, başarısız çağrı için ise hatanın gerçekten
+ * ARACA ait olması şartı aranır.
+ */
+export function isLearnableObservation(input: {
+  step: StepOutcomeRecord;
+  taskEvidenceKinds?: string[];
+  stopReason?: string | null;
+}): boolean {
+  if (!input.step.ok) {
+    return (
+      classifyStepFailure({
+        errorCode: input.step.errorCode,
+        stopReason: input.stopReason,
+      }) === "tool_failure"
+    );
+  }
+  return stepEvidenceStrength(input.step, input.taskEvidenceKinds ?? []) !== "none";
+}
+
+/**
  * Görev sonucundaki doğrulama kanıtı türleri.
  *
  * `verification.checks[].evidence` yalnız GEÇMİŞ kontrollerden okunur:
  * başarısız bir kontrol kanıt değildir.
  */
+function readStopReason(result: unknown): string | null {
+  const record = (result ?? {}) as Record<string, unknown>;
+  const direct = record.stopReason ?? record.stop_reason;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  const trace = record.executionTrace;
+  if (trace && typeof trace === "object") {
+    const nested = (trace as Record<string, unknown>).stopReason;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+  }
+  return null;
+}
+
 export function taskVerificationEvidenceKinds(result: unknown): string[] {
   const record = (result ?? {}) as Record<string, unknown>;
   const verification = record.verification;
@@ -224,6 +298,9 @@ export async function recordStepOutcomes(
   // Görev düzeyi doğrulama kanıtı: tek adımlı derlenmiş görevlerde kanıt
   // çoğu kez adımda değil görev sonucunda raporlanır.
   const taskEvidenceKinds = taskVerificationEvidenceKinds(input.result);
+  // Turun neden durduğu, bir çağrının araç hatası mı yoksa onay kapısı mı
+  // olduğunu ayırt etmenin tek güvenilir sinyalidir.
+  const stopReason = readStopReason(input.result);
   // learning_events'in görev anahtarı araç başına tek satırdır. Aynı araç
   // retry/replan döngüsünde birden fazla çalışmışsa çağrıları tek satırda
   // topluyoruz; ayrıntılı sıra/attempt bilgisi metadata.calls içinde kalır,
@@ -301,8 +378,20 @@ export async function recordStepOutcomes(
           // başarısızlık kanıtıdır. Alanın hiç olmadığı ESKİ satırlar
           // bilinçli olarak sayılmaya devam eder — bugünkü sinyali yok
           // etmemek için; 90 günlük pencere onları kendiliğinden düşürür.
-          evidenceBacked: stepEvidenceStrength(step, taskEvidenceKinds) !== "none",
+          evidenceBacked: isLearnableObservation({
+            step,
+            taskEvidenceKinds,
+            stopReason,
+          }),
           evidenceStrength: stepEvidenceStrength(step, taskEvidenceKinds),
+          ...(step.ok
+            ? {}
+            : {
+                failureClass: classifyStepFailure({
+                  errorCode: step.errorCode,
+                  stopReason,
+                }),
+              }),
           ...(step.evidenceKinds && step.evidenceKinds.length > 0
             ? { evidenceKinds: step.evidenceKinds }
             : {}),

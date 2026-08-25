@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  classifyStepFailure,
   evidenceKindsFromValue,
+  isLearnableObservation,
   extractStepOutcomes,
   recordStepOutcomes,
   scoreStepOutcome,
@@ -242,4 +244,45 @@ test("yürütücünün sözlük kanıtı tür adına indirgenir", () => {
   assert.deepEqual(evidenceKindsFromValue("state_readback"), ["state_readback"]);
   assert.deepEqual(evidenceKindsFromValue({ note: "ok" }), ["tool_result"]);
   assert.deepEqual(evidenceKindsFromValue(undefined), []);
+});
+
+test("onay kapısı araç hatası SAYILMAZ", () => {
+  // Onay bekleyen bir araç bozuk değildir. Bunu başarısızlık saymak, onay
+  // gerektiren her aracı zamanla "çalışmıyor" ilan etmek olurdu.
+  assert.equal(
+    classifyStepFailure({ errorCode: "AGENT_LOOP_NEEDS_APPROVAL" }),
+    "permission_gate",
+  );
+  assert.equal(
+    isLearnableObservation({
+      step: { tool: "file_write", ok: false, errorCode: "AGENT_LOOP_NEEDS_APPROVAL" },
+    }),
+    false,
+  );
+});
+
+test("iptal ve plan uyuşmazlığı da araç hakkında kanıt değildir", () => {
+  assert.equal(classifyStepFailure({ stopReason: "user_cancel" }), "user_cancel");
+  assert.equal(
+    classifyStepFailure({ errorCode: "SERVER_PLAN_STEP_MISMATCH" }),
+    "plan_mismatch",
+  );
+  assert.equal(
+    isLearnableObservation({
+      step: { tool: "x", ok: false, errorCode: "SERVER_PLAN_STEP_MISMATCH" },
+    }),
+    false,
+  );
+});
+
+test("gerçek araç hatası öğrenmeye GİRER", () => {
+  assert.equal(classifyStepFailure({ errorCode: "APP_NOT_FOUND" }), "tool_failure");
+  assert.equal(
+    isLearnableObservation({
+      step: { tool: "open_app", ok: false, errorCode: "APP_NOT_FOUND" },
+    }),
+    true,
+  );
+  // Hata kodu hiç yoksa da araç hatası varsayılır — fail-closed.
+  assert.equal(classifyStepFailure({}), "tool_failure");
 });
