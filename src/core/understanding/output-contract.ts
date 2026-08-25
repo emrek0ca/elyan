@@ -178,7 +178,10 @@ function isOutputFormatMention(
     /^(?:\s+|['’]?)(?:e|a|ye|ya|olarak|formatında|formatinda|dosyasına|dosyasina|file|document)\b/iu.test(
       after,
     ) ||
-    /^\s*(?:yap|yaz|oluştur|olustur|hazırla|hazirla|üret|uret|dönüştür|donustur|çevir|cevir|export|kaydet|ver|çıkar|cikar|tasarla|create|write|generate|convert|save|make)\p{L}*/iu.test(
+    /^\s*(?:sonra|ardından|ardindan)\s+(?:pdf|docx|word|xlsx|excel)\b/iu.test(
+      after,
+    ) ||
+    /^\s*(?:(?:tablo|table)\s+)?(?:yap|yaz|oluştur|olustur|hazırla|hazirla|üret|uret|dönüştür|donustur|çevir|cevir|export|kaydet|ver|çıkar|cikar|tasarla|create|write|generate|convert|save|make)\p{L}*/iu.test(
       after,
     )
   ) {
@@ -204,6 +207,12 @@ function inferFormat(text: string, metadata: Record<string, unknown> | null): Ou
         isOutputFormatMention(text, item.match.index ?? 0, item.match[0].length),
     )
     .sort((left, right) => (left.match?.index ?? 0) - (right.match?.index ?? 0));
+  // File formats outrank a later generic widget noun: "Excel tablo yap"
+  // requests an XLSX artifact, while "tablo" only describes its shape.
+  const fileFormat = explicitFormatMatches.find((item) =>
+    ["pdf", "docx", "xlsx"].includes(item.format),
+  );
+  if (fileFormat) return fileFormat.format;
   if (explicitFormatMatches.at(-1)) return explicitFormatMatches.at(-1)!.format;
   if (/\b(?:png|jpg|jpeg|webp)\b/iu.test(text)) {
     const match = text.match(/\b(png|jpg|jpeg|webp)\b/iu);

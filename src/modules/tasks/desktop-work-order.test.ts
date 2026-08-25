@@ -1209,6 +1209,13 @@ test("semantic document intent reconciles a stale chat output contract", () => {
   assert.equal(workOrder.contextPack?.privacyRouting?.mode, "desktop_private");
   assert.deepEqual(workOrder.resourceScope, {
     contract: "elyan.resource_scope.v1",
+    // TESLİM NİYETİ, YAZMA KAPSAMINDAN AYRI BİR GERÇEK.
+    //
+    // `writeRoots` her yazma görevinde dolu olduğu için "kapsam var" demek
+    // "kullanıcı dosyayı diskinde istiyor" demek değildi. Çıktı hedefi bu
+    // ayrımı bilmediği için masaüstü hiç bağlı olmasa bile `desktop`
+    // çıkıyordu. Bu tur açıkça `~/Desktop` istediği için niyet doğrudur.
+    desktopDeliveryRequested: true,
     readRoots: ["workspace"],
     // Kullanıcının kendi çıktı klasörleri her zaman yazılabilir kapsamda;
     // `~/Desktop` istendiği için başta.

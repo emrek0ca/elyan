@@ -93,6 +93,7 @@ import {
   isNegatedVisualActionRequest,
   isVisualImageRequested,
   latestImageArtifactFromMetadata,
+  type VisualIntentContract,
 } from "../brain/visual-intent-contract.js";
 import { resolveVisualIntentContract } from "../brain/visual-intent-semantic.js";
 import {
@@ -326,6 +327,7 @@ import {
 } from "../artifacts/service.js";
 import { artifactSpecToRenderRecipeBlocks } from "../artifacts/render-recipe-adapter.js";
 import type { ArtifactOutput } from "../artifacts/types.js";
+import { extractMoneyItems } from "../artifacts/utils.js";
 import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
 export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 
@@ -752,6 +754,24 @@ function verifiedNumericPoints(
       },
     ];
   });
+  return points.length >= 2 ? points.slice(0, 240) : undefined;
+}
+
+function explicitPromptNumericPoints(
+  prompt: string,
+  metadata: Record<string, unknown>,
+): VerifiedNumericPoint[] | undefined {
+  const requestedKinds = structuredOutputKinds(metadata);
+  if (!requestedKinds.has("table") && !requestedKinds.has("chart")) {
+    return undefined;
+  }
+  const points = extractMoneyItems(prompt)
+    .filter((item) => !item.isTotal)
+    .map((item) => ({
+      label: item.label,
+      value: item.amount,
+      ...(item.currency !== "unknown" ? { unit: item.currency } : {}),
+    }));
   return points.length >= 2 ? points.slice(0, 240) : undefined;
 }
 
@@ -2084,6 +2104,29 @@ export function resolveCompletionAssistantBlocks(input: {
     }
   }
 
+  // Explicit user/tool numeric points outrank a partial model table. Rebuild
+  // the requested widget so omitted rows cannot pass schema validation as a
+  // complete answer.
+  if (
+    (input.numericPoints?.length ?? 0) >= 2 &&
+    shouldPromoteMarkdownTableToWidget({
+      prompt: input.prompt,
+      selectedWorkload: input.selectedWorkload,
+    })
+  ) {
+    const derivedTable = deriveTableBlock({
+      prompt: input.prompt ?? "",
+      responseText: text,
+      numericPoints: input.numericPoints,
+    });
+    if (derivedTable) {
+      assistantBlocks = assistantBlocks.filter(
+        (block) => String(readRecord(block)?.type ?? "") !== "table",
+      );
+      assistantBlocks.push(derivedTable);
+    }
+  }
+
   // Strip every extracted span so the inline text doesn't duplicate the widget.
   for (const span of sourcesToStrip) {
     if (!span) continue;
@@ -2858,6 +2901,77 @@ function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+const DATA_VISUAL_OUTPUT_KINDS = new Set([
+  "chart",
+  "table",
+  "math",
+  "math_surface_3d",
+  "svg",
+]);
+
+export function hasStructuredDataVisualRequest(
+  metadata: Record<string, unknown>,
+): boolean {
+  const requestedKinds = structuredOutputKinds(metadata);
+  return [...requestedKinds].some((kind) =>
+    DATA_VISUAL_OUTPUT_KINDS.has(kind),
+  );
+}
+
+function structuredOutputKinds(
+  metadata: Record<string, unknown>,
+): Set<string> {
+  const desiredOutputs = Array.isArray(metadata.understanding_desired_outputs)
+    ? metadata.understanding_desired_outputs
+    : [];
+  const turnContract = readCommandTurnContract(metadata.turnContract);
+  const outputContract = turnContract?.outputContract;
+  return new Set(
+    [
+      ...desiredOutputs,
+      outputContract?.outputKind,
+      outputContract?.outputFormat,
+    ]
+      .map((value) => String(value ?? "").toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function shouldUseVisualImageFastPath(input: {
+  prompt: string;
+  visualIntent: VisualIntentContract;
+  sourceImageCount: number;
+}): boolean {
+  if (isHostedImageGenerationRequest(input.prompt)) return true;
+  if (isHostedImageEditIntent(input.prompt)) return true;
+  if (!isVisualImageRequested(input.visualIntent, input.prompt)) return false;
+  return (
+    input.sourceImageCount > 0 ||
+    Boolean(input.visualIntent.sourceArtifactId)
+  );
+}
+
+export function shouldMarkMissingVisualSource(input: {
+  prompt: string;
+  visualIntent: VisualIntentContract;
+  sourceImageCount: number;
+  hasVisualDataBlock: boolean;
+  metadata: Record<string, unknown>;
+}): boolean {
+  if (input.sourceImageCount > 0) return false;
+  if (input.hasVisualDataBlock || hasStructuredDataVisualRequest(input.metadata)) {
+    return false;
+  }
+  const editOrContinue =
+    input.visualIntent.intent === "image_edit" ||
+    input.visualIntent.intent === "image_continue";
+  if (!editOrContinue) return false;
+  return (
+    isHostedImageEditIntent(input.prompt) ||
+    isHostedImageGenerationRequest(input.prompt)
+  );
 }
 
 function resolveImageGenerationFallbackText(
@@ -6011,7 +6125,8 @@ async function completeServerBrainTask(
   });
   const derivationNumericPoints =
     verifiedNumericPoints(input.authoritativeArtifactData) ??
-    verifiedNumericPoints(payloadMetadata.authoritativeArtifactData);
+    verifiedNumericPoints(payloadMetadata.authoritativeArtifactData) ??
+    explicitPromptNumericPoints(prompt, payloadMetadata);
   // Grafik niyeti SEMANTİK çözülür (ucuz yapılandırılmış çağrı); çağrı
   // düşerse kelimeye değil kanıta düşer. Karar tamamlanma yolunun tek
   // sahibidir; aşağıdaki blok çözümü artık kelime desenine sormaz.
@@ -6307,11 +6422,15 @@ async function completeServerBrainTask(
   // oysa kullanıcı bir önceki turdaki polinomu kastediyor. Düzenlenecek/devam
   // edilecek gerçek bir kaynak (bu turda yüklenen ya da oturumdaki görsel) yoksa
   // bu bir görsel isteği DEĞİLDİR; tur normal sohbete düşer ve içerik çözülür.
-  const visualEditOrContinue =
-    visualIntent.intent === "image_edit" ||
-    visualIntent.intent === "image_continue";
-  const suppressSourcelessEdit =
-    visualEditOrContinue && effectiveSourceImages.length === 0;
+  const structuredDataVisualRequested =
+    hasVisualDataBlock || hasStructuredDataVisualRequest(payloadMetadata);
+  const suppressSourcelessEdit = shouldMarkMissingVisualSource({
+    prompt,
+    visualIntent,
+    sourceImageCount: effectiveSourceImages.length,
+    hasVisualDataBlock,
+    metadata: payloadMetadata,
+  });
   if (suppressSourcelessEdit) {
     payloadMetadata.imageGenerationBlockedReason = "image_edit_source_missing";
     payloadMetadata.imageGenerationBlockedDetails = {
@@ -6325,6 +6444,7 @@ async function completeServerBrainTask(
     artifactPipeline.kind !== "evidence_required" &&
     artifactPipeline.kind !== "validation_failed" &&
     !hasVisualDataBlock &&
+    !structuredDataVisualRequested &&
     !suppressSourcelessEdit &&
     visualIntent.notAnImageRequest !== true &&
     (isVisualImageRequested(visualIntent, prompt) ||
@@ -6334,6 +6454,7 @@ async function completeServerBrainTask(
     artifactPipeline.kind === "evidence_required" ||
     artifactPipeline.kind === "validation_failed" ||
     hasVisualDataBlock ||
+    structuredDataVisualRequested ||
     suppressSourcelessEdit ||
     visualIntent.notAnImageRequest === true
       ? null
@@ -11150,9 +11271,11 @@ export async function createTask(
         countDistinctEphemeralImages(input.ephemeralVision) === 0 &&
         !visualIntent.sourceArtifactId;
       if (
-        isVisualImageRequested(visualIntent, prompt) ||
-        isHostedImageGenerationRequest(prompt) ||
-        imageEditIntent
+        shouldUseVisualImageFastPath({
+          prompt,
+          visualIntent,
+          sourceImageCount: sourceImages.length,
+        })
       ) {
         const startedAtMs = Date.now();
         const completedTask = await completeServerBrainTask(app, {

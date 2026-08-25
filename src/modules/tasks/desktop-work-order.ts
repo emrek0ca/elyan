@@ -14,8 +14,12 @@ import type { ExecutionStep } from "./execution-step.js";
 import type { ExecutionPlacementSnapshot } from "./execution-placement.js";
 import { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
 import {
+  hasArtifactHandoffIntent,
+  hasExplicitLocalSaveIntent,
   hasLocalDocumentReadIntent,
+  hasLocalDocumentUpdateIntent,
   localDocumentReadCapabilities,
+  localDocumentUpdateCapabilities,
 } from "./local-read-intent.js";
 export { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
 
@@ -1169,6 +1173,18 @@ function semanticCapabilitiesFromEnvelope(
   return [...capabilities].slice(0, 16);
 }
 
+/**
+ * Bu turda devredilebilecek ÖNCEKİ bir çıktı var mı?
+ *
+ * İki bağımsız işaret: anlama zarfının taşıdığı artefakt referansı ya da
+ * çıktının önceki cevaba dayandığının açıkça bildirilmesi.
+ */
+function hasPriorArtifactRef(envelope?: UnderstandingEnvelope): boolean {
+  if (!envelope) return false;
+  if (envelope.latest_artifact_ref) return true;
+  return envelope.output_contract?.sourceReference === "previous_answer";
+}
+
 function inferCapabilities(
   routeDecision: CommandRouteDecision,
   message: string,
@@ -1190,6 +1206,19 @@ function inferCapabilities(
   // isteği `document_write` üretiyordu — yani okumak yerine YENİ belge yazmaya
   // kalkıyordu. "özetle" üretim fiili gibi okunuyordu; oysa konum + belge adı
   // birlikte geldiğinde niyet tüketmedir.
+  // DÖRDÜNCÜ ŞERİT: var olan yerel belgeyi GÜNCELLEME.
+  //
+  // `operation === "edit"` sözleşmede vardı ama hiçbir yere derlenmiyordu:
+  // "masaüstündeki raporu güncelle" ya dinamik döngüye düşüyor ya da YENİ
+  // dosya yazıyordu. Okumadan önce denenir çünkü ayrım fiildedir.
+  // BEŞİNCİ ŞERİT: artefakt devri. Üretim YOK — saklanan dosya diske yazılır.
+  // Yeniden üretim hem yavaştır hem de "aynı dosya" beklentisini bozar.
+  if (hasArtifactHandoffIntent(message, { hasPriorArtifact: hasPriorArtifactRef(envelope) })) {
+    return ["file_write"];
+  }
+  if (hasLocalDocumentUpdateIntent(message)) {
+    return localDocumentUpdateCapabilities(message);
+  }
   if (hasLocalDocumentReadIntent(message)) {
     return localDocumentReadCapabilities(message);
   }
@@ -2003,7 +2032,70 @@ function buildSteps(input: {
   // ADI yoktur, tarifi vardır. `document_read` yol beklediği için bu tür
   // istekler hiç derlenemiyor ve dinamik döngüye düşüyordu. Önce ara, sonra
   // bulunanı oku: ikisi de salt-okuma, yan etkisi yok.
+  // GÜNCELLEME: bul → oku → AYNI yola yaz.
+  //
+  // `mode: "update"` yeni bir dosya yaratmaz; okunan yolun üzerine yazar.
+  // Bu yüzden yetki de o yola bağlanır ve ayrı onay ister — üzerine yazma
+  // geri alınamaz.
+  // DEVİR ADIMI: sunucudaki artefaktı yerel diske yaz.
+  //
+  // `artifactId` çağrı anında sözleşmeden bağlanır; adım içerik ÜRETMEZ,
+  // yalnız var olanı taşır. Bu yüzden tek adım ve tek yetki yeter.
+  if (
+    hasArtifactHandoffIntent(input.message, {
+      hasPriorArtifact: hasPriorArtifactRef(input.envelope),
+    })
+  ) {
+    steps.push({
+      id: "step_artifact_handoff",
+      capability: "file_write",
+      description: "Hazırlanan çıktı yerel diske kaydedilecek.",
+      args: {
+        mode: "create",
+        source: "artifact",
+        title: compactText(input.title, 160),
+      },
+      resourceScope: ["~/Desktop"],
+    });
+  }
+  const localUpdateChain =
+    input.capabilities.includes("document_read") &&
+    input.capabilities.includes("document_write") &&
+    hasLocalDocumentUpdateIntent(input.message);
+  if (localUpdateChain) {
+    const readPath = fileHint ?? "{{steps.step_file_search.output}}";
+    if (!fileHint && input.capabilities.includes("file_search")) {
+      steps.push({
+        id: "step_file_search",
+        capability: "file_search",
+        description: "Güncellenecek belge yerel ve izinli klasörlerde aranacak.",
+        args: { query: compactText(input.summary, 200), mode: "search" },
+      });
+    }
+    steps.push({
+      id: "step_document_read",
+      capability: "document_read",
+      description: "Belge güncellenmeden önce okunacak.",
+      args: { path: readPath, mode: "read" },
+      ...(fileHint ? {} : { dependsOn: ["step_file_search"] }),
+    });
+    steps.push({
+      id: "step_document_update",
+      capability: "document_write",
+      description: "Belge AYNI yola güncellenerek yazılacak.",
+      args: {
+        mode: "update",
+        path: readPath,
+        targetPath: readPath,
+        title: compactText(input.title, 160),
+        prompt: semanticBrief,
+        sourceContext: "Mevcut içerik: {{steps.step_document_read.output}}",
+      },
+      dependsOn: ["step_document_read"],
+    });
+  }
   const localReadPair =
+    !localUpdateChain &&
     input.capabilities.includes("file_search") &&
     input.capabilities.includes("document_read") &&
     !fileHint;
@@ -2022,7 +2114,12 @@ function buildSteps(input: {
       dependsOn: ["step_file_search"],
     });
   }
-  if (!localReadPair && input.capabilities.includes("document_read") && (fileHint || input.capabilities.includes("text_analyze"))) {
+  if (
+    !localReadPair &&
+    !localUpdateChain &&
+    input.capabilities.includes("document_read") &&
+    (fileHint || input.capabilities.includes("text_analyze"))
+  ) {
     steps.push({
       id: "step_document_read",
       capability: "document_read",
@@ -2068,6 +2165,9 @@ function buildSteps(input: {
   }
   for (const capability of ["document_write", "spreadsheet_write", "presentation_write", "canvas_write"] as const) {
     if (!input.capabilities.includes(capability)) continue;
+    // Güncelleme zinciri yazıcı adımını zaten kurdu; ikinci kez eklemek
+    // aynı turda hem güncelleme hem YENİ dosya üretirdi.
+    if (localUpdateChain && capability === "document_write") continue;
     const args: Record<string, unknown> = {
       title: compactText(input.title, 160),
       prompt: semanticBrief,
@@ -2283,7 +2383,8 @@ export function buildDesktopWorkOrder(input: {
   // `document_task` dedi ve bu kapı yazıcıyı zorla menüye ekledi. Kullanıcı
   // var olan bir belgeyi TÜKETMEK istiyordu; sistem yenisini yazmaya
   // hazırlanıyordu. Yerel okuma niyeti varken yazıcı dayatılmaz.
-  const localDocumentReadRequested = hasLocalDocumentReadIntent(message);
+  const localDocumentReadRequested =
+    hasLocalDocumentReadIntent(message) || hasLocalDocumentUpdateIntent(message);
   const writerForKind =
     !readOnlyProcessObservationRequested &&
     !localDocumentReadRequested &&
@@ -2542,7 +2643,10 @@ export function buildDesktopWorkOrder(input: {
   const desktopOutputRequested = (
     executionEnvelope?.desired_outputs ?? []
   ).some((output) => output.target === "desktop") ||
-    stepWriteRoots.includes("~/Desktop");
+    stepWriteRoots.includes("~/Desktop") ||
+    // Anlama zarfı sıklıkla HİÇ GELMİYOR (`desired_outputs` boş). O zaman
+    // "masaüstüne kaydet" cümlesi tek güvenilir yerel teslim sinyalidir.
+    hasExplicitLocalSaveIntent(message);
   // YAZMA KAPSAMI PLANDAN ÖNCE DONDURULUYOR.
   //
   // Kapsam, iş emri kurulurken belirleniyor; gerçek planı model SONRA üretiyor
@@ -2585,6 +2689,16 @@ export function buildDesktopWorkOrder(input: {
     : ["workspace", "~/Desktop", "~/Documents", "~/Downloads"];
   const resourceScope = {
     contract: "elyan.resource_scope.v1" as const,
+    // TESLİM NİYETİ, YAZMA KAPSAMINDAN AYRIDIR.
+    //
+    // `writeRoots` neredeyse her yazma görevinde doludur (varsayılan ev
+    // klasörleri açılır), bu yüzden "kapsam var" demek "kullanıcı dosyayı
+    // diskinde istiyor" demek DEĞİLDİR. Çıktı hedefi bu ayrımı bilmeli;
+    // bilmediği için masaüstü hiç bağlı olmasa bile hedef `desktop` çıkıyordu.
+    // Var olan YEREL bir belgeyi güncellemek, tanım gereği yerel teslimdir:
+    // dosya zaten kullanıcının diskinde ve aynı yola yazılacak.
+    desktopDeliveryRequested:
+      desktopOutputRequested || hasLocalDocumentUpdateIntent(message),
     readRoots: [
       ...new Set(["workspace", ...explicitRoots, ...stepReadRoots]),
     ],

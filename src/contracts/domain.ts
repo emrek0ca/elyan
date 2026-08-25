@@ -462,6 +462,15 @@ export const elyanTaskTraceBlockSchema = z.object({
     kind: z.string().min(1).max(80).optional(),
     path: z.string().min(1).max(1_000).optional(),
     url: z.string().min(1).max(2_000).optional(),
+    // ADDITIVE: mobilin ÖNİZLEME yapabilmesi için gereken asgari bilgi.
+    // Hepsi sunucu sahiplidir; yol ve sorgu token'ı taşımaz. Eski istemciler
+    // bu alanları yok sayar.
+    mimeType: z.string().min(1).max(120).optional(),
+    byteSize: z.number().int().nonnegative().max(2_000_000_000).optional(),
+    pageCount: z.number().int().positive().max(10_000).optional(),
+    previewUrl: z.string().min(1).max(2_000).optional(),
+    /** Bu artefakt masaüstüne kaydedilebilir mi (devir görevi açılabilir mi)? */
+    savableToDesktop: z.boolean().optional(),
   })).max(12).optional(),
   error: z.object({
     code: z.string().min(1).max(120),

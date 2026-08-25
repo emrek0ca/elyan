@@ -81,6 +81,7 @@ type TaskVerificationEvidence =
   | "backend_verifier"
   | "outcome_verdict"
   | "artifact"
+  | "stored_artifact"
   | "state_readback"
   | "tool_result";
 
@@ -94,7 +95,7 @@ type TaskVerificationEvidence =
  */
 function collectVerificationEvidence(
   result: Record<string, unknown> | null,
-  artifacts: Array<{ id?: string }>,
+  artifacts: Array<{ id?: string; byteSize?: number }>,
 ): TaskVerificationEvidence[] {
   const evidence = new Set<TaskVerificationEvidence>();
 
@@ -115,6 +116,24 @@ function collectVerificationEvidence(
   // Sahibe bağlı artefakt kimliği backend'in kendi kaydıdır; runtime uyduramaz.
   if (artifacts.some((artifact) => typeof artifact.id === "string" && artifact.id.length > 0)) {
     evidence.add("artifact");
+  }
+  // SUNUCUDA ÜRETİLEN ÇIKTININ KANITI.
+  //
+  // `target=artifact` turlarında masaüstü yoktur, dolayısıyla state-readback
+  // de yoktur. Kanıt, sunucunun kendi sakladığı dosyadır: sahibe bağlı bir id
+  // VE sıfırdan büyük bir boyut. Boyut şart, çünkü kayıt satırı açılıp
+  // dosyanın boş kalması gerçek bir arıza biçimidir — id tek başına
+  // "dosya var" demez.
+  if (
+    artifacts.some(
+      (artifact) =>
+        typeof artifact.id === "string" &&
+        artifact.id.length > 0 &&
+        typeof (artifact as { byteSize?: unknown }).byteSize === "number" &&
+        ((artifact as { byteSize: number }).byteSize ?? 0) > 0,
+    )
+  ) {
+    evidence.add("stored_artifact");
   }
 
   const stateReadback =
@@ -156,7 +175,7 @@ function collectVerificationEvidence(
 function verificationSnapshotFromEvidence(
   block: ElyanTaskTraceBlock,
   result: Record<string, unknown> | null,
-  artifacts: Array<{ id?: string }>,
+  artifacts: Array<{ id?: string; byteSize?: number }>,
 ): ElyanTaskTraceBlock["verification"] {
   if (block.status === "failed") {
     return {
@@ -217,11 +236,28 @@ function decorateLifecycleFields(
     // Yerel mutlak yol kalıcı sohbet bloğuna GİRMEZ; kullanıcı dosyayı zaten
     // kendi masaüstünde görür, blok ise dışarı taşınabilir.
     const url = safeArtifactUrl(readString(artifact, "url"));
+    const previewUrl = safeArtifactUrl(readString(artifact, "previewUrl"));
+    const mimeType = compactDetail(readString(artifact, "mimeType"), 120);
+    const byteSize = readNumber(artifact, "byteSize");
+    const pageCount = readNumber(artifact, "pageCount");
     return [{
       ...(id ? { id } : {}),
       title,
       ...(artifactKind ? { kind: artifactKind } : {}),
       ...(url ? { url } : {}),
+      // ÖNİZLEME İÇİN ASGARİ BİLGİ. Mobil bugüne kadar yalnız başlık ve tür
+      // görüyordu; dosyayı açmadan ne olduğunu anlayamıyordu.
+      ...(mimeType ? { mimeType } : {}),
+      ...(byteSize != null && byteSize >= 0
+        ? { byteSize: Math.floor(byteSize) }
+        : {}),
+      ...(pageCount != null && pageCount > 0
+        ? { pageCount: Math.floor(pageCount) }
+        : {}),
+      ...(previewUrl ? { previewUrl } : {}),
+      // Sunucuda saklanan (owner-scoped id taşıyan) her artefakt masaüstüne
+      // devredilebilir; yalnız yerelde üretilmiş olan zaten oradadır.
+      ...(id ? { savableToDesktop: true } : {}),
     }];
   }).slice(0, 12);
   const availableActions = block.status === "waiting_approval"

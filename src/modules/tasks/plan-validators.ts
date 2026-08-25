@@ -612,6 +612,7 @@ export function validateMaterializedPlanAgainstWorkOrder(
     for (const step of steps) {
       const manifest = CAPABILITY_MANIFEST_BY_NAME.get(step.capability);
       const isWrite =
+        manifest?.mutatesPath === true ||
         manifest?.privacyClass.includes("_write") === true ||
         asRecord(manifest?.outputContract)?.primary === "artifact";
       const roots = isWrite

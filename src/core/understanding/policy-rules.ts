@@ -71,6 +71,7 @@ export const policyRules: PolicyRule[] = [
         /\b(hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle|dönüştür|donustur|çevir|cevir|yap)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor)\b/i,
         /\b(tasarım|tasarim|layout|şablon|sablon)\b.*\b(pdf|docx|word|belge|doküman|dokuman|rapor|sunum metni)\b/i,
         /\b(pdf olarak|word olarak|docx olarak)\b.*\b(ver|hazırla|hazirla|oluştur|olustur|üret|uret|tasarla|düzenle|duzenle)\b/i,
+        /(?<!\p{L})pdf(?:['’]?[iy])?(?!\p{L})(?=[\s\S]{0,160}(?<!\p{L})(?:özetle|ozetle)(?!\p{L}))(?=[\s\S]{0,160}(?<!\p{L})(?:profesyonel\p{L}*|düzenli|duzenli|resmi)(?!\p{L}))[\s\S]{0,160}(?<!\p{L})(?:yaz|düzenle|duzenle)(?!\p{L})/iu,
       ],
     },
     action: {

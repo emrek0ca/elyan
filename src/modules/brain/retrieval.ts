@@ -173,6 +173,9 @@ export async function backfillSemanticV2Embeddings(
   app: FastifyInstance,
   options: { maxBatches?: number } = {},
 ): Promise<{ processed: number; batches: number; stopped: string }> {
+  if (!(await hasKnowledgeChunkEmbeddingColumn(app))) {
+    return { processed: 0, batches: 0, stopped: "embedding_columns_unavailable" };
+  }
   if (!(await ensureSemanticV2Column(app))) {
     return { processed: 0, batches: 0, stopped: "v2_column_unavailable" };
   }

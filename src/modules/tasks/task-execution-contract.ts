@@ -19,6 +19,7 @@ import type {
   DesktopWorkOrderStep,
 } from "./desktop-work-order.js";
 import type { ExecutionStep } from "./execution-step.js";
+import { collectStepLocalPaths, resolveOutputTarget } from "./output-target.js";
 import {
   ELEVATED_RISK_ARGUMENT_PATTERN,
   GENERIC_EXECUTOR_CAPABILITY_PATTERN,
@@ -360,16 +361,20 @@ function outputSnapshot(input: {
   workOrder?: DesktopWorkOrder | null;
 }): TaskExecutionContract["output"] {
   const contract = input.turnContract.outputContract;
-  const writeRoots = input.workOrder?.resourceScope?.writeRoots ?? [];
+  const scope = input.workOrder?.resourceScope as
+    | { writeRoots?: string[]; desktopDeliveryRequested?: boolean }
+    | undefined;
   return {
     operation: contract.operation,
     kind: contract.outputKind,
     format: contract.outputFormat,
-    target: contract.requiresArtifact
-      ? writeRoots.length > 0
-        ? "desktop"
-        : "artifact"
-      : "chat",
+    target: resolveOutputTarget({
+      artifactRequired: contract.requiresArtifact,
+      writeRoots: scope?.writeRoots ?? [],
+      route: input.turnContract.routeDecision.route,
+      desktopDeliveryRequested: scope?.desktopDeliveryRequested === true,
+      stepLocalPaths: collectStepLocalPaths(input.workOrder),
+    }),
     artifactRequired: contract.requiresArtifact,
   };
 }
@@ -408,6 +413,7 @@ function explicitArtifactWriteGrants(input: {
   output: TaskExecutionContract["output"];
   workOrder?: DesktopWorkOrder | null;
   allowedCapabilities: string[];
+  steps?: TaskExecutionStep[];
 }): TaskExecutionGrant[] {
   const writeRoots = uniqueStrings(
     input.workOrder?.resourceScope?.writeRoots ?? [],
@@ -422,6 +428,14 @@ function explicitArtifactWriteGrants(input: {
   }
   return input.allowedCapabilities
     .filter((capability) => EXPLICIT_ARTIFACT_WRITE_CAPABILITIES.has(capability))
+    // ÜZERİNE YAZMA BU YOLDAN DA GEÇEMEZ.
+    //
+    // Bu fonksiyon "kullanıcı açıkça dosya istedi" gerekçesiyle yazma yetkisi
+    // üretir ve adımlara BAKMIYORDU. Güncelleme zinciri eklenince aynı
+    // gerekçe `mode:"update"` adımını da yetkilendirmeye başladı — yani
+    // ayrı onay kapısı sessizce atlandı. Adımı üzerine yazma olan capability
+    // burada da yetki almaz.
+    .filter((capability) => !overwritesCapability(capability, input.steps, input.workOrder))
     .slice(0, 8)
     .map((capability, index) => ({
       id: `grant_${compact(input.taskId, 48)}_${index + 1}`,
@@ -447,6 +461,44 @@ function stableGrantJson(value: unknown): string {
 
 function grantArgsHash(args: Record<string, unknown>): string {
   return createHash("sha256").update(stableGrantJson(args)).digest("hex").slice(0, 32);
+}
+
+/**
+ * Bu adım var olan bir dosyanın ÜZERİNE mi yazıyor?
+ *
+ * Üzerine yazma geri alınamaz ve kullanıcının zaten sahip olduğu içeriği
+ * yok edebilir; hiçbir koşulda önceden yetkilendirilmez.
+ */
+function isOverwriteStep(args: Record<string, unknown>): boolean {
+  const mode = String(args?.mode ?? "").trim().toLowerCase();
+  if (mode === "update" || mode === "overwrite" || mode === "replace") return true;
+  return args?.overwrite === true || args?.force === true;
+}
+
+/**
+ * Bu capability bu turda ÜZERİNE YAZAN bir adımla mı çağrılacak?
+ *
+ * Sözleşme adımları `buildTaskExecutionContract` anında HENÜZ BOŞTUR — plan
+ * iş emrinden sonra materialize edilir. Yalnız sözleşme adımlarına bakmak,
+ * güncelleme zincirini görünmez kılıyor ve üzerine yazma yetkisi sessizce
+ * veriliyordu. Bu yüzden iş emrinin plan önizlemesi de taranır.
+ */
+function overwritesCapability(
+  capability: string,
+  steps: TaskExecutionStep[] | undefined,
+  workOrder: DesktopWorkOrder | null | undefined,
+): boolean {
+  if ((steps ?? []).some((step) => step.capability === capability && isOverwriteStep(step.args))) {
+    return true;
+  }
+  const planSteps = (workOrder as { planPreview?: { steps?: unknown } } | null | undefined)
+    ?.planPreview?.steps;
+  if (!Array.isArray(planSteps)) return false;
+  return planSteps.some((value) => {
+    const step = recordOf(value);
+    if (!step || compact(step.capability, 120) !== capability) return false;
+    return isOverwriteStep(recordOf(step.args) ?? {});
+  });
 }
 
 function hasElevatedRiskArguments(args: Record<string, unknown>): boolean {
@@ -514,6 +566,15 @@ function taskScopedDesktopAccessGrants(input: {
     );
     // Argümanı riskli olan adım, adı ne olursa olsun ayrı onaya düşer.
     if (capabilitySteps.some((step) => hasElevatedRiskArguments(step.args))) {
+      withhold(capability);
+      continue;
+    }
+    // ÜZERİNE YAZMA HER ZAMAN AYRI ONAY.
+    //
+    // `document_write` adı temizdir ve normalde task-bound yetki alabilir;
+    // ama `mode: "update"` var olan bir dosyanın üzerine yazar ve geri
+    // alınamaz. Bu ayrım argümanda yaşadığı için ad taramasıyla görülmez.
+    if (capabilitySteps.some((step) => isOverwriteStep(step.args))) {
       withhold(capability);
       continue;
     }
@@ -756,11 +817,14 @@ function upgradeV1TaskExecutionContract(
       operation,
       kind,
       format: compact(legacyOutput?.outputFormat, 40) || null,
-      target: artifactRequired
-        ? writeRoots.length > 0
-          ? "desktop"
-          : "artifact"
-        : "chat",
+      target: resolveOutputTarget({
+        artifactRequired,
+        writeRoots,
+        route: "desktop_runtime",
+        desktopDeliveryRequested:
+          recordOf(workOrder?.resourceScope)?.desktopDeliveryRequested === true,
+        stepLocalPaths: collectStepLocalPaths(workOrder),
+      }),
       artifactRequired,
     },
     execution: {
@@ -841,6 +905,7 @@ export function buildTaskExecutionContract(input: {
     output,
     workOrder,
     allowedCapabilities,
+    steps,
   });
   const executionMode: "compiled" | "dynamic" = steps.length > 0 ? "compiled" : "dynamic";
   const taskScopedAccess = taskScopedDesktopAccessGrants({
@@ -1001,13 +1066,18 @@ export function syncTaskExecutionContractWithWorkOrder(input: {
     const allowedSet = new Set(allowedCapabilities);
     selectedTools = selectedTools.filter((tool) => allowedSet.has(tool.id));
   }
+  const syncScope = input.workOrder.resourceScope as
+    | { writeRoots?: string[]; desktopDeliveryRequested?: boolean }
+    | undefined;
   const output: TaskExecutionContract["output"] = {
     ...contract.output,
-    target: contract.output.artifactRequired
-      ? (input.workOrder.resourceScope?.writeRoots.length ?? 0) > 0
-        ? "desktop"
-        : "artifact"
-      : "chat",
+    target: resolveOutputTarget({
+      artifactRequired: contract.output.artifactRequired,
+      writeRoots: syncScope?.writeRoots ?? [],
+      route: "desktop_runtime",
+      desktopDeliveryRequested: syncScope?.desktopDeliveryRequested === true,
+      stepLocalPaths: collectStepLocalPaths(input.workOrder),
+    }),
   };
   const grants = explicitArtifactWriteGrants({
     taskId: contract.taskId,
@@ -1015,6 +1085,7 @@ export function syncTaskExecutionContractWithWorkOrder(input: {
     output,
     workOrder: input.workOrder,
     allowedCapabilities,
+    steps,
   });
   const grantedCapabilities = new Set(grants.map((grant) => grant.capability));
   const approvalScope = uniqueStrings([

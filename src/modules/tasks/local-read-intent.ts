@@ -89,3 +89,127 @@ export function localDocumentReadCapabilities(message: string): string[] {
   );
   return named ? ["document_read"] : ["file_search", "document_read"];
 }
+
+
+/**
+ * VAR OLANI GÜNCELLEME NİYETİ.
+ *
+ * `output.operation === "edit"` sözleşmede yıllardır var ama hiçbir yere
+ * derlenmiyordu: "masaüstündeki raporu güncelle" isteği ya dinamik döngüye
+ * düşüyor ya da YENİ dosya yazıyordu. Güncelleme, okumanın devamıdır —
+ * önce bul, sonra oku, sonra AYNI yola yaz.
+ */
+const LOCAL_UPDATE_VERB_STEMS = trStemPattern([
+  "güncelle", "guncelle", "düzelt", "duzelt", "revize", "ekle", "değiştir",
+  "degistir", "genişlet", "genislet", "düzenle", "duzenle", "update", "edit",
+  "revise", "append",
+]);
+
+/**
+ * Bu istek YEREL bir belgeyi güncellemek mi istiyor?
+ *
+ * Okuma niyetiyle aynı çapa: konum + belge adı. Fark fiilde. Yeni dosya
+ * yaratma fiilleri (`oluştur`, `hazırla`) burada DIŞLANIR — onlar üretimdir,
+ * güncelleme değil; ikisi farklı onay sınıfına düşer.
+ */
+export function hasLocalDocumentUpdateIntent(message: string): boolean {
+  const normalized = String(message ?? "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .slice(0, 400);
+  if (!normalized) return false;
+  if (normalized.split(" ").filter(Boolean).length > MAX_LOCAL_READ_WORDS) return false;
+  if (trStemPattern(["oluştur", "olustur", "hazırla", "hazirla", "yeni"]).test(normalized)) {
+    return false;
+  }
+  return (
+    LOCAL_FILE_LOCATION_STEMS.test(normalized) &&
+    LOCAL_DOCUMENT_NOUN_STEMS.test(normalized) &&
+    LOCAL_UPDATE_VERB_STEMS.test(normalized)
+  );
+}
+
+/** Güncelleme menüsü: bul → oku → aynı yola yaz. */
+export function localDocumentUpdateCapabilities(message: string): string[] {
+  const named = /(?:[\w\-.() ]+\.(?:pdf|docx?|txt|md|rtf|pptx?|xlsx?|csv))/iu.test(
+    String(message ?? ""),
+  );
+  return named
+    ? ["document_read", "document_write"]
+    : ["file_search", "document_read", "document_write"];
+}
+
+
+/**
+ * KULLANICI ÇIKTIYI AÇIKÇA YEREL DİSKTE İSTEDİ Mİ?
+ *
+ * Çıktı hedefi bu ayrımı bilmek zorunda: "bir rapor hazırla" sunucuda
+ * üretilebilir ve mobilde teslim edilir; "masaüstüne kaydet" ise yerel bir
+ * dosya ister. İkisini ayıran şey KONUM + KAYDETME fiilidir.
+ *
+ * Anlama zarfı sıklıkla hiç gelmiyor (`desired_outputs` boş); o zaman tek
+ * güvenilir sinyal kullanıcının cümlesidir.
+ */
+const LOCAL_SAVE_VERB_STEMS = trStemPattern([
+  "kaydet", "kaydeder", "indir", "at", "koy", "yaz", "dışa aktar",
+  "disa aktar", "export", "save", "download",
+]);
+
+export function hasExplicitLocalSaveIntent(message: string): boolean {
+  const normalized = String(message ?? "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .slice(0, 400);
+  if (!normalized) return false;
+  return (
+    LOCAL_FILE_LOCATION_STEMS.test(normalized) &&
+    LOCAL_SAVE_VERB_STEMS.test(normalized)
+  );
+}
+
+
+/**
+ * ARTEFAKT DEVRİ — "bunu masaüstüme kaydet".
+ *
+ * Kullanıcı çıktıyı mobilde aldıktan sonra diskine indirmek isteyecek. Bugün
+ * bunun tek yolu görevi YENİDEN ÜRETMEK: hem yavaş hem de ikinci üretim ilk
+ * çıktıdan farklı çıkabilir — kullanıcı "aynı dosya" beklerken başkasını alır.
+ *
+ * Devir turu tek adımdır ve üretim YAPMAZ: sunucuda saklanan artefaktı
+ * `artifactId` ile alıp yerel diske yazar. Yetki de o tek adıma bağlanır.
+ */
+const ARTIFACT_HANDOFF_REFERENCE_STEMS = trStemPattern([
+  "bunu", "şunu", "sunu", "onu", "dosyayı", "dosyayi", "belgeyi", "raporu",
+  "çıktıyı", "ciktiyi", "this", "it",
+]);
+
+/**
+ * Devir, ÖNCEKİ BİR ARTEFAKT olmadan anlamsızdır.
+ *
+ * "Raporu masaüstüne kaydet" iki şey demek olabilir: az önce ürettiğimiz
+ * raporu diske indir (devir), ya da bir rapor üret ve kaydet (üretim).
+ * Kelimeler ayırt etmiyor; ayıran şey ortada devredilecek bir çıktı olup
+ * olmadığıdır. Kanıt yoksa üretim varsayılır — kullanıcının hiç görmediği
+ * bir dosyayı "kaydetmek" boş bir iştir.
+ */
+export function hasArtifactHandoffIntent(
+  message: string,
+  context?: { hasPriorArtifact?: boolean },
+): boolean {
+  if (context?.hasPriorArtifact !== true) return false;
+  const normalized = String(message ?? "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .slice(0, 300);
+  if (!normalized) return false;
+  if (normalized.split(" ").filter(Boolean).length > 12) return false;
+  // Yeni içerik üretme fiili varsa bu devir değil üretimdir.
+  if (trStemPattern(["oluştur", "olustur", "hazırla", "hazirla", "araştır", "arastir", "yaz"]).test(normalized)) {
+    return false;
+  }
+  return (
+    ARTIFACT_HANDOFF_REFERENCE_STEMS.test(normalized) &&
+    LOCAL_FILE_LOCATION_STEMS.test(normalized) &&
+    LOCAL_SAVE_VERB_STEMS.test(normalized)
+  );
+}

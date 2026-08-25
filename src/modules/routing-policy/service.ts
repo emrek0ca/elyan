@@ -1812,6 +1812,27 @@ function deriveSelectedWorkload(
   return deriveSelectedWorkloadWithGuard(input).selectedWorkload;
 }
 
+/**
+ * Sunucunun TEK BAŞINA üretebileceği yetenekler.
+ *
+ * Liste bilinçli olarak dardır ve yalnız ÜRETİM araçlarını içerir. Yerel
+ * okuma (`document_read`, `directory_tree`, `file_search`) ya da cihaz
+ * kontrolü (`open_app`, `browser_control`, `desktop_operator.*`) bu kümede
+ * OLMAMALIDIR: onlar kullanıcının makinesindeki gerçeğe bakar, sunucu
+ * uyduramaz. Bir tanesi bile istenmişse görev masaüstü beklemeye devam eder.
+ */
+const SERVER_PRODUCIBLE_CAPABILITIES = new Set([
+  "document_write",
+  "spreadsheet_write",
+  "presentation_write",
+  "canvas_write",
+  "web_research",
+  "text_analyze",
+  "math_solve",
+  "image_generate",
+  "retrieve_context",
+]);
+
 function isArtifactOutputContract(
   outputContract: ReturnType<typeof compileOutputContract>,
 ): boolean {
@@ -4115,6 +4136,59 @@ export async function decideCommandRoute(
         classification,
         understandingConsensus,
       speechAct: routeSpeechAct,
+      });
+    }
+
+    // MASAÜSTÜ YOKKEN KULLANICI ELLERİ BOŞ KALMAZ.
+    //
+    // Buraya düşmek "hazır masaüstü bulunamadı" demektir. Şimdiye kadar bu
+    // TERMİNAL bir cevaptı: kullanıcı "rapor hazırla" dediğinde bilgisayarı
+    // bağlı değilse "önce bilgisayar eşle" alıyordu. Oysa istenen çıktının
+    // çoğu SUNUCUDA üretilebilir — `modules/artifacts/renderers` zaten pdf ve
+    // belge üretiyor.
+    //
+    // Ayrım niyetin kendisinde: kullanıcı "bir rapor istiyorum" mu dedi,
+    // yoksa "BENİM masaüstümdeki şeyi" mi dedi? İlki sunucuda üretilir ve
+    // mobilde render edilir; ikincisi gerçekten masaüstü ister ve eşleşme
+    // beklemeye devam eder.
+    if (
+      !needsPrivateDesktopData &&
+      isArtifactOutputContract(outputContract) &&
+      requestedCapabilities.length > 0 &&
+      requestedCapabilities.every((capability) =>
+        SERVER_PRODUCIBLE_CAPABILITIES.has(capability),
+      )
+    ) {
+      const artifactReason =
+        "Hazır masaüstü yok; istenen çıktı sunucuda üretilip mobilde teslim edilecek.";
+      return buildDecision({
+        route: "server_brain",
+        taskRoute: buildTaskRoute({
+          target: "server_brain",
+          operationalRoute: "server_brain",
+          executionPlan: ["server_brain"],
+          reason: artifactReason,
+          needsDesktop: false,
+          needsPrivateDesktopData: false,
+          needsUserApproval: false,
+          requiredCapabilities: requestedCapabilities,
+        }),
+        mode: "executable_task",
+        capabilities: requestedCapabilities,
+        privacyClass: "public_text",
+        requiresApproval: false,
+        reason: artifactReason,
+        userFacingMessage:
+          "Bilgisayarın bağlı değil; çıktıyı burada hazırlayıp sana veriyorum. İstersen sonra masaüstüne kaydedebilirsin.",
+        primaryIntent: classification.primaryIntent,
+        confidence: classification.confidence,
+        requiresLocalRuntime: false,
+        message,
+        semanticContract,
+        outputContract,
+        classification,
+        understandingConsensus,
+        speechAct: routeSpeechAct,
       });
     }
 

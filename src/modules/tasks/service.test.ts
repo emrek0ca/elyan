@@ -13,12 +13,16 @@ import {
   createChatQueueUnavailableError,
   createDurableChatMediaInputRequiredError,
   createTask,
+  hasStructuredDataVisualRequest,
   isRemoteMcpRouteDecisionStale,
   normalizeRevisionComparableText,
   readServerBrainCompletionMetadata,
+  resolveCompletionAssistantBlocks,
   resolveSharedBrainChatDispatchPolicy,
   restoreQueuedEphemeralVisionCarrier,
   resolveNonEchoAssistantText,
+  shouldMarkMissingVisualSource,
+  shouldUseVisualImageFastPath,
   stripPromptEchoFromAssistantText,
   reconcileStaleRuntimeTasks,
   recoverPendingDesktopPlan,
@@ -28,10 +32,104 @@ import {
   taskControlRedirectDuplicateFingerprint,
   updateTaskFromRuntime,
 } from "./service.js";
+import { buildVisualIntentContract } from "../brain/visual-intent-contract.js";
 import {
   QUANTUM_BENCHMARK_PRODUCER,
   QUANTUM_BENCHMARK_VERSION,
 } from "../brain/quantum-benchmark.js";
+
+test("data visualization requests do not enter the image continuation fast path", () => {
+  const prompt =
+    "Pazartesi 120 TL, Salı 180 TL harcadım. Bunu mobilde tablo ve grafik olarak göster.";
+  const visualIntent = buildVisualIntentContract({ prompt });
+  const metadata = {
+    understanding_desired_outputs: ["table", "chart"],
+    turnContract: {
+      outputContract: {
+        outputKind: "chart",
+        outputFormat: "chart",
+      },
+    },
+  };
+
+  assert.equal(visualIntent.intent, "image_continue");
+  assert.equal(hasStructuredDataVisualRequest(metadata), true);
+  assert.equal(
+    shouldUseVisualImageFastPath({
+      prompt,
+      visualIntent,
+      sourceImageCount: 0,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldMarkMissingVisualSource({
+      prompt,
+      visualIntent,
+      sourceImageCount: 0,
+      hasVisualDataBlock: false,
+      metadata,
+    }),
+    false,
+  );
+});
+
+test("an explicit sourceless image continuation still asks for its source", () => {
+  const prompt = "Yanına bir tane daha kedi çiz.";
+  const visualIntent = buildVisualIntentContract({ prompt });
+
+  assert.equal(visualIntent.intent, "image_continue");
+  assert.equal(
+    shouldUseVisualImageFastPath({
+      prompt,
+      visualIntent,
+      sourceImageCount: 0,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldMarkMissingVisualSource({
+      prompt,
+      visualIntent,
+      sourceImageCount: 0,
+      hasVisualDataBlock: false,
+      metadata: {},
+    }),
+    true,
+  );
+});
+
+test("verified numeric points rebuild a complete table and add the requested chart", () => {
+  const result = resolveCompletionAssistantBlocks({
+    prompt:
+      "Pazartesi 120 TL, Salı 180 TL, Çarşamba 90 TL harcadım. Bunu tablo ve grafik olarak göster.",
+    responseText:
+      "| Dönem | Tutar |\n|---|---:|\n| Pazartesi | 120 |\n| Salı | 180 |",
+    selectedWorkload: "mobile_chat_balanced",
+    chartIntent: {
+      wantsChart: true,
+      family: "data",
+      source: "evidence",
+    },
+    numericPoints: [
+      { label: "Pazartesi", value: 120, unit: "TRY" },
+      { label: "Salı", value: 180, unit: "TRY" },
+      { label: "Çarşamba", value: 90, unit: "TRY" },
+    ],
+  });
+  const blocks = result.blocks as Array<Record<string, unknown>>;
+  const table = blocks.find((block) => block.type === "table");
+  const chart = blocks.find((block) => block.type === "chart");
+
+  assert.ok(table);
+  assert.ok(chart);
+  assert.deepEqual(table.rows, [
+    ["Pazartesi", "120", "TRY"],
+    ["Salı", "180", "TRY"],
+    ["Çarşamba", "90", "TRY"],
+  ]);
+  assert.deepEqual(chart.values, [120, 180, 90]);
+});
 
 test("task-control redirect duplicate fingerprint is normalized and content-free", () => {
   const first = taskControlRedirectDuplicateFingerprint({
