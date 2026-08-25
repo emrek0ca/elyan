@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  evidenceKindsFromValue,
   extractStepOutcomes,
   recordStepOutcomes,
   scoreStepOutcome,
+  stepEvidenceStrength,
+  taskVerificationEvidenceKinds,
 } from "./step-outcome-ledger.js";
 
 // ---------------------------------------------------------------------------
@@ -76,13 +79,30 @@ test("tam sonuçta skor tam", () => {
   );
 });
 
-test("doğrulanmamış araç tam puan almaz", () => {
+test("doğrulanmamış araç HİÇ puan almaz", () => {
+  // Bu test eskiden 75 bekliyordu: açıkça doğrulanmamış bir çağrı yine de
+  // öğrenmeye üç çeyrek kredi yazıyordu. Kanıt kapısı bunu kapattı — kanıtı
+  // olmayan çağrı ne başarı ne başarısızlık sayılır; `evidenceBacked=false`
+  // ile tahminciye hiç girmez.
   assert.equal(
     scoreStepOutcome({
       step: { tool: "shell_run", ok: true, verified: false },
       taskVerdict: "fulfilled",
     }),
-    75,
+    0,
+  );
+  // Aynı çağrı kanıt üretmişse kredi geri gelir.
+  assert.equal(
+    scoreStepOutcome({
+      step: {
+        tool: "shell_run",
+        ok: true,
+        verified: false,
+        evidenceKinds: ["state_readback"],
+      },
+      taskVerdict: "fulfilled",
+    }),
+    100,
   );
 });
 
@@ -139,4 +159,87 @@ test("aynı araç retry edildiğinde tek satıra birleşir ve çağrı geçmişi
   const metadata = row?.metadata as { callCount?: number; calls?: unknown[] };
   assert.equal(metadata.callCount, 2);
   assert.equal(metadata.calls?.length, 2);
+});
+
+test("kanıtsız başarı TAM kredi almaz", () => {
+  // Eskiden `verified` alanı olmayan bir başarı 100 alıyordu: "runtime bitti"
+  // ile "istenen şey oldu" öğrenmede aynı ağırlıktaydı.
+  assert.equal(
+    scoreStepOutcome({
+      step: { tool: "document_write", ok: true },
+      taskVerdict: "fulfilled",
+    }),
+    0,
+  );
+});
+
+test("kanıt gücü krediyi belirler", () => {
+  const strong = scoreStepOutcome({
+    step: { tool: "document_write", ok: true, evidenceKinds: ["artifact"] },
+    taskVerdict: "fulfilled",
+  });
+  const weak = scoreStepOutcome({
+    step: { tool: "document_write", ok: true, evidenceKinds: ["runtime_status"] },
+    taskVerdict: "fulfilled",
+  });
+  assert.equal(strong, 100);
+  assert.equal(weak, 50);
+  assert.equal(
+    scoreStepOutcome({
+      step: { tool: "document_write", ok: true, evidenceKinds: ["artifact"] },
+      taskVerdict: "degraded",
+    }),
+    50,
+  );
+});
+
+test("adımın kanıtı yoksa görev düzeyi kanıta düşülür", () => {
+  assert.equal(
+    stepEvidenceStrength({ tool: "sys_info", ok: true }, ["state_readback"]),
+    "strong",
+  );
+  assert.equal(stepEvidenceStrength({ tool: "sys_info", ok: true }, []), "none");
+  assert.equal(
+    stepEvidenceStrength({ tool: "sys_info", ok: true, verified: true }, []),
+    "strong",
+  );
+});
+
+test("başarısız veya karşılanmamış çağrı kanıtı ne olursa olsun kredi almaz", () => {
+  assert.equal(
+    scoreStepOutcome({
+      step: { tool: "x", ok: false, evidenceKinds: ["artifact"] },
+      taskVerdict: "fulfilled",
+    }),
+    0,
+  );
+  assert.equal(
+    scoreStepOutcome({
+      step: { tool: "x", ok: true, evidenceKinds: ["artifact"] },
+      taskVerdict: "unfulfilled",
+    }),
+    0,
+  );
+});
+
+test("görev doğrulama kanıtı yalnız GEÇMİŞ kontrollerden okunur", () => {
+  assert.deepEqual(
+    taskVerificationEvidenceKinds({
+      verification: {
+        checks: [
+          { id: "a", passed: true, evidence: "artifact" },
+          { id: "b", passed: false, evidence: "state_readback" },
+        ],
+      },
+    }),
+    ["artifact"],
+  );
+  assert.deepEqual(taskVerificationEvidenceKinds({}), []);
+});
+
+test("yürütücünün sözlük kanıtı tür adına indirgenir", () => {
+  assert.deepEqual(evidenceKindsFromValue({ path: "/x/y.pdf" }), ["artifact"]);
+  assert.deepEqual(evidenceKindsFromValue("state_readback"), ["state_readback"]);
+  assert.deepEqual(evidenceKindsFromValue({ note: "ok" }), ["tool_result"]);
+  assert.deepEqual(evidenceKindsFromValue(undefined), []);
 });

@@ -111,6 +111,13 @@ export async function estimateToolSuccess(
     // girer. Ham "tool ok" olayı, kullanıcı sonucu karşılanmadan başarı
     // kanıtı değildir.
     sql`${learningEvents.metadata}->>'taskVerdict' is not null`,
+    // KANIT KAPISI. Doğrulanmamış bir çağrı ne başarı ne başarısızlık
+    // kanıtıdır — sayılırsa tahminciye gürültü, sayılıp sıfırlanırsa iftira
+    // olur. Bu yüzden yalnız açıkça `evidenceBacked=false` olan satır
+    // dışlanır; alanın hiç bulunmadığı ESKİ satırlar sayılmaya devam eder,
+    // yoksa bugünkü sinyalin tamamı bir anda yok olurdu. 90 günlük pencere
+    // onları kendiliğinden düşürür.
+    sql`coalesce(${learningEvents.metadata}->>'evidenceBacked', 'true') <> 'false'`,
   ];
 
   try {
