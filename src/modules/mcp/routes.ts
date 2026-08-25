@@ -2,7 +2,12 @@ import type { FastifyPluginAsync } from "fastify";
 import { getRequestContext } from "../../lib/http.js";
 import { getUserAuth } from "../../lib/request-auth.js";
 import { createMcpServerBodySchema, mcpServerParamsSchema, updateMcpServerBodySchema } from "./schemas.js";
-import { createMcpServer, listMcpServers, updateMcpServer } from "./service.js";
+import {
+  createMcpServer,
+  listMcpServers,
+  probeUserMcpServer,
+  updateMcpServer,
+} from "./service.js";
 
 export const mcpRoutes: FastifyPluginAsync = async (app) => {
   app.get("/servers", async (request, reply) => {
@@ -43,6 +48,31 @@ export const mcpRoutes: FastifyPluginAsync = async (app) => {
       metadata: body.metadata,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
+    });
+  });
+
+  /**
+   * SUNUCUYU YOKLA ve ARAÇLARINI GÖSTER.
+   *
+   * Kullanıcı bir MCP sunucusu ekleyebiliyor ama ne sunduğunu göremiyordu:
+   * "bağlandı" yazan bir satır, hangi araçların geldiğini ve hangilerinin
+   * onay isteyeceğini söylemiyordu. Yoklama araçları keşfeder ve her birini
+   * dar bir capability tanımına çevirir.
+   *
+   * Keşif KULLANIM İZNİ DEĞİLDİR: araçlar burada etkinleştirilmez.
+   */
+  app.post("/servers/:serverId/probe", async (request, reply) => {
+    await app.authenticateUser(request, reply);
+
+    if (reply.sent) {
+      return;
+    }
+
+    const auth = getUserAuth(request);
+    const params = mcpServerParamsSchema.parse(request.params);
+    return probeUserMcpServer(app, {
+      userId: auth.sub,
+      serverId: params.serverId,
     });
   });
 

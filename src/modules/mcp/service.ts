@@ -1,8 +1,10 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { integrationConnections, mcpServers } from "../../db/schema.js";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { createAuditLog } from "../audit/service.js";
+import { probeMcpServer } from "../integrations/mcp-probe.js";
+import { describeMcpTools } from "../integrations/mcp-capability.js";
 
 const MCP_SHELL_CONTROL_PATTERN = /[\0\r\n;&|`$<>]/u;
 const MCP_INLINE_SECRET_ARG_PATTERN =
@@ -194,4 +196,106 @@ export async function updateMcpServer(
   });
 
   return server;
+}
+
+/**
+ * KULLANICININ KENDİ MCP SUNUCUSUNU YOKLAR ve ARAÇLARINI TİPLER.
+ *
+ * NEDEN VAR
+ * ---------
+ * Kullanıcı bir MCP sunucusu ekleyebiliyordu ama sunucunun NE SUNDUĞUNU
+ * hiçbir yerde göremiyordu: mobilde yalnız ad, taşıma türü ve durum vardı.
+ * "Bağlandı" yazan bir satır, hangi araçların geldiğini ve hangilerinin onay
+ * isteyeceğini söylemiyordu — kullanıcı neyi yetkilendirdiğini bilmiyordu.
+ *
+ * Yoklama araçları keşfeder, `describeMcpTools` her birini dar bir capability
+ * tanımına çevirir (fail-closed: `readOnlyHint` yoksa salt-okuma sayılmaz) ve
+ * sonuç sunucu kaydına yazılır. Böylece mobil "5 araç, 3'ü onay ister"
+ * diyebilir ve derleyici bu araçları dar adlarıyla planlayabilir.
+ *
+ * NE YAPMAZ: aracı ETKİNLEŞTİRMEZ. Keşif, kullanım izni değildir.
+ */
+export async function probeUserMcpServer(
+  app: FastifyInstance,
+  input: { userId: string; serverId: string; accessToken?: string },
+) {
+  const rows = await app.db
+    .select()
+    .from(mcpServers)
+    .where(and(eq(mcpServers.userId, input.userId), eq(mcpServers.id, input.serverId)))
+    .limit(1);
+  const server = rows[0];
+  if (!server) {
+    throw notFound("MCP server not found");
+  }
+  const baseUrl = String(server.baseUrl ?? "").trim();
+  if (!baseUrl) {
+    throw badRequest("Only remote MCP servers can be probed");
+  }
+
+  const result = await probeMcpServer({
+    url: baseUrl,
+    accessToken: input.accessToken ?? "",
+    useSdk: app.config?.ELYAN_MCP_SDK_ENABLED === true,
+  });
+
+  const descriptors =
+    result.status === "ok"
+      ? describeMcpTools({
+          serverName: result.serverName ?? server.name,
+          tools: result.tools ?? [],
+        })
+      : [];
+
+  // Durum yoklamanın GERÇEĞİNİ yansıtır; başarısız yoklama "bağlı" bırakmaz.
+  const nextStatus =
+    result.status === "ok"
+      ? "connected"
+      : server.status === "revoked"
+        ? "revoked"
+        : "degraded";
+
+  await app.db
+    .update(mcpServers)
+    .set({
+      status: nextStatus,
+      capabilities: descriptors.map((descriptor) => descriptor.capabilityId),
+      metadata: sql`coalesce(${mcpServers.metadata}, '{}'::jsonb) || ${JSON.stringify({
+        probe: {
+          contract: "elyan.mcp_probe.v1",
+          status: result.status,
+          errorCode: result.errorCode ?? null,
+          serverName: result.serverName ?? null,
+          protocolVersion: result.protocolVersion ?? null,
+          toolCount: descriptors.length,
+          latencyMs: result.latencyMs ?? null,
+          probedAt: result.probedAt,
+          // Araç TANIMI saklanır: adı, etkisi, risk sınıfı ve şema özeti.
+          // Serbest metin açıklaması karar mantığına girmez, yalnız gösterim.
+          tools: descriptors.slice(0, 64).map((descriptor) => ({
+            capabilityId: descriptor.capabilityId,
+            toolName: descriptor.toolName,
+            sideEffectClass: descriptor.sideEffectClass,
+            riskClass: descriptor.riskClass,
+            requiresApproval: descriptor.requiresApproval,
+            inputContractHash: descriptor.inputContractHash,
+            argSlots: descriptor.argSlots,
+            description: descriptor.displayDescription,
+          })),
+        },
+      })}::jsonb`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(mcpServers.userId, input.userId), eq(mcpServers.id, input.serverId)));
+
+  return {
+    serverId: input.serverId,
+    status: result.status,
+    errorCode: result.errorCode ?? null,
+    serverName: result.serverName ?? null,
+    latencyMs: result.latencyMs ?? null,
+    toolCount: descriptors.length,
+    approvalToolCount: descriptors.filter((item) => item.requiresApproval).length,
+    tools: descriptors,
+  };
 }
