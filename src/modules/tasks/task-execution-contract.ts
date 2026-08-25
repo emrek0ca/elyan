@@ -19,6 +19,11 @@ import type {
   DesktopWorkOrderStep,
 } from "./desktop-work-order.js";
 import type { ExecutionStep } from "./execution-step.js";
+import {
+  ELEVATED_RISK_ARGUMENT_PATTERN,
+  GENERIC_EXECUTOR_CAPABILITY_PATTERN,
+  SEPARATE_APPROVAL_CAPABILITY_PATTERN,
+} from "./capability-risk.js";
 
 /**
  * Tek görev otoritesi.
@@ -428,31 +433,6 @@ function explicitArtifactWriteGrants(input: {
       source: "explicit_user_request" as const,
     }));
 }
-
-const SEPARATE_APPROVAL_CAPABILITY_PATTERN =
-  /(?:credential|password|secret|payment|billing|purchase|delete|trash|erase|wipe|overwrite|upload|share|send|message|email|system_settings|settings_write)/iu;
-
-/**
- * GENERIC YÜRÜTÜCÜLER — adı bir güvenlik kanıtı OLMAYAN capability'ler.
- *
- * Bu araçların gerçek etkisi capability adında değil ARGÜMANINDA yaşar:
- * `desktop_operator.run` bir pencere odaklayabildiği gibi bir dosyayı da
- * silebilir, `mcp_call_tool` çağırdığı alt araca göre her şeyi yapabilir.
- * Bu yüzden bunlara ÖNCEDEN cihaz kapsamlı bir yetki verilmez; yetki, adım
- * gerçekten hazırlandığında runtime tarafında dar kapsamla üretilir.
- */
-const GENERIC_EXECUTOR_CAPABILITY_PATTERN =
-  /(?:^|[._-])(?:desktop_operator|desktop_agent|browser_control|browser_agent|browser_use|computer_use|computer_control|mcp_call_tool|mcp_call|call_tool|run_skill|run_command|run_script|shell|bash|zsh|sh_exec|terminal|command_line|exec|execute_action|execute_command|applescript|osascript|python_exec|eval)(?:$|[._-])/iu;
-
-/**
- * Argüman düzeyinde YÜKSELTİLMİŞ risk.
- *
- * Ayrı onay gerektiren eylemler capability adına yazılmayabilir; kritik olan
- * argümanın kendisidir (`{"command": "rm -rf ..."}`, `{"action": "purchase"}`).
- * Bu tarama, adı temiz görünen bir adımın sessizce yetki almasını engeller.
- */
-const ELEVATED_RISK_ARGUMENT_PATTERN =
-  /(?:\brm\s+-[rf]|\bsudo\b|\bchmod\b|\bchown\b|\bkillall\b|\bdefaults\s+write\b|\bcurl\b|\bwget\b|\bpip\s+install\b|\bnpm\s+i(?:nstall)?\b|\bbrew\s+install\b|password|passphrase|secret|api[_-]?key|token|credential|payment|purchase|checkout|transfer|delete|erase|wipe|overwrite|uninstall)/iu;
 
 function stableGrantJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableGrantJson).join(",")}]`;

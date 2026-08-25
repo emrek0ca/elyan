@@ -34,7 +34,8 @@ for migration in \
   drizzle/0052_learning_events_task_key_unique.sql \
   drizzle/0053_chat_message_orphan_reconcile.sql \
   drizzle/0054_task_automations.sql \
-  drizzle/0055_task_episodes.sql; do
+  drizzle/0055_task_episodes.sql \
+  drizzle/0056_compiled_templates.sql; do
   echo "==> Applying ${migration}"
   docker compose -f "${COMPOSE_FILE}" exec -T "${POSTGRES_SERVICE}" \
     psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \

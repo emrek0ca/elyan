@@ -9,6 +9,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  real,
   serial,
   text,
   timestamp,
@@ -551,6 +552,53 @@ export const taskEpisodes = pgTable(
       table.outcomeVerdict,
     ),
     createdIdx: index("task_episodes_created_idx").on(table.createdAt),
+  }),
+);
+
+/**
+ * ÖĞRENİLMİŞ DERLEME ŞABLONLARI.
+ *
+ * `task_episodes` içinde tekrar eden ve doğrulanmış adım imzaları buraya aday
+ * olarak düşer. Şablon KENDİLİĞİNDEN devreye girmez: `state` yaşam döngüsünü
+ * taşır ve `active` yalnız gölge + kanarya + manuel yayın sonrası verilir.
+ * Bu, öğrenmeyi model ağırlıklarına dokunmadan derleyici katmanında yapar.
+ */
+export const compiledTemplates = pgTable(
+  "compiled_templates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: varchar("template_id", { length: 64 }).notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    intentFamily: varchar("intent_family", { length: 120 }).notNull(),
+    contractDigest: varchar("contract_digest", { length: 64 }).notNull(),
+    steps: jsonb("steps").notNull().default(sql`'[]'::jsonb`),
+    state: varchar("state", { length: 16 }).notNull().default("candidate"),
+    supportingEpisodes: integer("supporting_episodes").notNull().default(0),
+    fulfilledEpisodes: integer("fulfilled_episodes").notNull().default(0),
+    consistency: real("consistency").notNull().default(0),
+    evidenceKinds: jsonb("evidence_kinds").notNull().default(sql`'[]'::jsonb`),
+    medianLatencyMs: integer("median_latency_ms"),
+    shadowMatches: integer("shadow_matches").notNull().default(0),
+    shadowAgreements: integer("shadow_agreements").notNull().default(0),
+    wrongExecutionCount: integer("wrong_execution_count").notNull().default(0),
+    promotedAt: timestamp("promoted_at", { withTimezone: true }),
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    retiredReason: varchar("retired_reason", { length: 120 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userTemplateUniqueIdx: uniqueIndex("compiled_templates_user_template_uidx").on(
+      table.userId,
+      table.templateId,
+    ),
+    lookupIdx: index("compiled_templates_lookup_idx").on(
+      table.userId,
+      table.intentFamily,
+      table.state,
+    ),
   }),
 );
 
