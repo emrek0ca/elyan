@@ -487,6 +487,73 @@ export const tasks = pgTable(
  * source task reference is still useful for audit, but is intentionally
  * nullable because task retention may remove that historical row.
  */
+/**
+ * TİPLİ EPİZOT AMBARI — sistemin deneyimi.
+ *
+ * NEDEN AYRI TABLO
+ * ----------------
+ * Deneyim bugüne kadar `learning_events` içinde yaşıyordu: tek bir düz
+ * `type/key/value/metadata` satırı. Bu, YAZMAK için yeterli ama OKUMAK için
+ * değil — geri çağırma metin eşlemesine düşüyor, "bu isteğe benzer daha önce
+ * ne yaptım?" sorusu cevaplanamıyordu. Öğrenmenin tie-breaker'dan öteye
+ * geçememesinin yapısal sebebi buydu.
+ *
+ * Burada epizot tiplenir ve `request_embedding` üzerinden semantik komşuluğa
+ * göre çağrılabilir hâle gelir.
+ *
+ * GİZLİLİK
+ * --------
+ * Ham istek metni SAKLANMAZ. `agent_trajectory` sözleşmesinin kararı burada da
+ * geçerli: yalnız özet (sha256), uzunluk kovası, dil ve TÜREV gömme tutulur.
+ * Adım kaydı da değer değil ŞEKİL taşır — capability adı ve argüman
+ * anahtarları; argüman değerleri hiçbir koşulda buraya yazılmaz.
+ */
+export const taskEpisodes = pgTable(
+  "task_episodes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    episodeId: varchar("episode_id", { length: 120 }).notNull(),
+    turnId: varchar("turn_id", { length: 160 }),
+    requestSha256: varchar("request_sha256", { length: 64 }),
+    requestLengthBucket: varchar("request_length_bucket", { length: 24 }),
+    language: varchar("language", { length: 16 }),
+    requestEmbedding: vector384("request_embedding"),
+    embeddingModel: varchar("embedding_model", { length: 96 }),
+    intentFamily: varchar("intent_family", { length: 120 }).notNull().default("unknown"),
+    route: varchar("route", { length: 64 }),
+    mode: varchar("mode", { length: 16 }),
+    /** Adım dizisinin imzası — aynı şekli tekrar eden epizotlar bununla eşleşir. */
+    contractDigest: varchar("contract_digest", { length: 64 }),
+    stepShapes: jsonb("step_shapes").notNull().default(sql`'[]'::jsonb`),
+    outcomeVerdict: varchar("outcome_verdict", { length: 16 }).notNull(),
+    verificationEvidence: jsonb("verification_evidence").notNull().default(sql`'[]'::jsonb`),
+    latencyMs: integer("latency_ms"),
+    modelCalls: integer("model_calls"),
+    repairAttempts: integer("repair_attempts"),
+    /** Öğrenmeye girebilir mi — trajectory gizlilik kapısıyla aynı karar. */
+    trainingEligible: boolean("training_eligible").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    episodeUniqueIdx: uniqueIndex("task_episodes_episode_uidx").on(table.episodeId),
+    userIntentIdx: index("task_episodes_user_intent_idx").on(
+      table.userId,
+      table.intentFamily,
+      table.createdAt,
+    ),
+    digestIdx: index("task_episodes_digest_idx").on(
+      table.intentFamily,
+      table.contractDigest,
+      table.outcomeVerdict,
+    ),
+    createdIdx: index("task_episodes_created_idx").on(table.createdAt),
+  }),
+);
+
 export const taskAutomations = pgTable(
   "task_automations",
   {

@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { and, eq, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { learningEvents } from "../../db/schema.js";
+import { learningEvents, taskEpisodes } from "../../db/schema.js";
 import type { OutcomeAssessment } from "./outcome-verdict.js";
+import { recordTaskEpisode } from "./episode-store.js";
 
 /**
  * Model-merkezli agent öğrenmesinin görev başına, redakte edilmiş kayıt
@@ -886,6 +887,21 @@ export async function recordAgentTrajectory(
         },
       })
       .onConflictDoNothing();
+    // TİPLİ AMBARA İKİNCİ YAZIM.
+    //
+    // Yukarıdaki satır `learning_events` içindir ve öyle kalır: mevcut
+    // tüketiciler (continuous-learning filtresi, redaksiyon) oradan okuyor.
+    // Ama o tablo GERİ ÇAĞRILAMIYOR — düz metin eşlemesinden ötesi yok. Aynı
+    // epizot burada tipli satıra ve gömmeye de yazılır ki "bu isteğe benzer
+    // daha önce ne yaptım?" sorusu cevaplanabilsin.
+    //
+    // Fail-open: epizot ambarı öğrenme içindir, yürütme değil.
+    await recordTaskEpisode(app, {
+      userId: input.task.userId,
+      taskId: input.task.id,
+      record,
+      requestText: readPrompt(input.task, recordOf(input.task.payload) ?? {}),
+    });
     return true;
   } catch (error) {
     app.log?.warn?.(
@@ -964,4 +980,27 @@ export async function redactAgentTrajectoryRecords(
       metadata: sql`${learningEvents.metadata} || ${JSON.stringify(redactionMetadata)}::jsonb`,
     })
     .where(and(...baseFilters, taskFilter, linkedTrajectoryOrToolOutcome));
+
+  // TİPLİ AMBAR DA UNUTMALI.
+  //
+  // Unutma isteği yalnız `learning_events` satırını kapatsaydı, epizot
+  // ambarındaki gömme geri çağırma havuzunda kalmaya devam ederdi — kullanıcı
+  // "unut" dedikten sonra bile o epizot benzer isteklerde emsal olarak
+  // çıkardı. Gömme ve adım şekli fiziksel olarak silinir; satır denetim için
+  // kalır ama öğrenmeye kapanır.
+  await db
+    .update(taskEpisodes)
+    .set({
+      trainingEligible: false,
+      requestEmbedding: null,
+      embeddingModel: null,
+      stepShapes: [],
+      contractDigest: null,
+    })
+    .where(
+      and(
+        eq(taskEpisodes.userId, input.userId),
+        input.taskId ? eq(taskEpisodes.taskId, input.taskId) : sql`true`,
+      ),
+    );
 }
