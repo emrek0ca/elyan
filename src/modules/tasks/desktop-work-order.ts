@@ -13,6 +13,10 @@ import { matchDesktopCapabilitiesSemantically } from "./desktop-capability-ontol
 import type { ExecutionStep } from "./execution-step.js";
 import type { ExecutionPlacementSnapshot } from "./execution-placement.js";
 import { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
+import {
+  hasLocalDocumentReadIntent,
+  localDocumentReadCapabilities,
+} from "./local-read-intent.js";
 export { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
@@ -1180,6 +1184,15 @@ function inferCapabilities(
   // için hiçbir sebep yok. (Ölçüm 2026-08-25: bu isteklerin 5/5'i dinamik
   // döngüye düşüyordu.)
   if (parseLocalListingQuery(message)) return ["directory_tree"];
+  // ÜÇÜNCÜ KAPALI ŞERİT: var olan yerel belgeyi TÜKETME.
+  //
+  // Canlı arıza (görev 6126ee16): "Masaüstünde ... bi belge var onu özetle"
+  // isteği `document_write` üretiyordu — yani okumak yerine YENİ belge yazmaya
+  // kalkıyordu. "özetle" üretim fiili gibi okunuyordu; oysa konum + belge adı
+  // birlikte geldiğinde niyet tüketmedir.
+  if (hasLocalDocumentReadIntent(message)) {
+    return localDocumentReadCapabilities(message);
+  }
   const structuredDecision = routeDecision.taskRoute?.semanticDecision;
   if (structuredDecision?.source === "structured_model") {
     const structuredCapabilities = [
@@ -1984,7 +1997,32 @@ function buildSteps(input: {
       });
     }
   }
-  if (input.capabilities.includes("document_read") && (fileHint || input.capabilities.includes("text_analyze"))) {
+  // YEREL BELGE ARAMA → OKUMA ÇİFTİ.
+  //
+  // "Masaüstünde kediler hakkında bi belge var onu özetle" isteğinde dosya
+  // ADI yoktur, tarifi vardır. `document_read` yol beklediği için bu tür
+  // istekler hiç derlenemiyor ve dinamik döngüye düşüyordu. Önce ara, sonra
+  // bulunanı oku: ikisi de salt-okuma, yan etkisi yok.
+  const localReadPair =
+    input.capabilities.includes("file_search") &&
+    input.capabilities.includes("document_read") &&
+    !fileHint;
+  if (localReadPair) {
+    steps.push({
+      id: "step_file_search",
+      capability: "file_search",
+      description: "İstenen belge yerel ve izinli klasörlerde aranacak.",
+      args: { query: compactText(input.summary, 200), mode: "search" },
+    });
+    steps.push({
+      id: "step_document_read",
+      capability: "document_read",
+      description: "Bulunan belge okunacak.",
+      args: { path: "{{steps.step_file_search.output}}", mode: "read" },
+      dependsOn: ["step_file_search"],
+    });
+  }
+  if (!localReadPair && input.capabilities.includes("document_read") && (fileHint || input.capabilities.includes("text_analyze"))) {
     steps.push({
       id: "step_document_read",
       capability: "document_read",
@@ -2238,10 +2276,22 @@ export function buildDesktopWorkOrder(input: {
   //
   // Burada iki gerçek aynı anda elimizde: hedefin türü ve önerilen yetenekler.
   // Çelişiyorlarsa hedef kazanır.
+  // "BELGE" GEÇMESİ BELGE ÜRETMEK DEMEK DEĞİLDİR.
+  //
+  // Canlı arıza (görev 6126ee16): "Masaüstünde kediler hakkında bi belge var
+  // onu özetle" isteğinde `inferKind` "belge" kelimesini görüp
+  // `document_task` dedi ve bu kapı yazıcıyı zorla menüye ekledi. Kullanıcı
+  // var olan bir belgeyi TÜKETMEK istiyordu; sistem yenisini yazmaya
+  // hazırlanıyordu. Yerel okuma niyeti varken yazıcı dayatılmaz.
+  const localDocumentReadRequested = hasLocalDocumentReadIntent(message);
   const writerForKind =
-    !readOnlyProcessObservationRequested && kind === "document_task"
+    !readOnlyProcessObservationRequested &&
+    !localDocumentReadRequested &&
+    kind === "document_task"
       ? "document_write"
-      : !readOnlyProcessObservationRequested && kind === "presentation_task"
+      : !readOnlyProcessObservationRequested &&
+          !localDocumentReadRequested &&
+          kind === "presentation_task"
         ? "presentation_write"
         : null;
   if (writerForKind && !capabilities.includes(writerForKind)) {

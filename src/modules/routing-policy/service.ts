@@ -60,6 +60,7 @@ import {
 } from "../runtime/capabilities.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "../tasks/desktop-capability-manifest.js";
 import { parseSystemInfoQuery } from "../tasks/system-observation.js";
+import { hasLocalDocumentReadIntent } from "../tasks/local-read-intent.js";
 import {
   buildUnderstandingConsensus,
   type UnderstandingConsensus,
@@ -1155,10 +1156,35 @@ function hasDesktopFileLookupSignal(message: string): boolean {
   );
 }
 
+/**
+ * YEREL BELGE OKUMA SİNYALİ.
+ *
+ * Canlı arıza (2026-08-25, görev 6126ee16): "Masaüstünde kediler hakkında bi
+ * belge var onu özetle" isteği `server_brain` + `normal_chat` olarak
+ * yönlendirildi ve sunucu beyni masaüstünü göremediği için "Netleştireyim:
+ * tam olarak neyi yapmamı istiyorsun?" diye sordu. Oysa istek nettir.
+ *
+ * Sebep yapısaldı: `hasConcreteDesktopFallbackSignal` masaüstüne YAZMAYI
+ * (kaydet/dışa aktar/sil) tanıyordu ama masaüstünden OKUMAYI tanımıyordu.
+ * `FILE_LOOKUP_VERB_STEMS` yalnız bulma/listeleme fiillerini içeriyor —
+ * "özetle", "oku", "incele" yok. Var olan bir yerel belgeyi tüketen her istek
+ * bu yüzden sunucuya düşüyordu.
+ *
+ * Üç koşul BİRDEN aranır — konum + belge adı + okuma fiili. Tek başına
+ * "özetle" sunucu işidir ("şu makaleyi özetle"); yerel yapan şey konumdur.
+ */
+function hasDesktopDocumentReadSignal(message: string): boolean {
+  // Yazma/silme niyeti varsa bu bir okuma isteği değildir; o yollar kendi
+  // sinyallerine ve onay kapılarına sahip.
+  if (hasDesktopWriteSideEffectSignal(message)) return false;
+  return hasLocalDocumentReadIntent(message);
+}
+
 function hasDesktopActionSignal(message: string): boolean {
   return (
     hasDesktopPrivateDataSignal(message) ||
     hasDesktopFileLookupSignal(message) ||
+    hasDesktopDocumentReadSignal(message) ||
     hasDesktopSaveExportSignal(message) ||
     hasDesktopWriteSideEffectSignal(message) ||
     matchesAny(message, DESKTOP_APP_ACTION_PATTERNS)
@@ -1173,6 +1199,7 @@ function hasConcreteDesktopFallbackSignal(
     hasDesktopScreenGlanceSignal(message, metadata) ||
     hasDesktopSaveExportSignal(message) ||
     hasDesktopWriteSideEffectSignal(message) ||
+    hasDesktopDocumentReadSignal(message) ||
     matchesAny(message, DESKTOP_APP_ACTION_PATTERNS) ||
     (hasDesktopActionSignal(message) &&
       matchesAny(message, DESKTOP_FALLBACK_ANCHOR_PATTERNS))
@@ -3318,7 +3345,14 @@ export async function decideCommandRoute(
     },
   });
   const systemInfoQuery = parseSystemInfoQuery(message);
-  if (systemInfoQuery) {
+  const normalizedExplicitCapabilities = uniqueSemanticCapabilities(
+    input.requestedCapabilities ?? [],
+  );
+  if (
+    systemInfoQuery &&
+    (normalizedExplicitCapabilities.length === 0 ||
+      normalizedExplicitCapabilities.every((capability) => capability === "sys_info"))
+  ) {
     const outputContract = compileOutputContract({
       message: input.message,
       metadata,
