@@ -77,6 +77,13 @@ export const connectionProviderValues = [
   "groq",
   "ollama",
   "openrouter",
+  // Resmî uzak MCP sunucuları. Bu sağlayıcılar için ayrı bir connector
+  // yazılmaz: MCP OAuth (RFC 9728 keşif + RFC 7591 dinamik istemci kaydı +
+  // PKCE) jeneriktir ve her ikisinde de doğrulandı (2026-08-26) — ne client
+  // id ne secret gerekiyor. Katalog girdisi yalnız tek tıkla bağlanma
+  // yüzeyini açar.
+  "sentry",
+  "cloudflare",
 ] as const;
 export const integrationAuthTypeValues = [
   "oauth2",

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
 import type { ConnectionProvider } from "./contracts/domain.js";
+import { connectionProviderValues } from "./contracts/domain.js";
 import { encryptJson } from "./lib/crypto-seal.js";
 import {
   getIntegrationMcpApp,
@@ -529,4 +530,49 @@ test("OAuth completion redirects are limited to Elyan-owned destinations", () =>
       ),
     /correlation token/i,
   );
+});
+
+test("official remote MCP servers connect without a per-provider connector", () => {
+  // Bu katalogun asıl vaadi: hazır bir MCP sunucusu eklemek KOD yazmayı
+  // gerektirmemeli. Bunu mümkün kılan şey `mcp_oauth` yolunun jenerik
+  // olması — RFC 9728 kaynak keşfi + RFC 7591 dinamik istemci kaydı + PKCE.
+  // Dinamik kayıt sayesinde sağlayıcıya özel client id/secret gerekmez.
+  //
+  // Uçlar canlı olarak doğrulandı (2026-08-26): mcp.sentry.dev,
+  // mcp.cloudflare.com ve mcp.notion.com üçü de keşfi ve dinamik kaydı
+  // destekliyor.
+  //
+  // Bir girdi env anahtarı istemeye başlarsa vaat bozulmuş demektir: o
+  // uygulama artık "ekle ve çalışsın" değil, kurulum gerektiren bir iştir.
+  for (const id of ["sentry", "cloudflare", "notion"]) {
+    const entry = getIntegrationMcpApp(id);
+    assert.ok(entry, `${id} katalogda olmalı`);
+    assert.equal(entry?.authStrategy, "mcp_oauth", `${id} jenerik OAuth kullanmalı`);
+    assert.equal(entry?.execution, "remote_mcp", `${id} gerçek uzak MCP olmalı`);
+    assert.equal(
+      entry?.oauthClientIdEnvKey,
+      undefined,
+      `${id} sağlayıcıya özel client id istememeli`,
+    );
+    assert.equal(
+      entry?.oauthClientSecretEnvKey,
+      undefined,
+      `${id} sağlayıcıya özel secret istememeli`,
+    );
+    assert.match(entry?.serverUrl ?? "", /^https:\/\//u);
+  }
+});
+
+test("every catalog provider exists in the connection provider enum", () => {
+  // `integrationConnections.provider` bir pgEnum. Katalogda enum'da olmayan
+  // bir sağlayıcı bırakmak, bağlanma denemesini ÇALIŞMA ZAMANINDA veritabanı
+  // hatasına düşürür — derleme sessiz kalır çünkü tip `ConnectionProvider`
+  // olarak yazılır. Bu iddia, migration'ı unutmayı testte yakalar.
+  for (const entry of integrationMcpAppCatalog) {
+    assert.ok(
+      (connectionProviderValues as readonly string[]).includes(entry.provider),
+      `${entry.id} sağlayıcısı (${entry.provider}) enum'da yok — ` +
+        "drizzle/0057_mcp_provider_catalog.sql ve bootstrap-v18 ile eklenmeli",
+    );
+  }
 });

@@ -362,6 +362,43 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     execution: "remote_mcp",
   },
   {
+    id: "sentry",
+    provider: "sentry",
+    displayName: "Sentry",
+    description:
+      "Üretimdeki hataları, sorunları ve sürümleri Sentry hesabından oku ve incele.",
+    iconKey: "sentry",
+    category: "developer",
+    // Resmî, Sentry tarafından işletilen uzak MCP sunucusu.
+    // (2026-08-26 doğrulandı: RFC 9728 keşfi ve RFC 7591 dinamik istemci
+    // kaydı çalışıyor, bu yüzden client id/secret gerekmiyor.)
+    serverUrl: "https://mcp.sentry.dev/mcp",
+    stage: "available",
+    authStrategy: "mcp_oauth",
+    oauthScopes: [],
+    capabilities: ["sentry"],
+    execution: "remote_mcp",
+  },
+  {
+    id: "cloudflare",
+    provider: "cloudflare",
+    displayName: "Cloudflare",
+    description:
+      "Cloudflare hesabındaki Workers, DNS, gözlemlenebilirlik ve yapılandırmayı oku.",
+    iconKey: "cloudflare",
+    category: "developer",
+    // Cloudflare'ın kendi işlettiği API MCP sunucusu. Ürün başına ayrı
+    // uçlar da var (observability, bindings, radar…); tek tıkla bağlanma
+    // için ana uç yeterli, kalanlar kullanıcının kendi sunucu kaydıyla
+    // eklenebilir.
+    serverUrl: "https://mcp.cloudflare.com/mcp",
+    stage: "available",
+    authStrategy: "mcp_oauth",
+    oauthScopes: [],
+    capabilities: ["cloudflare"],
+    execution: "remote_mcp",
+  },
+  {
     id: "dropbox",
     provider: "dropbox",
     displayName: "Dropbox",
