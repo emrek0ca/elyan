@@ -518,23 +518,33 @@ function buildPromptEchoRecoveryAnswer(prompt: string) {
  */
 export function buildGroundingFailureContinuityText(
   responseText: string | null | undefined,
+  lead: readonly string[] = [
+    "Kaynak doğrulaması yapılamadığı için belge oluşturmadım.",
+    "Aşağıdaki kısa açıklama doğrulanmış kaynak yerine geçmez:",
+  ],
 ): string | null {
   const candidate = sanitizeAssistantVisibleText(responseText, {
     fallback: "",
   }).trim();
+  // ÇİFTE RET KORUMASI TÜRKÇEDE ÇALIŞMIYORDU.
+  //
+  // Desen `/istenen çıktıyı/iu` ile başlıyordu ama metin "İstenen çıktıyı"
+  // diye başlıyor. JavaScript'in `i` bayrağı Türkçe noktalı İ'yi (U+0130)
+  // `i` ile eşleştirmez; bu eşleme dile özgüdür. Sonuç: korumanın yakalamak
+  // için yazıldığı ret cümlesi korumadan geçiyor ve bir retin içine ikinci
+  // bir ret sarılıyordu ("üretmedim… cevap şu: …dayandıramadım").
+  //
+  // Türkçe kurallarıyla küçültüp öyle bakıyoruz.
+  const folded = candidate.toLocaleLowerCase("tr-TR");
   if (
     candidate.length < 40 ||
-    /^(?:araştırma için|istenen çıktıyı|bu turda yanıt|yanıt oluşturulamadı)/iu.test(
-      candidate,
+    /^(?:araştırma için|istenen çıktı|bu turda yanıt|yanıt oluşturulamadı|kaynak doğrulaması)/u.test(
+      folded,
     )
   ) {
     return null;
   }
-  return [
-    "Kaynak doğrulaması yapılamadığı için belge oluşturmadım.",
-    "Aşağıdaki kısa açıklama doğrulanmış kaynak yerine geçmez:",
-    candidate.slice(0, 4_000),
-  ].join("\n\n");
+  return [...lead, candidate.slice(0, 4_000)].join("\n\n");
 }
 
 export function resolveNonEchoAssistantText(input: {
@@ -6297,10 +6307,37 @@ async function completeServerBrainTask(
     resolvedAssistantBlocks = evidenceValidation.blocks;
     blockQuality = evidenceValidation.blockQuality;
   } else if (artifactPipeline.kind === "validation_failed") {
-    visibleResponseText =
+    // BAŞARISIZ ARTEFAKT KAPISI CEVABI SİLMEMELİ.
+    //
+    // CANLI ARIZA (2026-08-26, görev ed8ed264): "Kedi resmi çiz" isteğinde
+    // anlama katmanı DOĞRU çalıştı — `artifact: image`, `image.generate`,
+    // güven 0.92. Artefakt boru hattı tipi `chart`'a çözdü, yetkili veri
+    // bulamadı ve bu dal modelin ürettiği HER ŞEYİ attı (`blocks: []`),
+    // yerine yalnız bir ret cümlesi koydu. Kullanıcı ekranda hiçbir şey
+    // görmedi. Aynı şey "altının son bir haftası" isteğinde de oldu: grafik
+    // kurulamadığı için altın hakkındaki METİN CEVAP da çöpe gitti.
+    //
+    // Grafiği üretememek bir sonuçtur; cevabı yok etmek başka bir şey.
+    // `evidence_required` dalı bunu zaten doğru yapıyordu ve süreklilik
+    // yardımcısı oradaydı — bu dal onu çağırmıyordu.
+    const artifactFailureLead =
       artifactPipeline.reason === "authoritative_data_unavailable"
+        ? [
+            "İstenen görseli/tabloyu güvenilir veriye dayandıramadığım için üretmedim.",
+            "Elimdeki bilgiyle verebileceğim cevap şu:",
+          ]
+        : [
+            "İstenen çıktı doğrulama kontrollerini geçmedi, o yüzden göstermedim.",
+            "Elimdeki bilgiyle verebileceğim cevap şu:",
+          ];
+    visibleResponseText =
+      buildGroundingFailureContinuityText(
+        visibleResponseText,
+        artifactFailureLead,
+      ) ??
+      (artifactPipeline.reason === "authoritative_data_unavailable"
         ? "İstenen çıktıyı güvenilir ve eksiksiz veriye dayandıramadım; bu yüzden hatalı bir widget üretmedim. Veriyi açık eşleşmelerle paylaşabilir veya yeniden deneyebilirsin."
-        : "İstenen çıktı doğrulama kontrollerini geçmedi; bu yüzden hatalı sonucu göstermedim. Verileri kontrol edip yeniden deneyebilirsin.";
+        : "İstenen çıktı doğrulama kontrollerini geçmedi; bu yüzden hatalı sonucu göstermedim. Verileri kontrol edip yeniden deneyebilirsin.");
     const failedValidation = validateAssistantBlockContract({
       blocks: [],
       content: visibleResponseText,

@@ -31,7 +31,9 @@ import {
   summarizeToolFlowForTrace,
   taskControlRedirectDuplicateFingerprint,
   updateTaskFromRuntime,
+  buildGroundingFailureContinuityText,
 } from "./service.js";
+import { validateAssistantBlockContract } from "../chat/message-blocks.js";
 import { buildVisualIntentContract } from "../brain/visual-intent-contract.js";
 import {
   QUANTUM_BENCHMARK_PRODUCER,
@@ -1967,4 +1969,46 @@ test("gerçek eko koruması duruyor — uzun istem papağanlanırsa cevap boş s
     resolveNonEchoAssistantText({ prompt, responseText: prompt }),
     "",
   );
+});
+
+test("a failed artifact gate keeps the answer instead of erasing it", () => {
+  // CANLI ARIZA (2026-08-26, görev ed8ed264 "Kedi resmi çiz" ve altın grafiği).
+  // Anlama katmanı DOĞRU çalıştı (`artifact: image`, `image.generate`, güven
+  // 0.92). Artefakt boru hattı tipi `chart`'a çözdü, yetkili veri bulamadı ve
+  // modelin ürettiği her şeyi attı — kullanıcı ekranda yalnız bir ret cümlesi
+  // gördü. Grafiği üretememek bir sonuçtur; cevabı yok etmek başka bir şey.
+  const answer =
+    "Altın fiyatları son bir haftada dalgalı seyretti. Yükseliş beklentisi " +
+    "faiz kararlarına ve dolar endeksine bağlı; kesin bir rakam vermek doğru olmaz.";
+  const lead = [
+    "İstenen görseli/tabloyu güvenilir veriye dayandıramadığım için üretmedim.",
+    "Elimdeki bilgiyle verebileceğim cevap şu:",
+  ];
+
+  const preserved = buildGroundingFailureContinuityText(answer, lead);
+  assert.ok(preserved, "kullanılabilir bir cevap korunmalı");
+  assert.match(preserved ?? "", /dalgalı seyretti/);
+  assert.match(preserved ?? "", /üretmedim/);
+
+  // BLOK SÖZLEŞMESİ: korunan metin geçerli bir v2 bloğuna dönüşmeli, yoksa
+  // kullanıcı yine boş ekran görür.
+  const validated = validateAssistantBlockContract({
+    blocks: [],
+    content: preserved ?? "",
+    mode: "normalize",
+  });
+  assert.ok(validated.blocks.length > 0, "en az bir blok üretilmeli");
+  assert.equal(validated.blocks[0]?.type, "text");
+
+  // Cevabın kendisi ret cümlesiyse korunacak bir şey yoktur: sabit metne
+  // düşülür, ret iki kez yazılmaz.
+  assert.equal(
+    buildGroundingFailureContinuityText(
+      "İstenen çıktıyı güvenilir ve eksiksiz veriye dayandıramadım.",
+      lead,
+    ),
+    null,
+  );
+  // Çok kısa gövde de korunmaz.
+  assert.equal(buildGroundingFailureContinuityText("Tamam.", lead), null);
 });
