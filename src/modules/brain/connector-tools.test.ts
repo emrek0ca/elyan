@@ -8,7 +8,9 @@ import {
   connectorToolsForCapabilityGrants,
   isConnectorTool,
   selectSemanticConnectorReadToolHint,
+  resetConnectorBiasCacheForTests,
 } from "./connector-tools.js";
+import { resetSemanticBackgroundForTests } from "../../core/understanding/semantic-background.js";
 import {
   resetSemanticComputeWorkerForTests,
   setSemanticComputeDispatcherForTests,
@@ -379,4 +381,67 @@ test("scope'suz notion/github grant'ları read araçlarını reklam eder", () =>
   assert.ok(advertised.includes("github.search"));
   // Google araçları scope yoksa reklam edilmez — grant sınırı korunuyor.
   assert.equal(advertised.includes("gmail.search"), false);
+});
+
+test("a candidate that resembles every ordinary sentence cannot force a tool call", async () => {
+  // CANLI HATA (ölçüldü 2026-08-26, 20 etiketli mesaj): ham kosinüs bu uzayda
+  // neredeyse her cümleye yüksek skor veriyordu. "teşekkürler" 0.852,
+  // "merhaba nasılsın" 0.849, "bir fıkra anlat" 0.831 — üçü de 0.82 sert
+  // bandında, yani model bu mesajlarda connector aracı çağırmaya ZORLANIYORDU.
+  // On sıradan mesajın beşi.
+  //
+  // Burada gmail.search çapası, arka plan havuzundaki SIRADAN cümlelerle aynı
+  // eksene oturtulur: yani "her şeye benzeyen" bir aday. Ham skoru 1.0 olsa
+  // bile özgüllüğü sıfırdır ve ipucu üretilmemelidir.
+  resetSemanticComputeWorkerForTests();
+  resetSemanticBackgroundForTests();
+  resetConnectorBiasCacheForTests();
+  setSemanticComputeDispatcherForTests(async ({ texts }) =>
+    texts.map((text) =>
+      text.toLowerCase().startsWith("query:")
+        ? semanticTestVector(0)
+        : // Hem aday hem arka plan aynı eksende: hub adayı.
+          semanticTestVector(0),
+    ),
+  );
+  try {
+    const hint = await selectSemanticConnectorReadToolHint(
+      "teşekkürler",
+      gmailReadContracts(),
+    );
+    assert.equal(hint, null);
+  } finally {
+    resetSemanticComputeWorkerForTests();
+    resetSemanticBackgroundForTests();
+    resetConnectorBiasCacheForTests();
+  }
+});
+
+test("a candidate that is specific to the query still produces a hint", async () => {
+  // Kapının karşı tarafı: arka plan BAŞKA bir eksende olduğunda gmail.search
+  // yüksek skorunu hak eder ve ipucu üretilmelidir. Kapı gürültüyü eler,
+  // sinyali değil.
+  resetSemanticComputeWorkerForTests();
+  resetSemanticBackgroundForTests();
+  resetConnectorBiasCacheForTests();
+  setSemanticComputeDispatcherForTests(async ({ texts }) =>
+    texts.map((text) => {
+      if (text.toLowerCase().startsWith("query:")) return semanticTestVector(0);
+      // Arka plan cümleleri gmail çapasına DİK bir eksende durur.
+      if (!text.toLowerCase().includes("gmail")) return semanticTestVector(7);
+      return connectorSemanticPassageVector(text);
+    }),
+  );
+  try {
+    const hint = await selectSemanticConnectorReadToolHint(
+      "Bugün gelen mailler",
+      gmailReadContracts(),
+    );
+    assert.equal(hint?.tool, "gmail.search");
+    assert.equal(hint?.enforcement, "require");
+  } finally {
+    resetSemanticComputeWorkerForTests();
+    resetSemanticBackgroundForTests();
+    resetConnectorBiasCacheForTests();
+  }
 });

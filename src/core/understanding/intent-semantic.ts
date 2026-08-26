@@ -152,32 +152,63 @@ export type SemanticTextCandidateMatch = {
   score: number;
   margin: number;
   source: "transformer" | "hash";
+  /**
+   * Ham skordan adayın arka plan yanlılığı düşülmüş hâli — "bu aday sorguya,
+   * SIRADAN bir cümleye benzediğinden ne kadar fazla benziyor". Yalnız
+   * `candidateBias` verildiğinde doldurulur.
+   *
+   * Ham skor bilerek olduğu gibi bırakılır: mevcut çağıranların eşikleri
+   * değişmesin. Bu alan onların ÜSTÜNE koyabilecekleri ikinci bir kapıdır.
+   */
+  specificity?: number;
 };
 
 function bestCandidateMatch(
   queryVector: number[],
   candidates: SemanticTextCandidate[],
   vectors: number[][],
-): { id: string; score: number; margin: number } | null {
+  candidateBias?: number[],
+): { id: string; score: number; margin: number; specificity?: number } | null {
   // A capability may expose several multilingual semantic descriptions. Score
   // each description, then keep only the strongest score per capability id so
   // aliases/prototypes do not compete with themselves and inflate the margin.
-  const bestScoreById = new Map<string, number>();
+  // Ham skor ve özgüllük, bir aracın açıklamaları üzerinde AYRI AYRI
+  // maksimize edilir.
+  //
+  // İlk kurguda özgüllük, ham skoru üreten açıklamanın yanlılığından
+  // hesaplanıyordu. Ölçüldü (2026-08-26): "son mailimi oku" isteğinde ham
+  // skoru kazanan açıklama 0.0059 özgüllük veriyordu, oysa aynı aracın
+  // "Son mailimi oku; en son gelen e-postayı bul…" açıklaması 0.013 —
+  // kapının rahat üstünde. Kazananın yanlılığına bakmak, aracı en iyi
+  // anlatan açıklamayı görmezden gelmek demekti.
+  //
+  // Açıklamalar aynı aracın alternatif ifadeleridir; hangisi eşleşirse araç
+  // eşleşmiş sayılır. Ham skorda zaten maksimum alınıyor, özgüllükte de
+  // alınmalı.
+  const bestById = new Map<string, { score: number; specificity: number }>();
   candidates.forEach((candidate, index) => {
     const score = dot(queryVector, vectors[index] ?? []);
-    const previous = bestScoreById.get(candidate.id);
-    if (previous === undefined || score > previous) {
-      bestScoreById.set(candidate.id, score);
+    const specificity = score - (candidateBias?.[index] ?? 0);
+    const previous = bestById.get(candidate.id);
+    if (previous === undefined) {
+      bestById.set(candidate.id, { score, specificity });
+      return;
     }
+    bestById.set(candidate.id, {
+      score: Math.max(previous.score, score),
+      specificity: Math.max(previous.specificity, specificity),
+    });
   });
-  const ranked = [...bestScoreById.entries()]
-    .map(([id, score]) => ({ id, score }))
+  const ranked = [...bestById.entries()]
+    .map(([id, entry]) => ({ id, ...entry }))
     .sort((left, right) => right.score - left.score);
   const best = ranked[0];
   if (!best) return null;
   return {
-    ...best,
+    id: best.id,
+    score: best.score,
     margin: best.score - (ranked[1]?.score ?? 0),
+    ...(candidateBias ? { specificity: best.specificity } : {}),
   };
 }
 
@@ -201,12 +232,24 @@ export async function rankSemanticTextCandidates(
     requireWarmWorker?: boolean;
     hashMinScore?: number;
     hashMinMargin?: number;
+    /**
+     * Aday açıklamalarının arka plan yanlılıkları (aynı sırayla). Verilirse
+     * sonuca `specificity` eklenir; ham skor ve mevcut eşikler DEĞİŞMEZ.
+     */
+    candidateBias?: number[];
   } = {},
 ): Promise<SemanticTextCandidateMatch | null> {
   const trimmed = text.replace(/\s+/g, " ").trim();
-  const usableCandidates = candidates.filter(
-    (candidate) => candidate.id.trim() && candidate.description.trim(),
-  );
+  // Yanlılık dizisi ÇAĞIRANIN sırasıyla gelir; filtre bir adayı düşürürse
+  // hizalama bozulur ve kapı başka bir adayın yanlılığını okur. Bu yüzden
+  // filtre indeksleri taşıyarak yapılır.
+  const usableIndices = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => candidate.id.trim() && candidate.description.trim());
+  const usableCandidates = usableIndices.map(({ candidate }) => candidate);
+  const usableBias = options.candidateBias
+    ? usableIndices.map(({ index }) => options.candidateBias?.[index] ?? 0)
+    : undefined;
   if (!trimmed || usableCandidates.length === 0) return null;
   if (options.requireWarmWorker && !isSemanticComputeWorkerWarm()) return null;
 
@@ -229,6 +272,7 @@ export async function rankSemanticTextCandidates(
       semanticQuery,
       usableCandidates,
       semanticVectors,
+      usableBias,
     );
     if (
       match &&

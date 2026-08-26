@@ -13,6 +13,11 @@ import { getConnectorAccessToken } from "../integrations/service.js";
  * `allowSideEffects`, which only the approval flow does after the user confirms
  * the drafted action. A drafted write never reaches Google without that gate.
  */
+import {
+  backgroundBias,
+  getSemanticBackground,
+} from "../../core/understanding/semantic-background.js";
+import { embedTextsForStorage } from "./semantic-embedder.js";
 
 export type ConnectorToolPermission = "read" | "side_effect";
 
@@ -60,6 +65,74 @@ export type ConnectorReadToolHint = {
 // connector istekleri 0.82-0.87 bandında. Sert zorunluluk yalnız ≥0.82'de;
 // altındaki skorlar araçları söktürmeyen, cevabı düşürmeyen yumuşak ipucudur.
 const CONNECTOR_READ_REQUIRE_MIN_SCORE = 0.82;
+
+/**
+ * ÖZGÜLLÜK KAPISI — ham eşiğin ÜSTÜNE eklenir, onun yerine geçmez.
+ *
+ * Yukarıdaki 0.78/0.82 eşikleri ham kosinüse bakıyor, ve ham kosinüs bu
+ * uzayda neredeyse her cümleye yüksek skor veriyor. 20 etiketli mesajla
+ * ölçüldü (2026-08-26):
+ *
+ *   yalnız ham 0.78 → 10/10 meşru istek yakalanıyor, ama 9/10 GENEL soru da
+ *                     araç ipucu alıyor
+ *   yalnız ham 0.82 → 5/10 genel soru sert `require` bandına düşüyor, yani
+ *                     "teşekkürler"(0.852), "merhaba nasılsın"(0.849) ve
+ *                     "bir fıkra anlat"(0.831) modeli araç çağırmaya ZORLUYOR
+ *
+ * Yukarıdaki yorumların elle ayarladığı eşik ve marjlar (0.78 → 0.82,
+ * 0.012 → 0.008) hep bu tek sorunun semptomuydu: dar bir bantta mutlak eşik
+ * ayarlamak. Kapı, adayın SIRADAN bir cümleye ortalama benzerliğini skordan
+ * düşer; 0.005 ile 0.010 arasındaki her değerde ölçüm aynı çıktı — 9/10
+ * meşru istek geçiyor, genel sorulardan hiçbiri geçmiyor.
+ *
+ * Kaybedilen tek istek ("cuma günü boş muyum") yalnız İPUCUNU kaybeder:
+ * ipucu yokken reklam listesi olduğu gibi kalır ve model aracı yine
+ * çağırabilir. Yanlış bir `require` ise "teşekkürler" mesajında araç
+ * çağrısını ZORUNLU kılar.
+ */
+const CONNECTOR_READ_SPECIFICITY_FLOOR = 0.008;
+
+/**
+ * Aday açıklamalarının arka plan yanlılıkları. Sözleşmeler derleme zamanında
+ * sabit olduğu için metne göre önbelleklenir.
+ */
+const connectorBiasCache = new Map<string, number>();
+
+/** Testler arası sızıntıyı önler; yanlılık önbelleği de havuza bağlıdır. */
+export function resetConnectorBiasCacheForTests(): void {
+  connectorBiasCache.clear();
+}
+
+async function connectorCandidateBias(
+  candidates: { description: string }[],
+): Promise<number[] | null> {
+  try {
+    const background = await getSemanticBackground();
+    if (background.length === 0) return null;
+    const missing = candidates.filter(
+      (candidate) => !connectorBiasCache.has(candidate.description),
+    );
+    if (missing.length > 0) {
+      const vectors = await embedTextsForStorage(
+        missing.map((candidate) => candidate.description),
+        undefined,
+        "connector_bias",
+      );
+      if (!vectors || vectors.length !== missing.length) return null;
+      missing.forEach((candidate, index) => {
+        connectorBiasCache.set(
+          candidate.description,
+          backgroundBias(vectors[index], background),
+        );
+      });
+    }
+    return candidates.map(
+      (candidate) => connectorBiasCache.get(candidate.description) ?? 0,
+    );
+  } catch {
+    return null;
+  }
+}
 
 export type ConnectorReadSelectionPolicy = {
   /** Typed understanding/routing already identified an external side effect. */
@@ -422,21 +495,25 @@ export async function selectSemanticConnectorReadToolHint(
   );
   if (readContracts.length === 0) return null;
 
+  const semanticCandidates = [
+    ...readContracts.flatMap((entry) =>
+      (entry.semanticDescriptions?.length
+        ? entry.semanticDescriptions
+        : [entry.contract]
+      ).map((description) => ({
+        id: `tool:${entry.name}`,
+        description: `${entry.name}: ${description}`,
+      })),
+    ),
+    ...CONNECTOR_SEMANTIC_NEGATIVE_CANDIDATES,
+  ];
+  const candidateBias = await connectorCandidateBias(semanticCandidates);
+
   const match = await rankSemanticTextCandidates(
     prompt,
-    [
-      ...readContracts.flatMap((entry) =>
-        (entry.semanticDescriptions?.length
-          ? entry.semanticDescriptions
-          : [entry.contract]
-        ).map((description) => ({
-          id: `tool:${entry.name}`,
-          description: `${entry.name}: ${description}`,
-        })),
-      ),
-      ...CONNECTOR_SEMANTIC_NEGATIVE_CANDIDATES,
-    ],
+    semanticCandidates,
     {
+      ...(candidateBias ? { candidateBias } : {}),
       transformerMinScore: 0.78,
       // 0.012 canlıda meşru "Mailleri oku" kalıbını 0.0003 farkla eledi
       // (margin 0.0117, ikinci sıra bir negative çapasıydı). Yazma riski
@@ -452,6 +529,15 @@ export async function selectSemanticConnectorReadToolHint(
   );
   if (!match || match.source !== "transformer") return null;
   if (!match.id.startsWith("tool:")) return null;
+  // Ham skor yüksek olabilir çünkü bu uzayda HER ŞEY yüksektir. Kapı, skorun
+  // sorguya ÖZGÜ olup olmadığını sorar. Ölçülemediyse (havuz kurulamadı)
+  // `specificity` gelmez ve eski davranış aynen korunur.
+  if (
+    match.specificity !== undefined &&
+    match.specificity < CONNECTOR_READ_SPECIFICITY_FLOOR
+  ) {
+    return null;
+  }
 
   const tool = match.id.slice("tool:".length);
   if (!readContracts.some((entry) => entry.name === tool)) return null;
