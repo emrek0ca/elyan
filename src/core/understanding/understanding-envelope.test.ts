@@ -329,3 +329,45 @@ test("3B yüzey isteği zarfta chart olarak görünmez", () => {
     false,
   );
 });
+
+test("the semantic contract decides the output kind, not the word list", () => {
+  // CANLI ARIZA (2026-08-26, görev ed8ed264): "Kedi resmi çiz" isteğinde
+  // `compileOutputContract` doğru cevabı biliyordu — image/png/0.92 — ama
+  // sözleşme dalı `outputs.length === 0` şartına bağlıydı, yani yalnız kelime
+  // listesi boş dönerse konuşuyordu. Çıplak "çiz" fiili `chart` eklediği için
+  // sözleşme hiç sorulmadı ve kullanıcı ne grafik ne resim gördü.
+  //
+  // Buradaki iddia bir kelimenin varlığı değil, KARARIN SAHİBİ: isteği
+  // anlayan katman güvenle konuştuğunda liste onu ezemez.
+  const intent = {
+    primaryIntent: "writing",
+    confidence: 0.7,
+    secondaryIntents: [],
+    reason: "test",
+  } as never;
+  const kindsFor = (message: string): string[] =>
+    buildTypedUnderstandingEnvelope({
+      message,
+      intent,
+      userId: "user-1",
+    }).desired_outputs.map(
+      (output) => output.kind,
+    );
+
+  // Görsel isteği: fiil "çiz" olsa da sonuç grafik OLMAMALI.
+  assert.deepEqual(kindsFor("Kedi resmi çiz"), ["image"]);
+  assert.deepEqual(kindsFor("bana bir kedi resmi yap"), ["image"]);
+
+  // Sözleşme kararsızken liste eskisi gibi çalışır: gerçek grafik istekleri
+  // bozulmamalı.
+  assert.ok(kindsFor("satış verilerinin grafiğini çiz").includes("chart"));
+  assert.ok(
+    kindsFor(
+      "Altın sence ne kadar yükselir grafikle anlat. Mesela son bi haftanın grafiğini çiz",
+    ).includes("chart"),
+  );
+
+  // Diğer çıktı yolları etkilenmemeli.
+  assert.ok(kindsFor("bu tabloyu excel yap").includes("xlsx"));
+  assert.ok(kindsFor("rapor hazırla pdf olarak").includes("pdf"));
+});

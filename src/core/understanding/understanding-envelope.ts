@@ -828,7 +828,35 @@ function buildDesiredOutputs(input: {
   // bağlamda doğru. Ama ARTEFAKT TİPİ için yanlış: aynı turda zarf `chart`,
   // widget kararı `math_surface_3d` diyordu; tutarlılık raporu bunu yakaladı.
   // Yüzey isteği kendi widget'ında üretilir, chart verisi beklenmez.
-  if (requestsChartOutput(input.text) && !isExplicitMathSurface3DRequest(input.text)) {
+  // ANLAMSAL SÖZLEŞME KELİME LİSTESİNİN YEDEĞİ DEĞİL, ÜSTÜDÜR.
+  //
+  // CANLI ARIZA (2026-08-26, görev ed8ed264): "Kedi resmi çiz" isteğinde
+  // `compileOutputContract` DOĞRU cevabı üretiyordu — `outputKind: "image"`,
+  // `png`, `requiresArtifact: true`, güven 0.92. Ama aşağıdaki sözleşme dalı
+  // `outputs.length === 0` şartına bağlıydı, yani yalnız kelime listesi hiçbir
+  // şey bulamazsa konuşuyordu. `requestsChartOutput` çıplak "çiz" fiiliyle
+  // eşleşip `chart` eklediği için sözleşme hiç sorulmadı; artefakt boru hattı
+  // grafik için yetkili veri aradı, bulamadı ve kullanıcıya "güvenilir veriye
+  // dayandıramadım" dedi. Ekranda ne grafik vardı ne resim.
+  //
+  // Yetki ters kurulmuştu. Çıktı türüne, kelimeyi yakalayan liste değil,
+  // isteği anlayan katman karar vermeli. Sözleşme GÜVENLE başka bir tür
+  // söylüyorsa liste onu ezemez; sözleşme kararsızsa (chat_reply, düşük
+  // güven) liste eskisi gibi çalışır ve "grafiğini çiz" yine grafik üretir.
+  const contractKind = input.outputContract?.outputKind;
+  const contractIsAuthoritative =
+    input.outputContract?.requiresArtifact === true &&
+    (input.outputContract?.confidence ?? 0) >= 0.58 &&
+    contractKind != null &&
+    contractKind !== "chat_reply";
+  const contractContradictsChart =
+    contractIsAuthoritative && contractKind !== "chart";
+
+  if (
+    requestsChartOutput(input.text) &&
+    !isExplicitMathSurface3DRequest(input.text) &&
+    !contractContradictsChart
+  ) {
     addDesiredOutput(outputs, { kind: "chart", format: null, target: "widget", confidence: 0.82, constraints: ["chart_data"] });
   }
 
