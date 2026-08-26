@@ -23,6 +23,11 @@ test("shapeSubscriptionTruth keeps the mobile plan contract stable", () => {
 
   assert.deepEqual(subscription, {
     planCode: "pro",
+    // ADDITIVE: masaüstü sınırı istemciye açıkça söyleniyor. Free
+    // plandaki kullanıcı bunu bilmediği için eşleştirmeye kalkıp
+    // `desktop_plan_required` duvarına çarpıyordu (canlı 2026-08-26).
+    desktopLimit: 2,
+    desktopAllowed: true,
     qualityProfile: "pro_max",
     status: "active",
     aiCreditsMonthly: 1500,
@@ -57,6 +62,11 @@ test("shapeSubscriptionTruth falls back to free plan defaults", () => {
 
   assert.deepEqual(subscription, {
     planCode: "free",
+    // ADDITIVE: masaüstü sınırı istemciye açıkça söyleniyor. Free
+    // plandaki kullanıcı bunu bilmediği için eşleştirmeye kalkıp
+    // `desktop_plan_required` duvarına çarpıyordu (canlı 2026-08-26).
+    desktopLimit: 0,
+    desktopAllowed: false,
     qualityProfile: "free_basic",
     status: "free",
     aiCreditsMonthly: 120,
