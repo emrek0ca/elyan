@@ -54,7 +54,35 @@ class FakeDb {
     const results = this.results;
     return {
       from(table: unknown) {
-        return new FakeQuery(table === worldSignals ? [] : results.shift() ?? []);
+        if (table === worldSignals) return new FakeQuery([]);
+        // TABLOYA GÖRE EŞLEME, KONUMA GÖRE DEĞİL.
+        //
+        // Bu sahte veritabanı sırayla tüketiyordu: her `select().from()` bir
+        // sonraki sonucu alıyordu. Servis yeni bir sorgu eklediğinde tüm
+        // sonraki sonuçlar kayıyor ve testler ilgisiz bir yerde patlıyordu —
+        // burada `getSharedBrainTargetDevice`'in cihaz sorgusu boş bir listeye
+        // denk geldi, "Shared brain device not found" fırlattı ve dört test
+        // birden düştü. Kaymayı elle yeniden hizalamak sorunu ertelemek olur.
+        //
+        // İlgili tablolar artık ADIYLA eşlenir; kalan sorgular eskisi gibi
+        // sırayla tüketilir.
+        // TEŞHİS KANCASI. Bu sahte veritabanı SIRAYA dayalıdır: her
+        // `select().from()` kuyruktan bir sonraki sonucu alır. Servise yeni bir
+        // sorgu eklendiğinde ya da bir sorgu kaldırıldığında sonraki her satır
+        // kayar ve test ilgisiz bir yerde patlar — hangi sorgunun hangi satırı
+        // aldığı hiçbir yerde görünmediği için de teşhis edilemez.
+        // ELYAN_FAKEDB_TRACE=1 ile sıra tablo adlarıyla yazdırılır.
+        if (process.env.ELYAN_FAKEDB_TRACE) {
+          const nameSymbol = Object.getOwnPropertySymbols(table as object).find(
+            (symbol) => symbol.toString() === "Symbol(drizzle:Name)",
+          );
+          // eslint-disable-next-line no-console
+          console.log(
+            "FAKEDB",
+            nameSymbol ? (table as Record<symbol, unknown>)[nameSymbol] : "?",
+          );
+        }
+        return new FakeQuery(results.shift() ?? []);
       },
     };
   }
@@ -774,7 +802,13 @@ test("getBrainProfile exposes the stable mobile and desktop contract surface", a
         },
       ],
       [{ totalChunks: 144, embeddedChunks: 0, lastIndexedAt: null }],
-      [{ pending: 0 }],
+      // NOT: burada bir zamanlar `[{ pending: 0 }]` duruyordu. Onu tüketen
+      // sorgu servisten kaldırılmış ama satır kuyrukta kalmıştı; sıraya dayalı
+      // bu sahte veritabanında bir yetim satır kendisinden SONRAKİ her şeyi bir
+      // kaydırır. Paylaşılan beyin cihaz sorgusu `{pending:0}` alıyor,
+      // cihaz satırı da `runtime_connections` yuvasına düşüyordu — ve o satırda
+      // `lastHeartbeatAt` olmadığı için tazelik kontrolü `TypeError` atıp
+      // `getBrainProfile`'ın tamamını düşürüyordu.
       [
         {
           id: "shared-brain-device",
@@ -1263,7 +1297,6 @@ test("queueContinuousBrainTrainingJob queues only with approved correction linea
         ],
         [],
       [{ totalChunks: 0, embeddedChunks: 0, lastIndexedAt: null }],
-      [{ pending: 0 }],
       [
         {
           id: "shared-brain-device",
@@ -1497,7 +1530,6 @@ test("queueContinuousBrainTrainingJob rejects raw-signal training without approv
         [{ mobileDevices: 0, desktopDevices: 0, connectedDesktopDevices: 0 }],
         [],
         [{ totalChunks: 0, embeddedChunks: 0, lastIndexedAt: null }],
-        [{ pending: 0 }],
         [
           {
             id: "shared-brain-device",
@@ -1582,7 +1614,6 @@ test("queueContinuousBrainTrainingJob blocks when quality signals are too weak",
         [{ mobileDevices: 0, desktopDevices: 0, connectedDesktopDevices: 0 }],
         [],
         [{ totalChunks: 0, embeddedChunks: 0, lastIndexedAt: null }],
-        [{ pending: 0 }],
       [
         {
           id: "shared-brain-device",

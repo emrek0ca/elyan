@@ -140,9 +140,27 @@ function isRuntimeConnectionFresh(
   runtime: RuntimeConnectionRow,
   now = Date.now(),
 ): boolean {
-  return (
-    now - runtime.lastHeartbeatAt.getTime() <= RUNTIME_CONNECTION_STALE_AFTER_MS
-  );
+  // FAIL-CLOSED: kalp atışı bilinmiyorsa bağlantı TAZE DEĞİLDİR.
+  //
+  // Tip `Date` diyordu ve kod doğrudan `.getTime()` çağırıyordu. Alan
+  // gerçekten eksik olduğunda bu bir `TypeError` fırlatıyor ve hata
+  // `shapeUserDevice` → `getSharedBrainTargetDevice` → `getBrainProfile`
+  // zinciriyle yukarı çıkıp PROFİLİN TAMAMINI düşürüyordu: kullanıcı, yalnız
+  // bir tazelik kontrolü cevap veremediği için sohbet edemez hâle geliyordu.
+  //
+  // Tazeliğin doğru cevabı burada zaten "hayır"dır: kalp atışı görmediğimiz
+  // bir bağlantının canlı olduğunu iddia edemeyiz. Çökmek yerine bunu
+  // söylemek hem daha doğru hem de sonucu izole eder — cihaz `runtime_stale`
+  // görünür, profil ayakta kalır.
+  const heartbeat = runtime?.lastHeartbeatAt;
+  const heartbeatMs =
+    heartbeat instanceof Date
+      ? heartbeat.getTime()
+      : typeof heartbeat === "string" || typeof heartbeat === "number"
+        ? new Date(heartbeat).getTime()
+        : Number.NaN;
+  if (!Number.isFinite(heartbeatMs)) return false;
+  return now - heartbeatMs <= RUNTIME_CONNECTION_STALE_AFTER_MS;
 }
 
 export function shapeUserDevice(
@@ -607,7 +625,7 @@ async function listUserDevicesUncached(app: FastifyInstance, userId: string) {
         : null;
     const wsConnected =
       device.type === "desktop"
-        ? Boolean(app.services.realtimeHub?.isRuntimeConnected?.(device.id))
+        ? Boolean(app.services?.realtimeHub?.isRuntimeConnected?.(device.id))
         : false;
     return shapeUserDevice(
       device,
@@ -681,7 +699,7 @@ export async function getUserDevice(
   const reachability = getBaseUrlReachability(app.config);
   const wsConnected =
     device.type === "desktop"
-      ? Boolean(app.services.realtimeHub?.isRuntimeConnected?.(device.id))
+      ? Boolean(app.services?.realtimeHub?.isRuntimeConnected?.(device.id))
       : false;
 
   return shapeUserDevice(
