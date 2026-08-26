@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { rankSemanticTextCandidates } from "../../core/understanding/intent-semantic.js";
 import { mcpServers } from "../../db/schema.js";
 import { callMcpToolViaSdk } from "../integrations/mcp-sdk-client.js";
+import { createAuditLog } from "../audit/service.js";
 import {
   isRemoteMcpApp,
   probeMcpServer,
@@ -39,6 +40,27 @@ const MAX_TOOLS_PER_APP = 12;
 /** Bir turda ilan edilen toplam MCP aracı tavanı. */
 const MAX_TOTAL_MCP_TOOLS = 32;
 const MCP_TOOL_TIMEOUT_MS = 20_000;
+
+/**
+ * GEÇİCİ arızada tek yeniden deneme.
+ *
+ * `callMcpToolViaSdk` her çağrıda yeni bir bağlantı kurar ve uzak MCP
+ * sunucuları soğuk başlangıç, DNS gecikmesi ya da anlık 5xx ile düşebiliyor.
+ * Yeniden deneme YALNIZ taşıma katmanı hatasında yapılır: sunucunun iş
+ * mantığıyla verdiği `isError` sonucu tekrarlanmaz, çünkü o bir cevaptır.
+ *
+ * Yan etkili araçlar da yeniden denenir mi? Denenmez. Bir "sayfa oluştur"
+ * çağrısı zaman aşımına uğradığında isteğin sunucuya ULAŞMIŞ olabileceğini
+ * bilemeyiz; tekrarlamak ikinci bir sayfa yaratabilir. Yalnız salt-okuma
+ * araçları tekrarlanabilir.
+ */
+const MCP_RETRYABLE_ERROR_CODES = new Set([
+  "mcp_network_error",
+  "mcp_timeout",
+  "network_error",
+  "timeout",
+]);
+const MCP_RETRY_DELAY_MS = 400;
 /** Ad alanı ayracı. Nokta KULLANILMIYOR: yerleşik `notion.search` ile çakışırdı. */
 export const MCP_TOOL_PREFIX = "mcp__";
 const MCP_DECLARATION_CACHE_TTL_MS = 3_000;
@@ -197,6 +219,24 @@ async function queryMcpToolDeclarations(
 
   const connections = await listUserIntegrationConnections(app, userId);
   const declarations: McpToolDeclaration[] = [];
+  /**
+   * ÇAKIŞMA KAPISI: aynı araç iki kez ilan edilmesin.
+   *
+   * Bildirimler iki ayrı kaynaktan geliyor — küratörlü katalog uygulamaları
+   * ve kullanıcının kendi kaydettiği MCP sunucuları. Aynı sunucu ikisinden de
+   * bağlanabilir (ör. Notion hem katalogdan hem elle eklenmiş bir
+   * `https://mcp.notion.com/mcp` kaydı olarak). Adlar `appId` farklı olduğu
+   * için ÇARPIŞMIYOR, bu yüzden hiçbir yerde hata vermiyordu; model aynı
+   * aracı iki ayrı isimle görüyor, ikisi farklı yetkilendirmeyle çalışıyor ve
+   * hangisini seçtiği tesadüfe kalıyordu.
+   *
+   * Anahtar sunucu adresi + uzak araç adıdır: aynı uçtaki aynı araç bir kez
+   * ilan edilir. Katalog kaydı önce geldiği için o kazanır — incelenmiş
+   * uç nokta ve incelenmiş yetki akışı olan taraf odur.
+   */
+  const advertised = new Set<string>();
+  const advertiseKey = (url: string, toolName: string): string =>
+    `${url.trim().toLowerCase().replace(/\/+$/u, "")}::${toolName.trim().toLowerCase()}`;
 
   for (const connection of connections) {
     if (declarations.length >= MAX_TOTAL_MCP_TOOLS) break;
@@ -220,6 +260,12 @@ async function queryMcpToolDeclarations(
     for (const tool of probe.tools.slice(0, MAX_TOOLS_PER_APP)) {
       if (declarations.length >= MAX_TOTAL_MCP_TOOLS) break;
       if (!tool.name) continue;
+      const catalogUrl = entry.serverUrl ?? "";
+      if (catalogUrl) {
+        const key = advertiseKey(catalogUrl, tool.name);
+        if (advertised.has(key)) continue;
+        advertised.add(key);
+      }
       const name = mcpToolName(appId, tool.name);
       const description =
         tool.description || `${entry.displayName}: ${tool.name}`;
@@ -277,6 +323,9 @@ async function queryMcpToolDeclarations(
 
     for (const tool of probe.tools.slice(0, MAX_TOOLS_PER_APP)) {
       if (declarations.length >= MAX_TOTAL_MCP_TOOLS || !tool.name) break;
+      const key = advertiseKey(safeServerUrl, tool.name);
+      if (advertised.has(key)) continue;
+      advertised.add(key);
       const name = mcpToolName(serverAppId, tool.name);
       const description = tool.description || `${server.name}: ${tool.name}`;
       declarations.push({
@@ -782,12 +831,40 @@ export async function callMcpTool(
 
   permission = await resolveMcpToolPermission(app, declaration);
 
-  const result = await callMcpToolViaSdk({
+  const startedAt = Date.now();
+  let result = await callMcpToolViaSdk({
     url: serverUrl,
     accessToken,
     toolName: declaration.remoteToolName,
     args: input.args,
     timeoutMs: MCP_TOOL_TIMEOUT_MS,
+  });
+  let attempts = 1;
+  if (
+    !result.ok &&
+    permission === "read" &&
+    MCP_RETRYABLE_ERROR_CODES.has(String(result.errorCode ?? ""))
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, MCP_RETRY_DELAY_MS));
+    attempts = 2;
+    result = await callMcpToolViaSdk({
+      url: serverUrl,
+      accessToken,
+      toolName: declaration.remoteToolName,
+      args: input.args,
+      timeoutMs: MCP_TOOL_TIMEOUT_MS,
+    });
+  }
+
+  await traceMcpToolCall(app, {
+    userId: input.userId,
+    declaration,
+    permission,
+    args: input.args,
+    ok: result.ok,
+    errorCode: result.ok ? null : (result.errorCode ?? "mcp_tool_failed"),
+    durationMs: Date.now() - startedAt,
+    attempts,
   });
 
   if (!result.ok) {
@@ -816,7 +893,18 @@ export async function callMcpTool(
     errorCode: null,
     errorMessage: null,
   };
-  } catch {
+  } catch (error) {
+    // SESSİZ YUTMA YASAK. Bu blok hatayı hiçbir iz bırakmadan yutuyordu:
+    // "MCP aracı çalışmıyor" ile "kodda bir istisna var" birbirinden ayırt
+    // edilemiyordu. Davranış aynı (kullanıcıya aynı mesaj), fark: artık
+    // sebebi logda yazıyor.
+    app.log?.warn?.(
+      {
+        err: error instanceof Error ? error.message : String(error),
+        toolName: input.toolName,
+      },
+      "mcp tool call threw",
+    );
     return {
       ok: false,
       permission,
@@ -824,5 +912,63 @@ export async function callMcpTool(
       errorCode: "mcp_tool_failed",
       errorMessage: "MCP aracı şu anda kullanılamıyor.",
     };
+  }
+}
+
+/**
+ * BAĞLI UYGULAMA ÇAĞRISININ İZİ.
+ *
+ * MCP sunucusu EKLEMEK denetime yazılıyordu (`mcp.server.create`), ama araç
+ * ÇAĞIRMAK hiçbir iz bırakmıyordu. Yani kullanıcının Notion'ında bir sayfa
+ * oluşturulduğunda ya da Gmail'i okunduğunda sistemde bunun kaydı yoktu —
+ * ne kullanıcı görebiliyordu ne de bir arıza sonrası geriye bakılabiliyordu.
+ *
+ * ARGÜMAN DEĞERLERİ YAZILMAZ, yalnız anahtar adları. Bir MCP çağrısının
+ * argümanı mesaj gövdesi, sayfa içeriği ya da arama sorgusu olabilir; denetim
+ * kaydı ne yapıldığını göstermeli, kullanıcının verisini ikinci bir yere
+ * kopyalamamalı. (Aynı ilke `task-episode` ambarında da uygulanıyor.)
+ *
+ * İz YAZILAMAZSA çağrı düşmez: denetim kaydı işin kendisini engellemez.
+ */
+async function traceMcpToolCall(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    declaration: McpToolDeclaration;
+    permission: McpToolPermission;
+    args: Record<string, unknown>;
+    ok: boolean;
+    errorCode: string | null;
+    durationMs: number;
+    attempts: number;
+  },
+): Promise<void> {
+  try {
+    await createAuditLog(app, {
+      userId: input.userId,
+      // Çağrıyı backend yapar; hesap sahibi `userId` alanında zaten duruyor.
+      actorType: "system",
+      actorId: input.userId,
+      action: "mcp.tool.call",
+      resourceType: "mcp_tool",
+      resourceId: input.declaration.name,
+      status: input.ok ? "success" : "failure",
+      payload: {
+        appId: input.declaration.appId,
+        appDisplayName: input.declaration.appDisplayName,
+        toolName: input.declaration.remoteToolName,
+        permission: input.permission,
+        argKeys: Object.keys(input.args ?? {}).slice(0, 24),
+        argCount: Object.keys(input.args ?? {}).length,
+        durationMs: input.durationMs,
+        attempts: input.attempts,
+        ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+      },
+    });
+  } catch (error) {
+    app.log?.warn?.(
+      { err: error instanceof Error ? error.message : String(error) },
+      "mcp tool call trace not recorded",
+    );
   }
 }

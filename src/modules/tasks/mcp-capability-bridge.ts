@@ -25,6 +25,8 @@ import { isMcpCapabilityId } from "../integrations/mcp-capability.js";
 export type StoredMcpToolDescriptor = {
   capabilityId: string;
   toolName?: string;
+  /** Sunucunun kullanıcıya görünen adı — "Notion", "Linear". */
+  serverName?: string;
   sideEffectClass?: string;
   riskClass?: string;
   requiresApproval?: boolean;
@@ -67,6 +69,10 @@ export function collectStoredMcpTools(servers: unknown): StoredMcpToolDescriptor
       tools.push({
         capabilityId,
         toolName: typeof tool.toolName === "string" ? tool.toolName : undefined,
+        serverName:
+          typeof server.name === "string" && server.name.trim()
+            ? server.name.trim()
+            : undefined,
         sideEffectClass:
           typeof tool.sideEffectClass === "string" ? tool.sideEffectClass : undefined,
         riskClass: typeof tool.riskClass === "string" ? tool.riskClass : undefined,
@@ -82,6 +88,12 @@ export function collectStoredMcpTools(servers: unknown): StoredMcpToolDescriptor
     }
   }
   return tools;
+}
+
+/** `create-pages` → `create pages`; gömme için okunabilir yüzey. */
+function readableToolLabel(tool: StoredMcpToolDescriptor): string {
+  const raw = (tool.toolName ?? tool.capabilityId.split(":").pop() ?? "").trim();
+  return raw.replace(/[_-]+/gu, " ").trim();
 }
 
 /**
@@ -100,13 +112,52 @@ export function mcpToolManifestEntry(
       : tool.sideEffectClass === "destructive"
         ? "destructive"
         : "write";
+  const serverLabel = (tool.serverName ?? tool.capabilityId.split(":")[1] ?? "").trim();
+  const toolLabel = readableToolLabel(tool);
+  const description = (tool.description ?? "").trim();
+
+  // GİRDİ EKSİK KALAMAZ.
+  //
+  // Bu fonksiyon eskiden yalnız dört alan üretip `as` ile tam manifest girdisi
+  // gibi davranıyordu. Sonucu iki katmanda görülüyordu: anlamsal indeks
+  // pasajı bu alanlardan kurduğu için MCP araçları hiç bulunamıyor, ve dizi
+  // alanları eksik olduğu için pasaj kurucusu çöküp ÖNERİ MOTORUNUN TAMAMINI
+  // susturuyordu (bkz. capability-semantic-index.ts).
+  //
+  // Gereken veri zaten elde: sunucunun adı ve aracın kendi açıklaması. Buradan
+  // türetilen metin elle yazılmış bir kalıp değil — sunucu adı ve araç adı
+  // ayırt edici belirteçlerdir ve çok dilli gömme modeli eşleştirmeyi kendisi
+  // yapar. Yeni bir uygulama bağlandığında hiçbir yere kelime eklemek
+  // gerekmez.
+  const surface = [serverLabel, toolLabel].filter(Boolean).join(" ");
   return {
     name: tool.capabilityId,
+    displayName: [serverLabel, toolLabel].filter(Boolean).join(" · ") || tool.capabilityId,
+    description,
+    usage: surface ? `${serverLabel} uygulamasındaki "${toolLabel}" aracı.` : "",
+    requiredArgs: tool.argSlots ?? [],
     // Onay bilgisi yoklama anında hesaplanmıştır; burada yeniden yorumlanmaz.
     requiresApproval: tool.requiresApproval !== false,
+    whenToUse: surface ? [surface] : [],
+    whenNotToUse: [],
+    inputContract: {},
+    outputContract: {},
+    artifactContract: {},
+    verificationPlan: [],
+    liveNarration: [],
+    failureModes: [],
+    fewShots: [],
+    utterances: [serverLabel, toolLabel].filter(Boolean),
+    notFor: [],
+    privacyClass: "permission_gated",
+    sideEffect: sideEffectClass !== "read",
     mutatesPath: false,
     sideEffectClass,
-  } as DesktopCapabilityManifestEntry;
+    executionAuthority: "hybrid",
+    questionSafeObservation: sideEffectClass === "read",
+    fallbackExecutionEligible: false,
+    skillAffinity: [],
+  };
 }
 
 /**

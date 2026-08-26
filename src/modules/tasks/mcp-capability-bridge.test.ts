@@ -77,3 +77,51 @@ test("indeks capability adıyla sorgulanabilir", () => {
   assert.equal(index.get("mcp:google_calendar:create_event")?.sideEffectClass, "write");
   assert.equal(index.get("yok"), undefined);
 });
+
+test("a connected tool carries the text that makes it findable", () => {
+  // Bu fonksiyon yalnız dört alan üretip `as` ile tam manifest girdisi gibi
+  // davranıyordu. İki katmanda kırılıyordu:
+  //
+  //   1. Anlamsal indeks pasajı displayName/description/usage/whenToUse/
+  //      utterances alanlarından kurar; hepsi boş olduğu için bağlı bir
+  //      uygulamanın aracı hiçbir sorguda bulunamıyordu.
+  //   2. Dizi alanları YOK olduğu için pasaj kurucusu `...entry.whenToUse`
+  //      üzerinde "undefined is not iterable" fırlatıyor, hata öneri
+  //      motorunun catch'ine düşüyor ve fonksiyon BOŞ dönüyordu — yani bağlı
+  //      tek bir MCP sunucusu, YEREL yetenek önerilerini de susturuyordu.
+  const entry = mcpToolManifestEntry({
+    capabilityId: "mcp:notion:create-pages",
+    toolName: "create-pages",
+    serverName: "Notion",
+    sideEffectClass: "write",
+    requiresApproval: true,
+    description: "Notion'da yeni sayfa oluşturur.",
+  });
+
+  // Dizi alanları her koşulda dizi olmalı: aşağıdaki yayma bunu ister.
+  for (const field of ["whenToUse", "utterances", "requiredArgs", "fewShots"] as const) {
+    assert.ok(Array.isArray(entry[field]), `${field} dizi olmalı`);
+  }
+  assert.doesNotThrow(() => [...entry.whenToUse, ...entry.utterances]);
+
+  // Sunucunun adı ve aracın açıklaması gömmeye ulaşmalı.
+  assert.match(entry.displayName, /Notion/);
+  assert.match(entry.description, /sayfa oluşturur/);
+  assert.ok(entry.utterances.includes("Notion"));
+
+  // Güvenlik sınıflandırması değişmemeli.
+  assert.equal(entry.requiresApproval, true);
+  assert.equal(entry.sideEffectClass, "write");
+  assert.equal(entry.sideEffect, true);
+  assert.equal(entry.fallbackExecutionEligible, false);
+});
+
+test("an unclassified connected tool still fails closed", () => {
+  const entry = mcpToolManifestEntry({ capabilityId: "mcp:unknown:do-something" });
+  assert.equal(entry.sideEffectClass, "write");
+  assert.equal(entry.requiresApproval, true);
+  assert.equal(entry.questionSafeObservation, false);
+  // Ad çözülemese bile girdi kullanılabilir kalmalı.
+  assert.ok(Array.isArray(entry.whenToUse));
+  assert.equal(entry.name, "mcp:unknown:do-something");
+});

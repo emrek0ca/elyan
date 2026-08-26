@@ -125,12 +125,23 @@ const MAX_MCP_CACHE_ENTRIES = 512;
  * Olumsuz bilgi gömmeye değil, eşleştirme sonrası filtreye aittir.
  */
 function capabilityPassage(entry: (typeof DESKTOP_CAPABILITY_MANIFEST)[number]): string {
+  // DİZİ ALANLARI VAR SAYILAMAZ.
+  //
+  // Manifest girdileri derleme zamanında tamdır, ama tura özgü MCP girdileri
+  // aynı tipe `as` ile dönüştürülüyor ve alanların hepsini taşımıyordu.
+  // `...entry.whenToUse` üzerinde `undefined is not iterable` fırlıyor, hata
+  // `suggestCapabilitiesSemantically`nin catch'ine düşüyor ve fonksiyon BOŞ
+  // dönüyordu — yani kullanıcının bağlı TEK bir MCP sunucusu varsa yalnız MCP
+  // araçları değil, YEREL yetenek önerileri de tamamen susuyordu. Tek bozuk
+  // girdi bütün çağrıyı zehirliyordu.
+  const list = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
   return [
     entry.displayName,
     entry.description,
     entry.usage,
-    ...entry.whenToUse,
-    ...entry.utterances,
+    ...list(entry.whenToUse),
+    ...list(entry.utterances),
   ]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(". ")
