@@ -16,6 +16,7 @@ import { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observati
 import {
   hasArtifactHandoffIntent,
   hasExplicitLocalSaveIntent,
+  hasScreenCaptureIntent,
   hasLocalDocumentReadIntent,
   hasLocalDocumentUpdateIntent,
   localDocumentReadCapabilities,
@@ -1211,6 +1212,12 @@ function inferCapabilities(
   // `operation === "edit"` sözleşmede vardı ama hiçbir yere derlenmiyordu:
   // "masaüstündeki raporu güncelle" ya dinamik döngüye düşüyor ya da YENİ
   // dosya yazıyordu. Okumadan önce denenir çünkü ayrım fiildedir.
+  // EKRAN GÖRÜNTÜSÜ — kapalı, tek adımlı, dosya üreten şerit.
+  //
+  // Doğru araç yokken bu istek generic ekran otomasyonuna düşüyor ve dosyasız
+  // "başarılı" dönüyordu. `screen_capture` dosya üretir ve kanıtı dosyanın
+  // kendisidir.
+  if (hasScreenCaptureIntent(message)) return ["screen_capture"];
   // BEŞİNCİ ŞERİT: artefakt devri. Üretim YOK — saklanan dosya diske yazılır.
   // Yeniden üretim hem yavaştır hem de "aynı dosya" beklentisini bozar.
   if (hasArtifactHandoffIntent(message, { hasPriorArtifact: hasPriorArtifactRef(envelope) })) {
@@ -2037,6 +2044,21 @@ function buildSteps(input: {
   // `mode: "update"` yeni bir dosya yaratmaz; okunan yolun üzerine yazar.
   // Bu yüzden yetki de o yola bağlanır ve ayrı onay ister — üzerine yazma
   // geri alınamaz.
+  // EKRAN GÖRÜNTÜSÜ ADIMI. Hedef yol iş emrinin yazma kökünden türetilir;
+  // kanıt kaydedilen dosyanın kendisidir.
+  if (input.capabilities.includes("screen_capture")) {
+    steps.push({
+      id: "step_screen_capture",
+      capability: "screen_capture",
+      description: "Ekran görüntüsü alınıp dosyaya kaydedilecek.",
+      args: {
+        target: "screen",
+        format: "png",
+        outputPath: `~/Desktop/ekran-goruntusu-${Date.now()}.png`,
+      },
+      resourceScope: ["~/Desktop"],
+    });
+  }
   // DEVİR ADIMI: sunucudaki artefaktı yerel diske yaz.
   //
   // `artifactId` çağrı anında sözleşmeden bağlanır; adım içerik ÜRETMEZ,
@@ -2384,7 +2406,15 @@ export function buildDesktopWorkOrder(input: {
   // var olan bir belgeyi TÜKETMEK istiyordu; sistem yenisini yazmaya
   // hazırlanıyordu. Yerel okuma niyeti varken yazıcı dayatılmaz.
   const localDocumentReadRequested =
-    hasLocalDocumentReadIntent(message) || hasLocalDocumentUpdateIntent(message);
+    hasLocalDocumentReadIntent(message) ||
+    hasLocalDocumentUpdateIntent(message) ||
+    // EKRAN GÖRÜNTÜSÜ DOSYAYI KENDİ YAZAR.
+    //
+    // "ekran görüntüsü al ve masaüstüne kaydet" turunda "kaydet" fiili
+    // `document_task` çıkarımını tetikliyor ve yazıcı menüye zorla ekleniyordu.
+    // Sonuç: ekran görüntüsünün YANINDA bir de gereksiz belge — kodun daha
+    // önce belgelediği "klasör isteğine DOCX" hatasının aynısı.
+    hasScreenCaptureIntent(message);
   const writerForKind =
     !readOnlyProcessObservationRequested &&
     !localDocumentReadRequested &&
@@ -2698,7 +2728,10 @@ export function buildDesktopWorkOrder(input: {
     // Var olan YEREL bir belgeyi güncellemek, tanım gereği yerel teslimdir:
     // dosya zaten kullanıcının diskinde ve aynı yola yazılacak.
     desktopDeliveryRequested:
-      desktopOutputRequested || hasLocalDocumentUpdateIntent(message),
+      desktopOutputRequested ||
+      hasLocalDocumentUpdateIntent(message) ||
+      // Ekran görüntüsü tanım gereği DOSYA üretir ve yerel diske iner.
+      hasScreenCaptureIntent(message),
     readRoots: [
       ...new Set(["workspace", ...explicitRoots, ...stepReadRoots]),
     ],

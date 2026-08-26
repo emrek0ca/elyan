@@ -702,3 +702,58 @@ test("dispatch widget error never carries a runtime stack trace", () => {
   assert.equal(block.error?.message, "Görev tamamlanamadı.");
   assert.equal(/Traceback|bridge\.py/.test(block.error?.message ?? ""), false);
 });
+
+test("ADIM onay beklerken BLOK beklemiyorsa ölü uç oluşmaz", () => {
+  // Canlı arıza (görev 234fbf31): widget "Onayınızı bekliyor." yazıyordu ama
+  // approvalRequest boştu; mobil düğme çizemedi, kullanıcı onaylayamadı ve
+  // görev orada öldü. Bu kullanıcı izni değil, invariant ihlalidir.
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-broken-approval",
+      status: "running",
+      payload: {},
+      approvalRequest: {},
+      result: {
+        executionTrace: {
+          steps: [
+            {
+              id: "s1",
+              capability: "screen_capture",
+              status: "waiting_approval",
+              label: "Ekran görüntüsü",
+            },
+          ],
+        },
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    assistantContent: "",
+  });
+
+  assert.equal(block.needsApproval ?? false, false);
+  assert.equal(block.error?.code, "APPROVAL_REQUEST_MISSING");
+  assert.deepEqual(block.availableActions, ["retry"]);
+});
+
+test("gerçek onay isteği düğmeleriyle birlikte gösterilir", () => {
+  const block = buildTaskTraceBlock({
+    task: {
+      id: "task-real-approval",
+      status: "waiting_approval",
+      payload: {},
+      approvalRequest: {
+        interaction: { kind: "permission" },
+        question: "Ekran görüntüsü masaüstüne kaydedilsin mi?",
+      },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    assistantContent: "",
+  });
+
+  assert.equal(block.needsApproval, true);
+  assert.equal(block.interaction?.kind, "permission");
+  assert.deepEqual(block.availableActions, ["approve", "reject"]);
+  assert.equal(block.error, undefined);
+});

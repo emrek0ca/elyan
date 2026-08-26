@@ -155,12 +155,28 @@ const LOCAL_SAVE_VERB_STEMS = trStemPattern([
   "disa aktar", "export", "save", "download",
 ]);
 
+/**
+ * OLUMSUZLUK EKİ FİİLİ TERSİNE ÇEVİRİR.
+ *
+ * Türkçede `-me/-ma` yasak bildirir: "kaydetme" KAYDETME demektir, "kaydet"
+ * değil. Kök tabanlı eşleme ikisini ayırt edemiyordu ve
+ * "Hiçbir şeyi değiştirme, silme veya kaydetme." cümlesi AÇIK KAYIT İSTEĞİ
+ * sayılıyordu — yani kullanıcı "dosyaya dokunma" derken sistem dosya
+ * üretmeye hazırlanıyordu.
+ *
+ * Yasak bağlamı görüldüğünde şerit tamamen kapanır: belirsizlikte kullanıcının
+ * "dokunma" demesine uymak, tahmin etmekten daha doğrudur.
+ */
+const SAVE_PROHIBITION_PATTERN =
+  /(?:(?<!\p{L})(?:kaydetme|kaydetmeden|kaydetmiyor|kaydetmeyi?n)(?!\p{L})|hiçbir\s*şeyi|hicbir\s*seyi|(?:sadece|yalnızca|yalnizca)\s+[^.]{0,40}\b(?:söyle|soyle|göster|goster|anlat|listele))/iu;
+
 export function hasExplicitLocalSaveIntent(message: string): boolean {
   const normalized = String(message ?? "")
     .trim()
     .replace(/\s+/gu, " ")
     .slice(0, 400);
   if (!normalized) return false;
+  if (SAVE_PROHIBITION_PATTERN.test(normalized)) return false;
   return (
     LOCAL_FILE_LOCATION_STEMS.test(normalized) &&
     LOCAL_SAVE_VERB_STEMS.test(normalized)
@@ -211,5 +227,52 @@ export function hasArtifactHandoffIntent(
     ARTIFACT_HANDOFF_REFERENCE_STEMS.test(normalized) &&
     LOCAL_FILE_LOCATION_STEMS.test(normalized) &&
     LOCAL_SAVE_VERB_STEMS.test(normalized)
+  );
+}
+
+
+/**
+ * EKRAN GÖRÜNTÜSÜ İSTEĞİ.
+ *
+ * Canlı arıza (2026-08-26, görev 234fbf31): "ekran görüntüsünü alıp masaüstüne
+ * kaydet" isteği `desktop_operator.observe_screen` + `desktop_operator.run`
+ * seçti, iki generic çağrı yaptı, ikisi de "Operator aksiyonu çalıştırıldı."
+ * dedi ve ortada dosya yoktu. Doğrulama `WORK_ORDER_EVIDENCE_MISSING` ile
+ * görevi düşürdü.
+ *
+ * Sebep: ekran görüntüsü ALIP KAYDEDEN bir yetenek yoktu. Manifestteki
+ * `analyze_screen` ekranı yorumlar, dosya üretmez. Doğru araç olmayınca
+ * sistem generic ekran otomasyonuna uzandı.
+ *
+ * Ayrım net: "ekranda ne var" bir SORUDUR (analyze_screen), "ekran görüntüsü
+ * al" bir ÜRETİMDİR (screen_capture). Fiil ayırt eder.
+ */
+const SCREENSHOT_NOUN_STEMS = trStemPattern([
+  "ekran görüntü", "ekran goruntu", "ekrangörüntü", "screenshot", "screen shot",
+  "ekran resmi", "ekran fotoğraf", "ekran fotograf",
+]);
+
+const SCREENSHOT_CAPTURE_VERB_STEMS = trStemPattern([
+  "al", "çek", "cek", "kaydet", "yakala", "capture", "take", "save",
+]);
+
+/** Ekranı ANLAMAK isteyen fiiller — bunlar `analyze_screen` işidir. */
+const SCREEN_ANALYSIS_VERB_STEMS = trStemPattern([
+  "ne var", "ne yazıyor", "ne yaziyor", "analiz", "yorumla", "oku", "anlat",
+  "görünüyor", "gorunuyor", "ne diyor",
+]);
+
+export function hasScreenCaptureIntent(message: string): boolean {
+  const normalized = String(message ?? "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .slice(0, 300);
+  if (!normalized) return false;
+  if (normalized.split(" ").filter(Boolean).length > 16) return false;
+  // Ekranı yorumlama isteği bu şeride girmez: o bir soru, bu bir üretim.
+  if (SCREEN_ANALYSIS_VERB_STEMS.test(normalized)) return false;
+  return (
+    SCREENSHOT_NOUN_STEMS.test(normalized) &&
+    SCREENSHOT_CAPTURE_VERB_STEMS.test(normalized)
   );
 }

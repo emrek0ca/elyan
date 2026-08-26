@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parsePreferredWriteRoot } from "./write-preference.js";
+import { hasExplicitLocalSaveIntent } from "./local-read-intent.js";
 
 test("tercih izinli kökün ALTINI işaret edebilir", () => {
   assert.equal(parsePreferredWriteRoot("~/Desktop/Raporlar"), "~/Desktop/Raporlar");
@@ -35,4 +36,23 @@ test("aşırı derin veya bozuk yol reddedilir", () => {
 
 test("ters bölü normalleştirilir", () => {
   assert.equal(parsePreferredWriteRoot("~\\Desktop\\Raporlar"), "~/Desktop/Raporlar");
+});
+
+test("OLUMSUZLUK eki kayıt isteğini tersine çevirir", () => {
+  // Türkçede -me/-ma yasak bildirir: "kaydetme" KAYDETME demektir. Kök tabanlı
+  // eşleme ikisini ayırt edemiyor ve kullanıcı "dokunma" derken sistem dosya
+  // üretmeye hazırlanıyordu.
+  assert.equal(
+    hasExplicitLocalSaveIntent(
+      "masaüstünde en son değiştirilen rapor dosyasını bul. Hiçbir şeyi değiştirme, silme veya kaydetme.",
+    ),
+    false,
+  );
+  assert.equal(
+    hasExplicitLocalSaveIntent("masaüstündeki dosyaları kaydetmeden sadece listele"),
+    false,
+  );
+  // Gerçek kayıt isteği etkilenmez.
+  assert.equal(hasExplicitLocalSaveIntent("raporu masaüstüne kaydet"), true);
+  assert.equal(hasExplicitLocalSaveIntent("bunu masaüstüne indir"), true);
 });

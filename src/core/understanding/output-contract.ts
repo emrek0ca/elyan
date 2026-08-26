@@ -1,4 +1,5 @@
 import type { SharedBrainWorkload } from "../../modules/brain/workloads.js";
+import { hasExplicitLocalSaveIntent } from "../../modules/tasks/local-read-intent.js";
 import { trStemPattern } from "../../lib/tr-word-boundary.js";
 
 export type OutputOperation =
@@ -331,13 +332,27 @@ export function compileOutputContract(input: OutputContractInput): OutputContrac
   const operation = inferOperation(text, format, sourceReference);
   const outputKind = operation === "answer" ? "chat_reply" : outputKindFor(format, text);
   const pageCount = inferPageCount(text, metadata);
-  const requiresArtifact = operation !== "answer" && (outputKind !== "chat_reply" || format != null);
+  // AÇIK YEREL KAYIT İSTEĞİ DOSYA DEMEKTİR.
+  //
+  // Canlı arıza (2026-08-26, görev 234fbf31): "ekran görüntüsünü alıp
+  // masaüstüne kaydet" isteğinde `requiresArtifact` FALSE çıktı, hedef "chat"
+  // oldu ve tur dosyasız tamamlandı sayıldı. Sonra doğrulayıcı artefakt aradı,
+  // bulamadı ve görevi düşürdü — sistem kendi içinde çelişiyordu.
+  //
+  // Biçim çıkarımı ("pdf", "docx") her cümlede yakalanmıyor; ama kullanıcı
+  // "masaüstüne kaydet" dediğinde ortada bir DOSYA beklentisi vardır ve bu
+  // biçimden bağımsızdır.
+  const explicitLocalSave = hasExplicitLocalSaveIntent(text);
+  const requiresArtifact =
+    explicitLocalSave ||
+    (operation !== "answer" && (outputKind !== "chat_reply" || format != null));
   const reasons = [
     `operation:${operation}`,
     `reference:${sourceReference}`,
     ...(format ? [`format:${format}`] : []),
     ...(pageCount ? [`page_count:${pageCount}`] : []),
     ...(requiresArtifact ? ["artifact_required"] : []),
+    ...(explicitLocalSave ? ["explicit_local_save"] : []),
   ];
   const confidence =
     readBoolean(metadata, "outputContractAuthoritative") === true

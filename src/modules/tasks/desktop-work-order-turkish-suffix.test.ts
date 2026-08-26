@@ -116,10 +116,19 @@ test("ekran bağlamı yoksa belge görevinden ekran otomasyonu düşer", () => {
   );
 });
 
+test("ekran görüntüsü artık GENERIC yürütücüye düşmez", () => {
+  // Bu vaka eskiden bu dosyada "ekran otomasyonu korunmalı" diye kilitliydi:
+  // ekran görüntüsü alıp KAYDEDEN bir yetenek olmadığı için tek yol
+  // `desktop_operator` idi. Canlı arıza (görev 234fbf31) tam oradan çıktı —
+  // iki generic çağrı "başarılı" dedi, dosya oluşmadı, doğrulama görevi
+  // düşürdü. `screen_capture` eklendiği için geçici çözüm de gereksiz.
+  const capabilities = capabilitiesFor("ekran görüntüsü al ve masaüstüne kaydet");
+  assert.deepEqual(capabilities, ["screen_capture"]);
+});
+
 test("gerçek karma işlerde ekran otomasyonu KORUNUR", () => {
   // Bunlar ekran/tarayıcı yüzeyine gerçekten muhtaç; kapı onları elemez.
   for (const message of [
-    "ekran görüntüsü al ve masaüstüne kaydet",
     "ekrandaki tabloyu bir word belgesine aktar",
     "chrome'daki sayfayı pdf olarak kaydet",
   ]) {

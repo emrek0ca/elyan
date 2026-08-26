@@ -260,15 +260,41 @@ function decorateLifecycleFields(
       ...(id ? { savableToDesktop: true } : {}),
     }];
   }).slice(0, 12);
+  // ONAY İSTEĞİ OLMADAN "ONAY BEKLİYOR" GÖSTERİLEMEZ.
+  //
+  // Canlı arıza (2026-08-26, görev 234fbf31): widget "Onayınızı bekliyor."
+  // yazıyordu ama `approval_request` BOŞTU. Mobil onay nesnesi bulamadığı için
+  // düğme çizmedi; kullanıcı onaylayamadı ve görev orada öldü.
+  //
+  // Bu bir kullanıcı izni değil, INVARIANT İHLALİdir: adım onay bekliyorsa
+  // onay nesnesi var olmak zorundadır. Kullanıcıyı düğmesiz bir bekleme
+  // ekranında tutmak yerine durumu dürüstçe söyleyip yeniden denemesine
+  // izin veriyoruz.
+  // Uyumsuzluk ADIM ile BLOK arasındadır.
+  //
+  // Canlı ekranda (görev 234fbf31) adım "Onayınızı bekliyor." diyordu ama
+  // bloğun kendi durumu `waiting_approval` DEĞİLDİ. `needsApproval` yalnız
+  // blok durumundan üretildiği için hiç yazılmadı; mobil düğme çizmedi ve
+  // kullanıcı onaylayamadan görev öldü.
+  //
+  // Blok gerçekten `waiting_approval` ise varsayılan izin akışı doğrudur ve
+  // dokunulmaz — kırık olan, adımın beklediğini söyleyip bloğun söylememesi.
+  const stepWaitingForApproval = block.steps.some(
+    (step) => step.status === "waiting_approval",
+  );
+  const approvalContractBroken =
+    stepWaitingForApproval && block.status !== "waiting_approval";
   const availableActions = block.status === "waiting_approval"
     ? (declaredActions.length > 0
         ? declaredActions
         : kind === "clarification"
           ? ["answer"]
           : ["approve", "reject"])
-    : block.status === "failed" && retryable
+    : approvalContractBroken
       ? ["retry"]
-      : [];
+      : block.status === "failed" && retryable
+        ? ["retry"]
+        : [];
   const safeActions = availableActions.filter(
     (action): action is "approve" | "reject" | "answer" | "retry" =>
       ["approve", "reject", "answer", "retry"].includes(action),
@@ -283,6 +309,17 @@ function decorateLifecycleFields(
           },
           // A clarification is a question, not a computer permission.
           needsApproval: kind === "permission",
+        }
+      : {}),
+    // Kırık onay sözleşmesi kullanıcıya izin sorusu gibi GÖSTERİLMEZ.
+    ...(approvalContractBroken
+      ? {
+          needsApproval: false,
+          error: {
+            code: "APPROVAL_REQUEST_MISSING",
+            message: "Görev onay bekliyor görünüyor ama onay isteği oluşmamış.",
+            retryable: true,
+          },
         }
       : {}),
     verification: verificationSnapshotFromEvidence(block, result, artifacts),

@@ -5633,6 +5633,75 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "skillAffinity": []
   },
   {
+    "name": "screen_capture",
+    "displayName": "Ekran görüntüsü",
+    "description": "Ekranın, pencerenin veya seçilen bölgenin görüntüsünü alıp DOSYA olarak kaydeder.",
+    "usage": "Kullanıcı ekran görüntüsü alıp saklamak istediğinde. Ekranda NE OLDUĞUNU soruyorsa analyze_screen kullan.",
+    "requiredArgs": [
+      "outputPath"
+    ],
+    "requiresApproval": true,
+    "whenToUse": [
+      "ekran görüntüsü al",
+      "screenshot al masaüstüne kaydet",
+      "ekranın resmini çek"
+    ],
+    "whenNotToUse": [
+      "Ekranda ne olduğunu ANLAMAK için analyze_screen kullan.",
+      "Var olan görseli okumak için image_read kullan."
+    ],
+    "inputContract": {
+      "required": [
+        "outputPath"
+      ],
+      "properties": {
+        "outputPath": {
+          "type": "STRING"
+        },
+        "target": {
+          "type": "STRING",
+          "description": "screen | window | selection"
+        },
+        "format": {
+          "type": "STRING",
+          "description": "png | jpg"
+        }
+      },
+      "additionalProperties": false,
+      "target": "screen|window|selection",
+      "format": "png|jpg"
+    },
+    "outputContract": {
+      "kind": "artifact",
+      "format": "image"
+    },
+    "artifactContract": {},
+    "verificationPlan": [
+      "Structured result must return ok=true before success is reported.",
+      "Permission or approval must be verified before the side effect runs."
+    ],
+    "liveNarration": [
+      "Ekran görüntüsü alınıyor",
+      "Görüntü kaydediliyor"
+    ],
+    "failureModes": [
+      "SCREEN_RECORDING_PERMISSION_DENIED",
+      "INVALID_OUTPUT_PATH",
+      "CAPTURE_FAILED"
+    ],
+    "fewShots": [],
+    "utterances": [],
+    "notFor": [],
+    "privacyClass": "local_private_write",
+    "sideEffect": true,
+    "mutatesPath": true,
+    "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
+    "skillAffinity": []
+  },
+  {
     "name": "send_whatsapp_message",
     "displayName": "WhatsApp mesajı",
     "description": "WhatsApp Desktop/Web üzerinden mesaj hazırlar veya gönderir (gönderim dışa dönük — onay gerekir).",
