@@ -276,3 +276,48 @@ export function hasScreenCaptureIntent(message: string): boolean {
     SCREENSHOT_CAPTURE_VERB_STEMS.test(normalized)
   );
 }
+
+
+/**
+ * MAİL GÖNDERME İSTEĞİ.
+ *
+ * Canlı arıza (2026-08-26, görev cf4c32d4): kullanıcı "…pdf olarak kaydet
+ * masaüstüne VE osmanemrekoca@gmail.com a mail olarak gönder" dedi. Üretilen
+ * menü `web_research, document_write, canvas_write` oldu — mail adımı HİÇ
+ * yoktu. Gmail bağlantısı bağlıydı, yetenek manifestte vardı; eksik olan tek
+ * şey mesajdan çıkarım yapan şeritti. `email_send` yalnız yönlendiricinin
+ * önceden ilan ettiği durumlarda menüye giriyordu.
+ *
+ * İsteğin bir parçasının sessizce düşmesi, yanlış iş yapmaktan daha kötüdür:
+ * kullanıcı üç iş istedi, ikisi yapıldı ve üçüncüsünden hiç söz edilmedi.
+ *
+ * KAPI DAR: alıcı adresi AÇIKÇA yazılmış olmalı. "birine mail at" gibi
+ * belirsiz bir istekte adresi tahmin etmek, yanlış kişiye mesaj göndermek
+ * demektir — bu geri alınamaz.
+ */
+const EMAIL_ADDRESS_PATTERN =
+  /(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]{2,}(?![\w.-])/u;
+
+const MAIL_SEND_VERB_STEMS = trStemPattern([
+  "gönder", "gonder", "at", "yolla", "ilet", "send", "mail at", "email",
+]);
+
+const MAIL_NOUN_STEMS = trStemPattern([
+  "mail", "e-posta", "eposta", "email", "posta",
+]);
+
+/** Mesaj AÇIK bir alıcıya mail gönderilmesini istiyor mu? */
+export function hasEmailSendIntent(message: string): boolean {
+  const normalized = String(message ?? "").trim();
+  if (!normalized) return false;
+  if (!EMAIL_ADDRESS_PATTERN.test(normalized)) return false;
+  return (
+    MAIL_NOUN_STEMS.test(normalized) && MAIL_SEND_VERB_STEMS.test(normalized)
+  );
+}
+
+/** Mesajdaki ilk alıcı adresi. */
+export function extractEmailRecipient(message: string): string | null {
+  const match = EMAIL_ADDRESS_PATTERN.exec(String(message ?? ""));
+  return match ? match[0] : null;
+}

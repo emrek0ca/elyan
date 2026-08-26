@@ -14,7 +14,9 @@ import type { ExecutionStep } from "./execution-step.js";
 import type { ExecutionPlacementSnapshot } from "./execution-placement.js";
 import { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
 import {
+  extractEmailRecipient,
   hasArtifactHandoffIntent,
+  hasEmailSendIntent,
   hasExplicitLocalSaveIntent,
   hasScreenCaptureIntent,
   hasLocalDocumentReadIntent,
@@ -1374,6 +1376,15 @@ function inferCapabilities(
       String.raw`\b(dosya|belge|rapor|not|metin|yazı|yazi|pdf|docx|xlsx|pptx|csv|svg)\b`,
       "i",
     ).test(normalized);
+  // MAİL GÖNDERME AÇIKÇA İSTENDİYSE MENÜYE GİRER.
+  //
+  // `email_send` yalnız yönlendiricinin önceden ilan ettiği durumlarda menüye
+  // giriyordu; mesajdan çıkarım yapan bir şerit yoktu. Sonuç: kullanıcı üç iş
+  // istedi (araştır, kaydet, gönder), plan ikisini aldı ve üçüncüsünden hiç
+  // söz etmedi (canlı arıza cf4c32d4).
+  if (hasEmailSendIntent(message)) {
+    capabilities.add("email_send");
+  }
   if (!folderOnlyRequest && unicodeWordPattern(String.raw`\b(kaydet\p{L}*|save|yaz\p{L}*|çıkar\p{L}*|cikar\p{L}*|hazırla\p{L}*|hazirla\p{L}*|oluştur\p{L}*|olustur\p{L}*|düzenle\p{L}*|duzenle\p{L}*|export|dışa aktar|disa aktar)\b`, "i").test(normalized)) {
     if (presentationRequested) capabilities.add("presentation_write");
     else if (unicodeWordPattern(String.raw`\b(xlsx|excel|çalışma sayfası|calisma sayfasi)\b`, "i").test(normalized)) capabilities.add("spreadsheet_write");
@@ -2277,6 +2288,32 @@ function buildSteps(input: {
         workOrderKind: input.kind,
       },
     });
+  }
+  // MAİL ADIMI — üretilen çıktı alıcıya gönderilir.
+  //
+  // Son adımdır ve önceki adımların çıktısına bağlanır: önce belge üretilir,
+  // sonra gönderilir. `email_send` ayrı onay sınıfında olduğu için önceden
+  // yetki almaz; kullanıcı göndermeden önce görür.
+  if (input.capabilities.includes("email_send")) {
+    const recipient = extractEmailRecipient(input.message);
+    if (recipient) {
+      const upstream = steps
+        .filter((step) => step.capability.endsWith("_write"))
+        .map((step) => step.id);
+      steps.push({
+        id: "step_email_send",
+        capability: "email_send",
+        description: "Hazırlanan çıktı alıcıya e-posta ile gönderilecek.",
+        args: {
+          to: recipient,
+          subject: compactText(input.title, 160),
+          body: upstream.length > 0
+            ? `Ekli çıktı: {{steps.${upstream[upstream.length - 1]}.output}}`
+            : semanticBrief,
+        },
+        ...(upstream.length > 0 ? { dependsOn: [upstream[upstream.length - 1]] } : {}),
+      });
+    }
   }
   return steps.slice(0, MAX_WORK_ORDER_STEPS);
 }
