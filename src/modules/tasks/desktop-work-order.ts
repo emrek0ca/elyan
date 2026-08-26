@@ -1922,13 +1922,37 @@ function buildSteps(input: {
       String.raw`\b(?:masaüstü\p{L}*|masaustu\p{L}*|desktop)\b`,
       "i",
     ).test(topic);
+  // BU BRIEF BELGENİN İÇİNE YAZILIYOR — MAKİNE DÖKÜMÜ OLAMAZ.
+  //
+  // CANLI ARIZA (2026-08-27): "Atatürk'ün ilkeleri hakkında makale yaz 2
+  // sayfalık. Masaüstüne kaydet" isteğinin ürettiği DOCX 33 kelimeydi ve
+  // içinde makale YOKTU — kullanıcının cümlesi iki kez, ardından
+  // `layout_template: {"pageCount":2}`, `execution_surface: {"operation":
+  // "export",…}` ve İngilizce bir doğrulama cümlesi vardı.
+  //
+  // Sebep buydu: brief, zarfın İÇ YAPILARINI düz metne çeviriyordu —
+  // kısıtlar `kind: JSON.stringify(value)` olarak, başarı ölçütleri olduğu
+  // gibi. Bu metin `document_write`a `prompt` diye gidiyor ve o yeteneğin
+  // sözleşmesi açık: "Belgeye YAZILACAK hazır metin. Konu/talimat DEĞİL —
+  // ne yazarsan dosyada o görünür." Araç doğru çalıştı; ona makale yerine
+  // kendi iç durumumuz verildi.
+  //
+  // Kısıtlar makine olgusudur ve TİPLİ ARGÜMANA aittir (sayfa sayısı
+  // aşağıda `pageCount` olarak gider), gövde metnine değil. Başarı ölçütleri
+  // doğrulama içindir, okuyucu için değil. Brief artık yalnız insanın
+  // okuyabileceği şeyleri taşır.
+  const briefConstraints = (input.envelope?.constraints ?? [])
+    .filter((constraint) => constraint.explicit)
+    .map((constraint) =>
+      typeof constraint.value === "string" ? constraint.value.trim() : "",
+    )
+    .filter((value) => value.length > 0);
   const semanticBrief = compactText([
     input.envelope?.intent.topic,
-    ...(input.envelope?.entities ?? []).map((entity) => `${entity.type}: ${entity.normalized ?? entity.value}`),
-    ...(input.envelope?.constraints ?? [])
-      .filter((constraint) => constraint.explicit)
-      .map((constraint) => `${constraint.kind}: ${JSON.stringify(constraint.value)}`),
-    ...(input.envelope?.success_criteria ?? []).map((criterion) => criterion.description),
+    ...(input.envelope?.entities ?? [])
+      .map((entity) => (entity.normalized ?? entity.value ?? "").toString().trim())
+      .filter((value) => value.length > 0),
+    ...briefConstraints,
   ].filter(Boolean).join("\n"), 3_000) || topic || input.summary;
   // Explicit read-only runtime capabilities are already an authoritative
   // selection from the mobile manifest. Materialize them as concrete steps so
@@ -2218,10 +2242,26 @@ function buildSteps(input: {
     // Güncelleme zinciri yazıcı adımını zaten kurdu; ikinci kez eklemek
     // aynı turda hem güncelleme hem YENİ dosya üretirdi.
     if (localUpdateChain && capability === "document_write") continue;
+    // BAŞLIK VE DOSYA ADI TALİMAT DEĞİL KONU OLMALI.
+    //
+    // `input.title` kullanıcının cümlesinin TAMAMI: "Atatürk ün ilkeleri
+    // hakkında makale yaz 2 sayfalık. Masaüstüne kaydet". Bu hem belgeye
+    // başlık olarak yazılıyordu hem de dosya adına slug'lanıyordu —
+    // canlıda `ataturk-un-ilkeleri-hakkinda-makale-yaz-2-sayfalik-
+    // masaustune-ka.docx` çıktı; adın yarısı emir kipi, sonu da kesik.
+    // Zarfın çıkardığı konu varsa o kullanılır; yoksa eski davranış kalır.
+    const documentTitle = compactText(topic || input.title, 160);
     const args: Record<string, unknown> = {
-      title: compactText(input.title, 160),
+      title: documentTitle,
       prompt: semanticBrief,
     };
+    // Sayfa sayısı TİPLİ ARGÜMANDIR. Gövde metnine `layout_template:
+    // {"pageCount":2}` diye sızmasının sebebi burada karşılığının
+    // olmamasıydı.
+    const requestedPageCount = input.envelope?.output_contract?.pageCount;
+    if (typeof requestedPageCount === "number" && requestedPageCount > 0) {
+      args.pageCount = requestedPageCount;
+    }
     if (!researchRequested) args.sourceContext = semanticBrief;
     if (analysisRequested) {
       args.sourceContext = "Analiz bağlamı: {{steps.step_text_analyze.output}}";
@@ -2243,7 +2283,7 @@ function buildSteps(input: {
               : input.envelope?.output_contract?.outputFormat === "pdf"
                 ? "pdf"
                 : "docx";
-      args.outputPath = `~/Desktop/${safeArtifactFilename(input.title)}.${extension}`;
+      args.outputPath = `~/Desktop/${safeArtifactFilename(documentTitle)}.${extension}`;
     }
     if (capability === "canvas_write") {
       const wantsPdf = input.envelope?.desired_outputs.some((output) => output.kind === "pdf") ?? false;
@@ -2252,7 +2292,12 @@ function buildSteps(input: {
     steps.push({
       id: `step_${capability}`,
       capability,
-      description: "Tipli kullanıcı gereksinimlerinden deterministik çıktı üretilecek.",
+      description:
+        capability === "spreadsheet_write"
+          ? "Tablo dosyası hazırlanıyor."
+          : capability === "presentation_write"
+            ? "Sunum hazırlanıyor."
+            : "Belge hazırlanıyor.",
       args,
       ...(analysisRequested
         ? { dependsOn: ["step_text_analyze"] }
