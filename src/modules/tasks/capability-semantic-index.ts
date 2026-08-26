@@ -88,6 +88,44 @@ const DEMO_CAPABILITY_PATTERN = /^quantum_/u;
 /** Arka plan havuzunda her yetenekten en fazla kaç örnek söz kullanılacağı. */
 const BACKGROUND_UTTERANCES_PER_CAPABILITY = 3;
 
+/**
+ * AÇILIŞ GÖMMESİ İSTEK ZAMAN AŞIMINA SIĞMAZ.
+ *
+ * CANLI ARIZA (2026-08-26, VPS): indeks kurulumu her denemede düştü —
+ * `capability semantic index warmed ready:false` ve arkasında
+ * `semantic compute worker request timed out`. Sebep, gömücünün varsayılan
+ * 8 saniyelik İSTEK zaman aşımı: indeks 85 yetenek pasajını ve ~200 arka
+ * plan cümlesini tek çağrıda gömmeye çalışıyor ve bu sınır bir istek için
+ * doğru olsa da bir AÇILIŞ işi için yanlış. Model ısındıktan sonra bile
+ * aşılıyordu, yani beklemek çözmüyordu.
+ *
+ * İki değişiklik: parti başına daha az metin ve açılışa özgü cömert süre.
+ * Bu yol istek yolunda kullanılmıyor; oradaki tek sorgu 8 saniyede rahat
+ * biter ve varsayılanla kalır.
+ */
+const WARM_BATCH_SIZE = 48;
+const WARM_TIMEOUT_MS = 60_000;
+
+/** Metinleri partiler hâlinde gömer; bir parti düşerse tamamı düşer. */
+async function embedInBatches(
+  texts: string[],
+  app: FastifyInstance,
+): Promise<number[][] | null> {
+  const vectors: number[][] = [];
+  for (let index = 0; index < texts.length; index += WARM_BATCH_SIZE) {
+    const batch = texts.slice(index, index + WARM_BATCH_SIZE);
+    const embedded = await embedTextsForStorage(
+      batch,
+      app.log,
+      "capability_catalog",
+      WARM_TIMEOUT_MS,
+    );
+    if (!embedded || embedded.length !== batch.length) return null;
+    vectors.push(...embedded);
+  }
+  return vectors;
+}
+
 type IndexedCapability = {
   capability: string;
   vector: number[];
@@ -169,11 +207,7 @@ async function buildIndex(app: FastifyInstance): Promise<CatalogIndex> {
       !isGenericExecutorCapability(entry.name) &&
       !DEMO_CAPABILITY_PATTERN.test(entry.name),
   );
-  const vectors = await embedTextsForStorage(
-    entries.map(capabilityPassage),
-    app.log,
-    "capability_catalog",
-  );
+  const vectors = await embedInBatches(entries.map(capabilityPassage), app);
   if (!vectors || vectors.length !== entries.length) {
     return { entries: [], background: [] };
   }
@@ -191,7 +225,7 @@ async function buildIndex(app: FastifyInstance): Promise<CatalogIndex> {
   }
   const background =
     backgroundQueries.length > 0
-      ? ((await embedTextsForStorage(backgroundQueries, app.log, "capability_catalog")) ?? [])
+      ? ((await embedInBatches(backgroundQueries, app)) ?? [])
       : [];
 
   return {

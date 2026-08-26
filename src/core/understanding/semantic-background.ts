@@ -40,6 +40,8 @@ import { embedTextsForStorage } from "../../modules/brain/semantic-embedder.js";
 const UTTERANCES_PER_CAPABILITY = 3;
 
 const EMBED_LABEL = "semantic_background";
+const WARM_BATCH_SIZE = 48;
+const WARM_TIMEOUT_MS = 60_000;
 
 let backgroundPromise: Promise<number[][]> | null = null;
 
@@ -61,8 +63,24 @@ async function buildBackground(logger?: FastifyBaseLogger): Promise<number[][]> 
     }
   }
   if (queries.length === 0) return [];
-  const vectors = await embedTextsForStorage(queries, logger, EMBED_LABEL);
-  return vectors ?? [];
+  // Aynı sebep, aynı çare (bkz. capability-semantic-index.ts): bu havuz ~200
+  // cümle ve gömücünün varsayılan 8 saniyelik İSTEK zaman aşımına sığmıyor.
+  // Canlıda tek çağrı olarak denendiğinde "semantic compute worker request
+  // timed out" ile düşüyordu. Açılış işi partilere bölünür ve kendi süresini
+  // alır; istek yolundaki tek sorgu varsayılanla kalır.
+  const vectors: number[][] = [];
+  for (let index = 0; index < queries.length; index += WARM_BATCH_SIZE) {
+    const batch = queries.slice(index, index + WARM_BATCH_SIZE);
+    const embedded = await embedTextsForStorage(
+      batch,
+      logger,
+      EMBED_LABEL,
+      WARM_TIMEOUT_MS,
+    );
+    if (!embedded || embedded.length !== batch.length) return [];
+    vectors.push(...embedded);
+  }
+  return vectors;
 }
 
 /**
