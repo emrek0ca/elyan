@@ -36,6 +36,7 @@ import { rankSemanticTextCandidates } from "./intent-semantic.js";
 export type SemanticWidgetShape =
   | "table"
   | "chart"
+  | "image"
   | "math_surface_3d"
   | "math"
   | "svg"
@@ -48,6 +49,8 @@ const SHAPE_SEED_PHRASES: Record<SemanticWidgetShape, string[]> = {
     "her birinin fiyatını ve özelliğini düzenli göster",
     "bu verileri satır sütun halinde düzenle",
     "tablo olarak hazırla",
+    "bunu excele aktar",
+    "verileri hesap tablosuna dök",
     "compare these side by side in a grid",
     "lay out the specs for each option",
     "give me a spreadsheet of this data",
@@ -81,6 +84,28 @@ const SHAPE_SEED_PHRASES: Record<SemanticWidgetShape, string[]> = {
     "write the closed form expression",
     "bana bir polinom yaz",
   ],
+  // GÖRSEL ÜRETİMİ BİR BİÇİMDİ VE BURADA YOKTU.
+  //
+  // Ölçüldü (2026-08-26): "logo tasarla" hiçbir widget'a düşmüyordu, çünkü
+  // bu listede görsel diye bir biçim yoktu — anlamsal katman yapısal olarak
+  // görsel öneremiyordu. "Kedi resmi çiz" yalnız `resim` kelimesi bir biçim
+  // ipucu ("png") ürettiği için kurtuluyordu; kelimeyi kullanmayan her
+  // parafraz düşüyordu.
+  //
+  // Tohumlar kelime listesi değil: model bunlardan anlamı genelliyor, o
+  // yüzden "manzara çiz", "illüstrasyon hazırla", "kapak görseli üret" gibi
+  // burada yazmayan cümleler de yakalanır. `svg` ile karışmasın diye
+  // tohumlar RESİM üretimini anlatır, şema/diyagram çizimini değil.
+  image: [
+    "bana bir kedi resmi çiz",
+    "logo tasarla",
+    "manzara resmi yap",
+    "kapak görseli üret",
+    "bu tarifi anlatan bir illüstrasyon hazırla",
+    "draw a picture of a cat",
+    "design a logo for this",
+    "generate an image of a landscape",
+  ],
   svg: [
     "bunun şemasını çiz",
     "akış diyagramını göster",
@@ -104,22 +129,27 @@ const SHAPE_SEED_PHRASES: Record<SemanticWidgetShape, string[]> = {
   ],
 };
 
-function averagePrototype(phrases: string[]): number[] {
-  const vectors = phrases.map((phrase) => buildHashedKnowledgeEmbedding(phrase));
-  const dim = vectors[0]?.length ?? 0;
-  const sum = new Array<number>(dim).fill(0);
-  for (const vector of vectors) {
-    for (let i = 0; i < dim; i += 1) {
-      sum[i] += vector[i] ?? 0;
-    }
-  }
-  const magnitude = Math.sqrt(sum.reduce((acc, value) => acc + value * value, 0));
-  return magnitude > 0 ? sum.map((value) => value / magnitude) : sum;
+/**
+ * TOHUMLARI ORTALAMAK BİLGİ KAYBEDİYOR.
+ *
+ * Prototip, bir biçimin tüm tohum cümlelerinin ORTALAMASIYDI. Bir biçimin
+ * ifadeleri ne kadar çeşitliyse ortalama o kadar bulanıklaşır ve hiçbirine
+ * tam benzemez. Ölçüldü (2026-08-26): tablo tohumlarına iki yeni cümle
+ * eklenince, ZATEN TOHUM OLAN "her birinin fiyatını ve özelliğini düzenli
+ * göster" eşleşmez oldu — merkez kaydığı için. Yani listeyi zenginleştirmek
+ * doğruluğu düşürüyordu; tam ters olması gereken bir davranış.
+ *
+ * Tohumlar aynı şeyi söylemenin farklı yollarıdır, ortalaması alınacak
+ * ölçümler değil. Herhangi biri sorguya benziyorsa biçim eşleşmiştir; bu
+ * yüzden benzerlik tohumlar ÜZERİNDE MAKSİMUM alınır.
+ */
+function prototypeVectors(phrases: string[]): number[][] {
+  return phrases.map((phrase) => buildHashedKnowledgeEmbedding(phrase));
 }
 
-const SHAPE_PROTOTYPES: Array<{ shape: SemanticWidgetShape; vector: number[] }> =
+const SHAPE_PROTOTYPES: Array<{ shape: SemanticWidgetShape; vectors: number[][] }> =
   (Object.entries(SHAPE_SEED_PHRASES) as Array<[SemanticWidgetShape, string[]]>).map(
-    ([shape, phrases]) => ({ shape, vector: averagePrototype(phrases) }),
+    ([shape, phrases]) => ({ shape, vectors: prototypeVectors(phrases) }),
   );
 
 function dot(a: number[], b: number[]): number {
@@ -251,7 +281,11 @@ export function resolveWidgetShapeSemantic(
   const queryVector = buildHashedKnowledgeEmbedding(trimmed);
   const ranked = SHAPE_PROTOTYPES.map((prototype) => ({
     shape: prototype.shape,
-    score: dot(queryVector, prototype.vector),
+    // Tohumlar arasında MAKSİMUM: biri benziyorsa biçim eşleşmiştir.
+    score: prototype.vectors.reduce(
+      (best, vector) => Math.max(best, dot(queryVector, vector)),
+      Number.NEGATIVE_INFINITY,
+    ),
   })).sort((left, right) => right.score - left.score);
 
   const best = ranked[0];

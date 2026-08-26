@@ -371,7 +371,11 @@ export function decideStructuredResponseDecision(input: {
   // geçemezse widget'a zorlanmıyor. Kararsızlıkta widget üretmek, widget'ı
   // kaçırmaktan kötüdür — kullanıcı istemediği bir tabloyla karşılaşır.
   const semanticShape = resolveWidgetShapeSemantic(prompt);
-  if (semanticShape) {
+  // GÖRSEL BİR BLOK DEĞİLDİR. Görsel üretimi artefakt yolundan geçer
+  // (`desired_outputs: image` → `image_prompt`); blok sözleşmesinde karşılığı
+  // yok. Burada bir widget tipi ZORLAMAK, olmayan bir blok tipi beyan etmek
+  // olurdu. Biçim kararı çıktı türünü besler, blok seçimini değil.
+  if (semanticShape && semanticShape.shape !== "image") {
     reasons.push(`semantic_${semanticShape.shape}_request`);
     if (semanticShape.shape === "table") {
       return {

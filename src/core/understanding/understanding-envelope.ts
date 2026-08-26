@@ -29,6 +29,7 @@ import {
 } from "./output-contract.js";
 import { selectToolSkillForTurn } from "./tool-skill-selector.js";
 import { trStemPattern } from "../../lib/tr-word-boundary.js";
+import { resolveWidgetShapeSemantic } from "./widget-shape-semantic.js";
 
 type BuildEnvelopeInput = TaskUnderstandingInput & {
   intent: IntentClassification;
@@ -858,6 +859,29 @@ function buildDesiredOutputs(input: {
     !contractContradictsChart
   ) {
     addDesiredOutput(outputs, { kind: "chart", format: null, target: "widget", confidence: 0.82, constraints: ["chart_data"] });
+  }
+
+  // ANLAMSAL GÖRSEL KARARI ÇIKTIYA BAĞLANIR.
+  //
+  // Ölçüldü (2026-08-26): "logo tasarla" hiçbir widget'a düşmüyordu. Sebep
+  // biçim listesinde `image` diye bir şeklin OLMAMASIYDI; eklendi. Burada da
+  // o karar çıktıya çevrilir, yoksa katman doğru şeyi bilip susmuş olurdu.
+  //
+  // Olumsuzlamanın tek sahibi aşağıdaki sözleşme dalıyla aynı:
+  // `isNegatedVisualActionRequest` — "görsel üretme, sadece anlat" turunda
+  // görsel istenmiyor.
+  if (
+    outputs.length === 0 &&
+    resolveWidgetShapeSemantic(input.text)?.shape === "image" &&
+    !isNegatedVisualActionRequest(input.text)
+  ) {
+    addDesiredOutput(outputs, {
+      kind: "image",
+      format: input.format ?? "png",
+      target: artifactTarget,
+      confidence: 0.8,
+      constraints: ["semantic_shape"],
+    });
   }
 
   if (
