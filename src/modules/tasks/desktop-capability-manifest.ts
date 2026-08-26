@@ -5078,6 +5078,93 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     ]
   },
   {
+    "name": "print_document",
+    "displayName": "Belge yazdırma",
+    "description": "Var olan bir dosyayı fiziksel yazıcıya gönderir. GERİ ALINAMAZ: kağıt ve mürekkep tüketir.",
+    "usage": "Kullanıcı bir dosyanın çıktısını almak istediğinde. Önce belgeyi ÜRETMEK gerekiyorsa document_write/canvas_write ile üret, sonra bunu çağır.",
+    "requiredArgs": [
+      "path"
+    ],
+    "requiresApproval": true,
+    "whenToUse": [
+      "yazıcıdan çıktı al",
+      "bu pdf'i yazdır",
+      "raporun çıktısını al iki kopya",
+      "belgeyi printerdan bastır"
+    ],
+    "whenNotToUse": [
+      "Ekrana PDF üretmek yazdırmak değildir; dosya oluşturmak için canvas_write/document_write kullan.",
+      "Dosya henüz yoksa bu yetenek çalışmaz: önce üret."
+    ],
+    "inputContract": {
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "STRING",
+          "description": "Yazdırılacak var olan dosyanın yolu."
+        },
+        "printer": {
+          "type": "STRING",
+          "description": "Yazıcı adı. Boşsa sistem varsayılanı."
+        },
+        "copies": {
+          "type": "NUMBER",
+          "description": "Kopya sayısı (1-20)."
+        }
+      },
+      "additionalProperties": false,
+      "sourceMustExist": true
+    },
+    "outputContract": {
+      "kind": "print_document",
+      "primary": "queued"
+    },
+    "artifactContract": {},
+    "verificationPlan": [
+      "Yazdırma işi kuyruğa alınmış olmalı; sonuç kağıda düştüğünü İDDİA ETMEZ."
+    ],
+    "liveNarration": [
+      "Belge yazıcıya gönderiliyor"
+    ],
+    "failureModes": [
+      "MISSING_PATH",
+      "SOURCE_MISSING",
+      "UNSUPPORTED_FORMAT",
+      "RESOURCE_SCOPE",
+      "TOO_MANY_COPIES",
+      "NO_PRINTER",
+      "PRINT_FAILED",
+      "PRINT_UNAVAILABLE"
+    ],
+    "fewShots": [
+      {
+        "user": "masaüstündeki raporu yazdır",
+        "args": {
+          "path": "~/Desktop/rapor.pdf"
+        }
+      },
+      {
+        "user": "sözleşmenin üç kopyasını bas",
+        "args": {
+          "path": "~/Desktop/sozlesme.pdf",
+          "copies": 3
+        }
+      }
+    ],
+    "utterances": [],
+    "notFor": [],
+    "privacyClass": "local_private_action",
+    "sideEffect": true,
+    "mutatesPath": false,
+    "sideEffectClass": "write",
+    "executionAuthority": "desktop",
+    "questionSafeObservation": false,
+    "fallbackExecutionEligible": false,
+    "skillAffinity": []
+  },
+  {
     "name": "quantum_compare_classical",
     "displayName": "Kuantum karşılaştırma",
     "description": "Kuantum demo sonucunu klasik baseline ile karşılaştırır.",
@@ -6515,13 +6602,13 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
     "name": "text_to_speech",
     "displayName": "Metinden sese",
     "description": "Metni yerel olarak sesli okur.",
-    "usage": "Bir metni/cevabı sesli okutmak için.",
+    "usage": "Bir metni sese çevirmek için: seslendir, sesli oku, sese dönüştür, yüksek sesle söyle. TERS YÖN İÇİN DEĞİL — var olan bir ses kaydını yazıya dökmek speech_to_text'in işidir. Şarkı/medya çalmak için p…",
     "requiredArgs": [
       "text"
     ],
     "requiresApproval": false,
     "whenToUse": [
-      "Bir metni/cevabı sesli okutmak için."
+      "Bir metni sese çevirmek için: seslendir, sesli oku, sese dönüştür, yüksek sesle söyle. TERS YÖN İÇİN DEĞİL — var olan bir ses kaydını yazıya dökmek speech_to_text'in işidir. Şarkı/medya çalmak için p…"
     ],
     "whenNotToUse": [
       "Do not use when required inputs (text) are missing or ambiguous."
