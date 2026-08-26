@@ -51,6 +51,8 @@ import type { FastifyInstance } from "fastify";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import { embedQueryForStorage, embedTextsForStorage } from "../brain/semantic-embedder.js";
 import { isGenericExecutorCapability } from "./capability-risk.js";
+import { listMcpCapabilityEntries } from "./task-execution-contract.js";
+import type { DesktopCapabilityManifestEntry } from "./desktop-capability-manifest.js";
 
 export type CapabilitySuggestion = {
   capability: string;
@@ -71,6 +73,18 @@ const RELATIVE_FLOOR = 0.6;
 
 const MAX_SUGGESTIONS = 3;
 
+/**
+ * Demo yetenekleri indeksten çıkarılır.
+ *
+ * `quantum_*` dördü gösterim amaçlı ve gerçek bir işi karşılamıyor, ama
+ * adlarında "rapor"/"karşılaştır" geçtiği için sıradan istekleri kendilerine
+ * çekiyorlardı: ölçüldü (2026-08-26), "raporun iki kopyasını bastır"
+ * isteğinde birinci aday `quantum_generate_report`, gerçek cevap
+ * `print_document` ancak üçüncü sıradaydı. Öneri listesini kirleten bir aday,
+ * doğru aracı aşağı iter.
+ */
+const DEMO_CAPABILITY_PATTERN = /^quantum_/u;
+
 /** Arka plan havuzunda her yetenekten en fazla kaç örnek söz kullanılacağı. */
 const BACKGROUND_UTTERANCES_PER_CAPABILITY = 3;
 
@@ -81,7 +95,27 @@ type IndexedCapability = {
   bias: number;
 };
 
-let indexPromise: Promise<IndexedCapability[]> | null = null;
+type CatalogIndex = {
+  entries: IndexedCapability[];
+  /**
+   * Arka plan havuzunun vektörleri. Turda gelen MCP araçlarının yanlılığı da
+   * AYNI havuza göre hesaplanmalı, yoksa iki kaynağın skorları
+   * karşılaştırılamaz olur.
+   */
+  background: number[][];
+};
+
+let indexPromise: Promise<CatalogIndex> | null = null;
+
+/**
+ * Bağlı uygulama araçlarının vektör önbelleği.
+ *
+ * MCP araçları kullanıcıya göre değişir ve tur başına yeniden kurulur, ama
+ * araç TANIMLARI neredeyse hiç değişmez. Anahtar pasajın kendisi olduğu için
+ * sunucu aracını güncellediğinde önbellek kendiliğinden ıskalar.
+ */
+const mcpVectorCache = new Map<string, IndexedCapability>();
+const MAX_MCP_CACHE_ENTRIES = 512;
 
 /**
  * Yeteneği tek bir doğal dil pasajına çevirir.
@@ -118,16 +152,20 @@ function cosine(left: number[], right: number[]): number {
  * yeniden gömmek hem katalog hem arka plan havuzu için yüzlerce metni boşuna
  * tekrar gömmek olurdu.
  */
-async function buildIndex(app: FastifyInstance): Promise<IndexedCapability[]> {
+async function buildIndex(app: FastifyInstance): Promise<CatalogIndex> {
   const entries = DESKTOP_CAPABILITY_MANIFEST.filter(
-    (entry) => !isGenericExecutorCapability(entry.name),
+    (entry) =>
+      !isGenericExecutorCapability(entry.name) &&
+      !DEMO_CAPABILITY_PATTERN.test(entry.name),
   );
   const vectors = await embedTextsForStorage(
     entries.map(capabilityPassage),
     app.log,
     "capability_catalog",
   );
-  if (!vectors || vectors.length !== entries.length) return [];
+  if (!vectors || vectors.length !== entries.length) {
+    return { entries: [], background: [] };
+  }
 
   // Arka plan havuzu: kataloğun kendi örnek sözleri. Gerçek kullanıcı
   // cümlelerine en yakın elimizdeki dağılım bu, ve manifestle birlikte
@@ -140,21 +178,87 @@ async function buildIndex(app: FastifyInstance): Promise<IndexedCapability[]> {
       }
     }
   }
-  const backgroundVectors =
+  const background =
     backgroundQueries.length > 0
-      ? await embedTextsForStorage(backgroundQueries, app.log, "capability_catalog")
-      : null;
+      ? ((await embedTextsForStorage(backgroundQueries, app.log, "capability_catalog")) ?? [])
+      : [];
 
-  return entries.map((entry, index) => {
-    const vector = vectors[index];
-    let bias = 0;
-    if (backgroundVectors && backgroundVectors.length > 0) {
-      let total = 0;
-      for (const backgroundVector of backgroundVectors) total += cosine(backgroundVector, vector);
-      bias = total / backgroundVectors.length;
+  return {
+    entries: entries.map((entry, index) => ({
+      capability: entry.name,
+      vector: vectors[index],
+      bias: biasAgainst(vectors[index], background),
+    })),
+    background,
+  };
+}
+
+/** Bir vektörün arka plan havuzuna ortalama benzerliği. */
+function biasAgainst(vector: number[], background: number[][]): number {
+  if (background.length === 0) return 0;
+  let total = 0;
+  for (const backgroundVector of background) total += cosine(backgroundVector, vector);
+  return total / background.length;
+}
+
+/**
+ * Kullanıcının BAĞLADIĞI uygulamaların araçlarını indekse katar.
+ *
+ * NEDEN: katalog 86 yerel yeteneği kapsıyordu ama kullanıcının Notion'ını,
+ * Linear'ını, Slack'ini hiç görmüyordu. Bu araçlar tur başına MCP indeksine
+ * yükleniyor, orada tipli ve yetkilendirilmiş hâlde duruyorlardı — yalnız
+ * SEÇİLEMİYORLARDI, çünkü anlamsal katman yalnız yerel manifeste bakıyordu.
+ * Sonuç, "Notion notlarımı aç" isteğinin bağlı bir Notion varken bile hiçbir
+ * makul adaya düşmemesiydi.
+ *
+ * Yanlılık aynı arka plan havuzuna göre hesaplanır; iki kaynağın skorları
+ * ancak o zaman aynı ölçekte olur.
+ */
+async function indexMcpEntries(
+  app: FastifyInstance,
+  background: number[][],
+): Promise<IndexedCapability[]> {
+  let entries: DesktopCapabilityManifestEntry[];
+  try {
+    entries = listMcpCapabilityEntries();
+  } catch {
+    return [];
+  }
+  if (entries.length === 0) return [];
+
+  const resolved: IndexedCapability[] = [];
+  const pending: { entry: DesktopCapabilityManifestEntry; passage: string }[] = [];
+  for (const entry of entries) {
+    const passage = capabilityPassage(entry);
+    const cached = mcpVectorCache.get(passage);
+    if (cached) {
+      resolved.push(cached);
+      continue;
     }
-    return { capability: entry.name, vector, bias };
-  });
+    pending.push({ entry, passage });
+  }
+  if (pending.length > 0) {
+    const vectors = await embedTextsForStorage(
+      pending.map((item) => item.passage),
+      app.log,
+      "capability_catalog",
+    );
+    if (vectors && vectors.length === pending.length) {
+      pending.forEach((item, index) => {
+        const indexed: IndexedCapability = {
+          capability: item.entry.name,
+          vector: vectors[index],
+          bias: biasAgainst(vectors[index], background),
+        };
+        // Sınırsız büyümeyi engelle: çok kiracılı bir süreçte her kullanıcının
+        // her aracı burada birikirdi.
+        if (mcpVectorCache.size >= MAX_MCP_CACHE_ENTRIES) mcpVectorCache.clear();
+        mcpVectorCache.set(item.passage, indexed);
+        resolved.push(indexed);
+      });
+    }
+  }
+  return resolved;
 }
 
 /**
@@ -170,7 +274,7 @@ export async function warmCapabilitySemanticIndex(app: FastifyInstance): Promise
   try {
     indexPromise ??= buildIndex(app);
     const index = await indexPromise;
-    if (index.length === 0) {
+    if (index.entries.length === 0) {
       indexPromise = null;
       return false;
     }
@@ -197,7 +301,7 @@ export async function suggestCapabilitiesSemantically(
   try {
     indexPromise ??= buildIndex(app);
     const index = await indexPromise;
-    if (index.length === 0) {
+    if (index.entries.length === 0) {
       // Bir kez başarısız olan indeks kalıcı olarak boş kalmasın: bir sonraki
       // tur worker açılmış olabilir.
       indexPromise = null;
@@ -206,7 +310,11 @@ export async function suggestCapabilitiesSemantically(
     const queryVector = await embedQueryForStorage(query, app.log, "capability_catalog");
     if (!queryVector) return [];
 
-    const ranked = index
+    // Yerel katalog + kullanıcının bağladığı uygulamalar TEK sıralamada
+    // yarışır. İkisi ayrı ayrı sıralansaydı, bağlı bir Notion varken bile
+    // yerel bir yetenek her zaman önce gelirdi.
+    const candidates = [...index.entries, ...(await indexMcpEntries(app, index.background))];
+    const ranked = candidates
       .map((entry) => ({
         capability: entry.capability,
         score: cosine(queryVector, entry.vector) - entry.bias,

@@ -342,6 +342,17 @@ export function setMcpCapabilityIndex(
   mcpCapabilityIndex = index;
 }
 
+/**
+ * Turun MCP yeteneklerini okur.
+ *
+ * Anlamsal indeks bunu ister: kullanıcının BAĞLADIĞI uygulamalar da anlamla
+ * bulunabilmeli. Kopya döndürülür ki çağıran haritayı değiştiremesin —
+ * burası tur boyunca tek doğruluk kaynağı.
+ */
+export function listMcpCapabilityEntries(): DesktopCapabilityManifestEntry[] {
+  return [...mcpCapabilityIndex.values()];
+}
+
 function knownCapability(id: string): DesktopCapabilityManifestEntry | null {
   return capabilityManifestById.get(id) ?? mcpCapabilityIndex.get(id) ?? null;
 }
