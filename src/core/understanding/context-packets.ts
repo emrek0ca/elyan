@@ -609,20 +609,96 @@ function normalizeConfidence(value: number | null): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(3))));
 }
 
+/**
+ * 0..1 aralığındaki bir SKORU nitel kovaya çevirir.
+ *
+ * DİKKAT: yalnız skorlar için. Mutlak büyüklükler (adım, saat, nabız) bu
+ * fonksiyona verilmemelidir — `safeFactValue` bunu ayırır.
+ */
 function qualitativeScore(value: number): string {
-  const normalized = value > 1 ? value / 100 : value;
-  if (normalized >= 0.74) {
+  if (value >= 0.74) {
     return "high";
   }
-  if (normalized >= 0.42) {
+  if (value >= 0.42) {
     return "medium";
   }
   return "low";
 }
 
-function safeFactValue(value: unknown, options: { allowPlaintext?: boolean } = {}): string | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
+/**
+ * Sayısal bir olgunun modele nasıl gideceğine karar verir.
+ *
+ * ÖNCEKİ DAVRANIŞ ÖLÇÜLDÜ (2026-08-26) ve yalnız belirsiz değil, TERSTİ:
+ * fonksiyon `value > 1 ? value / 100 : value` ile her büyüklüğü yüzdelik
+ * sanıyordu. Sonuç —
+ *
+ *   8 saat uyku      → "low"      0,5 saat uyku → "medium"
+ *   300 adım         → "high"     8.420 adım    → "high"
+ *   nabız 58         → "medium"   nabız 180     → "high"
+ *
+ * Yani modele kullanıcının sağlığı hakkında aktif olarak YANLIŞ bilgi
+ * gidiyordu; iyi bir gece uykusu kötü, yarım saatlik bir şekerleme daha iyi
+ * görünüyordu.
+ *
+ * Doğru ayrım şu: 0..1 arası bir değer gerçekten bir skordur ve kovalanabilir.
+ * Mutlak bir büyüklük ise ya OLDUĞU GİBİ gider (kullanıcı izin verdiyse) ya da
+ * HİÇ gitmez. Yanlış etiket, sessizlikten kötüdür.
+ */
+/**
+ * Mutlak büyüklüklerin BİRİMİNE göre nitel eşikleri.
+ *
+ * Etiket zaten izin listesinden geliyor ve ne ölçtüğünü biliyor
+ * (`steps_today`, `sleep_h_today`). O bilgiyi kullanmak, her sayıyı aynı
+ * yüzdelik varsayımına sokmaktan hem doğru hem de ham değeri sızdırmadan
+ * anlamlıdır: model "az/orta/çok uyudu" bilgisini alır, "6.2" değerini değil.
+ */
+const ABSOLUTE_FACT_THRESHOLDS = new Map<string, [number, number]>([
+  ["steps_today", [3_000, 8_000]],
+  ["steps_yesterday", [3_000, 8_000]],
+  ["steps_week", [21_000, 56_000]],
+  ["sleep_h_today", [6, 7.5]],
+  ["sleep_h_yesterday", [6, 7.5]],
+  ["sleep_rem_h", [1, 1.8]],
+  ["sleep_deep_h", [0.8, 1.5]],
+  ["active_kcal", [200, 500]],
+  ["workout_min", [15, 45]],
+  ["workouts", [1, 3]],
+]);
+
+/**
+ * Sayısal bir olgunun modele nasıl gideceğine karar verir.
+ *
+ * ÖNCEKİ DAVRANIŞ ÖLÇÜLDÜ (2026-08-26) ve yalnız belirsiz değil TERSTİ:
+ * `value > 1 ? value / 100 : value` ile her büyüklük yüzdelik sayılıyordu.
+ *
+ *   8 saat uyku → "low"      0,5 saat uyku → "medium"
+ *   300 adım    → "high"     8.420 adım    → "high"
+ *
+ * Yani modele kullanıcının sağlığı hakkında aktif olarak YANLIŞ bilgi
+ * gidiyordu: iyi bir gece uykusu kötü, yarım saatlik şekerleme daha iyi
+ * görünüyordu. Ham değeri göndermek gizlilik sözleşmesini bozardı; yanlış
+ * etiket göndermek ise sessizlikten kötüdür. Doğrusu birimi bilmek.
+ */
+function numericFactValue(value: number, label?: string): string | null {
+  const thresholds = label ? ABSOLUTE_FACT_THRESHOLDS.get(label) : undefined;
+  if (thresholds) {
+    const [low, high] = thresholds;
+    return value >= high ? "high" : value >= low ? "medium" : "low";
+  }
+  // Birimini bilmediğimiz mutlak büyüklüğü etiketlemeyiz. 0..1 arası bir
+  // değer gerçekten bir skordur ve kovalanabilir.
+  if (value >= 0 && value <= 1) {
     return qualitativeScore(value);
+  }
+  return null;
+}
+
+function safeFactValue(
+  value: unknown,
+  options: { allowPlaintext?: boolean; label?: string } = {},
+): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return numericFactValue(value, options.label);
   }
   if (typeof value === "boolean") {
     return value ? "yes" : "no";
@@ -642,7 +718,11 @@ function safeFactValue(value: unknown, options: { allowPlaintext?: boolean } = {
 
 function safeDerivedFactValue(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return qualitativeScore(value);
+    // Takvim/cihaz olguları arasında hem gerçek SKORLAR (yoğunluk, doluluk)
+    // hem MUTLAK SAYILAR (etkinlik adedi) var. Skor kovalanır; mutlak sayı
+    // kovalanmaz — "3 etkinlik" ne "low"dur ne "high", ve zaten özet
+    // metninde adıyla geçer.
+    return numericFactValue(value);
   }
   if (typeof value === "boolean") {
     return value ? "yes" : "no";
@@ -661,7 +741,22 @@ function scrubHealthSummary(value: string, options: { allowPlaintext?: boolean }
   if (!value.trim()) {
     return "";
   }
-  const compact = clipCompactText(value.replace(RAW_MEASUREMENT_PATTERN, "ölçüm"), 180);
+  // Ham ölçüm özet METNİNDE asla geçmez — kullanıcı izin vermiş olsa bile.
+  // Mobilin `backendPlaintextAllowed` sözü verinin TÜRETİLMİŞ olduğunu
+  // söyler; özet cümlesinin ham ifade taşımadığını söylemez.
+  //
+  // Ama sansürün ÜRETTİĞİ ŞEY de bir sonuçtur. Ölçüldü (2026-08-26): giren
+  // "Bugün 8.420 adım atıldı, 45 dakika aktif." cümlesi modele
+  // "Bugün ölçüm atıldı, ölçüm aktif." olarak gidiyordu. Bu, hiçbir şey
+  // göndermemekten KÖTÜ: anlamsız bir Türkçe cümle modeli bilgilendirmez,
+  // yanıltır. Sansür bir şeyi gerçekten sildiyse cümleyi sakat hâliyle
+  // göndermek yerine yüksek seviyeli işareti gönderiyoruz; sayısal ayrıntı
+  // zaten izin listesindeki olgulardan nitel olarak geçiyor.
+  const redacted = value.replace(RAW_MEASUREMENT_PATTERN, "ölçüm");
+  if (redacted !== value) {
+    return "health_signal=recent detail=high_level";
+  }
+  const compact = clipCompactText(redacted, 180);
   if (!compact) {
     return "";
   }
@@ -699,7 +794,11 @@ function buildHealthFactsSummary(facts: Record<string, unknown> | null, options:
     if (!label) {
       continue;
     }
-    const safeValue = safeFactValue(value, { allowPlaintext: options.allowPlaintext });
+    // Etiket ne ölçüldüğünü biliyor; sayısal yorum onsuz yapılamaz.
+    const safeValue = safeFactValue(value, {
+      allowPlaintext: options.allowPlaintext,
+      label,
+    });
     if (!safeValue) {
       continue;
     }

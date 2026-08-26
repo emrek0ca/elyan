@@ -1726,3 +1726,82 @@ test("selectMemoryByRelevance: empty results yields off mode with empty list", (
   assert.equal(outcome.mode, "off");
   assert.equal(outcome.results.length, 0);
 });
+
+test("health facts are bucketed by what they measure, not as if every number were a percentage", () => {
+  // ÖLÇÜLDÜ (2026-08-26): `qualitativeScore` her büyüklüğü
+  // `value > 1 ? value / 100 : value` ile yüzdelik sayıyordu. Sonuç yalnız
+  // belirsiz değil TERSTİ — sekiz saat uyku "low", yarım saat "medium",
+  // üç yüz adım ile sekiz bin adım ikisi de "high" görünüyordu. Modele
+  // kullanıcının sağlığı hakkında aktif olarak yanlış bilgi gidiyordu.
+  const now = new Date("2030-01-01T12:00:00.000Z");
+  const packetFor = (facts: Record<string, unknown>) =>
+    buildContextPacketsFromMetadata(
+      {
+        chatContext: {
+          lastDerivedContextDigest: {
+            worldSignals: [
+              {
+                signalId: "health-buckets",
+                kind: "health",
+                summary: "Günlük özet hazır.",
+                confidence: 0.9,
+                createdAt: "2030-01-01T11:30:00.000Z",
+                privacy: { backendPlaintextAllowed: true },
+                facts,
+              },
+            ],
+          },
+        },
+      },
+      { now },
+    )[0]?.summary ?? "";
+
+  assert.match(packetFor({ sleepHoursToday: 8 }), /sleep_h_today=high/);
+  assert.match(packetFor({ sleepHoursToday: 6.2 }), /sleep_h_today=medium/);
+  assert.match(packetFor({ sleepHoursToday: 4 }), /sleep_h_today=low/);
+  assert.match(packetFor({ stepsToday: 8420 }), /steps_today=high/);
+  assert.match(packetFor({ stepsToday: 5000 }), /steps_today=medium/);
+  assert.match(packetFor({ stepsToday: 300 }), /steps_today=low/);
+
+  // Gerçek 0..1 SKORLARI eskisi gibi kovalanmaya devam eder.
+  assert.match(packetFor({ readiness: 0.82 }), /readiness=high/);
+
+  // Ham değer hiçbir koşulda sızmaz.
+  for (const raw of ["8420", "6.2", "8 saat"]) {
+    assert.doesNotMatch(packetFor({ stepsToday: 8420, sleepHoursToday: 6.2 }), new RegExp(raw));
+  }
+});
+
+test("a health summary is not delivered mangled by redaction", () => {
+  // ÖLÇÜLDÜ (2026-08-26): giren "Bugün 8.420 adım atıldı, 45 dakika aktif."
+  // cümlesi modele "Bugün ölçüm atıldı, ölçüm aktif." olarak gidiyordu.
+  // Ham ölçümü silmek doğru; ortaya anlamsız bir Türkçe cümle bırakmak
+  // değil. Sansür bir şey sildiyse yüksek seviyeli işaret gönderilir ve
+  // sayısal ayrıntı zaten izin listesindeki olgulardan nitel olarak geçer.
+  const now = new Date("2030-01-01T12:00:00.000Z");
+  const summary =
+    buildContextPacketsFromMetadata(
+      {
+        chatContext: {
+          lastDerivedContextDigest: {
+            worldSignals: [
+              {
+                signalId: "health-mangled",
+                kind: "health",
+                summary: "Bugün 8.420 adım atıldı, 45 dakika aktif.",
+                confidence: 0.95,
+                createdAt: "2030-01-01T11:40:00.000Z",
+                privacy: { backendPlaintextAllowed: true },
+                facts: { stepsToday: 8420, workoutDurationMinutes: 45 },
+              },
+            ],
+          },
+        },
+      },
+      { now },
+    )[0]?.summary ?? "";
+
+  assert.doesNotMatch(summary, /ölçüm atıldı|ölçüm aktif/);
+  assert.match(summary, /health_signal=recent/);
+  assert.match(summary, /steps_today=high/);
+});
