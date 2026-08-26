@@ -65,6 +65,7 @@ import { createMobilePushDispatcher } from "../modules/mobile/push.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
 import { getPerfSnapshot, startPerfTelemetry } from "../lib/perf-telemetry.js";
 import { primeFactSelection } from "../modules/facts/select.js";
+import { warmCapabilitySemanticIndex } from "../modules/tasks/capability-semantic-index.js";
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -577,6 +578,10 @@ export async function buildApp(envInput?: AppEnv) {
         const factCatalogReady = await primeFactSelection(app.log);
         app.log.info({ ready: factCatalogReady }, "fact selection catalog warmed");
       }
+      // Yetenek anlamsal indeksi de AYNI zincirde: gömücü artık hazır, ve
+      // ayrı bir `void` olsaydı yukarıdaki devre kesici tuzağına düşerdi.
+      const capabilityIndexReady = await warmCapabilitySemanticIndex(app);
+      app.log.info({ ready: capabilityIndexReady }, "capability semantic index warmed");
     })
     .catch(() => null);
 

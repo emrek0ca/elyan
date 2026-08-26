@@ -329,6 +329,7 @@ import { artifactSpecToRenderRecipeBlocks } from "../artifacts/render-recipe-ada
 import type { ArtifactOutput } from "../artifacts/types.js";
 import { extractMoneyItems } from "../artifacts/utils.js";
 import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
+import { suggestCapabilitiesSemantically } from "./capability-semantic-index.js";
 export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 
 type ShapedTaskFeedItem = ReturnType<typeof shapeTaskFeedItem>;
@@ -10106,7 +10107,21 @@ export async function createTask(
         logger: app.log,
       }).catch(() => plannerCapabilitySeed)
     : plannerCapabilitySeed;
-  const plannerCapabilityHints = refinedPlannerCapabilityHints.filter(
+  // Deterministik şeritler ve sözleşme ne bulduysa O önce gelir; anlamsal
+  // indeks yalnız ADAY EKLER. Öneriler bilerek çekirdeğe (`seed`) değil
+  // genişletme koluna giriyor: aşağıdaki filtre çekirdekteki yetenekleri
+  // sorgusuz geçirir, genişletmeleri ise politika kapısından geçirir. Yani
+  // anlamsal bir öneri, onay gerektiren ya da turun yan etki seviyesini aşan
+  // bir yeteneği sisteme sokamaz.
+  const semanticCapabilitySuggestions = desktopRouteSelected
+    ? await suggestCapabilitiesSemantically(app, planningPrompt).catch(() => [])
+    : [];
+  const plannerCapabilityHints = [
+    ...new Set([
+      ...refinedPlannerCapabilityHints,
+      ...semanticCapabilitySuggestions.map((suggestion) => suggestion.capability),
+    ]),
+  ].filter(
     (capability) => {
       if (plannerCapabilitySeed.includes(capability)) return true;
       const policy = resolveDesktopCapabilityExecutionPolicy(capability);

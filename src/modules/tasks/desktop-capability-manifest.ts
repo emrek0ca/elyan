@@ -2176,7 +2176,7 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "desktop_os.permissions",
     "displayName": "İzin durumu",
-    "description": "Masaüstü izin modelini ve izin hazırlık (readiness) durumunu döndürür.",
+    "description": "Elyan yerel çalışma zamanının sistem izin modelini ve izin hazırlık (readiness) durumunu döndürür. Dosya okumaz.",
     "usage": "Hangi sistem izinlerinin verildiğini görmek için. İzin ekranını açmak için desktop_os.open_permission_settings.",
     "requiredArgs": [],
     "requiresApproval": false,
@@ -2289,12 +2289,12 @@ export const DESKTOP_CAPABILITY_MANIFEST: DesktopCapabilityManifestEntry[] = [
   {
     "name": "desktop_os.status",
     "displayName": "Masaüstü durumu",
-    "description": "Masaüstü OS yetenek ve native entegrasyon durumunu döndürür.",
-    "usage": "Masaüstünün hangi yeteneklerinin hazır olduğunu kontrol ederken (tanılama).",
+    "description": "Elyan yerel çalışma zamanının native entegrasyon ve yetenek hazırlık durumunu döndürür. TANILAMA aracıdır; hiçbir dosyaya bakmaz.",
+    "usage": "Yerel çalışma zamanının hangi yeteneklerinin hazır olduğunu kontrol ederken. Masaüstü KLASÖRÜNDEKİ dosyalar için file_find/document_read kullan.",
     "requiredArgs": [],
     "requiresApproval": false,
     "whenToUse": [
-      "Masaüstünün hangi yeteneklerinin hazır olduğunu kontrol ederken (tanılama)."
+      "Yerel çalışma zamanının hangi yeteneklerinin hazır olduğunu kontrol ederken. Masaüstü KLASÖRÜNDEKİ dosyalar için file_find/document_read kullan."
     ],
     "whenNotToUse": [
       "Do not use when this capability does not directly advance the requested outcome."
