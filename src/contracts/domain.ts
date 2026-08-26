@@ -84,6 +84,8 @@ export const connectionProviderValues = [
   // yüzeyini açar.
   "sentry",
   "cloudflare",
+  "supabase",
+  "vercel",
 ] as const;
 export const integrationAuthTypeValues = [
   "oauth2",

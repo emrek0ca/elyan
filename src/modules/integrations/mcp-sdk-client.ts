@@ -217,6 +217,8 @@ export async function callMcpToolViaSdk(input: {
   toolName: string;
   args?: Record<string, unknown>;
   timeoutMs?: number;
+  /** İptal sinyali; verilirse uçuştaki istek yarıda kesilebilir. */
+  signal?: AbortSignal;
 }): Promise<McpSdkToolCallResult> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const client = newClient("elyan-mcp-client");
@@ -237,7 +239,8 @@ export async function callMcpToolViaSdk(input: {
     const result = await client.callTool(
       { name: input.toolName, arguments: input.args ?? {} },
       undefined,
-      { timeout: timeoutMs },
+      // Zaman aşımı üst sınırdır; `signal` kullanıcı/görev iptalini taşır.
+      { timeout: timeoutMs, ...(input.signal ? { signal: input.signal } : {}) },
     );
     await safeClose(client);
     return {

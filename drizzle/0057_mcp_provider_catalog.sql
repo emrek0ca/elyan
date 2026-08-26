@@ -6,3 +6,5 @@
 -- (bkz. bootstrap-v1'deki 'apple' emsali).
 ALTER TYPE "public"."connection_provider" ADD VALUE IF NOT EXISTS 'sentry';
 ALTER TYPE "public"."connection_provider" ADD VALUE IF NOT EXISTS 'cloudflare';
+ALTER TYPE "public"."connection_provider" ADD VALUE IF NOT EXISTS 'supabase';
+ALTER TYPE "public"."connection_provider" ADD VALUE IF NOT EXISTS 'vercel';

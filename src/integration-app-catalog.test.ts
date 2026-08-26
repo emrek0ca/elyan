@@ -544,7 +544,7 @@ test("official remote MCP servers connect without a per-provider connector", () 
   //
   // Bir girdi env anahtarı istemeye başlarsa vaat bozulmuş demektir: o
   // uygulama artık "ekle ve çalışsın" değil, kurulum gerektiren bir iştir.
-  for (const id of ["sentry", "cloudflare", "notion"]) {
+  for (const id of ["sentry", "cloudflare", "notion", "supabase", "vercel"]) {
     const entry = getIntegrationMcpApp(id);
     assert.ok(entry, `${id} katalogda olmalı`);
     assert.equal(entry?.authStrategy, "mcp_oauth", `${id} jenerik OAuth kullanmalı`);

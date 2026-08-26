@@ -61,6 +61,55 @@ const MCP_RETRYABLE_ERROR_CODES = new Set([
   "timeout",
 ]);
 const MCP_RETRY_DELAY_MS = 400;
+
+/**
+ * İptal yoklama aralığı. `shouldAbort` bir DB durumuna bakabilir; saniyede
+ * dört kez sormak iptali kullanıcı ölçeğinde anında hissettirir ve yükü
+ * ihmal edilebilir tutar.
+ */
+const MCP_ABORT_POLL_MS = 250;
+
+/**
+ * UÇUŞTAKİ ÇAĞRIYI İPTAL EDİLEBİLİR YAPAR.
+ *
+ * `shouldAbort` kancası `AgentToolContext` içinde zaten vardı ve MCP çağrısı
+ * BAŞLAMADAN ÖNCE soruluyordu — ama çağrı başladıktan sonra bir daha
+ * sorulmuyordu. Kullanıcı görevi iptal ettiğinde yirmi saniyelik bir HTTP
+ * isteği sonuna kadar çalışıyor, iptal ancak o bittikten sonra fark
+ * ediliyordu. Yeni bir iptal kavramı gerekmiyor; var olanı isteğin SÜRESİNCE
+ * sormak yetiyor.
+ *
+ * Dönen `dispose` çağrılmazsa zamanlayıcı sızar; her yolda çağrılır.
+ */
+export function abortSignalFrom(
+  shouldAbort: (() => boolean | Promise<boolean>) | undefined,
+): { signal?: AbortSignal; dispose: () => void } {
+  if (!shouldAbort) return { dispose: () => {} };
+  const controller = new AbortController();
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped) return;
+    void (async () => {
+      try {
+        if (await shouldAbort()) {
+          stopped = true;
+          controller.abort();
+        }
+      } catch {
+        // İptal sorusu cevaplanamıyorsa çağrıyı kesmeyiz: yanlış bir iptal,
+        // yavaş bir çağrıdan kötüdür.
+      }
+    })();
+  }, MCP_ABORT_POLL_MS);
+  if (typeof timer.unref === "function") timer.unref();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
+}
 /** Ad alanı ayracı. Nokta KULLANILMIYOR: yerleşik `notion.search` ile çakışırdı. */
 export const MCP_TOOL_PREFIX = "mcp__";
 const MCP_DECLARATION_CACHE_TTL_MS = 3_000;
@@ -761,7 +810,13 @@ export async function resolveMcpToolDeclaration(
  */
 export async function callMcpTool(
   app: FastifyInstance,
-  input: { userId: string; toolName: string; args: Record<string, unknown> },
+  input: {
+    userId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+    /** `AgentToolContext.shouldAbort`; uçuştaki çağrıyı kesebilir. */
+    shouldAbort?: () => boolean | Promise<boolean>;
+  },
 ): Promise<McpToolCallOutcome> {
   let permission: McpToolPermission = "side_effect";
   try {
@@ -832,28 +887,59 @@ export async function callMcpTool(
   permission = await resolveMcpToolPermission(app, declaration);
 
   const startedAt = Date.now();
-  let result = await callMcpToolViaSdk({
-    url: serverUrl,
-    accessToken,
-    toolName: declaration.remoteToolName,
-    args: input.args,
-    timeoutMs: MCP_TOOL_TIMEOUT_MS,
-  });
+  const abort = abortSignalFrom(input.shouldAbort);
+  let result: Awaited<ReturnType<typeof callMcpToolViaSdk>>;
   let attempts = 1;
-  if (
-    !result.ok &&
-    permission === "read" &&
-    MCP_RETRYABLE_ERROR_CODES.has(String(result.errorCode ?? ""))
-  ) {
-    await new Promise((resolve) => setTimeout(resolve, MCP_RETRY_DELAY_MS));
-    attempts = 2;
+  try {
     result = await callMcpToolViaSdk({
       url: serverUrl,
       accessToken,
       toolName: declaration.remoteToolName,
       args: input.args,
       timeoutMs: MCP_TOOL_TIMEOUT_MS,
+      signal: abort.signal,
     });
+    if (
+      !result.ok &&
+      permission === "read" &&
+      !abort.signal?.aborted &&
+      MCP_RETRYABLE_ERROR_CODES.has(String(result.errorCode ?? ""))
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, MCP_RETRY_DELAY_MS));
+      attempts = 2;
+      result = await callMcpToolViaSdk({
+        url: serverUrl,
+        accessToken,
+        toolName: declaration.remoteToolName,
+        args: input.args,
+        timeoutMs: MCP_TOOL_TIMEOUT_MS,
+        signal: abort.signal,
+      });
+    }
+  } finally {
+    abort.dispose();
+  }
+
+  // İPTAL BİR ARIZA DEĞİLDİR. Kullanıcı görevi durdurduğunda çağrının
+  // "başarısız" görünmesi, gerçek arızalarla iptali aynı kovaya atar.
+  if (abort.signal?.aborted) {
+    await traceMcpToolCall(app, {
+      userId: input.userId,
+      declaration,
+      permission,
+      args: input.args,
+      ok: false,
+      errorCode: "task_canceled",
+      durationMs: Date.now() - startedAt,
+      attempts,
+    });
+    return {
+      ok: false,
+      permission,
+      output: null,
+      errorCode: "task_canceled",
+      errorMessage: "İşlem iptal edildi.",
+    };
   }
 
   await traceMcpToolCall(app, {

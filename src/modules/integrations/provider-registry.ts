@@ -399,6 +399,47 @@ export const integrationMcpAppCatalog: IntegrationMcpAppCatalogEntry[] = [
     execution: "remote_mcp",
   },
   {
+    id: "supabase",
+    provider: "supabase",
+    displayName: "Supabase",
+    description:
+      "Supabase projelerindeki tabloları, şemayı ve kayıtları sorgula ve yönet.",
+    iconKey: "supabase",
+    category: "developer",
+    // Supabase'in kendi işlettiği uzak MCP sunucusu; dinamik istemci kaydı
+    // kullanıyor, yani kişisel erişim jetonu ya da OAuth uygulaması
+    // oluşturmak gerekmiyor. (2026-08-26 canlı uçta doğrulandı.)
+    //
+    // YAZMA RİSKİ NEREDE KARŞILANIYOR: veritabanı araçları geri alınamaz iş
+    // yapabilir. Sunucunun beyanına güvenilmez — `describeMcpTool` yapısal
+    // sinyallere bakıp sınıflandırır ve bilinmeyen aracı fail-closed olarak
+    // `write` + onay gerektirir sayar. Yani yıkıcı bir çağrı kullanıcı
+    // onayından geçmeden çalışmaz.
+    serverUrl: "https://mcp.supabase.com/mcp",
+    stage: "available",
+    authStrategy: "mcp_oauth",
+    oauthScopes: [],
+    capabilities: ["supabase"],
+    execution: "remote_mcp",
+  },
+  {
+    id: "vercel",
+    provider: "vercel",
+    displayName: "Vercel",
+    description:
+      "Vercel projelerini, dağıtımları ve analitiği oku; dokümantasyonda ara.",
+    iconKey: "vercel",
+    category: "developer",
+    // Vercel'in resmî uzak MCP sunucusu (public beta) — başlangıçta
+    // salt-okunur. (2026-08-26 canlı uçta doğrulandı.)
+    serverUrl: "https://mcp.vercel.com",
+    stage: "available",
+    authStrategy: "mcp_oauth",
+    oauthScopes: [],
+    capabilities: ["vercel"],
+    execution: "remote_mcp",
+  },
+  {
     id: "dropbox",
     provider: "dropbox",
     displayName: "Dropbox",

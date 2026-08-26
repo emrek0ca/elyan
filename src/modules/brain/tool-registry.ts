@@ -1684,6 +1684,8 @@ async function executeDynamicMcpTool(
     userId: context.userId,
     toolName: request.tool,
     args: (args ?? {}) as Record<string, unknown>,
+    // İptal yalnız çağrıdan ÖNCE sorulmuyordu; artık istek boyunca da geçerli.
+    shouldAbort: context.shouldAbort,
   });
 
   if (!outcome.ok) {
