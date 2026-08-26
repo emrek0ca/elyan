@@ -12,6 +12,7 @@ import {
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UnderstandingEnvelope } from "../../core/understanding/types.js";
 import type { RemoteMcpSelectionMetadata } from "../integrations/provider-registry.js";
+import { buildTypedUnderstandingEnvelope } from "../../core/understanding/understanding-envelope.js";
 
 function routeDecision(overrides: Partial<CommandRouteDecision> = {}): CommandRouteDecision {
   return {
@@ -1381,4 +1382,56 @@ test("parseDirectDesktopAppCommand still accepts single and known multi-word app
     capability: "open_app",
     appName: "App Store",
   });
+});
+
+test("a writer step gets a producer no matter where its capability came from", () => {
+  // CANLI ARIZA (2026-08-27, görev c83280fa): düzeltmenin ilk hâli
+  // `inferCapabilities` içinde ama `document_write`in EKLENDİĞİ satırdan
+  // ÖNCE duruyordu. Kural çalıştığında kümede henüz yazıcı yoktu, dolayısıyla
+  // hiçbir üretici eklenmedi ve canlı plan yine tek adım kaldı: kullanıcı
+  // 20 kelimelik, makalesiz bir DOCX aldı. Ekranda "1/1" yazıyordu.
+  //
+  // Yetenek iki yoldan da gelebilir — çıkarımdan ya da sözleşmeden. İddia
+  // ikisini de kapsar; kuralın konumu bir daha sessizce kaymasın.
+  const envelope = buildTypedUnderstandingEnvelope({
+    message: "Atatürk ün ilkeleri hakkında makale yaz 2 sayfalık. Masaüstüne kaydet",
+    intent: {
+      primaryIntent: "writing",
+      confidence: 0.7,
+      secondaryIntents: [],
+      reason: "test",
+    },
+    userId: "user-1",
+  } as never);
+
+  for (const requested of [[], ["document_write"]]) {
+    const workOrder = buildDesktopWorkOrder({
+      preferredWriteRoots: [],
+      message: "Atatürk ün ilkeleri hakkında makale yaz 2 sayfalık. Masaüstüne kaydet",
+      title: "Atatürk ün ilkeleri hakkında makale yaz 2 sayfalık. Masaüstüne kaydet",
+      routeDecision: { capabilities: requested, taskRoute: null } as never,
+      requestedCapabilities: requested,
+      understandingEnvelope: envelope,
+    } as never);
+
+    const steps = workOrder.planPreview?.steps ?? [];
+    const names = steps.map((step) => step.capability);
+    assert.ok(
+      names.includes("document_write"),
+      `yazıcı adım beklenirdi: ${names.join(", ")}`,
+    );
+    // Yazıcının içeriğini birinin üretmesi gerekir; tek adımlık plan bu
+    // istekte kullanıcıya boş belge demektir.
+    assert.ok(
+      names.includes("web_research"),
+      `üretici adım beklenirdi: ${names.join(", ")}`,
+    );
+    const writer = steps.find((step) => step.capability === "document_write");
+    assert.ok(
+      (writer?.dependsOn ?? []).length > 0,
+      "yazıcı bir üreticiye bağlı olmalı",
+    );
+    // Kullanıcının talimatı belgeye başlık diye yazılan iç durum olmamalı.
+    assert.equal(typeof writer?.args.pageCount, "number");
+  }
 });

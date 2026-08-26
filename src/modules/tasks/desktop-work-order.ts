@@ -1345,54 +1345,6 @@ function inferCapabilities(
   }
   if (researchRequested) capabilities.add("web_research");
   if (calculationRequested) capabilities.add("math_solve");
-  // YAZICI ADIMIN İÇERİĞE İHTİYACI VAR — ONU BİRİ ÜRETMELİ.
-  //
-  // CANLI ARIZA (2026-08-27): "Atatürk'ün ilkeleri hakkında makale yaz"
-  // isteğinde derlenen tek adım `document_write` oldu. O yetenek içerik
-  // ÜRETMEZ (kendi sözleşmesi: "İçerik ÜRETMEZ", kullanımı: "Metin henüz
-  // yoksa ÖNCE üreten bir adım gerekir"), dolayısıyla eline verilen brief'i
-  // aynen dosyaya yazdı ve kullanıcı 33 kelimelik, makalesiz bir DOCX aldı.
-  //
-  // Üretici zincirler zaten vardı — araştırma, analiz, hesap — ama üçü de
-  // kullanıcının O KELİMEYİ söylemesine bağlıydı ("araştır", "analiz et",
-  // "hesapla"). "Makale yaz" hiçbirini söylemiyor, o yüzden üretici hiç
-  // eklenmiyordu.
-  //
-  // Doğru kural kelimeye değil GÖREVİN YAPISINA bakar: bir yazıcı adım
-  // varsa ve içeriği verecek başka hiçbir kaynak yoksa (okunacak yerel
-  // dosya, analiz, hesap), içerik üretilmek ZORUNDADIR. Elimizdeki üretici
-  // `web_research`; `document_write` zaten ona
-  // `{{steps.step_web_research.output}}` ile bağlanıyor, yani zincir kurulu,
-  // yalnız tetiklenmiyordu.
-  const writerRequested = ["document_write", "presentation_write", "canvas_write"].some(
-    (capability) => capabilities.has(capability),
-  );
-  // `text_analyze` TEK BAŞINA İÇERİK KAYNAĞI DEĞİLDİR.
-  //
-  // Ölçüldü (2026-08-27): "makale yaz" isteğinde derlenen zincir
-  // `text_analyze → document_write` oldu ve `text_analyze`in girdisi
-  // kullanıcının KENDİ TALİMATIYDI. Talimatı analiz etmek içerik üretmez;
-  // ama aşağıdaki kontrol onu kaynak sayıp araştırmayı atlıyordu. Analiz
-  // ancak kendisini besleyen bir şey varsa içerik taşır.
-  const externalSourceExists =
-    capabilities.has("web_research") ||
-    capabilities.has("document_read") ||
-    capabilities.has("file_read") ||
-    capabilities.has("file_search") ||
-    capabilities.has("ocr_read") ||
-    capabilities.has("retrieve_context");
-  const contentSourceExists =
-    externalSourceExists ||
-    capabilities.has("math_solve") ||
-    (capabilities.has("text_analyze") && externalSourceExists) ||
-    capabilities.has("document_read") ||
-    capabilities.has("file_read") ||
-    capabilities.has("file_search") ||
-    capabilities.has("ocr_read") ||
-    capabilities.has("retrieve_context");
-  if (writerRequested && !contentSourceExists) {
-    capabilities.add("web_research");
-  }
   if (presentationRequested) {
     capabilities.add("presentation_write");
     capabilities.delete("desktop_operator.run");
@@ -1463,6 +1415,54 @@ function inferCapabilities(
   if (TERMINAL_CONTEXT_PATTERN.test(normalized)) capabilities.add("shell_run");
   if (unicodeWordPattern(String.raw`\b(ekran|screenshot|görüntü|goruntu)\b`, "i").test(normalized)) capabilities.add("desktop_operator.observe_screen");
   if (readOnlyProcessObservationRequested) removeReadOnlyConflicts(capabilities);
+  // YAZICI ADIMIN İÇERİĞE İHTİYACI VAR — ONU BİRİ ÜRETMELİ.
+  //
+  // CANLI ARIZA (2026-08-27): "Atatürk'ün ilkeleri hakkında makale yaz"
+  // isteğinde derlenen tek adım `document_write` oldu. O yetenek içerik
+  // ÜRETMEZ (kendi sözleşmesi: "İçerik ÜRETMEZ", kullanımı: "Metin henüz
+  // yoksa ÖNCE üreten bir adım gerekir"), dolayısıyla eline verilen brief'i
+  // aynen dosyaya yazdı ve kullanıcı 33 kelimelik, makalesiz bir DOCX aldı.
+  //
+  // Üretici zincirler zaten vardı — araştırma, analiz, hesap — ama üçü de
+  // kullanıcının O KELİMEYİ söylemesine bağlıydı ("araştır", "analiz et",
+  // "hesapla"). "Makale yaz" hiçbirini söylemiyor, o yüzden üretici hiç
+  // eklenmiyordu.
+  //
+  // Doğru kural kelimeye değil GÖREVİN YAPISINA bakar: bir yazıcı adım
+  // varsa ve içeriği verecek başka hiçbir kaynak yoksa (okunacak yerel
+  // dosya, analiz, hesap), içerik üretilmek ZORUNDADIR. Elimizdeki üretici
+  // `web_research`; `document_write` zaten ona
+  // `{{steps.step_web_research.output}}` ile bağlanıyor, yani zincir kurulu,
+  // yalnız tetiklenmiyordu.
+  const writerRequested = ["document_write", "presentation_write", "canvas_write"].some(
+    (capability) => capabilities.has(capability),
+  );
+  // `text_analyze` TEK BAŞINA İÇERİK KAYNAĞI DEĞİLDİR.
+  //
+  // Ölçüldü (2026-08-27): "makale yaz" isteğinde derlenen zincir
+  // `text_analyze → document_write` oldu ve `text_analyze`in girdisi
+  // kullanıcının KENDİ TALİMATIYDI. Talimatı analiz etmek içerik üretmez;
+  // ama aşağıdaki kontrol onu kaynak sayıp araştırmayı atlıyordu. Analiz
+  // ancak kendisini besleyen bir şey varsa içerik taşır.
+  const externalSourceExists =
+    capabilities.has("web_research") ||
+    capabilities.has("document_read") ||
+    capabilities.has("file_read") ||
+    capabilities.has("file_search") ||
+    capabilities.has("ocr_read") ||
+    capabilities.has("retrieve_context");
+  const contentSourceExists =
+    externalSourceExists ||
+    capabilities.has("math_solve") ||
+    (capabilities.has("text_analyze") && externalSourceExists) ||
+    capabilities.has("document_read") ||
+    capabilities.has("file_read") ||
+    capabilities.has("file_search") ||
+    capabilities.has("ocr_read") ||
+    capabilities.has("retrieve_context");
+  if (writerRequested && !contentSourceExists) {
+    capabilities.add("web_research");
+  }
   return [...capabilities].slice(0, 16);
 }
 
