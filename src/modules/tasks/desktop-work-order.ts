@@ -1367,10 +1367,24 @@ function inferCapabilities(
   const writerRequested = ["document_write", "presentation_write", "canvas_write"].some(
     (capability) => capabilities.has(capability),
   );
-  const contentSourceExists =
+  // `text_analyze` TEK BAŞINA İÇERİK KAYNAĞI DEĞİLDİR.
+  //
+  // Ölçüldü (2026-08-27): "makale yaz" isteğinde derlenen zincir
+  // `text_analyze → document_write` oldu ve `text_analyze`in girdisi
+  // kullanıcının KENDİ TALİMATIYDI. Talimatı analiz etmek içerik üretmez;
+  // ama aşağıdaki kontrol onu kaynak sayıp araştırmayı atlıyordu. Analiz
+  // ancak kendisini besleyen bir şey varsa içerik taşır.
+  const externalSourceExists =
     capabilities.has("web_research") ||
+    capabilities.has("document_read") ||
+    capabilities.has("file_read") ||
+    capabilities.has("file_search") ||
+    capabilities.has("ocr_read") ||
+    capabilities.has("retrieve_context");
+  const contentSourceExists =
+    externalSourceExists ||
     capabilities.has("math_solve") ||
-    capabilities.has("text_analyze") ||
+    (capabilities.has("text_analyze") && externalSourceExists) ||
     capabilities.has("document_read") ||
     capabilities.has("file_read") ||
     capabilities.has("file_search") ||
