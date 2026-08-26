@@ -1412,13 +1412,30 @@ function inferExpectedOutputs(
   capabilities: string[],
   envelope?: UnderstandingEnvelope,
 ): DesktopWorkOrder["expectedOutputs"] {
-  const outputs: DesktopWorkOrder["expectedOutputs"] = [{ kind: "chat_result", format: "elyan_blocks.v2", required: true }];
+  // Tek adımlı, dosya üreten bir yakalama turunda sohbet bloğu ZORUNLU
+  // değildir: kullanıcının istediği şey dosyanın kendisidir.
+  const chatResultRequired = !capabilities.includes("screen_capture");
+  const outputs: DesktopWorkOrder["expectedOutputs"] = [
+    { kind: "chat_result", format: "elyan_blocks.v2", required: chatResultRequired },
+  ];
   const addOutput = (output: DesktopWorkOrder["expectedOutputs"][number]) => {
     if (!outputs.some((candidate) => candidate.kind === output.kind && candidate.required === output.required)) {
       outputs.push(output);
     }
   };
   const normalized = message.toLocaleLowerCase("tr-TR");
+  // EKRAN GÖRÜNTÜSÜNÜN ÇIKTISI DOSYADIR.
+  //
+  // Canlı arıza (2026-08-26, görev 35d1d5f3): yakalama başarıyla çalıştı
+  // (`screen_capture ok:true`, artefakt kanıtı geçti) ama görev
+  // GOAL_VERIFICATION_FAILED ile düştü. Sebep beklenen çıktı listesiydi:
+  // varsayılan `chat_result/elyan_blocks.v2` zorunlu sayılıyor ve tek adımlı
+  // bir yakalama turu onu üretmiyordu. Kullanıcının istediği dosya diskteydi
+  // ama sistem "beklenen çıktılar doğrulanamadı" diyordu.
+  if (capabilities.includes("screen_capture")) {
+    addOutput({ kind: "artifact", format: "image", required: true });
+    addOutput({ kind: "file_update", format: "state_readback", required: true });
+  }
   if (parseDirectImageFetchCommand(message)) {
     addOutput({ kind: "artifact", format: "artifact_reference", required: true });
     addOutput({ kind: "file_update", format: "state_readback", required: true });
