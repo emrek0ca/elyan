@@ -351,8 +351,9 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     return resolveTaskApproval(app, {
       taskId: params.taskId,
       userId: auth.sub,
-      approved: body.approved,
-      notes: body.notes,
+      approved: body.approved ?? body.action !== "reject",
+      action: body.action,
+      notes: body.notes ?? body.answer,
       interactionId: body.interactionId ?? body.id,
       interactionRevision: body.interactionRevision ?? body.revision,
       ipAddress: context.ipAddress,

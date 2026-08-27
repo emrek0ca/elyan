@@ -5,7 +5,10 @@ import { AppError, unprocessableEntity } from "../../lib/errors.js";
 import { normalizeLocalDerivedMetadata } from "../../lib/derived-data.js";
 import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
 import { DESKTOP_SKILL_MANIFEST } from "./desktop-skill-manifest.js";
-import { normalizePublicTaskApprovalRequest } from "./service-lifecycle.js";
+import {
+  extractPublicInteraction,
+  normalizePublicTaskApprovalRequest,
+} from "./service-lifecycle.js";
 
 type IdempotentTaskRow = {
   id: string;
@@ -181,6 +184,11 @@ export function shapeTaskFeedItem(
     error: task.error ?? null,
     approvalRequest: sanitizePublicInferenceValue(
       normalizePublicTaskApprovalRequest(task.approvalRequest, task.id),
+    ),
+    // Kanonik etkileşim zarfı: istemci kart tipini durumdan değil buradan
+    // okur. `approvalRequest` geriye dönük istemciler için korunur.
+    interaction: sanitizePublicInferenceValue(
+      extractPublicInteraction(task.approvalRequest, task.id),
     ),
     createdAt: task.createdAt,
     startedAt: task.startedAt ?? null,

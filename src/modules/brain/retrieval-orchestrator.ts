@@ -8,6 +8,7 @@ import {
   retrievalResultsToEvidencePacket,
   type EvidencePacket,
 } from "./evidence-packet.js";
+import { contentTerms, jaccardSimilarity } from "./lexical-turkish.js";
 
 /**
  * RAG orkestratörü — Elyan beyninin gelişmiş retrieval katmanı.
@@ -63,6 +64,8 @@ export type OrchestratedRetrieval = {
       reason: string;
     };
     selfCheckRetried: boolean;
+    /** MMR ile elenen yakın-kopya sayısı — bütçe teşhisinin ilk sinyali. */
+    suppressedDuplicates: number;
     lowConfidence: boolean;
     neighborExpanded: number;
   };
@@ -206,6 +209,102 @@ async function searchKnowledgeKeyword(
   }));
 }
 
+/**
+ * Kapsama ölçümü için terimler — FTS sorgusundan AYRI tutulur.
+ *
+ * `keyTerms` çıktısı `websearch_to_tsquery`'ye gider ve Postgres'in kendi
+ * gövdeleyicisine teslim edilir; oraya köklenmiş biçim göndermek sorguyu
+ * bozabilir. Kapsama ölçümü ise düz `includes` ile çalışır ve Türkçe ekler
+ * yüzünden sistematik olarak DÜŞÜK ölçüyordu: sorgudaki "ilkeleri", metindeki
+ * "ilkeler" içinde bulunamıyor, kanıt varken yokmuş gibi görünüyordu. Kök
+ * biçim ("ilke") her iki yazımın da içinde geçer.
+ */
+function coverageTerms(query: string, limit = 10): string[] {
+  const stemmed = contentTerms(query, { limit });
+  return stemmed.length > 0 ? stemmed : keyTerms(query, limit);
+}
+
+/** Bir sonucun yakın-kopya karşılaştırması için terim kümesi. */
+function resultTermSet(result: RetrievalSearchResult): Set<string> {
+  return new Set(
+    contentTerms(`${result.title} ${result.content}`, { limit: 48 }),
+  );
+}
+
+/** Bu benzerliğin üstündeki bir sonuç, seçilmiş bir sonucun kopyasıdır. */
+const NEAR_DUPLICATE_THRESHOLD = 0.82;
+/** MMR dengesi: 1.0 saf alaka, 0.0 saf çeşitlilik. */
+const MMR_LAMBDA = 0.72;
+
+/**
+ * Maximal Marginal Relevance — bağlam penceresini kopyalarla doldurmamak için.
+ *
+ * RRF füzyonu alakayı iyi sıralar ama TEKRARA kördür: aynı paragrafın üç
+ * sürümü (asıl chunk, komşu chunk, başka bir dokümandaki alıntı) üç ayrı üst
+ * sıra kapabilir. Kullanıcı açısından bu üç kaynak değil bir kaynaktır; bütçe
+ * ise üçe bölünmüştür. Daha kötüsü kapsama skoru şişer — aynı terimler üç kez
+ * sayılır ve zayıf kanıt güçlü görünür.
+ *
+ * Seçim her adımda "alaka eksi seçilmişlere en yüksek benzerlik" ile yapılır.
+ * Eşiği aşan yakın-kopyalar tamamen atılır; bir şey eklemiyorlarsa yer
+ * kaplamamalılar.
+ */
+export function selectDiverseResults(
+  results: RetrievalSearchResult[],
+  limit: number,
+): { selected: RetrievalSearchResult[]; suppressedDuplicates: number } {
+  if (limit <= 0) return { selected: [], suppressedDuplicates: 0 };
+  if (results.length <= 1) {
+    return { selected: results.slice(0, limit), suppressedDuplicates: 0 };
+  }
+
+  const pool = results.map((result) => ({ result, terms: resultTermSet(result) }));
+  const maxScore = Math.max(...pool.map((entry) => entry.result.score), 0);
+  const relevanceOf = (score: number) => (maxScore > 0 ? score / maxScore : 0);
+
+  const selected: Array<{ result: RetrievalSearchResult; terms: Set<string> }> = [];
+  let suppressedDuplicates = 0;
+
+  // İlk sıra her zaman en alakalı sonuçtur: çeşitlilik ikinci sıradan başlar.
+  selected.push(pool[0]!);
+  const remaining = pool.slice(1);
+
+  while (selected.length < limit && remaining.length > 0) {
+    let bestIndex = -1;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < remaining.length; index += 1) {
+      const entry = remaining[index]!;
+      let maxSimilarity = 0;
+      for (const chosen of selected) {
+        const similarity = jaccardSimilarity(entry.terms, chosen.terms);
+        if (similarity > maxSimilarity) maxSimilarity = similarity;
+        if (maxSimilarity >= NEAR_DUPLICATE_THRESHOLD) break;
+      }
+      if (maxSimilarity >= NEAR_DUPLICATE_THRESHOLD) {
+        remaining.splice(index, 1);
+        index -= 1;
+        suppressedDuplicates += 1;
+        continue;
+      }
+      const mmr =
+        MMR_LAMBDA * relevanceOf(entry.result.score) -
+        (1 - MMR_LAMBDA) * maxSimilarity;
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIndex = index;
+      }
+    }
+    if (bestIndex < 0) break;
+    selected.push(remaining[bestIndex]!);
+    remaining.splice(bestIndex, 1);
+  }
+
+  return {
+    selected: selected.map((entry) => entry.result),
+    suppressedDuplicates,
+  };
+}
+
 /** Reciprocal Rank Fusion — skor ölçeğinden bağımsız adil liste birleşimi. */
 export function fuseWithRrf(
   lists: Array<{ results: RetrievalSearchResult[]; weight: number }>,
@@ -231,7 +330,7 @@ export function fuseWithRrf(
 /** Self-RAG lite kapsama ölçütü: sorgu anahtar terimlerinin top sonuçlarda
  * görülme oranı. Düşükse kanıt zayıf demektir. */
 export function coverageScore(query: string, results: RetrievalSearchResult[]): number {
-  const terms = keyTerms(query);
+  const terms = coverageTerms(query);
   if (terms.length === 0 || results.length === 0) return results.length > 0 ? 1 : 0;
   const haystack = foldTr(
     results
@@ -247,7 +346,7 @@ function supportScoreForQuestion(
   question: string,
   results: RetrievalSearchResult[],
 ): number {
-  const terms = keyTerms(question, 10);
+  const terms = coverageTerms(question, 10);
   if (terms.length === 0) return results.length > 0 ? 1 : 0;
   if (results.length === 0) return 0;
   const topResults = results.slice(0, 5);
@@ -465,7 +564,12 @@ export async function searchKnowledge(
     }
   }
 
-  const top = fused.slice(0, input.limit);
+  // Kopya bastırma füzyondan SONRA, kesmeden ÖNCE: aksi halde ilk `limit`
+  // sıra üç kopyaya gidebilir ve arkadaki gerçekten farklı kaynak hiç
+  // görülmez.
+  const diversified = selectDiverseResults(fused, input.limit);
+  const top = diversified.selected;
+  const suppressedDuplicates = diversified.suppressedDuplicates;
   // Graph-lite bağlam genişletme: limit dolmadıysa komşu chunk'larla doldur.
   let neighborExpanded = 0;
   if (top.length > 0 && top.length < input.limit) {
@@ -516,6 +620,7 @@ export async function searchKnowledge(
           : "neural_readiness_withheld_semantic_rerank",
       },
       selfCheckRetried,
+      suppressedDuplicates,
       lowConfidence:
         top.length > 0 &&
         (coverage < COVERAGE_RETRY_THRESHOLD ||

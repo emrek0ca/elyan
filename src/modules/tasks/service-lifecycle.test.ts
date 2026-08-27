@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildTaskApprovalResumeUpdate,
+  extractPublicInteraction,
   buildTaskApprovalResolution,
   buildTaskCancellationUpdate,
   buildTaskDispatchLeaseAckUpdate,
@@ -227,6 +228,8 @@ test("buildTaskApprovalResolution merges the existing request and appends the re
     resolution: {
       approved: true,
       notes: "Approved for execution",
+      action: "approve",
+      state: "approved",
       resolvedAt: now.toISOString(),
       revision: 1,
       approvalKey: null,
@@ -392,6 +395,8 @@ test("buildTaskApprovalResumeUpdate keeps approved tasks waiting for runtime res
     resolution: {
       approved: true,
       notes: "Approved for execution",
+      action: "approve",
+      state: "approved",
       resolvedAt: now.toISOString(),
       revision: 1,
       approvalKey: "task:1",
@@ -411,6 +416,8 @@ test("buildTaskApprovalResumeUpdate keeps approved tasks waiting for runtime res
     resolution: {
       approved: true,
       notes: "Approved for execution",
+      action: "approve",
+      state: "approved",
       resolvedAt: now.toISOString(),
       revision: 1,
       approvalKey: "task:1",
@@ -522,4 +529,119 @@ test("buildTaskRuntimeUpdate keeps lifecycle fields aligned with task status", (
   assert.equal(completedUpdate.queuePosition, 0);
   assert.equal(canceledUpdate.canceledAt, now);
   assert.equal(canceledUpdate.queuePosition, 0);
+});
+
+// ── Kanonik etkileşim zarfı: expiry ve iç içe çözüm ─────────────────────────
+// Zarf ve eski düz alanlar aynı gerçeği iki yerde taşır. Süre ve çözüm
+// bilgisi hangisinde yazılıysa oradan okunmalı; aksi halde çözülmüş bir
+// etkileşim yeniden "bekliyor" gibi görünür.
+
+test("expiry is read from the nested interaction envelope, not only the flat field", () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  const expired = {
+    kind: "permission",
+    interaction: {
+      contract: "elyan.interaction.v1",
+      id: "task-x:interaction:1",
+      taskId: "task-x",
+      taskRunId: "run-x",
+      kind: "permission",
+      revision: 1,
+      availableActions: ["approve", "reject"],
+      expiresAt: "2029-12-31T23:59:00.000Z",
+      resolution: null,
+    },
+  };
+  assert.equal(isApprovalRequestExpired(expired, now), true);
+
+  const live = {
+    ...expired,
+    interaction: { ...expired.interaction, expiresAt: "2030-01-01T00:05:00.000Z" },
+  };
+  assert.equal(isApprovalRequestExpired(live, now), false);
+
+  // Süresi geçmiş bir zarf normalize edilirken yeniden canlandırılır; onay
+  // penceresi sunucunun TTL'ine göre yeniden açılır, bayat değere sabitlenmez.
+  const normalized = normalizeTaskApprovalRequest(expired, { taskId: "task-x", now });
+  assert.equal(Date.parse(normalized.expiresAt) > now.getTime(), true);
+  assert.equal(normalized.interaction.expiresAt, normalized.expiresAt);
+});
+
+test("a resolution stored inside the interaction envelope still counts as resolved", () => {
+  const nested = {
+    kind: "clarification",
+    interaction: {
+      contract: "elyan.interaction.v1",
+      id: "task-y:interaction:2",
+      taskId: "task-y",
+      taskRunId: "run-y",
+      kind: "clarification",
+      revision: 2,
+      availableActions: ["answer"],
+      question: "Hangi klasöre kaydedeyim?",
+      expiresAt: "2030-01-01T00:05:00.000Z",
+      resolution: {
+        approved: true,
+        action: "answer",
+        state: "answered",
+        answer: "Masaüstüne",
+        revision: 2,
+      },
+    },
+  };
+
+  assert.equal(isApprovalAlreadyResolved(nested), true);
+
+  const fields = buildPublicTaskApprovalEventFields(nested, {
+    status: "running",
+    updatedAt: new Date("2030-01-01T00:00:00.000Z"),
+  });
+  assert.equal(fields.interactionKind, "clarification");
+  assert.equal(fields.interactionRevision, 2);
+  assert.equal(fields.resolution?.state, "answered");
+  assert.equal(fields.resolution?.approved, true);
+  // Serbest metin yanıtı public event alanlarına sızmaz.
+  assert.equal("answer" in (fields.resolution ?? {}), false);
+});
+
+test("extractPublicInteraction reports pending, resolved and expired without guessing from status", () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  const pending = extractPublicInteraction(
+    { kind: "permission", summary: "Dosya yazılacak.", expiresAt: "2030-01-01T00:05:00.000Z" },
+    "task-z",
+    now,
+  );
+  assert.equal(pending?.state, "pending");
+  assert.equal(pending?.kind, "permission");
+  assert.deepEqual(pending?.availableActions, ["approve", "reject"]);
+
+  const resolved = extractPublicInteraction(
+    {
+      kind: "clarification",
+      question: "Hangi klasör?",
+      expiresAt: "2030-01-01T00:05:00.000Z",
+      resolution: { approved: true, action: "answer", state: "answered" },
+    },
+    "task-z",
+    now,
+  );
+  assert.equal(resolved?.state, "resolved");
+  assert.deepEqual(resolved?.availableActions, ["answer"]);
+
+  // Boş approval alanı bir etkileşim değildir.
+  assert.equal(extractPublicInteraction(null, "task-z", now), null);
+  assert.equal(extractPublicInteraction({}, "task-z", now), null);
+});
+
+test("a rejected clarification is recorded as a reject, not as an unanswered approval", () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  const resolved = buildTaskApprovalResolution(
+    { kind: "clarification", interaction: { kind: "clarification" } },
+    { approved: false, now },
+  ) as Record<string, unknown>;
+  const resolution = resolved.resolution as Record<string, unknown>;
+  assert.equal(resolution.action, "reject");
+  assert.equal(resolution.state, "rejected");
+  assert.equal(resolution.approved, false);
+  assert.equal("answer" in resolution, false);
 });

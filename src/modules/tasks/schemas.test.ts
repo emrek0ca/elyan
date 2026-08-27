@@ -46,3 +46,42 @@ test("approval body rejects conflicting interaction aliases", () => {
 
   assert.equal(parsed.success, false);
 });
+
+test("approval body accepts the canonical action surface", () => {
+  const answered = approvalBodySchema.parse({
+    action: "answer",
+    answer: "Masaüstüne kaydet",
+    id: "task-1:interaction:2",
+    revision: 2,
+  });
+  assert.equal(answered.action, "answer");
+  assert.equal(answered.answer, "Masaüstüne kaydet");
+  // Eski boolean gönderilmediğinde de istek geçerlidir.
+  assert.equal(answered.approved, undefined);
+
+  assert.equal(approvalBodySchema.safeParse({ action: "reject" }).success, true);
+  assert.equal(
+    approvalBodySchema.safeParse({ action: "approve", approved: true }).success,
+    true,
+  );
+});
+
+test("approval body refuses a resolution that says two different things", () => {
+  // `action` ve `approved` çeliştiğinde hangisinin kazandığını tahmin etmek
+  // yerine istek reddedilir.
+  assert.equal(
+    approvalBodySchema.safeParse({ action: "reject", approved: true }).success,
+    false,
+  );
+  assert.equal(
+    approvalBodySchema.safeParse({ action: "approve", approved: false }).success,
+    false,
+  );
+  // Bir ret serbest metin yanıtı taşımaz.
+  assert.equal(
+    approvalBodySchema.safeParse({ action: "reject", answer: "olur" }).success,
+    false,
+  );
+  // Hiçbir çözüm alanı yoksa istek anlamsızdır.
+  assert.equal(approvalBodySchema.safeParse({ notes: "hi" }).success, false);
+});

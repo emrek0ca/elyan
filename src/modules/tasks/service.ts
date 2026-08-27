@@ -18,7 +18,16 @@ import {
   tasks,
 } from "../../db/schema.js";
 import { compactStructuredPayloadPreview } from "../../lib/blob/blob-service.js";
-import { AppError, conflict, notFound } from "../../lib/errors.js";
+import {
+  AppError,
+  conflict,
+  notFound,
+  unprocessableEntity,
+} from "../../lib/errors.js";
+import {
+  isInteractionActionAllowed,
+  type InteractionAction,
+} from "../../contracts/interaction.js";
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
 import {
   recordBridgeLearningSignals,
@@ -274,6 +283,7 @@ import {
   buildTaskRuntimeUpdate,
   isApprovalAlreadyResolved,
   isApprovalRequestExpired,
+  extractPublicInteraction,
   normalizePublicTaskApprovalRequest,
   normalizeTaskApprovalRequest,
   shouldAutoApproveDesktopTask,
@@ -11728,6 +11738,9 @@ export async function getTaskDetail(
           hydratedTask.id,
         ),
       ),
+      interaction: sanitizePublicInferenceValue(
+        extractPublicInteraction(hydratedTask.approvalRequest, hydratedTask.id),
+      ),
       chatSessionId: extractTaskChatSessionId(hydratedTask.payload),
     },
     events: await Promise.all(
@@ -12758,6 +12771,7 @@ export async function resolveTaskApproval(
     taskId: string;
     userId: string;
     approved: boolean;
+    action?: InteractionAction;
     notes?: string;
     interactionId?: string;
     interactionRevision?: number;
@@ -12795,6 +12809,17 @@ export async function resolveTaskApproval(
     input.interactionRevision !== normalizedInteraction.revision
   ) {
     throw conflict("Interaction revision is stale");
+  }
+  // Eylem yüzeyi zarfın türünden gelir: bir netleştirme "onaylanamaz", bir
+  // izin sorusu da serbest metinle "yanıtlanamaz". Eski istemciler `action`
+  // göndermez ve etkilenmez.
+  if (
+    input.action &&
+    !isInteractionActionAllowed(normalizedInteraction.kind, input.action)
+  ) {
+    throw unprocessableEntity(
+      `Interaction of kind ${normalizedInteraction.kind} does not accept action ${input.action}`,
+    );
   }
   if (task.status !== "waiting_approval") {
     if (isTerminalTaskStatus(task.status)) {
@@ -12839,6 +12864,7 @@ export async function resolveTaskApproval(
         approvalRequest: buildTaskApprovalResolution(task.approvalRequest, {
           approved: true,
           notes: input.notes,
+          action: input.action,
           now,
         }),
         summary: "Plan onaylandı. Masaüstüne aktarılıyor.",
@@ -12936,7 +12962,12 @@ export async function resolveTaskApproval(
 
   const approvalRows = await app.db
     .update(tasks)
-    .set(buildTaskApprovalResumeUpdate(task, { notes: input.notes }))
+    .set(
+      buildTaskApprovalResumeUpdate(task, {
+        notes: input.notes,
+        action: input.action,
+      }),
+    )
     .where(
       and(
         eq(tasks.id, task.id),

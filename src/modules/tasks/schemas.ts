@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { hasRawBinaryUploadHint } from "../../lib/derived-data.js";
 import { boundedJsonRecordSchema } from "../../lib/json-boundary.js";
+import { interactionActionValues } from "../../contracts/interaction.js";
 
 const taskPayloadSchema = z
   .object({
@@ -68,7 +69,8 @@ export const listTasksQuerySchema = z.object({
 });
 
 export const approvalBodySchema = z.object({
-  approved: z.boolean(),
+  // Legacy wire field. Still accepted alone; `action` is the canonical form.
+  approved: z.boolean().optional(),
   notes: z.string().max(500).optional(),
   // Canonical interaction identity. `approved` and `notes` remain the legacy
   // wire fields so older mobile/runtime clients can still resolve a request.
@@ -77,7 +79,36 @@ export const approvalBodySchema = z.object({
   // Envelope-shaped aliases accepted during the additive migration.
   id: z.string().trim().min(1).max(255).optional(),
   revision: z.number().int().positive().max(1_000_000).optional(),
+  // Canonical resolution: exactly one of the envelope's `availableActions`.
+  // A clarification is answered, never "approved" — the boolean cannot carry
+  // that distinction, which is why the card type was being guessed downstream.
+  action: z.enum(interactionActionValues).optional(),
+  answer: z.string().max(4_000).optional(),
 }).superRefine((value, ctx) => {
+  if (value.approved === undefined && value.action === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["action"],
+      message: "action or approved is required",
+    });
+  }
+  if (value.approved !== undefined && value.action !== undefined) {
+    const impliedApproval = value.action !== "reject";
+    if (impliedApproval !== value.approved) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["action"],
+        message: "action and approved disagree",
+      });
+    }
+  }
+  if (value.action === "reject" && value.answer) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["answer"],
+      message: "answer is not part of a reject",
+    });
+  }
   if (value.interactionId && value.id && value.interactionId !== value.id) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

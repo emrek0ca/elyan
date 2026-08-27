@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   extractFirstJsonObject,
   validateDesktopPlanPayload,
 } from "./desktop-plan.js";
+// Import (readFileSync değil): derleyici JSON'u `dist` altına taşır, böylece
+// parity fixture'ı derlenmiş testte de bulunur. Aynı dosyanın birebir kopyası
+// masaüstünde `tests/fixtures/elyan-contract-parity.json` altındadır.
+import parityFixtureJson from "./fixtures/elyan-contract-parity.json" with { type: "json" };
 
-const parityFixture = JSON.parse(
-  readFileSync(new URL("./fixtures/elyan-contract-parity.json", import.meta.url), "utf8"),
-) as {
+const parityFixture = parityFixtureJson as unknown as {
   validPlan: Record<string, unknown>;
   compiledTaskContract: Record<string, unknown>;
   invalidDecisionShape: Record<string, unknown>;

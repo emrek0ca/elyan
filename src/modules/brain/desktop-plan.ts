@@ -119,6 +119,9 @@ const PLANNER_SYSTEM_PREFIX = [
   "Only use capabilities that exist in the provided tool catalog.",
   "If the user only asks to observe, list, find, check, or read and forbids changes, deletion, writing, or saving, ignore conflicting artifact metadata and use read-only capabilities only; never add a writer step.",
   "Prefer the smallest correct plan; chain steps with dependsOn when a step consumes a previous step's output.",
+  // Başlığı kuralla cümleden ayıklamak bitmeyen bir iştir; konuyu bilen taraf
+  // planı üreten modeldir. Dosya adı da bu başlıktan türetilir.
+  "When a step writes an artifact, its `title` argument must name the SUBJECT, never repeat the user's instruction: for \"write a one-page article about Ataturk's principles and save it to the desktop\" the title is \"Ataturk's Principles\" - no verb, no page count, no format, no destination folder. The output file name is derived from this title.",
 ].join(" ");
 
 function normalizePlanSteps(

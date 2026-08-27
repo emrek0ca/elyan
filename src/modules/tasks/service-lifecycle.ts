@@ -7,8 +7,13 @@ import {
   type UserApprovalMode,
 } from "../approval-policy/policy.js";
 import {
+  buildInteractionEnvelope,
+  interactionActionsForKind,
   interactionEnvelopeSchema,
+  normalizeInteractionKind,
+  type InteractionAction,
   type InteractionEnvelope,
+  type InteractionKind,
 } from "../../contracts/interaction.js";
 
 export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: string; now?: Date }) {
@@ -120,11 +125,16 @@ export function buildPublicTaskApprovalEventFields(
     ? resolution.approved
     : null;
   const resolutionRevision = readNumber(resolution?.revision);
-  const resolutionState = approved === true
-    ? "approved"
-    : approved === false
-      ? "rejected"
-      : readString(resolution?.state) || null;
+  // Kanonik `state`/`action` varsa o kazanır: netleştirme yanıtı bir onay
+  // değildir ve boolean bu farkı taşıyamaz.
+  const resolutionState = readString(resolution?.state)
+    || (readString(resolution?.action) === "answer" ? "answered" : "")
+    || (approved === true
+      ? "approved"
+      : approved === false
+        ? "rejected"
+        : "")
+    || null;
 
   return {
     ...(interaction
@@ -210,14 +220,9 @@ export function normalizeTaskApprovalRequest(
   const taskKey = (readString(input.taskId) || "task").slice(0, 255);
   const kind = readString(request.kind) || "permission";
   const interaction = readRecord(request.interaction) ?? {};
-  const rawInteractionKind = (readString(interaction.kind) || kind).toLowerCase();
-  const interactionKind = (
-    rawInteractionKind === "clarification"
-      ? "clarification"
-      : ["approval", "desktop_plan", "plan_approval"].includes(rawInteractionKind)
-        ? "approval"
-        : "permission"
-  ) as "clarification" | "permission" | "approval";
+  const interactionKind: InteractionKind = normalizeInteractionKind(
+    readString(interaction.kind) || kind,
+  );
   const {
     surface: _surface,
     permissionSurface: _permissionSurface,
@@ -262,19 +267,15 @@ export function normalizeTaskApprovalRequest(
   const boundedSummary = summary.slice(0, 1_000);
   const interactionResolution =
     readRecord(request.resolution) ?? readRecord(interaction.resolution);
-  const availableActions = interactionKind === "clarification"
-    ? (["answer"] as const)
-    : (["approve", "reject"] as const);
-  const canonicalInteraction = interactionEnvelopeSchema.parse({
-    contract: "elyan.interaction.v1",
+  const availableActions = interactionActionsForKind(interactionKind);
+  const canonicalInteraction = buildInteractionEnvelope({
     id: boundedInteractionId,
     taskId: taskKey,
     taskRunId: boundedTaskRunId,
     kind: interactionKind,
     revision,
-    availableActions,
-    ...(boundedQuestion ? { question: boundedQuestion } : {}),
-    ...(boundedSummary ? { summary: boundedSummary } : {}),
+    question: boundedQuestion,
+    summary: boundedSummary,
     expiresAt,
     resolution: interactionResolution,
   });
@@ -314,6 +315,32 @@ export function normalizePublicTaskApprovalRequest(
     return approvalRequest ?? null;
   }
   return normalizeTaskApprovalRequest(request, { taskId });
+}
+
+/**
+ * Bir görevin bekleyen etkileşimi — TEK kanonik zarf.
+ *
+ * REST, SSE, history ve bootstrap aynı değeri okur. İstemci kart tipini
+ * `status === "waiting_approval"` üzerinden çıkarmaz; bu zarfın `kind`,
+ * `availableActions`, `id`, `revision` ve `expiresAt` alanlarını kullanır.
+ * Çözülmüş ya da süresi dolmuş bir etkileşim artık beklemede değildir.
+ */
+export function extractPublicInteraction(
+  approvalRequest: unknown,
+  taskId: string,
+  now: Date = new Date(),
+): (InteractionEnvelope & { state: "pending" | "resolved" | "expired" }) | null {
+  const request = readRecord(approvalRequest);
+  if (!request || Object.keys(request).length === 0) {
+    return null;
+  }
+  const normalized = normalizeTaskApprovalRequest(request, { taskId, now });
+  const state = isApprovalAlreadyResolved(request)
+    ? "resolved"
+    : isApprovalRequestExpired(normalized, now)
+      ? "expired"
+      : "pending";
+  return { ...normalized.interaction, state };
 }
 
 const trustedDesktopIdempotentWriteCapabilities = new Set([
@@ -530,12 +557,31 @@ export function buildTaskApprovalResolution(
   input: {
     approved?: boolean;
     notes?: string;
+    action?: InteractionAction;
     now?: Date;
   } = {},
 ) {
+  const approved = input.approved ?? true;
+  const existingKind = normalizeInteractionKind(
+    readString(readRecord(readRecord(approvalRequest)?.interaction)?.kind) ||
+      readString(readRecord(approvalRequest)?.kind),
+  );
+  // Eylem, zarfın türünden türetilir: bir netleştirme "onaylanmaz", yanıtlanır.
+  // Eski `approved`/`notes` alanları aynen korunur.
+  const action: InteractionAction =
+    input.action ??
+    (!approved
+      ? "reject"
+      : existingKind === "clarification"
+        ? "answer"
+        : "approve");
+  const answer = action === "answer" ? (input.notes ?? null) : null;
   const resolution = {
-    approved: input.approved ?? true,
+    approved,
     notes: input.notes ?? null,
+    action,
+    state: approved ? (action === "answer" ? "answered" : "approved") : "rejected",
+    ...(answer !== null ? { answer } : {}),
     resolvedAt: (input.now ?? new Date()).toISOString(),
     revision: approvalRequestRevision(approvalRequest),
     approvalKey: approvalRequestKey(approvalRequest) || null,
@@ -571,6 +617,7 @@ export function buildTaskApprovalResumeUpdate(
   },
   input: {
     notes?: string;
+    action?: InteractionAction;
     now?: Date;
   } = {},
 ) {
@@ -586,6 +633,7 @@ export function buildTaskApprovalResumeUpdate(
     status: "waiting_approval" as TaskStatus,
     approvalRequest: buildTaskApprovalResolution(approvalRequest, {
       notes: input.notes,
+      action: input.action,
       now,
     }),
     summary: resolutionMessage,

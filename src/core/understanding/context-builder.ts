@@ -34,6 +34,7 @@ import type {
 import { listFreshWorldSignals } from "../../modules/mobile/service.js";
 import { getActiveGoalForContext } from "../../modules/goals/service.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import { contentTerms } from "../../modules/brain/lexical-turkish.js";
 import {
   sanitizeInboundContextRecord,
   sanitizeInboundContextText,
@@ -278,14 +279,22 @@ function readPersonalizationPrompt(metadata: Record<string, unknown> | undefined
   return null;
 }
 
+/**
+ * Hafıza eşleştirmesinin terim kümesi — kökleştirilmiş.
+ *
+ * Eskiden düz `toLowerCase` + tam token karşılaştırmasıydı. Türkçe eklemeli
+ * olduğu için bu, aynı kavramın iki yazımını farklı sayıyordu: kullanıcının
+ * "ilkeleri" dediği turda "ilkeler" içeren bir hafıza kaydı hiç örtüşmüyor,
+ * dolayısıyla alaka kapısına takılıp prompt'a hiç girmiyordu. Kayıp sessizdi —
+ * sistem "bulamadım" demiyor, sadece daha kötü hatırlıyordu.
+ *
+ * Kök biçim her iki yazımı da tek anahtara indirir. Terim SAYISI artmaz
+ * (token yerine kökü konur), bu yüzden mevcut örtüşme eşikleri aynı ölçekte
+ * kalır; yalnız gerçek morfolojik varyantlar artık eşleşir.
+ */
 function tokenize(value: string): Set<string> {
   return new Set(
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9çğıöşü_\s.-]/gi, " ")
-      .split(/\s+/)
-      .filter((token) => token.length >= 3)
-      .slice(0, 80),
+    contentTerms(value, { limit: 80 }),
   );
 }
 

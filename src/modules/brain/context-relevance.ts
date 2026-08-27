@@ -1,4 +1,5 @@
 import { estimateTokens } from "./text-metrics.js";
+import { contentTerms } from "./lexical-turkish.js";
 
 /**
  * Bağlam kapısı: hatırlatmayı ITMEK yerine ÇEKMEK.
@@ -53,23 +54,21 @@ export type ContextGateResult = {
 const ADMISSION_THRESHOLD = 0.28;
 
 /**
- * Küçük ama çok geçen kelimeler örtüşme sinyalini bozar: "bir", "ve", "the"
- * her metinde vardır ve alakayı değil dili ölçer.
+ * Örtüşme için kullanılan terim kümesi.
+ *
+ * İki şey burada kasıtlı olarak ayıklanır. Birincisi durak kelimeler: "bir",
+ * "ve", "the" her metinde vardır ve alakayı değil dili ölçer. İkincisi ve
+ * daha önemlisi KOMUT kelimeleri — "yaz", "kaydet", "masaüstüne", "1 sayfalık"
+ * kullanıcının ne istediğini değil işin nasıl teslim edileceğini söyler.
+ * Bunlar sinyale karışırsa geçmişteki her masaüstü işi her yeni masaüstü
+ * isteğine alakalı görünür; kapı o zaman eleme yapmaz, gürültü geçirir.
+ *
+ * Terimler ayrıca köklerine indirilir: Türkçe eklemeli bir dil olduğu için
+ * "ilkeleri" ile "ilke" tam-token karşılaştırmasında eşleşmez ve alakalı bir
+ * blok yalnız çekim eki yüzünden elenir.
  */
-const STOPWORDS = new Set([
-  "bir", "bu", "şu", "o", "ve", "ile", "için", "ama", "gibi", "daha", "çok",
-  "var", "yok", "olan", "olarak", "de", "da", "ki", "mi", "mı", "ne", "her",
-  "the", "a", "an", "and", "or", "of", "to", "in", "is", "are", "for", "on",
-  "with", "that", "this", "it", "be", "as", "at", "by",
-]);
-
 function tokenizeForOverlap(value: string): Set<string> {
-  return new Set(
-    value
-      .toLocaleLowerCase("tr-TR")
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((word) => word.length >= 3 && !STOPWORDS.has(word)),
-  );
+  return new Set(contentTerms(value, { limit: 64 }));
 }
 
 /**
