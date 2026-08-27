@@ -25,6 +25,7 @@ import {
   GENERIC_EXECUTOR_CAPABILITY_PATTERN,
   SEPARATE_APPROVAL_CAPABILITY_PATTERN,
 } from "./capability-risk.js";
+import { isSideEffectTurn } from "../../core/understanding/turn-facts.js";
 
 /**
  * Tek görev otoritesi.
@@ -963,7 +964,8 @@ export function buildTaskExecutionContract(input: {
   const risk = workOrder?.semanticGoal?.risk;
   const requiredRuntime = input.routeDecision.requiredRuntime;
   const privacyClass =
-    risk?.sideEffect || input.routeDecision.privacyClass === "side_effect"
+    risk?.sideEffect ||
+    isSideEffectTurn({ routeDecision: input.routeDecision })
       ? "side_effect"
       : risk?.localPrivate || input.routeDecision.privacyClass === "local_private"
         ? "local_private"

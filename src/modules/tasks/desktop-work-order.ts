@@ -25,6 +25,7 @@ import {
   localDocumentUpdateCapabilities,
 } from "./local-read-intent.js";
 import { asRecord as readRecord } from "../../lib/record.js";
+import { isSideEffectTurn } from "../../core/understanding/turn-facts.js";
 export { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
@@ -2921,11 +2922,17 @@ export function buildDesktopWorkOrder(input: {
       ),
       risk: {
         localPrivate: Boolean(input.understandingEnvelope?.risk.local_private || localContextNeeded.length > 0),
+        // Alan-özel sinyaller (yazma/yıkıcı sözleşme seviyesi) burada kalır;
+        // turun GENEL yan etki gerçeği tek yerden okunur. Eskiden bu ifade
+        // `requiresApproval`ı saymıyordu ve aynı tur `inference.ts`te yan
+        // etkili, burada değil sayılıyordu.
         sideEffect: Boolean(
           semanticDesktopContract?.sideEffectLevel === "write" ||
             semanticDesktopContract?.sideEffectLevel === "destructive" ||
-          input.understandingEnvelope?.risk.side_effect ||
-            input.routeDecision.privacyClass === "side_effect",
+            isSideEffectTurn({
+              routeDecision: input.routeDecision,
+              understandingEnvelope: input.understandingEnvelope,
+            }),
         ),
         irreversible: semanticDesktopContract?.sideEffectLevel === "destructive",
       },
@@ -3017,8 +3024,10 @@ export function buildDesktopWorkOrder(input: {
       summary,
       privacyClass:
         remoteMcpOperation === "write" ||
-        input.routeDecision.privacyClass === "side_effect" ||
-        input.understandingEnvelope?.risk.side_effect
+        isSideEffectTurn({
+          routeDecision: input.routeDecision,
+          understandingEnvelope: input.understandingEnvelope,
+        })
         ? "side_effect"
         : kind === "remote_mcp" ||
             input.routeDecision.privacyClass === "local_private" ||

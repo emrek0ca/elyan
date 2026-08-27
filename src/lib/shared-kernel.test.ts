@@ -18,6 +18,7 @@ import {
   trimOnly,
   truncateText,
 } from "./text.js";
+import { isSideEffectTurn } from "../core/understanding/turn-facts.js";
 
 /**
  * ORTAK ÇEKİRDEĞİN KORUMASI.
@@ -155,4 +156,29 @@ test("value readers mirror the record readers", () => {
   assert.equal(asFiniteNumber(3.5), 3.5);
   assert.equal(asFiniteNumber(Number.POSITIVE_INFINITY), null);
   assert.equal(asFiniteNumber("3"), null, "metin sayı değildir");
+});
+
+test("a turn's side-effect answer does not depend on which module asks", () => {
+  // ÖLÇÜLEN SAPMA: aynı soru yedi yerde soruluyor ve 1, 2 ya da 3 kaynağa
+  // bakılıyordu. Yalnız onay isteyen bir tur `inference.ts`e göre yan
+  // etkiliyken `desktop-work-order.ts`e göre değildi.
+  const approvalOnly = { routeDecision: { requiresApproval: true } };
+  const privacyOnly = { routeDecision: { privacyClass: "side_effect" } };
+  const envelopeOnly = {
+    understandingEnvelope: { risk: { side_effect: true } },
+  };
+
+  for (const sources of [approvalOnly, privacyOnly, envelopeOnly]) {
+    assert.equal(isSideEffectTurn(sources), true, JSON.stringify(sources));
+  }
+
+  // Hiçbir kaynak işaret etmiyorsa tur yan etkili değildir.
+  assert.equal(isSideEffectTurn({}), false);
+  assert.equal(
+    isSideEffectTurn({
+      routeDecision: { privacyClass: "public", requiresApproval: false },
+      understandingEnvelope: { risk: { side_effect: false } },
+    }),
+    false,
+  );
 });

@@ -473,6 +473,7 @@ import {
   recordString as readMetadataString,
 } from "../../lib/record.js";
 import { collapseWhitespace as compactText } from "../../lib/text.js";
+import { isSideEffectTurn } from "../../core/understanding/turn-facts.js";
 
 function providerBaseUrlForPath(
   candidate: {
@@ -1226,11 +1227,10 @@ function deterministicDriveRecentRequest(
 ): AgentToolRequest | null {
   const prompt = input.prompt.replace(/\s+/g, " ").trim();
   if (!prompt || prompt.length > 160) return null;
-  const sideEffectDetected =
-    input.routeDecision?.requiresApproval === true ||
-    input.routeDecision?.privacyClass === "side_effect" ||
-    input.understandingContext?.understandingEnvelope?.risk.side_effect ===
-      true;
+  const sideEffectDetected = isSideEffectTurn({
+    routeDecision: input.routeDecision,
+    understandingEnvelope: input.understandingContext?.understandingEnvelope,
+  });
   if (sideEffectDetected) return null;
   if (
     /(?<!\p{L})(?:(?:sil|kaldır|tas[iı]|taşı|paylaş|gönder|yükle)\p{L}*|(?:delete|remove|move|share|send|upload)(?:s|ed|ing)?)(?!\p{L})/iu.test(
@@ -6248,7 +6248,13 @@ export async function generateSharedBrainReply(
     requestedToolName != null ||
     (input.connectorToolContracts?.length ?? 0) > 0 ||
     readRecord(input.requestMetadata)?.remoteMcpSelection != null ||
-    input.routeDecision?.privacyClass === "side_effect";
+    // Eskiden yalnız `privacyClass`a bakıyordu: sadece onay isteyen bir tur
+    // burada yan etkili SAYILMIYORDU, oysa aynı dosyanın üç satır ötesi
+    // sayıyordu. Tek tanım.
+    isSideEffectTurn({
+      routeDecision: input.routeDecision,
+      understandingEnvelope: input.understandingContext?.understandingEnvelope,
+    });
   // Connector tools (gmail/calendar/drive read) are advertised only on
   // chat/planning-shaped turns where the agent loop can actually run them, and
   // only when the user has a matching integration connected. Resolved once and
@@ -6364,10 +6370,11 @@ export async function generateSharedBrainReply(
         input.connectorToolContracts ?? [],
         {
           sideEffectDetected:
-            input.routeDecision?.privacyClass === "side_effect" ||
-            input.routeDecision?.requiresApproval === true ||
-            input.understandingContext?.understandingEnvelope?.risk
-              .side_effect === true,
+            isSideEffectTurn({
+              routeDecision: input.routeDecision,
+              understandingEnvelope:
+                input.understandingContext?.understandingEnvelope,
+            }),
         },
       );
       input.connectorReadToolHint = decision.hint;
@@ -6409,10 +6416,11 @@ export async function generateSharedBrainReply(
         input.connectorToolContracts ?? [],
         {
           sideEffectDetected:
-            input.routeDecision?.privacyClass === "side_effect" ||
-            input.routeDecision?.requiresApproval === true ||
-            input.understandingContext?.understandingEnvelope?.risk
-              .side_effect === true,
+            isSideEffectTurn({
+              routeDecision: input.routeDecision,
+              understandingEnvelope:
+                input.understandingContext?.understandingEnvelope,
+            }),
         },
       );
     } catch (error) {
@@ -6441,10 +6449,11 @@ export async function generateSharedBrainReply(
         mcpToolDeclarations,
         {
           sideEffectDetected:
-            input.routeDecision?.privacyClass === "side_effect" ||
-            input.routeDecision?.requiresApproval === true ||
-            input.understandingContext?.understandingEnvelope?.risk
-              .side_effect === true,
+            isSideEffectTurn({
+              routeDecision: input.routeDecision,
+              understandingEnvelope:
+                input.understandingContext?.understandingEnvelope,
+            }),
         },
       );
     } catch {
