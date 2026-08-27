@@ -6,6 +6,7 @@ import {
   isReferentlessVisualEdit,
   resolveCompletionAssistantBlocks,
 } from "../tasks/service.js";
+import { buildAgentToolCatalogForTurn } from "./tool-registry.js";
 import type { SkillSummary } from "../skills/types.js";
 
 /**
@@ -253,5 +254,88 @@ test("a complete answer is never handed a canned clarification", () => {
       (block) => block.type === "clarification",
     ),
     true,
+  );
+});
+
+const CONNECTOR_READ_TOOLS = [
+  "gmail.search",
+  "gmail.read",
+  "calendar.list_events",
+  "drive.search",
+  "notion.search",
+  "github.search",
+  "slack.search",
+];
+
+test("a connected account stays reachable when the semantic selector cannot run", () => {
+  // Bağlı hesap araçlarının TEK seçim yolu canlı semantik ipucuydu ve o ipucu
+  // bir işçi modeline bağlı. İşçi düştüğünde ipucu `null` oluyor, bu da
+  // "bu tur bağlı hesaba gitmiyor" ile aynı değere iniyordu: kullanıcının
+  // bağladığı Gmail/Takvim/Drive/Notion/GitHub/Slack araçlarının hepsi
+  // katalogdan siliniyordu ve Elyan "erişimim yok" diyordu.
+  const catalog = buildAgentToolCatalogForTurn({
+    prompt: "Bu haftaki toplantılarım neler?",
+    intent: "chat",
+    action: null,
+    desiredOutputKinds: ["chat_reply"],
+    requiredCapabilities: [],
+    advertisedConnectorTools: CONNECTOR_READ_TOOLS,
+    connectorReadHint: null,
+    connectorWriteHint: null,
+    connectorSemanticUnavailable: true,
+    includeCoreTools: false,
+  } as never);
+
+  const names = catalog.map((tool) => tool.name);
+  for (const tool of CONNECTOR_READ_TOOLS) {
+    assert.equal(names.includes(tool), true, `${tool} katalogda olmalı`);
+  }
+});
+
+test("a healthy selector that declines still keeps connected tools out", () => {
+  // Bozulmuş mod yalnız ARIZA içindir. Seçici çalıştı ve "bu tur bağlı hesaba
+  // gitmiyor" dediyse araçlar sunulmamalı; aksi halde her sohbet turu bağlı
+  // hesap araçlarıyla dolar.
+  const catalog = buildAgentToolCatalogForTurn({
+    prompt: "Bugün hava çok güzel",
+    intent: "chat",
+    action: null,
+    desiredOutputKinds: ["chat_reply"],
+    requiredCapabilities: [],
+    advertisedConnectorTools: CONNECTOR_READ_TOOLS,
+    connectorReadHint: null,
+    connectorWriteHint: null,
+    connectorSemanticUnavailable: false,
+    includeCoreTools: false,
+  } as never);
+
+  assert.deepEqual(catalog.map((tool) => tool.name), []);
+});
+
+test("a side-effect connector tool needs the turn to be a side effect first", () => {
+  const base = {
+    prompt: "Bu maili gönder",
+    intent: "chat",
+    action: null,
+    desiredOutputKinds: ["chat_reply"],
+    requiredCapabilities: [],
+    advertisedConnectorTools: ["gmail.send"],
+    connectorReadHint: null,
+    connectorWriteHint: null,
+    connectorSemanticUnavailable: true,
+    includeCoreTools: false,
+  };
+
+  // Zarf turu yan etkili ilan etmediyse yazma aracı bozulmuş modda da gelmez.
+  assert.deepEqual(
+    buildAgentToolCatalogForTurn({ ...base, sideEffectRequested: false } as never)
+      .map((tool) => tool.name),
+    [],
+  );
+  // Yan etkili ilan edildiyse araç sunulur; yürütme yine onaya bağlıdır.
+  assert.deepEqual(
+    buildAgentToolCatalogForTurn({ ...base, sideEffectRequested: true } as never)
+      .map((tool) => tool.name),
+    ["gmail.send"],
   );
 });

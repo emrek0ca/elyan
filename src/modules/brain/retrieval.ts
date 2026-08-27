@@ -94,9 +94,19 @@ function hashTokenToBuckets(token: string): Array<{ index: number; sign: number 
   return buckets;
 }
 
+/**
+ * VARSAYILAN `v1` OLMAK ZORUNDA.
+ *
+ * Bu fonksiyonu yalnız bilgi indeksi kullanmıyor: `intent-semantic.ts` de
+ * sabit prototipleri karşılaştırırken çağırıyor ve oradaki eşikler v1
+ * skorlarına göre ÖLÇÜLEREK kalibre edildi. Varsayılanı v2 yapmak, sürümleme
+ * yapmanın amacını tersine çevirip ilgisiz bir sınıflandırıcının davranışını
+ * sessizce değiştirdi ("ileri analiz dersinden örnek soru yaz" → math yerine
+ * writing). Sürüm, isteyen çağıranın AÇIKÇA seçtiği bir şeydir.
+ */
 export function buildHashedKnowledgeEmbedding(
   text: string,
-  modelTag: string = RETRIEVAL_EMBEDDING_MODEL,
+  modelTag: string = RETRIEVAL_EMBEDDING_MODEL_V1,
 ): number[] {
   const vector = new Array<number>(RETRIEVAL_VECTOR_DIMENSIONS).fill(0);
   const tokens =
@@ -122,7 +132,9 @@ async function buildEmbedding(text: string): Promise<number[]> {
     const vec = await nlpDaemon.embed256(text).catch(() => null);
     if (vec && vec.length === RETRIEVAL_VECTOR_DIMENSIONS) return vec;
   }
-  return buildHashedKnowledgeEmbedding(text);
+  // Bilgi indeksi sürümü AÇIKÇA seçilir: sorgu ile indeks aynı sözlüğü
+  // kullanmak zorunda.
+  return buildHashedKnowledgeEmbedding(text, RETRIEVAL_EMBEDDING_MODEL);
 }
 
 function vectorLiteral(vector: number[]): string {

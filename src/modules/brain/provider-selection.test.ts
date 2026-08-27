@@ -232,7 +232,7 @@ test("buildInferenceProviderCandidates keeps Compound off when research flag is 
   ]);
 });
 
-test("buildInferenceProviderCandidates depth-router escalates a live-web chat turn to Compound", () => {
+test("a live-web chat turn no longer puts Compound at the head of the chain", () => {
   const app = appWithConfig({
     GROQ_API_KEY: "groq-key",
     GROQ_COMPOUND_ENABLED: true,
@@ -248,9 +248,12 @@ test("buildInferenceProviderCandidates depth-router escalates a live-web chat tu
     localModels: ["local-balanced"],
     liveWebSignal: true,
   });
-  assert.equal(withSignal[0]?.preferredModels[0], "groq/compound");
+  // DAVRANIŞ DEĞİŞİKLİĞİ (ölçümle): sohbet iş yükü compound için uygun
+  // değildir ve canlı-web sinyali bunu değiştiremez. Sinyal uygun iş
+  // yüklerinde önceliktir; burada zincirin başı gerçek sohbet modelidir.
+  assert.equal(withSignal[0]?.preferredModels.includes("groq/compound"), false);
 
-  // Aynı iş yükü, sinyal yok → compound zincire girmez (mevcut davranış).
+  // Sinyal yokken de aynı: compound zincire girmez.
   const withoutSignal = buildInferenceProviderCandidates({
     app,
     workload: "mobile_chat_balanced",

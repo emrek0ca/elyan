@@ -112,6 +112,7 @@ import {
   connectorToolsForCapabilityGrants,
   connectorWriteToolsForCapabilityGrants,
   isConnectorTool,
+  selectSemanticConnectorReadToolDecision,
   selectSemanticConnectorReadToolHint,
   selectSemanticConnectorWriteToolHint,
   type ConnectorReadToolHint,
@@ -6340,9 +6341,36 @@ export async function generateSharedBrainReply(
   ) {
     try {
       mcpToolDeclarations = await listMcpToolDeclarations(app, input.userId);
-    } catch {
+    } catch (error) {
+      // Sessiz yutmak, kullanıcının bağladığı MCP sunucularının hiç var
+      // olmamış gibi davranması demekti: Elyan "böyle bir aracım yok" der,
+      // kimse de neden olduğunu göremez. Araç yine sunulmaz (bağlantı gerçekten
+      // kurulamıyor), ama artık teşhis edilebilir.
+      app.log.warn?.(
+        {
+          error:
+            error instanceof Error ? error.message : "mcp_tool_listing_failed",
+        },
+        "connected MCP tools could not be listed; they are unavailable this turn",
+      );
       mcpToolDeclarations = [];
     }
+  }
+  // Semantik seçici bu turda ulaşılabilir miydi? Ret ile arıza aynı şey
+  // değildir; bağlı hesap araçları arızada bozulmuş moda düşer.
+  let connectorSemanticUnavailable = false;
+  // İşçi KAPALIYSA seçici hiç sorulmaz; bu da bir "ret" değil, bir yokluktur.
+  // Bayrak kapalıyken bağlı hesap araçlarının tamamen kaybolması, kullanıcının
+  // Elyan'a bağladığı uygulamaları operatör bayrağıyla sessizce kapatmak
+  // demekti.
+  if (
+    mailOpenBlockAction == null &&
+    !input.internalEvaluation?.refinementPass &&
+    connectorTurnMayNeedContracts &&
+    app.config?.ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED !== true &&
+    (input.connectorToolContracts?.length ?? 0) > 0
+  ) {
+    connectorSemanticUnavailable = true;
   }
   if (
     input.connectorReadToolHint === undefined &&
@@ -6353,7 +6381,7 @@ export async function generateSharedBrainReply(
     (input.connectorToolContracts?.length ?? 0) > 0
   ) {
     try {
-      input.connectorReadToolHint = await selectSemanticConnectorReadToolHint(
+      const decision = await selectSemanticConnectorReadToolDecision(
         input.prompt,
         input.connectorToolContracts ?? [],
         {
@@ -6364,7 +6392,19 @@ export async function generateSharedBrainReply(
               .side_effect === true,
         },
       );
+      input.connectorReadToolHint = decision.hint;
+      // Seçici ULAŞILAMADIYSA bu bir ret değildir; bağlı hesap araçları
+      // bozulmuş modda yine sunulur. Sessiz kalması, kullanıcının bağladığı
+      // uygulamaların yok olması demekti.
+      connectorSemanticUnavailable = decision.semanticAvailable === false;
+      if (connectorSemanticUnavailable) {
+        app.log.warn?.(
+          { advertised: input.connectorToolContracts?.length ?? 0 },
+          "connector semantic selector unavailable; advertising connected read tools directly",
+        );
+      }
     } catch (error) {
+      connectorSemanticUnavailable = true;
       app.log.debug?.(
         {
           error:
@@ -6582,6 +6622,7 @@ export async function generateSharedBrainReply(
           }
         : null,
       hasExplicitUrl: explicitUrl,
+      connectorSemanticUnavailable,
       coreToolHint,
       semanticToolSelectionResolved,
       webToolsAllowed,

@@ -70,6 +70,13 @@ export type AgentToolSelectionHints = {
 };
 
 export type AgentToolSelectionContext = {
+  /**
+   * Semantik seçici bu turda ULAŞILAMAZ mıydı (gömme üretilemedi)?
+   *
+   * Kasıtlı bir ret değil, bir arıza. Bağlı hesap araçları bozulmuş moda
+   * bunun üzerinden düşer; `false`/tanımsız iken davranış değişmez.
+   */
+  connectorSemanticUnavailable?: boolean;
   prompt: string;
   intent?: string | null;
   action?: string | null;
@@ -1483,20 +1490,54 @@ function scoreConnectorToolForTurn(
         reasons: ["connected_capability", "semantic_connector_hint"],
       };
     }
-    // Connected-account reads are selected by the live semantic connector
-    // hint. No connector name or user phrase is inspected here.
+    // BOZULMUŞ MOD: sıralayıcıya ULAŞILAMADIYSA araçlar kaybolmaz.
+    //
+    // Bağlı hesap okumaları tek bir yola bağlıydı: canlı semantik ipucu. O
+    // ipucu bir işçi modeline dayanıyor (`ELYAN_SEMANTIC_COMPUTE_WORKER_ENABLED`
+    // + e5'in yüklenebilmesi) ve model yüklenemediğinde `null` dönüyordu —
+    // "bu tur bağlı hesaba gitmiyor" ile "bakamadım" aynı değere iniyordu.
+    // Sonuç: işçi düştüğü anda kullanıcının BAĞLADIĞI her uygulama (Gmail,
+    // Takvim, Drive, Notion, GitHub, Slack) Elyan'ın elinden çıkıyor ve Elyan
+    // sadece "erişimim yok" diyor. Kullanıcı bunu bir arıza olarak görmez.
+    //
+    // Sıralayıcı bir GÜVENLİK sınırı değil, bir seçicidir: gerçek sınır
+    // hangi konektörün bağlı olduğu (`advertisedConnectorTools`) ve
+    // yürütmedeki izin kapısıdır. O yüzden ulaşılamadığında doğru davranış,
+    // bağlı hesabın salt-okunur araçlarını modele SUNMAK ve seçimi ona
+    // bırakmaktır — semantic rerank'in sözlüksel aramaya düşmesi gibi.
+    //
+    // Kasıtlı ret bu yoldan geçmez: `semanticUnavailable` yalnız gömme
+    // üretilemediğinde true olur.
+    if (input.connectorSemanticUnavailable === true) {
+      return {
+        confidence: 0.75,
+        reasons: ["connected_capability", "semantic_selector_unavailable"],
+      };
+    }
     return null;
   }
 
   if (input.sideEffectRequested !== true) return null;
-  if (input.connectorWriteHint?.tool !== tool.name) return null;
-  const score = Number.isFinite(input.connectorWriteHint.score)
-    ? Math.max(0, Math.min(1, input.connectorWriteHint.score))
-    : 0;
-  return {
-    confidence: score,
-    reasons: ["connected_capability", "semantic_side_effect_hint"],
-  };
+  if (input.connectorWriteHint?.tool === tool.name) {
+    const score = Number.isFinite(input.connectorWriteHint.score)
+      ? Math.max(0, Math.min(1, input.connectorWriteHint.score))
+      : 0;
+    return {
+      confidence: score,
+      reasons: ["connected_capability", "semantic_side_effect_hint"],
+    };
+  }
+  // Yazma tarafında da aynı bozulmuş mod. Burada iki kapı zaten aşılmış
+  // durumda: zarf turu YAN ETKİLİ ilan etmiş ve konektör bağlı. Yeni bir
+  // ayrıcalık açılmaz — çağrı yine taslak olarak staged edilir ve kullanıcı
+  // açıkça onaylayana kadar çalışmaz (`connector-write-approvals`).
+  if (input.connectorSemanticUnavailable === true) {
+    return {
+      confidence: 0.75,
+      reasons: ["connected_capability", "semantic_selector_unavailable"],
+    };
+  }
+  return null;
 }
 
 export function buildAgentToolCatalogForTurn(

@@ -221,7 +221,31 @@ function bestCandidateMatch(
  * a cheap degraded-mode signal and is explicitly identified in the result so
  * permission-sensitive callers can choose to fail closed.
  */
+/**
+ * Sıralayıcının SONUCU ile ULAŞILABİLİRLİĞİ iki ayrı gerçektir.
+ *
+ * `null` bugün iki farklı şeyi anlatıyor: "baktım, hiçbiri yeterince
+ * benzemiyor" (kasıtlı ret) ve "bakamadım, model yüklenemedi" (arıza).
+ * Çağıran taraf bunları ayırt edemediği için arızayı ret gibi işliyor —
+ * bağlı hesap araçlarında bunun bedeli, kullanıcının bağladığı her
+ * uygulamanın sessizce kaybolmasıdır.
+ */
+export type SemanticTextRanking = {
+  match: SemanticTextCandidateMatch | null;
+  /** Gömme vektörleri gerçekten üretilebildi mi? */
+  embeddingsAvailable: boolean;
+};
+
 export async function rankSemanticTextCandidates(
+  text: string,
+  candidates: SemanticTextCandidate[],
+  options: Parameters<typeof rankSemanticTextCandidatesDetailed>[2] = {},
+): Promise<SemanticTextCandidateMatch | null> {
+  return (await rankSemanticTextCandidatesDetailed(text, candidates, options))
+    .match;
+}
+
+export async function rankSemanticTextCandidatesDetailed(
   text: string,
   candidates: SemanticTextCandidate[],
   options: {
@@ -238,7 +262,7 @@ export async function rankSemanticTextCandidates(
      */
     candidateBias?: number[];
   } = {},
-): Promise<SemanticTextCandidateMatch | null> {
+): Promise<SemanticTextRanking> {
   const trimmed = text.replace(/\s+/g, " ").trim();
   // Yanlılık dizisi ÇAĞIRANIN sırasıyla gelir; filtre bir adayı düşürürse
   // hizalama bozulur ve kapı başka bir adayın yanlılığını okur. Bu yüzden
@@ -250,8 +274,12 @@ export async function rankSemanticTextCandidates(
   const usableBias = options.candidateBias
     ? usableIndices.map(({ index }) => options.candidateBias?.[index] ?? 0)
     : undefined;
-  if (!trimmed || usableCandidates.length === 0) return null;
-  if (options.requireWarmWorker && !isSemanticComputeWorkerWarm()) return null;
+  if (!trimmed || usableCandidates.length === 0) {
+    return { match: null, embeddingsAvailable: true };
+  }
+  if (options.requireWarmWorker && !isSemanticComputeWorkerWarm()) {
+    return { match: null, embeddingsAvailable: false };
+  }
 
   const [semanticVectors, semanticQuery] = await Promise.all([
     embedTextsForStorage(
@@ -279,9 +307,12 @@ export async function rankSemanticTextCandidates(
       match.score >= (options.transformerMinScore ?? 0.62) &&
       match.margin >= (options.transformerMinMargin ?? 0.015)
     ) {
-      return { ...match, source: "transformer" };
+      return {
+        match: { ...match, source: "transformer" },
+        embeddingsAvailable: true,
+      };
     }
-    return null;
+    return { match: null, embeddingsAvailable: true };
   }
 
   const hashMatch = bestCandidateMatch(
@@ -296,9 +327,12 @@ export async function rankSemanticTextCandidates(
     hashMatch.score < (options.hashMinScore ?? 0.18) ||
     hashMatch.margin < (options.hashMinMargin ?? 0.04)
   ) {
-    return null;
+    return { match: null, embeddingsAvailable: false };
   }
-  return { ...hashMatch, source: "hash" };
+  return {
+    match: { ...hashMatch, source: "hash" },
+    embeddingsAvailable: false,
+  };
 }
 
 /**

@@ -34,7 +34,13 @@ test("shouldUseGroqCompound stays off when the master flag is disabled, even wit
 
 // Derinlik-router — bayrak açıkken, UYGUN OLMAYAN bir iş yükünde (balanced)
 // canlı-web sinyali compound'u tetikler. "aç + derinlik-router"ın özü.
-test("shouldUseGroqCompound escalates a non-eligible workload when a live-web signal is present", () => {
+test("a live-web signal cannot make a non-eligible workload eligible for Compound", () => {
+  // DAVRANIŞ DEĞİŞİKLİĞİ (ölçümle): sinyal eskiden her iş yükünü compound'a
+  // yönlendiriyordu. Yerel koşuda sıradan bir sohbet turu ("Şu an saat kaç?")
+  // canlı-web sinyali taşıdığı için compound'a gitti, iki kez boş dönüş
+  // (503) verdi ve turu uzattı — o turun araç döngüsüne değil yalnız saate
+  // ihtiyacı vardı. Sinyal artık uygun iş yükleri içinde bir önceliktir,
+  // uygunluk kapısının kendisi değil.
   const config = {
     ...baseConfig,
     GROQ_COMPOUND_ENABLED: true,
@@ -45,9 +51,8 @@ test("shouldUseGroqCompound escalates a non-eligible workload when a live-web si
       workload: "mobile_chat_balanced",
       liveWebSignal: true,
     }),
-    true,
+    false,
   );
-  // Sinyal yoksa uygun olmayan iş yükü compound kullanmaz.
   assert.equal(
     shouldUseGroqCompound({ config, workload: "mobile_chat_balanced" }),
     false,

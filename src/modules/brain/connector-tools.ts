@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { parseHTML } from "linkedom";
-import { rankSemanticTextCandidates } from "../../core/understanding/intent-semantic.js";
+import {
+  rankSemanticTextCandidates,
+  rankSemanticTextCandidatesDetailed,
+} from "../../core/understanding/intent-semantic.js";
 import { getConnectorAccessToken } from "../integrations/service.js";
 
 /**
@@ -476,6 +479,36 @@ export function connectorContractsForSemanticReadHint(
  * fail closed and produce no hint. This is a prompt hint only: execution still
  * passes through advertised-tool, OAuth-scope, and permission checks.
  */
+/**
+ * Bağlı hesap okuma seçimi — SONUÇ ve ULAŞILABİLİRLİK ayrı döner.
+ *
+ * `hint: null` iki farklı gerçeği anlatabiliyordu: "bu tur bağlı hesaba
+ * gitmiyor" (kasıtlı ret) ve "sıralayıcıya ulaşamadım" (arıza). Çağıran taraf
+ * ikisini de ret sayıyordu; sonuçta e5 işçisi düştüğünde kullanıcının
+ * bağladığı Gmail, Takvim, Drive, Notion, GitHub ve Slack araçlarının HEPSİ
+ * kataloğdan sessizce siliniyor, Elyan da "bu bilgiye erişimim yok" diyordu.
+ * Kullanıcı için bu bir arıza değil, bir yetenek kaybı gibi görünür.
+ *
+ * `semanticAvailable: false` çağıranın bozulmuş moda (advertised araçları
+ * doğrudan sunma) düşmesini sağlar — güvenlik sınırı değişmez, çünkü sınır
+ * zaten hangi konektörün BAĞLI olduğu ve yürütmedeki izin kapısıdır.
+ */
+export async function selectSemanticConnectorReadToolDecision(
+  prompt: string,
+  advertisedContracts: string[],
+  policy: ConnectorReadSelectionPolicy = {},
+): Promise<{ hint: ConnectorReadToolHint | null; semanticAvailable: boolean }> {
+  const hint = await selectSemanticConnectorReadToolHint(
+    prompt,
+    advertisedContracts,
+    policy,
+  );
+  return { hint, semanticAvailable: lastConnectorReadSemanticAvailable };
+}
+
+/** Son sıralama denemesinde gömme üretilebildi mi (modül-yerel gözlem). */
+let lastConnectorReadSemanticAvailable = true;
+
 export async function selectSemanticConnectorReadToolHint(
   prompt: string,
   advertisedContracts: string[],
@@ -509,7 +542,7 @@ export async function selectSemanticConnectorReadToolHint(
   ];
   const candidateBias = await connectorCandidateBias(semanticCandidates);
 
-  const match = await rankSemanticTextCandidates(
+  const ranking = await rankSemanticTextCandidatesDetailed(
     prompt,
     semanticCandidates,
     {
@@ -527,6 +560,8 @@ export async function selectSemanticConnectorReadToolHint(
       hashMinMargin: 1.1,
     },
   );
+  lastConnectorReadSemanticAvailable = ranking.embeddingsAvailable;
+  const match = ranking.match;
   if (!match || match.source !== "transformer") return null;
   if (!match.id.startsWith("tool:")) return null;
   // Ham skor yüksek olabilir çünkü bu uzayda HER ŞEY yüksektir. Kapı, skorun
