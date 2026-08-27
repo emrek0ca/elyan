@@ -3,6 +3,7 @@ import {
   embedTextsWithSemanticWorker,
   isSemanticComputeWorkerUnavailable,
 } from "./semantic-compute-client.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 /**
  * Real (transformer-based) semantic embeddings for the storage layer.
@@ -49,10 +50,6 @@ function recordEmbedderFailure(): void {
     embedderCooldownUntil = Date.now() + EMBEDDER_COOLDOWN_MS;
     consecutiveEmbedderFailures = 0;
   }
-}
-
-function compactText(value: string): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
 /**

@@ -1,4 +1,10 @@
 import type { ContextPacket, LearningSignal } from "./types.js";
+import {
+  asRecord as readRecord,
+  recordNumber as readNumber,
+  recordString as readString,
+} from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 type FreshWorldSignal = {
   signalId?: string;
@@ -40,26 +46,6 @@ const GREETING_PATTERN =
   /^(selam|selamlar|merhaba|mrb|hey|hi|hello|günaydın|gunaydin|iyi akşamlar|iyi aksamlar|iyi geceler|naber|nasılsın|nasilsin)[\s!.?]*$/i;
 const ADAPTIVE_WORK_PATTERN =
   /\b(plan|planla|planning|program|schedule|bugün|bugun|yarın|yarin|task|görev|gorev|workflow|routine|rutin|araştır|arastir|research|debug|kod|code|odak|focus|hazırla|hazirla|çıkar|cikar|optimize|iyileştir|iyilestir|prepare)\b/i;
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
 
 function normalizeKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");

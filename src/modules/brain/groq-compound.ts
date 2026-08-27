@@ -1,6 +1,7 @@
 import { buildGroqModelCatalog, type GroqModelConfigSource } from "./groq-models.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 import type { SharedBrainConversationMessage } from "./provider-request.js";
+import { trimOnly as compactText } from "../../lib/text.js";
 
 /**
  * Groq Compound entegrasyonu — mevcut OpenAI uyumlu Groq sağlayıcı boru hattını
@@ -34,10 +35,6 @@ const COMPOUND_ELIGIBLE_WORKLOADS: ReadonlySet<SharedBrainWorkload> = new Set([
   "public_deep_research",
   "public_quantum_research",
 ]);
-
-function compactText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 function splitDomains(value: unknown): string[] {
   return compactText(value)

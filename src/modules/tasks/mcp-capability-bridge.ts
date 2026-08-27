@@ -21,6 +21,7 @@
 
 import type { DesktopCapabilityManifestEntry } from "./desktop-capability-manifest.js";
 import { isMcpCapabilityId } from "../integrations/mcp-capability.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 export type StoredMcpToolDescriptor = {
   capabilityId: string;
@@ -34,12 +35,6 @@ export type StoredMcpToolDescriptor = {
   argSlots?: string[];
   description?: string | null;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /**
  * Sunucu kayıtlarındaki yoklama sonuçlarından araç tanımlarını toplar.

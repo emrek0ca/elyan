@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { devices, taskAutomations, tasks } from "../../db/schema.js";
 import { conflict, badRequest, notFound } from "../../lib/errors.js";
 import { assessTaskOutcome } from "../tasks/outcome-verdict.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 export type TaskAutomationRow = typeof taskAutomations.$inferSelect;
 
@@ -48,12 +49,6 @@ const AUTOMATION_ALLOWED_CAPABILITIES = new Set([
   "web.search",
   "web_research",
 ]);
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function compactText(value: unknown, max: number): string {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();

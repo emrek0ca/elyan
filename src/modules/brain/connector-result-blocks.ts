@@ -10,6 +10,7 @@ import {
 } from "../chat/block-envelope.js";
 import { sanitizeEmailHtmlToMarkdown } from "./connector-tools.js";
 import type { AgentToolResult } from "./tool-registry.js";
+import { asRecord } from "../../lib/record.js";
 
 /**
  * Deterministically normalize successful connector/MCP read results into the
@@ -49,12 +50,6 @@ function asRows(value: unknown): Record<string, unknown>[] {
           Boolean(item) && typeof item === "object" && !Array.isArray(item),
       )
     : [];
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function parseEmbeddedJson(value: unknown): unknown {

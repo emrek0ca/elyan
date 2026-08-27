@@ -66,12 +66,7 @@ import { nlpDaemon } from "../lib/nlp-daemon.js";
 import { getPerfSnapshot, startPerfTelemetry } from "../lib/perf-telemetry.js";
 import { primeFactSelection } from "../modules/facts/select.js";
 import { warmCapabilitySemanticIndex } from "../modules/tasks/capability-semantic-index.js";
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+import { asRecord as readRecord } from "../lib/record.js";
 
 function compactRealtimePayload(value: unknown): Record<string, unknown> {
   const record = readRecord(value);

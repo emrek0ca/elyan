@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { subscriptions } from "../../db/schema.js";
 import { AppError } from "../errors.js";
 import { nlpDaemon } from "../nlp-daemon.js";
+import { asRecord as readRecord } from "../record.js";
 
 export type RequestBudgetOptions = {
   scope: string;
@@ -14,12 +15,6 @@ export type RequestBudgetOptions = {
 
 function hashIdentity(identity: string): string {
   return createHash("sha256").update(identity).digest("hex").slice(0, 32);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function readString(value: unknown): string {

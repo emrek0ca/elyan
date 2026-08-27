@@ -1,6 +1,10 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { modelArtifacts, trainingJobs } from "../../db/schema.js";
+import {
+  asRecord as readRecord,
+  recordString as readString,
+} from "../../lib/record.js";
 
 type BrainModelRow = {
   id: string;
@@ -52,19 +56,6 @@ const selectionCache = new WeakMap<
   FastifyInstance,
   Map<string, SelectionCacheEntry>
 >();
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  if (!record) {
-    return null;
-  }
-
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function readAdapterStrategy(model: BrainModelRow | null, warmupJob: BrainTrainingJobRow | null): string {
   const modelMetadata = readRecord(model?.metadata);

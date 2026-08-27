@@ -1,10 +1,5 @@
 import { resolveWidgetShapeSemantic } from "./widget-shape-semantic.js";
-
-function compactText(value: string): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const EXPLICIT_TABLE_REQUEST_PATTERNS = [
   // Only genuine "I want a table" nouns. Generic words like satır/sütun/row/

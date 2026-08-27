@@ -2,18 +2,13 @@ import {
   isLikelyPureDocumentExportPrompt,
   isMobileLocalExportMode,
 } from "./mobile-local-export.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 type AttachmentIntentInput = {
   prompt: string;
   requestMetadata?: Record<string, unknown>;
   attachmentContext?: { used?: boolean } | null;
 };
-
-function compactText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function readMetadataRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

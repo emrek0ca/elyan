@@ -1,4 +1,5 @@
 import type { SharedBrainWorkload } from "./workloads.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type ElyanTurnIntent =
   | "casual_chat"
@@ -71,10 +72,6 @@ const IMAGE_SUCCESS_WITHOUT_ARTIFACT_PATTERN =
   /(?<!\p{L})(görsel|gorsel|resim|foto|image|picture)(?!\p{L}).{0,80}(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|created|generated|ready)(?!\p{L})|(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|created|generated|ready)(?!\p{L}).{0,80}(?<!\p{L})(görsel|gorsel|resim|foto|image|picture)(?!\p{L})/iu;
 const ARTIFACT_SUCCESS_WITHOUT_OUTPUT_PATTERN =
   /(?<!\p{L})(pdf|docx|xlsx|pptx|belge|doküman|dokuman|dosya|spreadsheet|sunum|presentation|çıktı|cikti|output)(?!\p{L}).{0,80}(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|tamamlandı|tamamlandi|created|generated|completed|ready)(?!\p{L})|(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|tamamlandı|tamamlandi|created|generated|completed|ready)(?!\p{L}).{0,80}(?<!\p{L})(pdf|docx|xlsx|pptx|belge|doküman|dokuman|dosya|spreadsheet|sunum|presentation|çıktı|cikti|output)(?!\p{L})/iu;
-
-function compactText(value: string): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
 
 export function classifyElyanTurnIntent(prompt: string): ElyanTurnIntent {
   const normalized = compactText(prompt);

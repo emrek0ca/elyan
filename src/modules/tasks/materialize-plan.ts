@@ -63,6 +63,7 @@ import {
   type ToolSuccessEstimate,
 } from "./tool-success-model.js";
 import { buildSelfModel } from "./self-model.js";
+import { asRecord } from "../../lib/record.js";
 
 export {
   buildAllowedCapabilities,
@@ -404,12 +405,6 @@ async function persistTaskPayload(
         });
     }
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function safePlanningError(error: unknown): {

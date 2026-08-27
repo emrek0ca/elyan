@@ -1,10 +1,5 @@
 import { extractFirstJsonObject } from "../brain/desktop-plan.js";
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+import { asRecord } from "../../lib/record.js";
 
 export function materializedPlanParseDiagnostics(
   rawPlan: Record<string, unknown> | null,

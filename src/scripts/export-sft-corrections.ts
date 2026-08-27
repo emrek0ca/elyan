@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildApp } from "../app/build-app.js";
 import { loadEnv } from "../config/env.js";
 import { exportSftReadyCorrectionsDataset } from "../modules/brain/review.js";
+import { asRecordOrEmpty as readRecord } from "../lib/record.js";
 
 type CliOptions = {
   actorUserId: string;
@@ -39,10 +40,6 @@ function parseOptions(argv: string[]): CliOptions {
     actorUserId,
     writeJsonlPath,
   };
-}
-
-function readRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function shapeSafeExportSummary(result: Awaited<ReturnType<typeof exportSftReadyCorrectionsDataset>>, jsonlWrittenTo: string | null) {

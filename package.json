@@ -39,7 +39,7 @@
     "brain:seed-corpus": "node dist/scripts/seed-brain-corpus.js",
     "brain:seed-corpus:src": "tsx src/scripts/seed-brain-corpus.ts",
     "check": "tsc --noEmit",
-    "test": "npm run build && node --test $(find dist -name '*.test.js' -type f | sort)",
+    "test": "npm run build && bash scripts/run-tests.sh",
     "db:generate": "npm run build && drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "npm run build && drizzle-kit push",
@@ -55,7 +55,8 @@
     "smoke:desktop": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/desktop-task-smoke.ts",
     "memory:routing-backfill": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/routing-episode-backfill.ts",
     "report:self-model": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/self-model-report.ts",
-    "retrieval:backfill-hash": "node --env-file-if-exists=.env dist/scripts/backfill-hashed-embeddings.js"
+    "retrieval:backfill-hash": "node --env-file-if-exists=.env dist/scripts/backfill-hashed-embeddings.js",
+    "test:shard": "bash scripts/run-tests.sh"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

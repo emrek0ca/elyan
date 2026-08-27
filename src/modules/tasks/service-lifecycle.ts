@@ -15,6 +15,7 @@ import {
   type InteractionEnvelope,
   type InteractionKind,
 } from "../../contracts/interaction.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: string; now?: Date }) {
   return {
@@ -70,12 +71,6 @@ export const TASK_QUEUE_TTL_MS = 10 * 60_000;
 export const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 export const MAX_ACTIVE_USER_APPROVALS = 8;
 export const MAX_TASK_DISPATCH_ATTEMPTS = 5;
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";

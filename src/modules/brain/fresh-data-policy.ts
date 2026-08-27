@@ -1,3 +1,5 @@
+import { collapseWhitespace as compactText } from "../../lib/text.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 export type FreshDataDomain =
   | "news"
   | "market"
@@ -219,16 +221,6 @@ const DOMAIN_CONFIG: Record<
     searchCategory: "general",
   },
 };
-
-function compactText(value: string): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 function readEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {
   return typeof value === "string" && (allowed as readonly string[]).includes(value)

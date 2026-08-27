@@ -10,6 +10,7 @@ import type {
   DesktopWorkOrder,
   DesktopWorkOrderStep,
 } from "./desktop-work-order.js";
+import { asRecord } from "../../lib/record.js";
 
 const CAPABILITY_MANIFEST_BY_NAME = new Map(
   DESKTOP_CAPABILITY_MANIFEST.map((entry) => [entry.name, entry] as const),
@@ -18,12 +19,6 @@ const SKILL_MANIFEST_BY_ID = new Map(
   DESKTOP_SKILL_MANIFEST.map((entry) => [entry.id, entry] as const),
 );
 const STEP_TEMPLATE_RE = /\{\{\s*steps\.([A-Za-z0-9_-]+)/g;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function templateStepReferences(value: unknown): Set<string> {
   const refs = new Set<string>();

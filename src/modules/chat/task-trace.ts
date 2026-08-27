@@ -17,6 +17,13 @@ import {
   interactionEnvelopeSchema,
   type InteractionEnvelope,
 } from "../../contracts/interaction.js";
+import {
+  asRecord as readRecord,
+  recordBoolean as readBoolean,
+  recordNumber as readNumber,
+  recordString as readString,
+  recordStringList as readStringList,
+} from "../../lib/record.js";
 
 type TaskTraceSource = {
   id: string;
@@ -407,48 +414,6 @@ const STEP_LABELS: Record<ElyanTaskTraceStepId, string> = {
   verify: "Kontrol",
   response: "Yanıt",
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(
-  record: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readBoolean(
-  record: Record<string, unknown> | null,
-  key: string,
-): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
-}
-
-function readNumber(
-  record: Record<string, unknown> | null,
-  key: string,
-): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readStringList(
-  record: Record<string, unknown> | null,
-  key: string,
-): string[] {
-  const value = record?.[key];
-  return Array.isArray(value)
-    ? value
-        .map((item) => (typeof item === "string" ? item.trim() : ""))
-        .filter(Boolean)
-    : [];
-}
 
 function compactDetail(
   value: string | null | undefined,

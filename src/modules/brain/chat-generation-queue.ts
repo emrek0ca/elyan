@@ -22,6 +22,7 @@ import {
   type ChatGenerationProviderStage,
 } from "./chat-generation-policy.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 export type ChatGenerationJobData = {
   taskId: string;
@@ -382,12 +383,6 @@ export async function releaseChatGenerationAdmission(
   await store
     .releaseExpiringSlot(CHAT_ADMISSION_SLOT_KEY, taskId)
     .catch(() => undefined);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 export function readChatGenerationQueueFailure(

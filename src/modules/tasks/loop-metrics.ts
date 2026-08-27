@@ -1,3 +1,4 @@
+import { asRecord as readRecord } from "../../lib/record.js";
 /**
  * Ajan döngüsünün ölçümü ve kredi ataması.
  *
@@ -67,12 +68,6 @@ export type LoopCredit = {
   /** Kaç denemeden sonra pes edildi. */
   attempts: number;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";

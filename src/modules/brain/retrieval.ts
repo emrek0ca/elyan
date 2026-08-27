@@ -11,6 +11,7 @@ import {
 } from "./semantic-embedder.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import { stemTurkish } from "./lexical-turkish.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const RETRIEVAL_VECTOR_DIMENSIONS = 256;
 /**
@@ -49,10 +50,6 @@ export type RetrievalSearchResult = {
   score: number;
   updatedAt: Date;
 };
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
 
 /* Arama katmanı case-folding: i-ailesi tek harfe iner (İ/I/ı → i) — C daemon
  * tr_lower tablosuyla birebir. NOT: hashed embedding bucket'ları tokenlere

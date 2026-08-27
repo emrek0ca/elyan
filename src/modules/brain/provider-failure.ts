@@ -1,4 +1,5 @@
 import { AppError } from "../../lib/errors.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 export type ProviderFailureClass =
   | "rate_limited"
@@ -74,12 +75,6 @@ export function providerHttpStatusClass(
   return family >= 1 && family <= 5
     ? (`${family}xx` as "1xx" | "2xx" | "3xx" | "4xx" | "5xx")
     : "network";
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 export function readProviderRetryAfterMs(headers: Headers): number | null {

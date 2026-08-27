@@ -12,6 +12,7 @@ import {
 } from "./memory-key-policy.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
 import { invalidateCanonicalMemoryCache } from "./memory-context-cache.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 type MemoryOp = TurnEnvelope["memory_ops"][number];
 export type MemoryDb = FastifyInstance["db"];
@@ -24,10 +25,6 @@ export type TurnMemoryOpsWriteResult = {
   forgotten: number;
   skipped: number;
 };
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
 
 export function canonicalizeMemoryKey(key: string): string {
   const normalized = compactText(key)

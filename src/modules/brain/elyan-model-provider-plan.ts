@@ -2,6 +2,10 @@ import { z } from "zod";
 import type { SharedBrainProvider } from "./runtime.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 import type { ElyanModelLearningPolicy } from "./elyan-model-learning-policy.js";
+import {
+  asRecord as readRecord,
+  recordString as readString,
+} from "../../lib/record.js";
 
 const sharedBrainProviderSchema = z.enum([
   "ollama",
@@ -65,15 +69,6 @@ export type ElyanModelProviderPlan = {
     allowedCanaryWorkloads: SharedBrainWorkload[];
   };
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function isServableModelArtifact(artifact: ElyanModelPlanArtifact | null): boolean {
   if (

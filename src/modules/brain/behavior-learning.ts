@@ -4,6 +4,7 @@ import { learningEvents } from "../../db/schema.js";
 import { isSafeForLearning } from "../../core/understanding/personalization-policy.js";
 import { sanitizeInboundContextText } from "../../lib/context-text-sanitizer.js";
 import { classifyElyanTurnIntent, type ElyanTurnIntent } from "./response-policy.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 type BehaviorLesson = {
   userId: string | null;
@@ -88,12 +89,6 @@ const FAILURE_DIRECTIVES: Array<{ pattern: RegExp; directive: string }> = [
     directive: "Prioritize correctness and answer only what the available context supports.",
   },
 ];
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 function readString(record: Record<string, unknown> | null, key: string): string {
   const value = record?.[key];

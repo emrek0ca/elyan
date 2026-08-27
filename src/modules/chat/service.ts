@@ -84,6 +84,13 @@ export { shouldReconcileOrphanedChatMessage } from "./orphan-reconciler.js";
 import { buildTaskTraceBlock } from "./task-trace.js";
 import { materializeLegacyVisionForDurableQueue } from "../tasks/media-inputs.js";
 import { normalizeComposerContext } from "./composer-context.js";
+import {
+  asRecord as readRecord,
+  recordArray as readArray,
+  recordBoolean as readBoolean,
+  recordNumber as readNumber,
+  recordString as readString,
+} from "../../lib/record.js";
 
 const SHARED_BRAIN_CONVERSATION_MAX_MESSAGES = 14;
 const SHARED_BRAIN_CONVERSATION_MAX_TOKENS = 3200;
@@ -356,44 +363,6 @@ function titleFromChatPreview(title: string | undefined, preview: string) {
     return compactSessionPreview(normalizedTitle, preview);
   }
   return compactSessionPreview(preview, "Yeni sohbet");
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(
-  record: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readNumber(
-  record: Record<string, unknown> | null,
-  key: string,
-): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readBoolean(
-  record: Record<string, unknown> | null,
-  key: string,
-): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
-}
-
-function readArray(
-  record: Record<string, unknown> | null,
-  key: string,
-): unknown[] {
-  const value = record?.[key];
-  return Array.isArray(value) ? value : [];
 }
 
 function clipCompactText(value: string, maxLength: number) {

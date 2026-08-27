@@ -1,3 +1,4 @@
+import { asRecord as readRecord } from "../../lib/record.js";
 /**
  * Masaüstü RUNTIME ERİŞİM DURUMUNUN SUNUCU OTORİTESİ.
  *
@@ -55,11 +56,6 @@ export type RuntimeAccessState = {
   message?: string;
   pending: RuntimeAccessPendingCommand | null;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
 
 function readIsoString(value: unknown): string | null {
   if (typeof value !== "string") return null;

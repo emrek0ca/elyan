@@ -1,5 +1,6 @@
 import { GEMINI_MODELS } from "../../config/model-policy.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import { trimOnly as compactText } from "../../lib/text.js";
 
 type GeminiModelConfigSource = {
   GEMINI_TEXT_MODEL?: string | null;
@@ -19,10 +20,6 @@ export type GeminiModelCatalog = {
   defaultModelByWorkload: Record<SharedBrainWorkload, string>;
   models: string[];
 };
-
-function compactText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 /**
  * Gemini image model ids changed from preview aliases to stable ids. Keep the

@@ -8,6 +8,11 @@ import {
 } from "../../db/schema.js";
 import { createAuditLog } from "../audit/service.js";
 import { evaluateContinuousLearningPromotion } from "./continuous-learning-policy.js";
+import {
+  asRecord as readRecord,
+  recordBoolean as readBoolean,
+  recordString as readString,
+} from "../../lib/record.js";
 
 type LearningEventRow = Pick<
   typeof learningEvents.$inferSelect,
@@ -100,22 +105,6 @@ const PRIVATE_VALUE_PATTERNS = [
   /\b(?:sk|pk|ghp|glpat|xoxb|xoxp)-[A-Za-z0-9_=-]{12,}\b/i,
   /\b(?:\d[ -]*?){13,19}\b/,
 ];
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function sha256(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");

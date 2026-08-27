@@ -5,23 +5,14 @@ import {
   readVerifiedQuantumBenchmark,
 type VerifiedQuantumBenchmark,
 } from "./quantum-benchmark.js";
+import {
+  asRecord as readRecord,
+  recordNumber as readNumber,
+  recordString as readString,
+} from "../../lib/record.js";
 
 const ML_WORKER_HEARTBEAT_KEY = "elyan:ml-worker:heartbeat";
 const ML_WORKER_STALE_AFTER_MS = 90_000;
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function readBooleanRecord(record: Record<string, unknown> | null, key: string): Record<string, boolean> {
   const value = readRecord(record?.[key]);

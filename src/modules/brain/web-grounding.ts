@@ -34,6 +34,7 @@ import {
 } from "./fresh-data-policy.js";
 import { resolveFactAnswer } from "../facts/service.js";
 import type { FactAnswer, FactProviderId } from "../facts/types.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type WebGroundingSearchResult = {
   title: string;
@@ -447,10 +448,6 @@ function createTimedAbortController(timeoutMs: number): { controller: AbortContr
   const controller = createAbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   return { controller, timeout };
-}
-
-function compactText(value: string): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
 function decodeHtmlEntities(value: string): string {

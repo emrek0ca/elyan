@@ -11,6 +11,7 @@ import {
   type ConnectorWriteDraft,
 } from "./connector-tools.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import { asRecord } from "../../lib/record.js";
 
 const STAGE_TTL_MS = 10 * 60 * 1_000;
 
@@ -26,12 +27,6 @@ export type DurableConnectorWriteApproval = {
   connectorCall: AgentToolRequest;
   draft: ConnectorWriteDraft;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /** Bind the visible draft to the exact registered side-effect call. */
 export function readCanonicalConnectorWriteApprovalCall(

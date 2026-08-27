@@ -5,15 +5,10 @@ import { joinProviderUrl, postJson } from "../../modules/brain/provider-http.js"
 import { listSharedBrainProviderCandidates, type SharedBrainProvider } from "../../modules/brain/runtime.js";
 import type { IntentClassification, TaskUnderstandingInput, UnderstandingEnvelope } from "./types.js";
 import { understandingEnvelopeSchema } from "./types.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const MODEL_FALLBACK_TIMEOUT_MS = 3_500;
 const MODEL_FALLBACK_MAX_TOKENS = 900;
-
-function compactText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function chooseFallbackModel(app: FastifyInstance, provider: SharedBrainProvider): string {
   if (provider === "groq") {

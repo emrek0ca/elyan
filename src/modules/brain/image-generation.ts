@@ -27,6 +27,7 @@ import {
   latestImageArtifactFromMetadata,
   type VisualIntentContract,
 } from "./visual-intent-contract.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type HostedImageSource = {
   base64Data: string;
@@ -272,10 +273,6 @@ function resolveGeminiImageSize(
   const normalized = compactText(prompt).toLowerCase();
   if (/\b4k\b/i.test(normalized)) return configuredMax;
   return "1K";
-}
-
-function compactText(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
 function shouldGenerateHostedImage(prompt: string): boolean {

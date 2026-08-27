@@ -7,6 +7,13 @@ import type {
   UnderstandingIntent,
 } from "./types.js";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
+import {
+  asRecord as readRecord,
+  recordArrayValue as readArray,
+  recordNumber as readNumber,
+  recordString as readString,
+} from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const MAX_PACKETS = 10;
 const MAX_PACKET_SUMMARY_CHARS = 360;
@@ -200,12 +207,6 @@ const CASUAL_OR_CREATIVE_ONLY_PATTERN = unicodeWordPattern(
   String.raw`\b(sohbet\p{L}*|chat|şaka\p{L}*|saka\p{L}*|joke|şiir\p{L}*|siir\p{L}*|poem|tweet\p{L}*|caption|başlık\p{L}*|baslik\p{L}*|isim söyle|name one|yaratıcı\p{L}*|yaratici\p{L}*|creative|garip\p{L}*|weird|hayvan\p{L}*|animal)\b`,
   "i",
 );
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 export type ExplicitMobileContextKind = "health" | "location" | "calendar";
 
 export function explicitMobileContextKindsForPrompt(
@@ -245,24 +246,6 @@ export function isExclusiveMobileContextRequest(
     (token) =>
       common.test(token) || kinds.some((kind) => allowedByKind[kind].test(token)),
   );
-}
-
-function readArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 function clipCompactText(value: string, maxChars: number): string {

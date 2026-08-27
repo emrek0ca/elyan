@@ -1,5 +1,6 @@
 import type { SharedBrainConversationMessage } from "./provider-request.js";
 import { sanitizeAssistantVisibleText } from "../chat/message-blocks.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 type MobileLocalExportShortcutInput = {
   prompt: string;
@@ -7,12 +8,6 @@ type MobileLocalExportShortcutInput = {
   requestMetadata?: Record<string, unknown>;
   attachmentContextUsed?: boolean;
 };
-
-function compactText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function normalizeMetadataValue(value: unknown): string {
   return String(value ?? "")

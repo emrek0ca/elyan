@@ -1,4 +1,6 @@
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
+import { asRecord } from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type VisualIntentKind = "image_generate" | "image_edit" | "image_continue";
 
@@ -133,16 +135,6 @@ const COUNT_WORDS: Array<[RegExp, number]> = [
   [unicodeWordPattern(String.raw`\b(dört|dort|4|four)\b`, "i"), 4],
   [unicodeWordPattern(String.raw`\b(beş|bes|5|five)\b`, "i"), 5],
 ];
-
-function compactText(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function unique(values: string[]): string[] {
   const seen = new Set<string>();

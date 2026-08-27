@@ -1,4 +1,5 @@
 import type { UserUnderstandingContext } from "../../core/understanding/types.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type PromptLanguage = "tr" | "en" | "turkic" | "mixed" | "unknown";
 export type DataGroundingLevel =
@@ -13,12 +14,6 @@ type DataGroundingInput = {
     "contextPackets" | "retrievedMemory"
   >;
 };
-
-function compactText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 export function detectPromptLanguage(prompt: string): PromptLanguage {
   const compact = compactText(prompt);

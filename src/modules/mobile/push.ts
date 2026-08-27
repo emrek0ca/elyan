@@ -7,6 +7,7 @@ import type { AppEnv } from "../../config/env.js";
 import { devices } from "../../db/schema.js";
 import { serviceUnavailable } from "../../lib/errors.js";
 import type { DomainEvent, EventBus } from "../realtime/event-bus.js";
+import { asRecordOrEmpty as readRecord } from "../../lib/record.js";
 
 type MobilePushDeviceRow = {
   id: string;
@@ -39,10 +40,6 @@ const PUSH_DEDUPE_MAX_ENTRIES = 20_000;
 
 function readString(value: unknown): string {
   return String(value ?? "").trim();
-}
-
-function readRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function sanitizePushProvider(value: unknown): string {

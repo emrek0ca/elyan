@@ -5,6 +5,7 @@ import {
   embedQueryForStorage,
   embedTextsForStorage,
 } from "../brain/semantic-embedder.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 /**
  * Gerçek sonuçlardan öğrenen örnek havuzu.
@@ -51,12 +52,6 @@ export type PlanExemplar = {
   /** Başarısız örneklerde kısa neden. */
   failureReason?: string;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readCapabilitySequence(payload: unknown): string[] {
   const record = readRecord(payload);

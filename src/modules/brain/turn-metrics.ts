@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { turnMetrics } from "../../db/schema.js";
+import { asRecord as readRecord } from "../../lib/record.js";
+import { asNonEmptyString as readString } from "../../lib/text.js";
 
 const uuidSchema = z.string().uuid();
 const safeIdSchema = z.string().trim().min(1).max(160);
@@ -102,17 +104,6 @@ export const turnMetricInputSchema = z.object({
 
 export type TurnMetricInput = z.input<typeof turnMetricInputSchema>;
 export type NormalizedTurnMetricInput = z.output<typeof turnMetricInputSchema>;
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function readNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value)

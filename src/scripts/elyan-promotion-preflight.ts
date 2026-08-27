@@ -2,6 +2,14 @@ import { fileURLToPath } from "node:url";
 import { buildApp } from "../app/build-app.js";
 import { loadEnv } from "../config/env.js";
 import { getBrainProfile } from "../modules/brain/service.js";
+import {
+  asRecordOrEmpty as readRecord,
+  recordArrayValue as readArray,
+} from "../lib/record.js";
+import {
+  asFiniteNumber as readNumber,
+  asNonEmptyString as readString,
+} from "../lib/text.js";
 
 type CliOptions = {
   userId: string | null;
@@ -31,24 +39,8 @@ function parseOptions(argv: string[]): CliOptions {
   return { userId };
 }
 
-function readRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function readBoolean(value: unknown): boolean {
   return value === true;
-}
-
-function readArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
 }
 
 export function shapeElyanPromotionPreflight(profile: Awaited<ReturnType<typeof getBrainProfile>>) {

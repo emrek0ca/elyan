@@ -1,3 +1,7 @@
+import {
+  asRecord as readRecord,
+  recordArrayValue as readArray,
+} from "../../lib/record.js";
 export type TurnRuntimeStateInput = {
   prompt: string;
   conversation?: Array<{ role?: string; content?: string | null }>;
@@ -45,16 +49,6 @@ function cleanText(value: unknown, max = 360): string | null {
   if (typeof value !== "string") return null;
   const cleaned = value.replace(/\s+/g, " ").trim();
   return cleaned ? cleaned.slice(0, max) : null;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function readArtifacts(metadata: Record<string, unknown> | null): SessionArtifact[] {

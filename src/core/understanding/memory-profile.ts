@@ -2,6 +2,7 @@ import { distance as levenshteinDistance } from "fastest-levenshtein";
 import { isSafeForLearning } from "./personalization-policy.js";
 import { formatTurkicLanguageLabel } from "./turkic-language.js";
 import type { MemoryProfileFact, MemoryProfileSnapshot, RetrievedMemory } from "./types.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const MAX_FACTS_PER_SECTION = 4;
 const MAX_SUMMARY_CHARS = 480;
@@ -134,10 +135,6 @@ const PREFERENCE_VALUE_LABELS: Record<string, Record<string, string>> = {
     off: "kapalı",
   },
 };
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
 
 function sentenceCase(value: string): string {
   const compact = compactText(value);

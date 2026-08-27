@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 import { embedTextsWithSemanticWorker } from "./semantic-compute-client.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type SemanticRerankCandidate = {
   title: string;
@@ -30,10 +31,6 @@ export type SemanticRerankResult<T extends SemanticRerankCandidate> = {
 
 const DEFAULT_SEMANTIC_MODEL = "Xenova/multilingual-e5-small";
 const MAX_TEXT_LENGTH = 1_200;
-
-function compactText(value: string): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));

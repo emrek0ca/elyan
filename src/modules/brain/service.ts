@@ -110,6 +110,12 @@ import {
   readBrainProfileCache,
   writeBrainProfileCache,
 } from "./profile-cache.js";
+import {
+  asRecord as readRecord,
+  recordBoolean as readBoolean,
+  recordString as readString,
+  recordStringList as readStringArray,
+} from "../../lib/record.js";
 
 const KNOWLEDGE_SUMMARY_MAX_CHARS = 280;
 const KNOWLEDGE_CHUNK_MAX_CHARS = 900;
@@ -679,24 +685,6 @@ function tokenize(text: string): string[] {
     .slice(0, 80);
 }
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(
-  record: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  if (!record) {
-    return null;
-  }
-
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function hasApprovedCorrectionDatasetLineage(metadata: unknown): boolean {
   const record = readRecord(metadata);
   return (
@@ -704,17 +692,6 @@ function hasApprovedCorrectionDatasetLineage(metadata: unknown): boolean {
     (record?.approvedCorrectionsOnly === true ||
       readString(record, "sourceLineage") === "approved_corrections")
   );
-}
-
-function readBoolean(
-  record: Record<string, unknown> | null,
-  key: string,
-): boolean | null {
-  if (!record) {
-    return null;
-  }
-  const value = record[key];
-  return typeof value === "boolean" ? value : null;
 }
 
 async function readLastTurnBehaviorUsage(
@@ -872,18 +849,6 @@ function withLiveBehaviorUsage<T>(profile: T, lastTurnUsed: unknown): T {
       },
     },
   } as T;
-}
-
-function readStringArray(
-  record: Record<string, unknown> | null,
-  key: string,
-): string[] {
-  const value = record?.[key];
-  return Array.isArray(value)
-    ? value
-        .map((item) => (typeof item === "string" ? item.trim() : ""))
-        .filter(Boolean)
-    : [];
 }
 
 function resolveBrainServingMode(

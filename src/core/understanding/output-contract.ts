@@ -1,6 +1,10 @@
 import type { SharedBrainWorkload } from "../../modules/brain/workloads.js";
 import { hasExplicitLocalSaveIntent } from "../../modules/tasks/local-read-intent.js";
 import { trStemPattern } from "../../lib/tr-word-boundary.js";
+import {
+  recordBoolean as readBoolean,
+  recordString as readString,
+} from "../../lib/record.js";
 
 export type OutputOperation =
   | "answer"
@@ -120,16 +124,6 @@ function normalize(value: unknown): string {
     .replace(/\s+/g, " ")
     .trim()
     .toLocaleLowerCase("tr-TR");
-}
-
-function readString(record: Record<string, unknown> | null | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readBoolean(record: Record<string, unknown> | null | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
 }
 
 function safeMetadata(value: unknown): Record<string, unknown> | null {

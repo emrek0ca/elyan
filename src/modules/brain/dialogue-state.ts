@@ -7,6 +7,8 @@ import type { AgentToolResult } from "./tool-registry.js";
 import { resolveCanonicalMemoryKey } from "./memory-key-policy.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
 import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
+import { asRecord as readRecord } from "../../lib/record.js";
+import { asNonEmptyString as readString } from "../../lib/text.js";
 
 const uuidSchema = z.string().uuid();
 
@@ -183,16 +185,6 @@ export type DialogueStateTurnInput = {
 type DialogueDb = FastifyInstance["db"];
 
 const DIALOGUE_STATE_METADATA_SOURCE = "server_dialogue_state.v1";
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function clip(value: string, max: number): string {
   const trimmed = value.trim().replace(/\s+/g, " ");

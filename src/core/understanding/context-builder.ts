@@ -55,6 +55,12 @@ import {
   resolveInteractionContext,
   type InteractionContext,
 } from "./interaction-context.js";
+import {
+  asRecord as readRecord,
+  recordBoolean as readBooleanValue,
+  recordString as readStringValue,
+} from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const MAX_HINTS = 12;
 const MAX_CHARS = 4000;
@@ -90,10 +96,6 @@ const SUSPICIOUS_NAME_TOKENS = new Set([
   "artık",
   "artik",
 ]);
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
 
 function clipCompactText(value: string, maxChars: number): string {
   const compact = compactText(value);
@@ -245,22 +247,6 @@ function extractExplicitSelfIdentifiedName(message: string): string | null {
     }
   }
   return null;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readStringValue(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readBooleanValue(record: Record<string, unknown> | null, key: string): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
 }
 
 function readPersonalizationPrompt(metadata: Record<string, unknown> | undefined): string | null {

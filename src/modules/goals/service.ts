@@ -13,6 +13,7 @@ import {
   readGoalEngineState,
   type GoalEngineState,
 } from "./state-machine.js";
+import { truncateText as compactText } from "../../lib/text.js";
 
 const DEFAULT_MAX_STEPS = 20;
 const ACTIVE_GOAL_LIMIT = 5;
@@ -43,11 +44,6 @@ export type GoalExecutionEvent = {
   payload: Record<string, unknown>;
   createdAt: Date;
 };
-
-function compactText(value: string, max: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trimEnd()}…`;
-}
 
 function clampMaxSteps(value: number | undefined): number {
   if (!Number.isInteger(value)) {

@@ -1,3 +1,4 @@
+import { asRecord as readRecord } from "../../lib/record.js";
 /**
  * ADIM SÖZLEŞMESİ — cihazlar arası yürütmenin ortak dili.
  *
@@ -81,12 +82,6 @@ const DEVICES: ReadonlySet<string> = new Set<ExecutionDevice>([
   "mobile",
   "control-plane",
 ]);
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /**
  * Serbest biçimli adım verisini sözleşmeye çevir.

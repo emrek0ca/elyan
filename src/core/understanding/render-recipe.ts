@@ -4,6 +4,13 @@ import {
   hasRenderableDesiredOutput,
   preferredFormatFromUnderstandingEnvelope,
 } from "./understanding-envelope.js";
+import {
+  asRecord as readRecord,
+  recordArray as readArray,
+  recordBoolean as readBoolean,
+  recordString as readString,
+} from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type RenderRecipeFormat =
   "pdf" | "png" | "jpg" | "jpeg" | "webp" | "svg" | "docx" | "xlsx";
@@ -131,12 +138,6 @@ const DOCUMENT_WORD_EXPORT_PATTERNS = [
   /\b(pdf|word|docx|doc|belge)\b.*\b(metni|yazıyı|yaziyi|içeriği|icerigi|notları|notlari|özeti|ozeti|taslağı|taslagi)\b/i,
 ];
 
-function compactText(value: string): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function slugifyFileName(value: string): string {
   const slug = compactText(value)
     .toLocaleLowerCase("tr-TR")
@@ -197,36 +198,6 @@ function normalizeValue(value: unknown): string {
     .trim()
     .toLowerCase()
     .replace(/[\s.-]+/g, "_");
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(
-  record: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readArray(
-  record: Record<string, unknown> | null,
-  key: string,
-): unknown[] {
-  const value = record?.[key];
-  return Array.isArray(value) ? value : [];
-}
-
-function readBoolean(
-  record: Record<string, unknown> | null,
-  key: string,
-): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
 }
 
 function isRenderRecipeFormat(value: string | null): value is RenderRecipeFormat {

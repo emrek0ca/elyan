@@ -10,6 +10,7 @@ import {
   buildTurnEnvelopeResponseFormat,
   TURN_ENVELOPE_COMPACT_SCHEMA_INSTRUCTION,
 } from "./turn-envelope.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export type SharedBrainConversationMessage = {
   role: "system" | "user" | "assistant";
@@ -26,12 +27,6 @@ export type SharedBrainRequestAttempt = {
 type OpenAiContentBlock =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } };
-
-function compactText(value: string): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 export function getChatCompletionPath(provider: SharedBrainProvider): string {
   if (provider === "ollama") {

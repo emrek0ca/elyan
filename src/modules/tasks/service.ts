@@ -346,6 +346,7 @@ import type { ArtifactOutput } from "../artifacts/types.js";
 import { extractMoneyItems } from "../artifacts/utils.js";
 import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
 import { suggestCapabilitiesSemantically } from "./capability-semantic-index.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 export { canonicalTaskTitle, shapeTaskFeedItem } from "./service-helpers.js";
 
 type ShapedTaskFeedItem = ReturnType<typeof shapeTaskFeedItem>;
@@ -2951,12 +2952,6 @@ function canKeepChatTaskPayloadInline(
   } catch {
     return false;
   }
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 const DATA_VISUAL_OUTPUT_KINDS = new Set([

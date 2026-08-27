@@ -30,6 +30,12 @@ import {
 import { selectToolSkillForTurn } from "./tool-skill-selector.js";
 import { trStemPattern } from "../../lib/tr-word-boundary.js";
 import { resolveWidgetShapeSemantic } from "./widget-shape-semantic.js";
+import {
+  asRecord as readRecord,
+  recordBoolean as readBoolean,
+  recordString as readString,
+} from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 type BuildEnvelopeInput = TaskUnderstandingInput & {
   intent: IntentClassification;
@@ -133,12 +139,6 @@ const NEGATED_WRITE_PATTERN = trStemPattern([
   "uretme",
 ]);
 
-function compactText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function clampConfidence(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -153,22 +153,6 @@ function normalizeToken(value: unknown): string {
     .replace(/[^\p{L}\p{N}_-]+/gu, "_")
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "");
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
 }
 
 function addConstraint(

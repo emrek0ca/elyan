@@ -65,6 +65,12 @@ import {
   buildUnderstandingConsensus,
   type UnderstandingConsensus,
 } from "./understanding-consensus.js";
+import {
+  asRecord as readRecord,
+  recordArray as readArray,
+  recordBoolean as readBoolean,
+  recordString as readString,
+} from "../../lib/record.js";
 
 export type RoutingPurpose = "task" | "chat";
 
@@ -715,28 +721,6 @@ function matchesAny(message: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(message));
 }
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(
-  record: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readBoolean(
-  record: Record<string, unknown> | null,
-  key: string,
-): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
-}
-
 function normalizeFlag(value: unknown): string {
   return String(value ?? "")
     .trim()
@@ -782,14 +766,6 @@ function hasMobileLocalDocumentExportHint(metadata: unknown): boolean {
     exportMode === "on_device_export" ||
     exportMode === "mobile_export"
   );
-}
-
-function readArray(
-  record: Record<string, unknown> | null,
-  key: string,
-): unknown[] {
-  const value = record?.[key];
-  return Array.isArray(value) ? value : [];
 }
 
 function hasDocumentEnvelopePayload(value: unknown, depth = 0): boolean {

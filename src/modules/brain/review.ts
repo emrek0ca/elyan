@@ -8,6 +8,12 @@ import { ELYAN_CONSTITUTION_VERSION, ELYAN_PROMPT_PROFILE_VERSION, constitutionR
 import { invalidateBrainProfileCache } from "./profile-cache.js";
 import { invalidateBehaviorLearningCache } from "./behavior-learning.js";
 import type { BrainEvalResult } from "./evaluator.js";
+import {
+  asRecord as readRecord,
+  recordBoolean as readBoolean,
+  recordNumber as readNumber,
+  recordString as readString,
+} from "../../lib/record.js";
 
 type RouteDecisionSnapshot = {
   route: string;
@@ -111,25 +117,6 @@ function redactPrivatePrompt(prompt: string, routeDecision: RouteDecisionSnapsho
     return `[redacted:${createHash("sha256").update(prompt).digest("hex").slice(0, 16)}] ${compactText(prompt, 96)}`;
   }
   return prompt;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readBoolean(record: Record<string, unknown> | null, key: string): boolean | null {
-  const value = record?.[key];
-  return typeof value === "boolean" ? value : null;
 }
 
 function reviewRecordFromMetadata(metadata: Record<string, unknown>): BrainInteractionReviewRecord | null {

@@ -467,6 +467,12 @@ import {
   getTrialQuotaUsage,
   resolveUsageIdentityContext,
 } from "../quota/service.js";
+import {
+  asRecord as readRecord,
+  recordNumber as readMetadataNumber,
+  recordString as readMetadataString,
+} from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 function providerBaseUrlForPath(
   candidate: {
@@ -479,12 +485,6 @@ function providerBaseUrlForPath(
   return candidate.provider === "gemini" && !path.startsWith("/interactions")
     ? candidate.compatibilityBaseUrl ?? candidate.baseUrl
     : candidate.baseUrl;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 const CONNECTOR_TOOL_WORKLOADS: ReadonlySet<SharedBrainWorkload> = new Set([
@@ -1642,12 +1642,6 @@ const sharedBrainResponseCache = new WeakMap<
   Map<string, SharedBrainResponseCacheEntry>
 >();
 
-function compactText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 type ResponseCompletenessAnalysis = {
   isComplete: boolean;
   needsRepair: boolean;
@@ -1735,28 +1729,12 @@ function readGenerationAffectFromMetadata(
   return { mood, rapport, volatility };
 }
 
-function readMetadataString(
-  record: Record<string, unknown> | null,
-  key: string,
-): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function readMetadataBoolean(
   record: Record<string, unknown> | null,
   key: string,
 ): boolean | null {
   const value = record?.[key];
   return typeof value === "boolean" ? value : null;
-}
-
-function readMetadataNumber(
-  record: Record<string, unknown> | null | undefined,
-  key: string,
-): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function readMetadataArray(

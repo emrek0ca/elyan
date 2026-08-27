@@ -51,6 +51,12 @@ import {
   processDueAutomations,
   type AutomationSweepResult,
 } from "../automations/runner.js";
+import {
+  asRecord as readRecord,
+  recordNumber as readNumber,
+  recordString as readString,
+  recordStringList as readStringArray,
+} from "../../lib/record.js";
 
 type TrainingJobRow = typeof trainingJobs.$inferSelect;
 type DatasetManifestRow = Pick<
@@ -64,19 +70,6 @@ type TrainingWorkerOptions = {
 };
 
 const EVALUATION_METRIC_VERSION = "bounded_offline_eval_v2";
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  if (!record) {
-    return null;
-  }
-
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function mergeTrainingMetadata(
   existing: unknown,
@@ -95,20 +88,6 @@ function buildExternalRequiredMetadata(reason: string, extra: Record<string, unk
     failureReason: reason,
     ...extra,
   };
-}
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readStringArray(record: Record<string, unknown> | null, key: string): string[] {
-  const value = record?.[key];
-  return Array.isArray(value)
-    ? value
-        .map((item) => (typeof item === "string" ? item.trim() : ""))
-        .filter(Boolean)
-    : [];
 }
 
 function clampScore(value: number): number {

@@ -10,6 +10,7 @@ import { invalidateBrainProfileCache } from "../brain/profile-cache.js";
 import { getSharedBrainTargetDeviceId } from "../devices/service.js";
 import { activeTaskStatuses, resequenceDeviceQueue } from "../tasks/queue.js";
 import { deriveTaskDeliveryState, extractTaskRouteDecision } from "../tasks/service-helpers.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 function getPairingExpiry(minutes: number): Date {
   return new Date(Date.now() + minutes * 60_000);
@@ -25,12 +26,6 @@ function buildPairingManualCode(sessionId: string, pairingCode: string): string 
 
 function normalizePairingCode(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function retargetPairingRequiredPayload(payload: unknown): Record<string, unknown> | null {

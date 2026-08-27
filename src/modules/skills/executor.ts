@@ -21,6 +21,8 @@ import {
   validateSkillInput,
   validateSkillOutput,
 } from "./validator.js";
+import { asRecord as readRecord } from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 type CacheEntry = {
   result: SkillExecutionResult;
@@ -58,18 +60,8 @@ const RELEVANCE_STOPWORDS = new Set([
   "file",
 ]);
 
-function compactText(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
-
 function normalize(value: unknown): string {
   return compactText(value).toLowerCase();
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function boundedMetadataCount(value: unknown): number {

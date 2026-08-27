@@ -25,6 +25,13 @@ import { buildVisionTaskPromptBlock, classifyVisionTask } from "./vision-task-po
 import { assessVisionEvidence, buildVisionEvidenceGatePrompt } from "./vision-evidence-gate.js";
 import { extractClientAttachments } from "./document-types.js";
 import { isSessionVisionMemoryFresh } from "./vision-memory-policy.js";
+import {
+  asRecord as readRecord,
+  recordArray as readArray,
+  recordNumber as readNumber,
+  recordString as readString,
+} from "../../lib/record.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 3;
 const DEFAULT_MAX_CHUNKS = 20;
@@ -110,31 +117,6 @@ type PreparedAttachmentCandidate = CachedPreparedAttachmentCandidate & {
 };
 
 type AttachmentContextStore = Pick<ReliabilityStore, "get" | "set">;
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readArray(record: Record<string, unknown> | null, key: string): unknown[] {
-  const value = record?.[key];
-  return Array.isArray(value) ? value : [];
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function compactText(value: unknown): string {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
-}
 
 function normalizeToken(value: string): string {
   return value

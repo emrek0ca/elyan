@@ -22,6 +22,7 @@ import {
   capabilityScoreForWorkload,
   resolveProviderModelCapabilities,
 } from "./provider-capabilities.js";
+import { trimOnly as compactText } from "../../lib/text.js";
 
 export type SharedBrainProviderCandidate = {
   provider: SharedBrainProvider;
@@ -129,10 +130,6 @@ function isPublicResearchWorkload(workload: SharedBrainWorkload): boolean {
     workload === "public_deep_research" ||
     workload === "public_quantum_research"
   );
-}
-
-function compactText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
 }
 
 function modelFamilyFor(provider: SharedBrainProvider, model: string): ModelRouteDecision["modelFamily"] {

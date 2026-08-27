@@ -5,6 +5,7 @@ import {
   getBrainProfile,
   queueContinuousBrainTrainingJob,
 } from "../modules/brain/service.js";
+import { asRecordOrEmpty as readRecord } from "../lib/record.js";
 
 type CliOptions = {
   userId: string | null;
@@ -42,10 +43,6 @@ function parseOptions(argv: string[]): CliOptions {
     userId,
     execute,
   };
-}
-
-function readRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 export function shapeRefreshQueuePreflight(profile: Awaited<ReturnType<typeof getBrainProfile>>) {

@@ -1,3 +1,4 @@
+import { asRecord } from "../../lib/record.js";
 /**
  * Görev başarısızlıklarını toplu rapora ve öğrenmeye elverişli, makine-okur
  * bir imzaya indirger. Saf fonksiyonlar — DB/ağ yok, kolay test edilir.
@@ -19,12 +20,6 @@ export type TaskFailureSignature = {
   /** Görevin talep ettiği yetenekler — "hangi görev tipi patlıyor". */
   capabilities: string[];
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /**
  * Serbest metin ya da SCREAMING_SNAKE kodu, kararlı bir slug'a çevirir.

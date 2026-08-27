@@ -34,6 +34,8 @@ import { calculateVisionVariantEncodedBudget, shouldApplyFineTextEnhancement, sh
 import { evaluateVisionInputGate } from "./vision-input-gate.js";
 import { shouldRunVisionSecondaryReview, VISION_TOTAL_PROVIDER_CALL_BUDGET } from "./vision-attempt-budget.js";
 import { createDeltaPublisherCore, type SharedBrainInferenceDelta } from "./stream-publisher.js";
+import { asRecord as readRecord } from "../../lib/record.js";
+import { asNonEmptyString as readString } from "../../lib/text.js";
 
 /**
  * Production-grade JSONL benchmark harness for Elyan as an AGENT (route picker,
@@ -202,17 +204,6 @@ export function normalizeTarget(
     default:
       return "server_brain";
   }
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function normalizeBenchmarkCase(raw: unknown, file: string): BenchmarkCase {

@@ -40,6 +40,8 @@ import {
   readCanonicalMemoryCache,
   writeCanonicalMemoryCache,
 } from "./memory-context-cache.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
+import { recordNumber as readMetadataNumber } from "../../lib/record.js";
 
 const MEMORY_VECTOR_DIMENSIONS = 256;
 const MEMORY_EXTRACTION_BATCH = 120;
@@ -242,10 +244,6 @@ function toTenantRows(
     source,
     logger: logger ?? null,
   }) as ExecuteRow[];
-}
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 function cleanSyntheticMemoryContent(value: string): string {
@@ -870,11 +868,6 @@ function inferFactType(key: string): "semantic" | "self_model" | "reflective" {
     return "reflective";
   }
   return "semantic";
-}
-
-function readMetadataNumber(metadata: Record<string, unknown>, key: string): number | null {
-  const value = metadata[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function readMetadataString(metadata: Record<string, unknown>, key: string): string | null {

@@ -1,3 +1,8 @@
+import {
+  asRecord as readRecord,
+  recordNumber as readNumber,
+  recordString as readString,
+} from "../../lib/record.js";
 export const QUANTUM_BENCHMARK_VERSION = "elyan_quantum_benchmark_v1";
 export const QUANTUM_BENCHMARK_PRODUCER = "elyan_quantum_benchmark_worker";
 
@@ -16,22 +21,6 @@ export type VerifiedQuantumBenchmark = {
   advantageScore: number;
   qualified: boolean;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readNumber(record: Record<string, unknown> | null, key: string): number | null {
-  const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function isValidTimestamp(value: string): boolean {
   return Number.isFinite(Date.parse(value));

@@ -1,3 +1,4 @@
+import { asRecord as readRecord } from "../../lib/record.js";
 export type RuntimeCapabilityCategory =
   | "runtime"
   | "task"
@@ -147,12 +148,6 @@ export function normalizeRuntimeCapabilities(input: unknown): string[] {
 
 function boundedString(value: unknown, maxLength: number): string {
   return String(value ?? "").trim().slice(0, maxLength);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {

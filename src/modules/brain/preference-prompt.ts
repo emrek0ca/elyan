@@ -1,12 +1,7 @@
 import { formatMemoryProfilePromptBlock } from "../../core/understanding/memory-profile.js";
 import type { UserUnderstandingContext } from "../../core/understanding/types.js";
 import { formatTurkicLanguageLabel } from "../../core/understanding/turkic-language.js";
-
-function compactText(value: unknown): string {
-  return String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 function sentenceCase(value: string): string {
   const compact = compactText(value);

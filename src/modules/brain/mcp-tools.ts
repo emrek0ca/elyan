@@ -17,6 +17,7 @@ import {
   listUserIntegrationConnections,
   normalizeSafePublicMcpUrl,
 } from "../integrations/service.js";
+import { asRecordOrEmpty as asRecord } from "../../lib/record.js";
 
 /**
  * Uzak MCP sunucularının TÜM araç kataloğunu paylaşılan beyne bağlar.
@@ -401,12 +402,6 @@ async function queryMcpToolDeclarations(
   }
 
   return declarations;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 function readRegisteredMcpProbe(metadata: Record<string, unknown>): McpProbeResult | null {

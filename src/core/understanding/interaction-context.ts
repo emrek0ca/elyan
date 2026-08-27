@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TaskUnderstandingInput } from "./types.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 
 export const interactionChannelValues = [
   "mobile",
@@ -20,12 +21,6 @@ export type InteractionContext = {
   conversationRef: string | null;
   messageRef: string | null;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function boundedOpaqueRef(value: unknown): string | null {
   if (typeof value !== "string") return null;

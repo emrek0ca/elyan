@@ -1,5 +1,6 @@
 import { RETIRED_MODELS } from "../../config/model-policy.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import { trimOnly as compactText } from "../../lib/text.js";
 
 export type GroqModelConfigSource = {
   GROQ_REASONING_MODEL?: string | null;
@@ -61,10 +62,6 @@ const DEFAULT_STRUCTURED_JSON_MODEL = "qwen/qwen3.6-27b";
 // Burada ikinci bir liste tutmak, masaüstüyle sürüklenmenin ta kendisiydi:
 // sunucu bir modelin kalktığını biliyor, masaüstü hâlâ zincirinde taşıyordu.
 const RETIRED_STRUCTURED_JSON_MODELS = RETIRED_MODELS;
-
-function compactText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => compactText(value)).filter(Boolean))];

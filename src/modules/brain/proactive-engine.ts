@@ -11,6 +11,7 @@ import {
 import { sendUserPush } from "../notifications/push-sender.js";
 import { recordProactiveEvent } from "./proactive-metrics.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
+import { truncateText as compactText } from "../../lib/text.js";
 
 type FollowUp = TurnEnvelope["follow_ups"][number];
 
@@ -332,11 +333,6 @@ export async function recordTurnFollowUps(
     result.created += 1;
   }
   return result;
-}
-
-function compactText(value: string, max: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trimEnd()}…`;
 }
 
 function estimateTokens(value: string): number {

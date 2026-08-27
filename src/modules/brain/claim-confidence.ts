@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { CommandRouteDecision } from "../routing-policy/service.js";
 import type { UserUnderstandingContext } from "../../core/understanding/types.js";
+import { asRecord as readRecord } from "../../lib/record.js";
+import {
+  asFiniteNumber as readNumber,
+  asNonEmptyString as readString,
+} from "../../lib/text.js";
 
 export const claimSourceSchema = z.enum([
   "known_fact",
@@ -83,23 +88,8 @@ type ClaimConfidenceApp = {
   config?: ClaimConfidenceConfig;
 };
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function readBoolean(value: unknown): boolean {
   return value === true;
-}
-
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function normalizeConfidence(value: unknown, fallback = 0.5): number {

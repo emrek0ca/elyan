@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { knowledgeChunks, knowledgeDocuments } from "../../db/schema.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 export const ELYAN_BRAIN_CORPUS_VERSION = "2026-06-v1";
 
@@ -101,10 +102,6 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     priority: 92,
   },
 ];
-
-function compactText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
 
 function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");

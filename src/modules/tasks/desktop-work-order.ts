@@ -24,6 +24,7 @@ import {
   localDocumentReadCapabilities,
   localDocumentUpdateCapabilities,
 } from "./local-read-intent.js";
+import { asRecord as readRecord } from "../../lib/record.js";
 export { parseLocalListingQuery, parseSystemInfoQuery } from "./system-observation.js";
 
 // Work order adım bütçesi. Eskiden 8'e sabitliydi ve karmaşık (çok-adımlı)
@@ -686,12 +687,6 @@ function compactText(value: unknown, maxLength = 1_000): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1).trimEnd()}…` : normalized;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 export function buildDesktopPlanningEvidenceFromMetadata(
