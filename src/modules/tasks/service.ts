@@ -106,10 +106,11 @@ import {
 } from "../brain/visual-intent-contract.js";
 import { resolveVisualIntentContract } from "../brain/visual-intent-semantic.js";
 import {
+  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  assistantTurnFailureMessage,
   isGenericAssistantFallbackReply,
   responsePolicyForPrompt,
   sanitizeFinalAssistantResponse,
-  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
 } from "../brain/response-policy.js";
 import { generateGovernedSharedBrainReply } from "../brain/inference.js";
 import { evaluateSemanticResponseGate } from "../brain/semantic-response-gate.js";
@@ -8236,7 +8237,7 @@ async function processSharedBrainChatTask(
       throw new AppError(
         502,
         "provider_empty_output",
-        ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+        assistantTurnFailureMessage("provider_empty_output"),
         {
           transient: retryable,
           retrySuggested: retryable,

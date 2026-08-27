@@ -7,6 +7,11 @@ import {
   resolveCompletionAssistantBlocks,
 } from "../tasks/service.js";
 import { buildAgentToolCatalogForTurn } from "./tool-registry.js";
+import {
+  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  assistantTurnFailureMessage,
+  isGenericAssistantFallbackReply,
+} from "./response-policy.js";
 import type { SkillSummary } from "../skills/types.js";
 
 /**
@@ -338,4 +343,35 @@ test("a side-effect connector tool needs the turn to be a side effect first", ()
       .map((tool) => tool.name),
     ["gmail.send"],
   );
+});
+
+test("a failure tells the user what happened, and is still recognised as a failure", () => {
+  // 2026-08-27: saat sorusu "Bu turda yanıt oluşturulamadı. Tekrar dene."
+  // aldı. Gerçek sebep sağlayıcının boş akış döndürmesiydi; kullanıcının
+  // gördüğü ise Elyan'ın saati bilmediğiydi.
+  const empty = assistantTurnFailureMessage("provider_empty_output");
+  const unavailable = assistantTurnFailureMessage("server_brain_unavailable");
+  const busy = assistantTurnFailureMessage("rate_limited");
+
+  assert.notEqual(empty, ASSISTANT_TURN_FAILURE_FALLBACK_TR);
+  assert.notEqual(unavailable, empty, "farklı arızalar farklı şey söylemeli");
+  assert.notEqual(busy, unavailable);
+
+  // KRİTİK: her yeni cümle "bu bir cevap değil" korumasınca TANINMALI.
+  // Tanınmayan bir çıkmaz cümlesi turu başarılı gösterip görevi `completed`
+  // yazmıştı; koruma tek tek string karşılaştırdığı için yeni cümleler
+  // sessizce kapının dışında kalırdı.
+  for (const message of [empty, unavailable, busy, ASSISTANT_TURN_FAILURE_FALLBACK_TR]) {
+    assert.equal(isGenericAssistantFallbackReply(message), true, message);
+  }
+
+  // Bilinmeyen sebep uydurmaz, genel cümleye düşer.
+  assert.equal(
+    assistantTurnFailureMessage("hiç_bilinmeyen_sebep"),
+    ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  );
+  assert.equal(assistantTurnFailureMessage(null), ASSISTANT_TURN_FAILURE_FALLBACK_TR);
+
+  // Gerçek bir cevap asla arıza sayılmaz.
+  assert.equal(isGenericAssistantFallbackReply("Ankara."), false);
 });

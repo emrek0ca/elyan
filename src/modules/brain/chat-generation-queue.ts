@@ -1,4 +1,7 @@
-import { ASSISTANT_TURN_FAILURE_FALLBACK_TR } from "./response-policy.js";
+import {
+  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  assistantTurnFailureMessage,
+} from "./response-policy.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   DelayedError,
@@ -485,7 +488,7 @@ async function enqueueFallback(
       error: new AppError(
         503,
         "server_brain_unavailable",
-        ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+        assistantTurnFailureMessage("fallback_unconfigured"),
         {
           transient: false,
           retrySuggested: false,

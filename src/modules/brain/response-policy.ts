@@ -503,6 +503,52 @@ export const ASSISTANT_TURN_FAILURE_FALLBACK_TR =
   "Bu turda yanıt oluşturulamadı. Tekrar dene.";
 
 /**
+ * ARIZANIN SEBEBİNİ SÖYLEYEN CÜMLELER.
+ *
+ * "Bu turda yanıt oluşturulamadı. Tekrar dene." bir cevap değil, bir duvar.
+ * Kullanıcıya ne olduğunu söylemez, ne yapabileceğini söylemez ve her arıza
+ * için aynıdır — bu yüzden ürün davranışı gibi okunur, arıza gibi değil.
+ * Yerel denemede saat sorusu tam olarak bunu aldı: sağlayıcı boş akış
+ * döndürmüştü, ama kullanıcının gördüğü şey Elyan'ın saati bilmediğiydi.
+ *
+ * Sebep zaten SINIFLANDIRILMIŞ durumda (`failureClass`, `errorCode`); tek
+ * eksik onu kullanıcıya taşımaktı. Cümleler kısa ve suçlamasız: ne oldu, ne
+ * yapılabilir. Sebep bilinmiyorsa yukarıdaki genel cümleye düşülür — bilmediği
+ * bir şeyi uyduran bir mesaj, hiç mesaj olmamasından kötüdür.
+ */
+const ASSISTANT_TURN_FAILURE_BY_CAUSE: Record<string, string> = {
+  rate_limited:
+    "Şu an yoğunluk var ve sıraya giremedim. Birkaç saniye sonra tekrar dener misin?",
+  provider_rate_limited:
+    "Şu an yoğunluk var ve sıraya giremedim. Birkaç saniye sonra tekrar dener misin?",
+  provider_empty_output:
+    "Yanıt üretilirken yarıda kesildi. Aynı mesajı yeniden gönderirsen tamamlarım.",
+  server_brain_unavailable:
+    "Şu anda düşünme servisine ulaşamıyorum. Birazdan yeniden dener misin?",
+  fallback_unconfigured:
+    "Şu anda düşünme servisine ulaşamıyorum. Birazdan yeniden dener misin?",
+  timeout:
+    "Yanıt beklenenden uzun sürdü ve kesildi. Yeniden dener misin?",
+  provider_timeout:
+    "Yanıt beklenenden uzun sürdü ve kesildi. Yeniden dener misin?",
+};
+
+/**
+ * Bilinen bir arıza sebebi için kullanıcıya gösterilecek cümle.
+ * Sebep tanınmıyorsa genel son çare döner.
+ */
+export function assistantTurnFailureMessage(cause?: string | null): string {
+  const key = String(cause ?? "").trim();
+  return ASSISTANT_TURN_FAILURE_BY_CAUSE[key] ?? ASSISTANT_TURN_FAILURE_FALLBACK_TR;
+}
+
+/** Kullanıcıya gösterilen TÜM "cevap veremedim" cümleleri. */
+const ASSISTANT_FAILURE_MESSAGE_SET = new Set<string>([
+  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  ...Object.values(ASSISTANT_TURN_FAILURE_BY_CAUSE),
+]);
+
+/**
  * Metin, "üretemedim" son çaresinin ta kendisi mi?
  *
  * Boru hattının erken bir adımı bu cümleyi yazdıysa ve SONRADAN çizilebilir
@@ -516,10 +562,14 @@ export function isGenericAssistantFallbackReply(text: unknown): boolean {
   if (!normalized) {
     return false;
   }
+  // Sebebe özel cümleler de "bu bir cevap değil" sayılmalı. Tek tek string
+  // karşılaştırmak, yeni bir cümle eklendiğinde sessizce unutulurdu — ve o
+  // unutmanın bedeli ölçülmüştü: tanınmayan bir çıkmaz cümlesi turu BAŞARILI
+  // gösterip görevi `completed` yazmıştı.
   return (
     normalized === ASSISTANT_GENERIC_FALLBACK_TR ||
     normalized === ASSISTANT_GENERIC_FALLBACK_EN ||
-    normalized === ASSISTANT_TURN_FAILURE_FALLBACK_TR
+    ASSISTANT_FAILURE_MESSAGE_SET.has(normalized)
   );
 }
 

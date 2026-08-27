@@ -373,10 +373,11 @@ import {
   resolveCleanVisibleAnswer,
 } from "./reply-finalizer.js";
 import {
-  buildElyanVoiceProfilePromptBlock,
-  sanitizeFinalAssistantResponse,
-  isMachineOutputWorkload,
   ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  assistantTurnFailureMessage,
+  buildElyanVoiceProfilePromptBlock,
+  isMachineOutputWorkload,
+  sanitizeFinalAssistantResponse,
 } from "./response-policy.js";
 import { buildBehaviorLearningPromptBlock } from "./behavior-learning.js";
 import {
@@ -9197,7 +9198,7 @@ export async function generateSharedBrainReply(
       throw new AppError(
         503,
         "server_brain_unavailable",
-        ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+        assistantTurnFailureMessage("server_brain_unavailable"),
         {
           route: input.route ?? "shared_brain",
           workload,
