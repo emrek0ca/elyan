@@ -55,7 +55,7 @@
     "smoke:desktop": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/desktop-task-smoke.ts",
     "memory:routing-backfill": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/routing-episode-backfill.ts",
     "report:self-model": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/self-model-report.ts",
-    "retrieval:backfill-hash": "node --env-file-if-exists=.env dist/scripts/backfill-hashed-embeddings.js",
+    "retrieval:backfill-hash": "node --env-file-if-exists=.env scripts/run-ts.mjs src/scripts/backfill-hashed-embeddings.ts",
     "test:shard": "bash scripts/run-tests.sh"
   },
   "dependencies": {

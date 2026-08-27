@@ -13,6 +13,31 @@ APNS_PRIVATE_KEY_SOURCE="${APNS_PRIVATE_KEY_SOURCE:-}"
 REMOTE_APPLE_PRIVATE_KEY="${REMOTE_DIR}/secrets/apple-iap-private-key.p8"
 REMOTE_APNS_PRIVATE_KEY="${REMOTE_DIR}/secrets/apns-private-key.p8"
 TEMP_ENV_CREATED="false"
+# YEREL KAPI ATLANABİLİR OLMALI.
+#
+# Kapı `npm test`i çağırıyor ve o paket 293 dosyayı tek seferde koşturduğu için
+# GÜVENİLİR biçimde asılıyordu (bkz. scripts/run-tests.sh). Deploy iki kez
+# burada durdu ve uzak adımlar elle yürütüldü — o elle yol hiçbir yerde yazılı
+# değildi, her seferinde hafızadan kuruldu. Artık birinci sınıf:
+#
+#   --skip-local-gate   yerel test kapısını atla (derleme yine koşar)
+#   --remote-only       yerel adımların tamamını atla, doğrudan sunucuya git
+SKIP_LOCAL_GATE="false"
+REMOTE_ONLY="false"
+for arg in "$@"; do
+  case "${arg}" in
+    --skip-local-gate) SKIP_LOCAL_GATE="true" ;;
+    --remote-only) REMOTE_ONLY="true"; SKIP_LOCAL_GATE="true" ;;
+    --help|-h)
+      echo "kullanım: bash scripts/deploy-v1-release.sh [--skip-local-gate] [--remote-only]"
+      exit 0
+      ;;
+    *)
+      echo "bilinmeyen argüman: ${arg}" >&2
+      exit 1
+      ;;
+  esac
+done
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -106,14 +131,23 @@ provision_private_key() {
   }
 }
 
-echo "==> Local gate"
-ONNXRUNTIME_NODE_INSTALL=skip npm ci
-if [[ ! -f .env ]]; then
-  cp .env.example .env
-  TEMP_ENV_CREATED="true"
+if [[ "${REMOTE_ONLY}" == "true" ]]; then
+  echo "==> Yerel adımlar atlandı (--remote-only)"
+else
+  echo "==> Local gate"
+  ONNXRUNTIME_NODE_INSTALL=skip npm ci
+  if [[ ! -f .env ]]; then
+    cp .env.example .env
+    TEMP_ENV_CREATED="true"
+  fi
+  npm run build
+  if [[ "${SKIP_LOCAL_GATE}" == "true" ]]; then
+    echo "==> Yerel test kapısı ATLANDI (--skip-local-gate)"
+    echo "    Doğrulama çağıranın sorumluluğunda: bash scripts/run-tests.sh"
+  else
+    npm test
+  fi
 fi
-npm run build
-npm test
 
 echo "==> Remote backup to ${BACKUP_DIR}"
 run_remote "umask 077 && install -d -m 700 '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && tar --exclude='./.codex-backups' --exclude='./.codex-worktrees' --exclude='./node_modules' --exclude='./dist' --exclude='./.blob-store' --exclude='./.git' --exclude='./docs/release/evidence' --exclude='./.claude' --exclude='./.DS_Store' --exclude='*/__pycache__' -czf '${BACKUP_DIR}/release-source.tgz' . && sha256sum '${BACKUP_DIR}/release-source.tgz' > '${BACKUP_DIR}/release-source.tgz.sha256'"
@@ -144,11 +178,18 @@ echo "==> Provision Apple signing keys"
 provision_private_key "Apple IAP" "${APPLE_IAP_PRIVATE_KEY_SOURCE}" "${REMOTE_APPLE_PRIVATE_KEY}"
 provision_private_key "APNs" "${APNS_PRIVATE_KEY_SOURCE}" "${REMOTE_APNS_PRIVATE_KEY}"
 
-echo "==> Remote install and test"
-run_remote "cd '${REMOTE_DIR}' && ONNXRUNTIME_NODE_INSTALL=skip npm ci && npm run compile:nlp && npm run build && npm test"
+if [[ "${SKIP_LOCAL_GATE}" == "true" ]]; then
+  # Uzak kapı da aynı `npm test`i çağırıyor ve aynı sebeple asılabilir.
+  # Bayrak ikisini birden kapatır; yarısını atlamak yanıltıcı olurdu.
+  echo "==> Remote install (test kapısı atlandı)"
+  run_remote "cd '${REMOTE_DIR}' && ONNXRUNTIME_NODE_INSTALL=skip npm ci && npm run compile:nlp && npm run build"
+else
+  echo "==> Remote install and test"
+  run_remote "cd '${REMOTE_DIR}' && ONNXRUNTIME_NODE_INSTALL=skip npm ci && npm run compile:nlp && npm run build && npm test"
+fi
 
 echo "==> Remote schema bootstrap and restart"
-run_remote "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d postgres redis && bash scripts/bootstrap-v1-social-auth-schema.sh && bash scripts/bootstrap-v1-device-schema.sh && bash scripts/bootstrap-v2-apple-billing-schema.sh && bash scripts/bootstrap-v3-blob-memory-schema.sh && bash scripts/bootstrap-v4-identity-quota-schema.sh && bash scripts/bootstrap-v5-world-signals-schema.sh && bash scripts/bootstrap-v6-operator-schema.sh && bash scripts/bootstrap-v7-subscription-lifecycle-schema.sh && bash scripts/bootstrap-v8-session-goals-schema.sh && bash scripts/bootstrap-v9-agent-foundation-schema.sh && bash scripts/bootstrap-v10-cognitive-foundation-schema.sh && bash scripts/bootstrap-v11-integration-apps-schema.sh && bash scripts/bootstrap-v12-approval-policy-schema.sh && bash scripts/bootstrap-v13-web-schema.sh && bash scripts/bootstrap-v14-multichannel-schema.sh && bash scripts/bootstrap-v15-push-delivery-schema.sh && bash scripts/bootstrap-v16-memory-single-value-scope-schema.sh && bash scripts/bootstrap-v17-task-episodes-schema.sh && bash scripts/bootstrap-v18-mcp-provider-catalog-schema.sh && docker compose -f '${COMPOSE_FILE}' up -d --build --remove-orphans"
+run_remote "cd '${REMOTE_DIR}' && docker compose -f '${COMPOSE_FILE}' up -d postgres redis && bash scripts/bootstrap-all.sh && docker compose -f '${COMPOSE_FILE}' up -d --build --remove-orphans"
 
 echo "==> Post-deploy probe"
 probe_with_retry 6 5
