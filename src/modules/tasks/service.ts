@@ -1921,6 +1921,31 @@ function extractExplicitPlanningList(value: string): ExtractedPlanningList | nul
   return items.length >= 3 ? { items, sourceLines } : null;
 }
 
+/**
+ * Cevabın kendisi gerçek bir içerik mi, yoksa yalnız bir "yaptım" onayı mı?
+ *
+ * Ölçüt YAPISALDIR, kelime değil: sıralı/madde işaretli satır sayısı ve
+ * gövde uzunluğu. Amaç, tamamlanmış bir cevabın yanına uydurma bir soru
+ * eklenmesini engellemek.
+ *
+ * CANLI GÖZLEM (yerel duman testi): "1350 TL'nin %18 KDV dahil hali kaç TL?
+ * Adım adım göster." isteği sınıflandırıcı tarafından `planning` sayıldı,
+ * model doğru cevabı (adımlar + 1593 TL) üretti, ama adım sayısı üçün altında
+ * kaldığı için cevabın yanına "Önceliğin, süren veya mevcut durumun hangisini
+ * esas alalım?" diye bir netleştirme kartı basıldı. Kullanıcı hem cevabı hem
+ * cevaplanamaz bir soruyu birlikte gördü. Eksik olan bilgi yoktu; eksik olan
+ * yalnız üçüncü maddeydi.
+ */
+function responseCarriesSubstance(text: string): boolean {
+  const compact = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (compact.length >= 240) return true;
+  let structuredLines = 0;
+  for (const line of String(text ?? "").split("\n")) {
+    if (/^\s*(?:\d+[.)-]|[-*•])\s+\S/u.test(line)) structuredLines += 1;
+  }
+  return structuredLines >= 2;
+}
+
 function buildPlanClarificationBlock(): Record<string, unknown> {
   return {
     type: "clarification",
@@ -1998,11 +2023,15 @@ export function resolveCompletionAssistantBlocks(input: {
       if (nextSteps) {
         assistantBlocks.push(nextSteps);
         sourcesToStrip.push(...explicitList!.sourceLines);
-      } else {
-        // A missing plan is surfaced as one focused clarification instead of
-        // being presented as a completed roadmap. This is deliberately a
-        // safe fallback: the server has no authority to guess user-specific
-        // milestones from a one-line answer.
+      } else if (!responseCarriesSubstance(text)) {
+        // A bare acknowledgement ("yol haritası hazırlandı") is not a plan and
+        // must not be presented as one; a single focused clarification is the
+        // honest surface, because the server has no authority to guess
+        // user-specific milestones from a one-line answer.
+        //
+        // But a cevap that already carries its own content is NOT missing
+        // information, and appending a canned question to it manufactures an
+        // interaction the user cannot act on.
         assistantBlocks.push(buildPlanClarificationBlock());
       }
     }
@@ -6491,9 +6520,38 @@ async function completeServerBrainTask(
       sourceArtifactId: visualIntent.sourceArtifactId ?? "last_image",
     };
   }
+  // GÖRSEL DÜZENLEMENİN BİR REFERANSI OLMAK ZORUNDA.
+  //
+  // Niyet çıkarıcısı bir model çağrısıdır ve yanılabilir. Yerel duman
+  // testinde "Şu an saat kaç? Bir de bu ayın son günü hangi güne denk
+  // geliyor?" turu `image_edit` sayıldı; ortada hiç görsel yoktu, üretim
+  // `image_edit_source_missing` ile bloklandı ve kullanıcı saat sorusuna
+  // "Düzenlenecek son görseli bu sohbet içinde bulamadım" cevabını aldı.
+  //
+  // Kural KANIT temellidir, kelime değil: bir düzenleme/devam turunun ya bu
+  // turda bir görseli, ya oturumda bir görsel geçmişi, ya da kullanıcının
+  // kendi cümlesinde açık bir görsel eylemi olmalı. Üçü de yoksa ortada
+  // düzenlenecek bir şey yoktur — bu bir yanlış sınıflandırmadır ve tur
+  // normal sohbete düşer.
+  const visualEditOrContinueIntent =
+    visualIntent.intent === "image_edit" ||
+    visualIntent.intent === "image_continue";
+  const visualReferentAvailable =
+    effectiveSourceImages.length > 0 ||
+    Boolean(
+      resolveLastVisualArtifactMemory(
+        payloadMetadata,
+        visualIntent.sourceArtifactId,
+      ),
+    ) ||
+    isHostedImageEditIntent(prompt) ||
+    isHostedImageGenerationRequest(prompt);
+  const referentlessVisualEdit =
+    visualEditOrContinueIntent && !visualReferentAvailable;
   // Semantik model "bu görsel değil, bir grafik/plot isteği" dediyse görsel
   // üretimi tamamen bastır; chart/fonksiyon yolu turu üretir.
   const imageGenerationRequested =
+    !referentlessVisualEdit &&
     artifactPipeline.kind !== "evidence_required" &&
     artifactPipeline.kind !== "validation_failed" &&
     !hasVisualDataBlock &&
@@ -6504,6 +6562,7 @@ async function completeServerBrainTask(
       isHostedImageGenerationRequest(prompt) ||
       isHostedImageEditRequest(prompt, effectiveSourceImages.length));
   const generatedImageArtifact =
+    referentlessVisualEdit ||
     artifactPipeline.kind === "evidence_required" ||
     artifactPipeline.kind === "validation_failed" ||
     hasVisualDataBlock ||
@@ -7940,10 +7999,25 @@ async function processSharedBrainChatTask(
       (imageEditIntent || visualIntent.intent === "image_edit") &&
       countDistinctEphemeralImages(hydratedEphemeralVision) === 0 &&
       !imageEditHasSessionImage;
+    // Referansı olmayan bir "düzenleme" niyeti, düzenlenecek bir şeyin
+    // eksikliği değil, sınıflandırmanın yanlışlığıdır: ne bu turda görsel
+    // var, ne oturumda görsel geçmişi, ne de kullanıcının cümlesinde açık
+    // bir görsel eylem. Böyle bir tur görsel şeridine hiç girmemeli —
+    // girdiğinde kullanıcı sorusuna değil, kayıp bir görsele dair cevap
+    // alıyor (yerel duman testi: "Şu an saat kaç?" → "Düzenlenecek son
+    // görseli bulamadım").
+    const referentlessVisualEdit =
+      (visualIntent.intent === "image_edit" ||
+        visualIntent.intent === "image_continue") &&
+      countDistinctEphemeralImages(hydratedEphemeralVision) === 0 &&
+      !imageEditHasSessionImage &&
+      !imageEditIntent &&
+      !isHostedImageGenerationRequest(input.prompt);
     const imageGenerationRequested =
-      isVisualImageRequested(visualIntent, input.prompt) ||
-      isHostedImageGenerationRequest(input.prompt) ||
-      imageEditIntent;
+      !referentlessVisualEdit &&
+      (isVisualImageRequested(visualIntent, input.prompt) ||
+        isHostedImageGenerationRequest(input.prompt) ||
+        imageEditIntent);
 
     if (imageGenerationRequested) {
       await executionActivePromise;

@@ -2642,6 +2642,42 @@ function buildDataUnderstandingQualityPromptBlock(
   ].join("\n");
 }
 
+/**
+ * Modelin UYDURAMAYACAĞI ama sürekli gereken olgular: şu an.
+ *
+ * CANLI GÖZLEM (yerel duman testi): "Bugün ayın kaçı ve haftanın hangi günü?"
+ * sorusu turu tamamen düşürdü. Model tarihi bilmiyordu, reddeden bir cümle
+ * üretti, `isGenericAssistantFallbackReply` bunu boş cevap sayıp
+ * `provider_empty_output` fırlattı ve kullanıcı "Bu turda yanıt
+ * oluşturulamadı" gördü. Eksik olan zekâ değil, tek bir olguydu.
+ *
+ * Masaüstü ajanı bu olguları `build_environment_facts()` ile zaten alıyor;
+ * sunucu beyni almıyordu. Aynı bilgi, aynı gerekçeyle buraya da konur:
+ * tahmin edilecek bir şey değil, verilmesi gereken bir veri.
+ *
+ * Saat dilimi kullanıcının değil sunucunun yereli olabilir; bu yüzden IANA
+ * adı da yazılır — model neye göre konuştuğunu söyleyebilsin.
+ */
+function buildTemporalFactsPromptBlock(now: Date = new Date()): string {
+  const timeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const date = new Intl.DateTimeFormat("tr-TR", {
+    dateStyle: "full",
+    timeZone,
+  }).format(now);
+  const time = new Intl.DateTimeFormat("tr-TR", {
+    timeStyle: "short",
+    timeZone,
+  }).format(now);
+  return [
+    "CURRENT TIME (authoritative fact, not a guess):",
+    `- Bugün: ${date}`,
+    `- Saat: ${time} (${timeZone})`,
+    `- ISO: ${now.toISOString()}`,
+    "Use these values whenever the turn depends on the current date, day of week, or time. Never answer that you cannot know the date, and never substitute your training cutoff for it. Relative expressions ('bugün', 'yarın', 'geçen hafta', 'bu ay') are resolved against these values.",
+  ].join("\n");
+}
+
 function buildReasoningProtocolPromptBlock(input: {
   context: UserUnderstandingContext | undefined;
   workload: SharedBrainWorkload;
@@ -3422,6 +3458,7 @@ export function buildStructuredSystemPrompt(
     attachmentInsightBlock,
     memoryProfileBlock,
     currentUserIdentityDirective,
+    buildTemporalFactsPromptBlock(),
     buildReasoningProtocolPromptBlock({
       context: input.understandingContext,
       workload: input.workload ?? "fast_route",
