@@ -54,7 +54,8 @@
     "eval:knowledge-recency": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/knowledge-recency-eval-report.ts",
     "smoke:desktop": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/desktop-task-smoke.ts",
     "memory:routing-backfill": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/routing-episode-backfill.ts",
-    "report:self-model": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/self-model-report.ts"
+    "report:self-model": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/self-model-report.ts",
+    "retrieval:backfill-hash": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs src/scripts/backfill-hashed-embeddings.ts"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

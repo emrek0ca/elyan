@@ -10,9 +10,26 @@ import {
   STORAGE_SEMANTIC_MODEL_TAG,
 } from "./semantic-embedder.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import { stemTurkish } from "./lexical-turkish.js";
 
 const RETRIEVAL_VECTOR_DIMENSIONS = 256;
-export const RETRIEVAL_EMBEDDING_MODEL = "elyan_hash_v1";
+/**
+ * Hash embedding sürümü — tokenleştirme değiştiğinde ARTAR.
+ *
+ * `v2`nin `v1`den tek farkı Türkçe kök bulmadır. Fark küçük görünür, sonucu
+ * değildir: `v1` tam token hash'liyordu, bu yüzden "ilkeleri" ile "ilkeler"
+ * FARKLI bucket'lara düşüyor ve aynı kavramı arayan sorgu ile indekslenen
+ * metin birbirini bulamıyordu. Türkçe eklemeli bir dil olduğu için bu, her
+ * çekim ekinde sessizce kaybedilen bir eşleşme demek.
+ *
+ * Sürüm ayrımı ŞART: eski satırlar `v1` bucket'larıyla yazıldı ve `v2` bir
+ * sorguyla karşılaştırılamaz. `embedding_model` sütunu her satırın hangi
+ * sözlükle yazıldığını söyler; yeniden indeksleme tamamlanana kadar ikisi bir
+ * arada yaşar ve sorgu tarafı satırın kendi sürümüne göre okunur.
+ */
+export const RETRIEVAL_EMBEDDING_MODEL_V1 = "elyan_hash_v1";
+export const RETRIEVAL_EMBEDDING_MODEL_V2 = "elyan_hash_v2";
+export const RETRIEVAL_EMBEDDING_MODEL = RETRIEVAL_EMBEDDING_MODEL_V2;
 
 const pgvectorAvailabilityCache = new WeakMap<FastifyInstance, Promise<boolean>>();
 const embeddingColumnAvailabilityCache = new WeakMap<FastifyInstance, Promise<boolean>>();
@@ -53,6 +70,19 @@ function tokenize(text: string): string[] {
     .slice(0, 120);
 }
 
+/**
+ * `v2` tokenleştirme: aynı temizlik + Türkçe kök.
+ *
+ * Kök alma token SAYISINI artırmaz (token yerine kökü konur), bu yüzden
+ * vektör yoğunluğu ve mevcut eşik davranışı aynı ölçekte kalır; değişen tek
+ * şey, aynı kavramın çekimli yazımlarının artık AYNI bucket'a düşmesidir.
+ */
+function tokenizeV2(text: string): string[] {
+  return tokenize(text).map((token) =>
+    token.length >= 4 ? stemTurkish(token) : token,
+  );
+}
+
 function hashTokenToBuckets(token: string): Array<{ index: number; sign: number }> {
   const digest = createHash("sha256").update(token).digest();
   const buckets: Array<{ index: number; sign: number }> = [];
@@ -64,9 +94,13 @@ function hashTokenToBuckets(token: string): Array<{ index: number; sign: number 
   return buckets;
 }
 
-export function buildHashedKnowledgeEmbedding(text: string): number[] {
+export function buildHashedKnowledgeEmbedding(
+  text: string,
+  modelTag: string = RETRIEVAL_EMBEDDING_MODEL,
+): number[] {
   const vector = new Array<number>(RETRIEVAL_VECTOR_DIMENSIONS).fill(0);
-  const tokens = tokenize(text);
+  const tokens =
+    modelTag === RETRIEVAL_EMBEDDING_MODEL_V2 ? tokenizeV2(text) : tokenize(text);
   for (const token of tokens) {
     const weight = Math.min(2.5, 1 + token.length / 10);
     for (const bucket of hashTokenToBuckets(token)) {
@@ -169,6 +203,64 @@ const SEMANTIC_V2_BACKFILL_MAX_BATCHES = 12;
  * never thrashes the model or DB on a huge corpus. Idempotent: safe to invoke
  * multiple times; subsequent calls see no work to do.
  */
+/**
+ * Hash embedding sözlüğünü `v1`den `v2`ye taşır (Türkçe kök).
+ *
+ * Sürüm damgası tek başına yetmez: sorgu tarafı `v2` yazarken indekste `v1`
+ * satırlar kaldığı sürece o satırlar bulunamaz hale gelir. Bu yüzden sürüm
+ * artışı ile yeniden indeksleme AYNI değişikliğin iki yarısıdır.
+ *
+ * Partili ve idempotent: her koşu yalnız `v2` olmayan satırlara dokunur,
+ * yarıda kesilirse kaldığı yerden devam eder.
+ */
+export async function backfillHashedEmbeddings(
+  app: FastifyInstance,
+  options: { maxBatches?: number } = {},
+): Promise<{ processed: number; batches: number; stopped: string }> {
+  if (!(await hasKnowledgeChunkEmbeddingColumn(app))) {
+    return { processed: 0, batches: 0, stopped: "embedding_columns_unavailable" };
+  }
+  const limit = SEMANTIC_V2_BACKFILL_BATCH;
+  const maxBatches = options.maxBatches ?? SEMANTIC_V2_BACKFILL_MAX_BATCHES;
+  let processed = 0;
+  let batches = 0;
+  for (let i = 0; i < maxBatches; i += 1) {
+    const rows = await app.db
+      .select({ id: knowledgeChunks.id, content: knowledgeChunks.content })
+      .from(knowledgeChunks)
+      .where(
+        and(
+          sql`embedding is not null`,
+          sql`coalesce(embedding_model, '') <> ${RETRIEVAL_EMBEDDING_MODEL_V2}`,
+        ),
+      )
+      .limit(limit);
+    if (rows.length === 0) {
+      return { processed, batches, stopped: "complete" };
+    }
+    for (const row of rows) {
+      try {
+        // Yeniden indekslemede DAEMON KULLANILMAZ: amaç satırı bilinen bir
+        // sözlüğe taşımak. Daemon'ın kendi tokenleştirmesi sürümlenmediği
+        // için damga yalan olurdu.
+        const vector = buildVectorSql(
+          buildHashedKnowledgeEmbedding(row.content, RETRIEVAL_EMBEDDING_MODEL_V2),
+        );
+        await app.db.execute(sql`
+          update knowledge_chunks
+          set embedding = ${vector}, embedding_model = ${RETRIEVAL_EMBEDDING_MODEL_V2}
+          where id = ${row.id}
+        `);
+        processed += 1;
+      } catch (error) {
+        app.log?.warn?.({ error, chunkId: row.id }, "hashed embedding backfill skipped");
+      }
+    }
+    batches += 1;
+  }
+  return { processed, batches, stopped: "batch_limit" };
+}
+
 export async function backfillSemanticV2Embeddings(
   app: FastifyInstance,
   options: { maxBatches?: number } = {},

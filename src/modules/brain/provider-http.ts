@@ -3,6 +3,8 @@ import { AppError } from "../../lib/errors.js";
 import type { SharedBrainProvider } from "./runtime.js";
 import {
   buildProviderHeaders,
+  getConfiguredProviderApiKey,
+  getConfiguredProviderBaseUrl,
   getConfiguredProviderKeySlot,
   getConfiguredProviderApiKeys,
 } from "./provider-selection.js";
@@ -153,6 +155,51 @@ export function joinProviderUrl(baseUrl: string, path: string): string {
   const normalizedBase = baseUrl.replace(/\/+$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${normalizedBase}${normalizedPath}`.replace(/\/v1\/v1\//g, "/v1/");
+}
+
+/**
+ * Uzak sağlayıcı bağlantılarını AÇILIŞTA kurar.
+ *
+ * ÖLÇÜM (yerel koşu): ilk sohbet isteğinin kabul gecikmesi 1900–2000 ms,
+ * sonrakiler 60–160 ms. Aradaki farkın büyük kısmı model değil TAŞIMA: DNS
+ * çözümü, TCP el sıkışması ve TLS anlaşması ilk gerçek kullanıcı turunda
+ * yapılıyor. Bu bedeli ödeyen, o gün ilk yazan kullanıcı oluyor.
+ *
+ * Isıtma kasıtlı olarak ZARARSIZ bir GET'tir: model çağırmaz, token
+ * harcamaz, kota tüketmez. Başarısız olması da önemsizdir — amaç yanıt
+ * almak değil, soketi açmak. Bu yüzden her hata yutulur ve sunucunun
+ * açılışını hiçbir koşulda geciktirmez.
+ */
+export async function warmProviderConnections(
+  app: FastifyInstance,
+  providers: ReadonlyArray<"groq" | "gemini" | "openai">,
+  timeoutMs = 3_000,
+): Promise<Array<{ provider: string; warmed: boolean }>> {
+  const unique = [...new Set(providers)];
+  return Promise.all(
+    unique.map(async (provider) => {
+      const baseUrl = getConfiguredProviderBaseUrl(app, provider);
+      const apiKey = getConfiguredProviderApiKey(app, provider);
+      if (!baseUrl || !apiKey) {
+        return { provider, warmed: false };
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        await fetch(`${baseUrl.replace(/\/+$/, "")}/models`, {
+          method: "GET",
+          headers: providerRequestHeaders(app, provider, baseUrl),
+          signal: controller.signal,
+        });
+        return { provider, warmed: true };
+      } catch {
+        // Soket açıldıysa iş görüldü; cevabın kendisi umursanmaz.
+        return { provider, warmed: false };
+      } finally {
+        clearTimeout(timer);
+      }
+    }),
+  );
 }
 
 export async function postJson(

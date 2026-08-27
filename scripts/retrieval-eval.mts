@@ -18,13 +18,25 @@ import { buildApp } from "../src/app/build-app.js";
 import {
   backfillSemanticV2Embeddings,
   indexKnowledgeChunksForDocument,
-  searchKnowledge,
 } from "../src/modules/brain/retrieval.js";
+// ORKESTRATÖR ÖLÇÜLÜR, ÇEKİRDEK DEĞİL.
+//
+// Harness çekirdek `searchKnowledge`i çağırıyordu; oysa ürünün kullandığı yol
+// orkestratördür (keyword kolu, RRF füzyonu, komşu genişletme, yakın-kopya
+// bastırma). Çekirdeği ölçmek, gemiyi limanda tartmaktır: iyileştirmeler ya da
+// gerilemeler ölçüye hiç yansımıyordu.
+import { searchKnowledge } from "../src/modules/brain/retrieval-orchestrator.js";
 
 const EVAL_USER_ID = "00000000-0000-4000-8000-00000000eea1";
 
 type EvalDoc = { key: string; title: string; content: string };
-type EvalCase = { kind: "keyword" | "paraphrase" | "suffixed"; query: string; expect: string };
+type EvalCase = {
+  kind: "keyword" | "paraphrase" | "suffixed" | "duplicate";
+  query: string;
+  expect: string;
+  /** Yakın-kopya sınıfı: ilk `limit` sonuçta EN FAZLA kaç ayrı kopya olmalı. */
+  maxDuplicateCopies?: number;
+};
 
 const DOCS: EvalDoc[] = [
   { key: "arac-bakim", title: "Araç bakım rehberi", content: "Otomobilinizin motor yağı her 10.000 kilometrede bir değiştirilmelidir. Fren balatalarını yılda bir kontrol ettirin. Lastik basıncı ayda bir ölçülmeli, kışın kış lastiğine geçilmelidir." },
@@ -35,6 +47,13 @@ const DOCS: EvalDoc[] = [
   { key: "toplanti-kurali", title: "Toplantı kültürü kuralları", content: "Toplantılar 25 veya 50 dakika olarak planlanır. Gündemsiz toplantı davet edilmez. Kararlar toplantı notuna yazılır ve sorumlusu atanır. Katılımcı sayısı yediyi geçmemelidir." },
   { key: "bitki-sulama", title: "Ev bitkileri sulama rehberi", content: "Sukulentler iki haftada bir, orkideler haftada bir sulanır. Toprağın üst iki santimi kuruduğunda sulama zamanı gelmiştir. Aşırı sulama kök çürümesinin en yaygın sebebidir." },
   { key: "vergi-beyan", title: "Serbest çalışan vergi beyanı", content: "Serbest meslek makbuzu kesen çalışanlar üç ayda bir geçici vergi beyannamesi verir. Giderler belgelendiğinde vergi matrahından düşülebilir. Yıllık beyanname mart ayında verilir." },
+  // YAKIN-KOPYA ÜÇLÜSÜ: aynı bilgi üç ayrı belgede, neredeyse aynı cümlelerle.
+  // Gerçek hayatta bu böyle olur — bir not, onun kopyası ve bir alıntı. RRF
+  // bunların üçünü de üst sıraya koyabilir ve bağlam penceresi tek kaynağın üç
+  // kopyasıyla dolar; kapsama skoru da aynı terimleri üç kez sayıp şişer.
+  { key: "kopya-a", title: "Elektrikli araç şarj notu", content: "Elektrikli araçlarda hızlı şarj bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır." },
+  { key: "kopya-b", title: "Elektrikli araç şarj notu (kopya)", content: "Elektrikli araçlarda hızlı şarj bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır." },
+  { key: "kopya-c", title: "Şarj notundan alıntı", content: "Elektrikli araçlarda hızlı şarj bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır." },
 ];
 
 const CASES: EvalCase[] = [
@@ -61,7 +80,13 @@ const CASES: EvalCase[] = [
   { kind: "suffixed", query: "iznimi nasıl talep ederim", expect: "sirket-izin" },
   { kind: "suffixed", query: "yedeklerimizi test ediyor muyuz", expect: "sunucu-yedek" },
   { kind: "suffixed", query: "toplantılarımızı kısaltmalıyız", expect: "toplanti-kurali" },
+  // duplicate — aynı bilgiyi taşıyan üç belgeden en fazla biri üst sıralarda
+  // yer tutmalı; kalan yerler FARKLI kaynaklara kalmalı.
+  { kind: "duplicate", query: "elektrikli araç hızlı şarj süresi", expect: "kopya-a", maxDuplicateCopies: 1 },
 ];
+
+/** Yakın-kopya kümesi: bu anahtarlar aynı bilgiyi taşır. */
+const DUPLICATE_KEYS = new Set(["kopya-a", "kopya-b", "kopya-c"]);
 
 async function main() {
   const app = await buildApp();
@@ -97,10 +122,20 @@ async function main() {
 
     const byKind = new Map<string, { n: number; hitAt1: number; hitAt5: number; rrSum: number }>();
     const misses: string[] = [];
+    const duplicateFindings: string[] = [];
+    const duplicateDocIds = new Set(
+      [...DUPLICATE_KEYS].map((key) => docIdByKey.get(key)).filter(Boolean) as string[],
+    );
     for (const evalCase of CASES) {
       const results = await searchKnowledge(app, { userId: EVAL_USER_ID, query: evalCase.query, limit: 5 });
       const expectedId = docIdByKey.get(evalCase.expect)!;
-      const rank = results.results.findIndex((row: { documentId: string }) => row.documentId === expectedId) + 1;
+      const ranked = results.results as Array<{ documentId: string }>;
+      // Yakın-kopya sınıfında "doğru belge" tek tek değil KÜMEdir: üçünden
+      // hangisinin geldiği önemli değil, KAÇININ geldiği önemli.
+      const rank =
+        evalCase.kind === "duplicate"
+          ? ranked.findIndex((row) => duplicateDocIds.has(row.documentId)) + 1
+          : ranked.findIndex((row) => row.documentId === expectedId) + 1;
       const bucket = byKind.get(evalCase.kind) ?? { n: 0, hitAt1: 0, hitAt5: 0, rrSum: 0 };
       bucket.n += 1;
       if (rank === 1) bucket.hitAt1 += 1;
@@ -108,6 +143,16 @@ async function main() {
       bucket.rrSum += rank >= 1 ? 1 / rank : 0;
       byKind.set(evalCase.kind, bucket);
       if (rank !== 1) misses.push(`${evalCase.kind} | rank=${rank || "-"} | ${evalCase.query}`);
+      if (evalCase.maxDuplicateCopies != null) {
+        const copies = ranked.filter((row) => duplicateDocIds.has(row.documentId)).length;
+        const suppressed = results.orchestration?.suppressedDuplicates ?? 0;
+        duplicateFindings.push(
+          `${evalCase.query} | üst-5'te kopya=${copies} (en fazla ${evalCase.maxDuplicateCopies}) | MMR eledi=${suppressed}`,
+        );
+        if (copies > evalCase.maxDuplicateCopies) {
+          misses.push(`duplicate | ${copies} kopya üst-5'i doldurdu | ${evalCase.query}`);
+        }
+      }
     }
 
     let totalN = 0, totalHit1 = 0, totalHit5 = 0, totalRr = 0;
@@ -120,6 +165,10 @@ async function main() {
     console.log(
       `TOPLAM      n=${totalN}  recall@1=${(totalHit1 / totalN).toFixed(2)}  recall@5=${(totalHit5 / totalN).toFixed(2)}  MRR=${(totalRr / totalN).toFixed(3)}`,
     );
+    if (duplicateFindings.length > 0) {
+      console.log("\nyakın-kopya bastırma:");
+      for (const finding of duplicateFindings) console.log("  " + finding);
+    }
     if (misses.length > 0) {
       console.log("\nrank!=1 olan sorgular:");
       for (const miss of misses) console.log("  " + miss);

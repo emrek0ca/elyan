@@ -84,7 +84,7 @@ export function getConfiguredProviderKeySlot(
   return digest.readUInt32BE(0) % keys.length;
 }
 
-function getConfiguredProviderBaseUrl(
+export function getConfiguredProviderBaseUrl(
   app: FastifyInstance,
   provider: "groq" | "gemini" | "openai",
 ): string | null {

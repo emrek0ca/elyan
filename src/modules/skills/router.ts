@@ -30,6 +30,25 @@ function canRouteSkillWithAttachment(
   return hasPayloadType(context, skill);
 }
 
+/**
+ * Bu beceri, bu turun istediği çıktıyı üretebilir mi?
+ *
+ * Kapı iki yönlü çalışmak zorunda. Zengin çıktı istendiğinde beceri onu
+ * üretebilmeli — bu zaten vardı. Ama tersi eksikti: HİÇ zengin çıktı
+ * istenmemişse, yalnız belge/artefakt üreten bir beceri de aday değildir.
+ *
+ * ÖLÇÜLEN BEDEL (yerel koşu): tek attachment gerektirmeyen beceri
+ * `research_document` ve o yalnız pdf/docx/artifact üretiyor. Sıradan bir
+ * sohbet turunda ("1350 TL'nin KDV'si") aday listesinde kalıyor, bu yüzden
+ * semantik sınıflandırıcı ÇAĞRILIYOR ve "hayır, beceri gerekmiyor" demek
+ * için ortalama 1481 ms harcanıyor — cevabı üreten çağrının kendisi kadar.
+ * Kullanıcı bu süre boyunca boş ekrana bakıyor, çünkü bu çağrı üretimin
+ * ÖNÜNDE duruyor.
+ *
+ * Bu bir kelime/desen kuralı değil, becerinin kendi ilan ettiği sözleşmeye
+ * bakan bir kanıt kapısıdır: sohbet cevabı üretemeyen bir beceri, sohbet
+ * cevabı istenen bir turu karşılayamaz.
+ */
 function canProduceRequestedOutput(
   skill: SkillSummary,
   desiredOutputKinds: readonly string[] | undefined,
@@ -37,8 +56,10 @@ function canProduceRequestedOutput(
   const richOutputs = (desiredOutputKinds ?? []).filter(
     (kind) => !NON_SKILL_OUTPUT_KINDS.has(kind),
   );
-  if (richOutputs.length === 0) return true;
   const produced = new Set<string>(skill.produces.desiredOutputKinds);
+  if (richOutputs.length === 0) {
+    return produced.has("chat_reply");
+  }
   return richOutputs.every((kind) => produced.has(kind));
 }
 

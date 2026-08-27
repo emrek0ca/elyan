@@ -3,6 +3,7 @@ import { getBaseUrlReachability, loadEnv } from "./config/env.js";
 import { ensureElyanServerBrainBootstrap } from "./modules/brain/bootstrap.js";
 import { maybeStartSemanticV2Backfill } from "./modules/brain/retrieval.js";
 import { warmSharedBrainRuntime } from "./modules/brain/runtime.js";
+import { warmProviderConnections } from "./modules/brain/provider-http.js";
 
 try {
   process.loadEnvFile();
@@ -72,6 +73,17 @@ try {
     "elyan server brain runtime warmup failed",
   );
 }
+
+// Uzak sağlayıcı soketlerini ilk KULLANICI turundan önce aç. Fire-and-forget:
+// dinlemeye başlamayı geciktirmez, başarısızlığı da bir arıza değildir.
+void warmProviderConnections(app, ["groq", "gemini", "openai"])
+  .then((results) => {
+    app.log.info(
+      { warmed: results.filter((item) => item.warmed).map((item) => item.provider) },
+      "provider connections warmed",
+    );
+  })
+  .catch(() => {});
 
 try {
   await app.listen({

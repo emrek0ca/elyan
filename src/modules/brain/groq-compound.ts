@@ -57,8 +57,8 @@ export function isGroqCompoundModel(model: unknown): boolean {
 /**
  * Compound'un birincil model olarak denenip denenmeyeceği. Bayrak kapalıysa
  * (varsayılan) veya iş yükü uygun değilse asla. `liveWebSignal` — turdaki web/
- * güncellik ipucu — verildiyse uygunluğu güçlendirir ama tek başına zorunlu
- * değildir; operatör bayrağı açtığında uygun iş yükleri compound'a yönelir.
+ * güncellik ipucu — uygun iş yükleri içinde önceliktir; uygun OLMAYAN bir iş
+ * yükünü compound'a çeviremez.
  */
 export function shouldUseGroqCompound(input: {
   config: GroqCompoundConfigSource;
@@ -81,7 +81,15 @@ export function shouldUseGroqCompound(input: {
   ) {
     return false;
   }
-  if (input.liveWebSignal === true) return true;
+  // Canlı-web sinyali compound'u UYGUN iş yüklerinde öne çıkarır; uygunluğu
+  // tek başına YARATMAZ.
+  //
+  // Eskiden bu satır her iş yükünü compound'a yönlendiriyordu. Yerel koşuda
+  // sıradan bir sohbet turu ("Şu an saat kaç?") canlı-web sinyali taşıdığı
+  // için compound'a gitti ve boş dönüşle turu uzattı — oysa o turun araç
+  // döngüsüne ihtiyacı yoktu, yalnız saate ihtiyacı vardı ve o zaten
+  // prompt'ta. Sinyal artık uygun iş yükleri içinde bir ÖNCELİK, kapının
+  // kendisi değil.
   return COMPOUND_ELIGIBLE_WORKLOADS.has(input.workload);
 }
 

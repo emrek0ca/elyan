@@ -162,6 +162,7 @@ import {
 import {
   enqueueSharedBrainChatTask,
   isChatGenerationQueueEnabled,
+  isGeminiFallbackQueueConfigured,
   releaseChatGenerationAdmission,
   reserveChatGenerationAdmission,
 } from "../brain/chat-generation-queue.js";
@@ -2994,6 +2995,25 @@ function structuredOutputKinds(
   );
 }
 
+/**
+ * Bu üretim kullanıcı için gerçekten bir cevap mı?
+ *
+ * Boş metin ile "yanıt oluşturamadım" cümlesi aynı şeydir: ikisi de cevapsız
+ * bir tur. Çizilebilir bir blok (grafik/tablo/belge) varsa metin boş olsa da
+ * tur teslim edilmiştir; o zaman yeniden denemeyiz.
+ */
+function isEmptyOrDeadEndAssistantReply(reply: {
+  text?: unknown;
+  metadata?: Record<string, unknown>;
+}): boolean {
+  const text = typeof reply.text === "string" ? reply.text.trim() : "";
+  const blocks = (reply.metadata ?? {}).assistantBlocks;
+  if (Array.isArray(blocks) && hasRenderableAssistantBlocks(blocks)) {
+    return false;
+  }
+  return !text || isGenericAssistantFallbackReply(text);
+}
+
 export function shouldUseVisualImageFastPath(input: {
   prompt: string;
   visualIntent: VisualIntentContract;
@@ -3005,6 +3025,35 @@ export function shouldUseVisualImageFastPath(input: {
   return (
     input.sourceImageCount > 0 ||
     Boolean(input.visualIntent.sourceArtifactId)
+  );
+}
+
+/**
+ * Bir "görsel düzenleme" niyeti gerçekten uygulanabilir mi?
+ *
+ * Niyet çıkarıcısı bir model çağrısıdır ve yanılır. Yerel duman testinde
+ * "Şu an saat kaç?" ve "Şunu halleder misin?" turları `image_edit` sayıldı;
+ * ortada hiç görsel yoktu, üretim bloklandı ve kullanıcı sorusuna değil
+ * kayıp bir görsele dair cevap aldı.
+ *
+ * Kanıt üç kaynaktan birinde olmalı: bu turda bir görsel, oturumda bir
+ * görsel geçmişi, ya da kullanıcının kendi cümlesinde açık bir görsel
+ * eylemi. Üçü de yoksa bu bir yanlış sınıflandırmadır ve tur görsel
+ * şeridine HİÇ girmemelidir — eksik dosya hatası vermek de dahil.
+ */
+export function isReferentlessVisualEdit(input: {
+  prompt: string;
+  visualIntentKind: string | null | undefined;
+  sourceImageCount: number;
+  hasSessionVisualHistory: boolean;
+}): boolean {
+  const kind = String(input.visualIntentKind ?? "");
+  if (kind !== "image_edit" && kind !== "image_continue") return false;
+  if (input.sourceImageCount > 0) return false;
+  if (input.hasSessionVisualHistory) return false;
+  return (
+    !isHostedImageEditIntent(input.prompt) &&
+    !isHostedImageGenerationRequest(input.prompt)
   );
 }
 
@@ -6533,21 +6582,17 @@ async function completeServerBrainTask(
   // kendi cümlesinde açık bir görsel eylemi olmalı. Üçü de yoksa ortada
   // düzenlenecek bir şey yoktur — bu bir yanlış sınıflandırmadır ve tur
   // normal sohbete düşer.
-  const visualEditOrContinueIntent =
-    visualIntent.intent === "image_edit" ||
-    visualIntent.intent === "image_continue";
-  const visualReferentAvailable =
-    effectiveSourceImages.length > 0 ||
-    Boolean(
+  const referentlessVisualEdit = isReferentlessVisualEdit({
+    prompt,
+    visualIntentKind: visualIntent.intent,
+    sourceImageCount: effectiveSourceImages.length,
+    hasSessionVisualHistory: Boolean(
       resolveLastVisualArtifactMemory(
         payloadMetadata,
         visualIntent.sourceArtifactId,
       ),
-    ) ||
-    isHostedImageEditIntent(prompt) ||
-    isHostedImageGenerationRequest(prompt);
-  const referentlessVisualEdit =
-    visualEditOrContinueIntent && !visualReferentAvailable;
+    ),
+  });
   // Semantik model "bu görsel değil, bir grafik/plot isteği" dediyse görsel
   // üretimi tamamen bastır; chart/fonksiyon yolu turu üretir.
   const imageGenerationRequested =
@@ -8006,13 +8051,12 @@ async function processSharedBrainChatTask(
     // girdiğinde kullanıcı sorusuna değil, kayıp bir görsele dair cevap
     // alıyor (yerel duman testi: "Şu an saat kaç?" → "Düzenlenecek son
     // görseli bulamadım").
-    const referentlessVisualEdit =
-      (visualIntent.intent === "image_edit" ||
-        visualIntent.intent === "image_continue") &&
-      countDistinctEphemeralImages(hydratedEphemeralVision) === 0 &&
-      !imageEditHasSessionImage &&
-      !imageEditIntent &&
-      !isHostedImageGenerationRequest(input.prompt);
+    const referentlessVisualEdit = isReferentlessVisualEdit({
+      prompt: input.prompt,
+      visualIntentKind: visualIntent.intent,
+      sourceImageCount: countDistinctEphemeralImages(hydratedEphemeralVision),
+      hasSessionVisualHistory: imageEditHasSessionImage,
+    });
     const imageGenerationRequested =
       !referentlessVisualEdit &&
       (isVisualImageRequested(visualIntent, input.prompt) ||
@@ -8657,6 +8701,41 @@ async function processSharedBrainChatTask(
       : chatContextSnapshot?.integrity ??
         (snapshotCarrierPresent ? "verified" : "legacy");
     await assertSharedBrainExecutionActive(input);
+    // BOŞ CEVAP, KULLANICI İÇİN CEVAPSIZLIKTIR — İKİNCİ SAĞLAYICI HAZIRDA
+    // BEKLİYOR.
+    //
+    // ÖLÇÜM (yerel koşu): 29 sağlayıcı çağrısının 29'u Groq'a gitti; Gemini
+    // yapılandırılmış, anahtarı var, HİÇ denenmedi. Kuyruk yolunda
+    // primary(groq) → fallback(gemini) yükseltmesi var, ama satır içi
+    // (kuyruksuz) turda yok: model boş ya da çıkmaz bir cümle döndürünce
+    // kullanıcı doğrudan "yanıt oluşturulamadı" görüyor.
+    //
+    // Tek ek deneme, tamponlanmış (akış yok: ilk deneme zaten delta
+    // yayınladıysa buraya girmeyiz) ve yalnız gerçekten boş sonuçta.
+    if (
+      input.providerStage == null &&
+      inference.metadata.firstDeltaMs == null &&
+      isGeminiFallbackQueueConfigured(app) &&
+      isEmptyOrDeadEndAssistantReply(inference)
+    ) {
+      const crossProviderAttemptId = randomUUID();
+      const crossProvider = await generateGovernedSharedBrainReply(app, {
+        ...governedInferenceRequest,
+        providerAllowlist: ["gemini"],
+        requestMetadata: {
+          ...turnContextMetadata,
+          generationAttemptId: crossProviderAttemptId,
+        },
+        onDelta: undefined,
+      }).catch(() => null);
+      if (crossProvider && !isEmptyOrDeadEndAssistantReply(crossProvider)) {
+        crossProvider.metadata.generationAttemptId = crossProviderAttemptId;
+        crossProvider.metadata.chatContextIntegrity =
+          inference.metadata.chatContextIntegrity;
+        crossProvider.metadata.crossProviderRecovery = "gemini";
+        inference = crossProvider;
+      }
+    }
     endInferenceStage();
     // İLK GÖRÜNÜR TOKEN. Ürünün gerçek gecikme metriği budur; `inference_total`
     // yalnız turun tamamını ölçüyordu. Sağlayıcı isteği başladıktan sonrasını
@@ -10525,6 +10604,11 @@ export async function createTask(
       routeDecision,
       requestId: input.requestId,
       turnContract,
+      // Masaüstünün o an bağlı olup olmadığı, "bunu yapabilir miyim"in
+      // cevabıdır ve modelin uyduramayacağı bir olgudur. Burada zaten
+      // hesaplanmış durumda; tura taşınır ki prompt bunu OLGU olarak
+      // kullanabilsin.
+      desktopOnline: selectedDesktopOnline,
       ...(remoteMcpSelection ? { remoteMcpSelection } : {}),
     },
   };

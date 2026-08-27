@@ -1076,19 +1076,14 @@ function buildCheapSocialTurnReply(
   }
   const workload =
     input.workload ?? input.routeDecision?.selectedWorkload ?? DEFAULT_WORKLOAD;
-  if (
-    /(?<!\p{L})(?:garip|tuhaf|değişik|degisik|bilinmeyen|ilginç|ilginc)(?:\p{L}*\s+\p{L}*){0,5}(?:hayvan|animal)(?!\p{L})/iu.test(
-      prompt,
-    ) &&
-    /(?<!\p{L})(?:isim\p{L}*|adı|adi|name)(?!\p{L})/iu.test(prompt)
-  ) {
-    const looksTurkish =
-      /[çğıöşüÇĞİÖŞÜ]/u.test(prompt) ||
-      /(?<!\p{L})(bana|hayvan|ismi|söyle|soyle)(?!\p{L})/iu.test(prompt);
-    return looksTurkish
-      ? "Aye-aye. Madagaskar'da yaşayan, uzun orta parmağıyla ağaç kabuklarının içindeki böcekleri çıkaran oldukça tuhaf görünümlü bir primat."
-      : "Aye-aye. It is a wonderfully odd-looking primate from Madagascar that uses its long middle finger to find insects inside tree bark.";
-  }
+  // Buradan bir OLGU cevabı çıkmaz.
+  //
+  // Eskiden "garip bir hayvan ismi söyle" kalıbı iki regex ile yakalanıp
+  // gövdesi koda gömülü tek bir cevapla ("Aye-aye…") karşılanıyordu. Bu ne
+  // ucuzluk ne hızdır: aynı soruyu soran herkes ömür boyu aynı hayvanı alır,
+  // cevabın doğruluğu kod incelemesine bağlı kalır ve her yeni ifade biçimi
+  // yeni bir regex ister. Olgu sorusu modele aittir; bu kapı yalnız SOSYAL
+  // turları (selam, teşekkür, hatır sorma) ucuzlatmak için vardır.
   if (!isSocialChatPrompt(prompt)) {
     return null;
   }
@@ -2658,9 +2653,33 @@ function buildDataUnderstandingQualityPromptBlock(
  * Saat dilimi kullanıcının değil sunucunun yereli olabilir; bu yüzden IANA
  * adı da yazılır — model neye göre konuştuğunu söyleyebilsin.
  */
-function buildTemporalFactsPromptBlock(now: Date = new Date()): string {
+/**
+ * Masaüstü bu turda bağlı mı? Bilinmiyorsa `null` — bilinmeyen olgu diye
+ * sunulmaz. Değer görev oluşturulurken damgalanır (`desktopOnline`).
+ */
+function readDesktopAvailability(
+  requestMetadata: Record<string, unknown> | undefined,
+): boolean | null {
+  const value = (requestMetadata ?? {}).desktopOnline;
+  return typeof value === "boolean" ? value : null;
+}
+
+export function buildTemporalFactsPromptBlock(
+  input: {
+    context?: UserUnderstandingContext | undefined;
+    desktopAvailable?: boolean | null;
+    now?: Date;
+  } = {},
+): string {
+  const now = input.now ?? new Date();
+  // Kullanıcının kendi saat dilimi biliniyorsa o kazanır: sunucunun yereli
+  // kullanıcının değil, barındırmanın olgusudur ve "bugün" sınırını yanlış
+  // yere koyabilir.
+  const userTimeZone =
+    input.context?.userModel?.locale.timezone ?? null;
   const timeZone =
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    resolveUsableTimeZone(userTimeZone) ??
+    (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
   const date = new Intl.DateTimeFormat("tr-TR", {
     dateStyle: "full",
     timeZone,
@@ -2670,12 +2689,40 @@ function buildTemporalFactsPromptBlock(now: Date = new Date()): string {
     timeZone,
   }).format(now);
   return [
-    "CURRENT TIME (authoritative fact, not a guess):",
+    "CURRENT ENVIRONMENT (authoritative facts, not guesses):",
     `- Bugün: ${date}`,
     `- Saat: ${time} (${timeZone})`,
     `- ISO: ${now.toISOString()}`,
+    // Masaüstünün açık olup olmaması, "yapabilir miyim" sorusunun cevabıdır.
+    // Bilinmiyorsa hiçbir şey yazılmaz — bilinmeyeni olgu diye sunmayız.
+    ...(input.desktopAvailable === true
+      ? [
+          "- Kullanıcının masaüstü uygulaması ŞU AN bağlı: yerel dosya, uygulama ve tarayıcı işleri masaüstüne devredilebilir.",
+        ]
+      : input.desktopAvailable === false
+        ? [
+            "- Kullanıcının masaüstü uygulaması şu an bağlı DEĞİL: yerel dosya/uygulama işleri yürütülemez. Böyle bir istek gelirse bunu dürüstçe söyle, yapılmış gibi anlatma.",
+          ]
+        : []),
     "Use these values whenever the turn depends on the current date, day of week, or time. Never answer that you cannot know the date, and never substitute your training cutoff for it. Relative expressions ('bugün', 'yarın', 'geçen hafta', 'bu ay') are resolved against these values.",
   ].join("\n");
+}
+
+/**
+ * IANA saat dilimi adı gerçekten kullanılabilir mi?
+ *
+ * Hafızadan gelen değer bayat ya da bozuk olabilir; `Intl` geçersiz bir adla
+ * fırlatır ve turu düşürürdü. Doğrulanamayan ad yok sayılır.
+ */
+function resolveUsableTimeZone(value: string | null | undefined): string | null {
+  const candidate = compactText(value);
+  if (!candidate) return null;
+  try {
+    new Intl.DateTimeFormat("tr-TR", { timeZone: candidate });
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 function buildReasoningProtocolPromptBlock(input: {
@@ -3458,7 +3505,10 @@ export function buildStructuredSystemPrompt(
     attachmentInsightBlock,
     memoryProfileBlock,
     currentUserIdentityDirective,
-    buildTemporalFactsPromptBlock(),
+    buildTemporalFactsPromptBlock({
+      context: input.understandingContext,
+      desktopAvailable: readDesktopAvailability(input.requestMetadata),
+    }),
     buildReasoningProtocolPromptBlock({
       context: input.understandingContext,
       workload: input.workload ?? "fast_route",
@@ -8052,10 +8102,24 @@ export async function generateSharedBrainReply(
           if (geminiCooldownTriggered) break;
           let attemptSucceeded = false;
 
+          // COMPOUND BİR HIZLANDIRICI, BİR BAĞIMLILIK DEĞİL.
+          //
+          // Compound araç kullanan bir ajan modelidir; başarısız olduğunda
+          // zincirdeki sıradaki model aynı işi zaten yapabilir. Ona ikinci
+          // bir deneme vermek yalnız kullanıcıyı bekletir.
+          //
+          // ÖLÇÜM (yerel koşu): `groq/compound` iki turda üst üste
+          // `empty_stream_response` (503) döndürdü ve HER İKİ denemeyi de
+          // harcadı; gpt-oss'a sıra gelmeden önce iki tur gitti. Bir turda
+          // uçtan uca süre 20 sn'ye çıktı. Tek deneme, sonra sıradaki model.
+          const attemptMaxRetries = isVisionProviderTurn
+            ? 0
+            : isGroqCompoundModel(attemptedModel)
+              ? 0
+              : providerMaxRetries;
           for (
             let retryIndex = 0;
-            retryIndex <=
-            (isVisionProviderTurn ? 0 : providerMaxRetries);
+            retryIndex <= attemptMaxRetries;
             retryIndex += 1
           ) {
             if (input.shouldAbort && (await input.shouldAbort())) {
@@ -8935,8 +8999,7 @@ export async function generateSharedBrainReply(
             if (
               !attemptRetryable ||
               attemptHadDelta ||
-              retryIndex >=
-                (isVisionProviderTurn ? 0 : providerMaxRetries)
+              retryIndex >= attemptMaxRetries
             ) {
               break;
             }

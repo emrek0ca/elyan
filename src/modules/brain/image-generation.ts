@@ -309,9 +309,15 @@ const IMAGE_EDIT_REQUEST_PATTERNS = [
   /\b(başka|baska|farklı|farkli|diğer|diger|alternatif)\s+(renk|renkte|renkli|ton|tonda)\b.{0,50}\b(çiz|ciz|yap|olsun|üret|uret)\b/iu,
   /\b(renk|renkte|renkli|ton|tonda)\b.{0,50}\b(değiştir|degistir|çevir|cevir|başka|baska|farklı|farkli)\b/iu,
   /\b(daha)\s+(beyaz|siyah|aydınlık|aydinlik|karanlık|karanlik|parlak|mat|canlı|canli|sinematik|cinematic|gerçekçi|gercekci|minimal|detaylı|detayli|net)\b/iu,
-  /\b(bunu|görseli|gorseli|resmi|fotoğrafı|fotografi)\b.{0,60}\b(yap|çevir|cevir)\b/i,
+  /\b(görseli|gorseli|resmi|fotoğrafı|fotografi)\b.{0,60}\b(yap|çevir|cevir)\b/i,
   /\b(beni|bizi|saçımı|sacimi|kıyafetimi|kiyafetimi)\b.{0,80}\b(yap|göster|goster|çevir|cevir)\b/i,
-  /\b(onu|şunu|sunu|bunu)\b.{0,80}\b(yap|çevir|cevir)\b/i,
+  // KALDIRILDI: /\b(onu|şunu|sunu|bunu)\b.{0,80}\b(yap|çevir|cevir)\b/
+  // Salt zamir + genel fiil, görsel iddiası taşımaz: "bunu yapar mısın",
+  // "şunu çevirir misin" (metin çevirisi) gibi cümleleri görsel düzenlemeye
+  // sokuyordu. Gerçek referans artık `service.ts` içindeki kanıt kapısıyla
+  // aranıyor (turda görsel, oturumda görsel geçmişi ya da cümlede açık
+  // görsel adı); bu desen o kapının işini yapamaz, yalnız yanlış pozitif
+  // üretirdi.
   /\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya)\b.{0,50}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/i,
   /\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b.{0,50}\b(anime|çizgi film|cizgi film|sinematik|cinematic|vintage|retro|noir|fotogerçekçi|fotogercekci|photorealistic|3d|sulu boya|watercolor|yağlı boya|yagli boya)\b/i,
   /\b(tarzında|tarzinda|stilinde|style(?:\s+of)?|look like)\b.{0,60}\b(yap|çevir|cevir|dönüştür|donustur|make|turn|transform)\b/i,
