@@ -13,6 +13,10 @@ import {
 } from "../tasks/service-helpers.js";
 import { buildRouteTransparencyReason } from "./route-transparency.js";
 import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
+import {
+  interactionEnvelopeSchema,
+  type InteractionEnvelope,
+} from "../../contracts/interaction.js";
 
 type TaskTraceSource = {
   id: string;
@@ -207,13 +211,58 @@ function decorateLifecycleFields(
 ): ElyanTaskTraceBlock {
   const approval = readRecord(task.approvalRequest);
   const interaction = readRecord(approval?.interaction);
-  const interactionKind = readString(interaction, "kind");
-  const kind = interactionKind === "clarification" ? "clarification" : "permission";
+  const rawInteractionKind =
+    readString(interaction, "kind") ?? readString(approval, "kind") ?? "";
+  const kind: "clarification" | "permission" | "approval" =
+    rawInteractionKind === "clarification"
+      ? "clarification"
+      : rawInteractionKind === "approval"
+        ? "approval"
+        : "permission";
+  const revision = Math.max(
+    1,
+    Math.floor(readNumber(interaction, "revision") ?? readNumber(approval, "revision") ?? 1),
+  );
   const question = compactDetail(
-    readString(approval, "question") ?? readString(approval, "message"),
+    readString(interaction, "question") ??
+      readString(approval, "question") ??
+      readString(approval, "message"),
     500,
   );
-  const declaredActions = readStringList(approval, "availableActions");
+  const interactionExpiresAt =
+    readString(interaction, "expiresAt") ?? readString(approval, "expiresAt");
+  const expiresAt = interactionExpiresAt && !Number.isNaN(Date.parse(interactionExpiresAt))
+    ? new Date(interactionExpiresAt).toISOString()
+    : new Date(Date.now() + 60_000).toISOString();
+  const canonicalInteractionResult = approval
+    ? interactionEnvelopeSchema.safeParse({
+    contract: "elyan.interaction.v1",
+    id:
+      readString(interaction, "id") ??
+      readString(approval, "interactionId") ??
+      readString(approval, "id") ??
+      `${task.id}:interaction:${revision}`,
+    taskId: readString(interaction, "taskId") ?? task.id,
+    taskRunId:
+      readString(interaction, "taskRunId") ??
+      readString(approval, "taskRunId") ??
+      task.id,
+    kind,
+    revision,
+    // Interaction kind is authoritative. A stale/forged action list must not
+    // turn a clarification into an approval (or expose answer on a permission).
+    availableActions: kind === "clarification" ? ["answer"] : ["approve", "reject"],
+    ...(question ? { question } : {}),
+    ...(readString(interaction, "summary") || readString(approval, "summary")
+      ? { summary: readString(interaction, "summary") ?? readString(approval, "summary")! }
+      : {}),
+    expiresAt,
+    resolution: readRecord(interaction?.resolution) ?? readRecord(approval?.resolution),
+      })
+    : null;
+  const canonicalInteraction: InteractionEnvelope | null = canonicalInteractionResult?.success
+    ? canonicalInteractionResult.data
+    : null;
   const result = readRecord(task.result);
   const resultError = readRecord(result?.error);
   const errorMessage = safeErrorMessage(
@@ -285,11 +334,9 @@ function decorateLifecycleFields(
   const approvalContractBroken =
     stepWaitingForApproval && block.status !== "waiting_approval";
   const availableActions = block.status === "waiting_approval"
-    ? (declaredActions.length > 0
-        ? declaredActions
-        : kind === "clarification"
-          ? ["answer"]
-          : ["approve", "reject"])
+    ? (canonicalInteraction?.availableActions ?? (
+        kind === "clarification" ? ["answer"] : ["approve", "reject"]
+      ))
     : approvalContractBroken
       ? ["retry"]
       : block.status === "failed" && retryable
@@ -303,12 +350,19 @@ function decorateLifecycleFields(
     ...block,
     ...(block.status === "waiting_approval"
       ? {
-          interaction: {
-            kind,
-            ...(question ? { question } : {}),
-          },
+          ...(canonicalInteraction?.kind === "clarification"
+            ? {
+                title: "Netleştirme gerekiyor",
+                ...(question
+                  ? { summary: question.slice(0, 180) }
+                  : {}),
+              }
+            : canonicalInteraction?.kind === "approval"
+              ? { title: "Plan onayı bekleniyor" }
+              : {}),
+          ...(canonicalInteraction ? { interaction: canonicalInteraction } : {}),
           // A clarification is a question, not a computer permission.
-          needsApproval: kind === "permission",
+          needsApproval: kind !== "clarification",
         }
       : {}),
     // Kırık onay sözleşmesi kullanıcıya izin sorusu gibi GÖSTERİLMEZ.

@@ -645,7 +645,7 @@ function detectAction(text: string, outputs: UnderstandingDesiredOutput[]): stri
   return "reply";
 }
 
-function extractEntities(text: string): UnderstandingEntity[] {
+function extractEntities(text: string, canonicalSubject?: string): UnderstandingEntity[] {
   const entities: UnderstandingEntity[] = [];
   for (const amount of extractMoneyAmounts(text)) {
     entities.push({
@@ -653,6 +653,16 @@ function extractEntities(text: string): UnderstandingEntity[] {
       value: amount.raw,
       normalized: amount.currency,
       confidence: 0.9,
+      source: "typed_extractor",
+    });
+  }
+  const subject = cleanCanonicalSubject(canonicalSubject);
+  if (subject) {
+    entities.push({
+      type: "topic",
+      value: subject,
+      normalized: subject,
+      confidence: 0.92,
       source: "typed_extractor",
     });
   }
@@ -1229,25 +1239,59 @@ function inferEnvelopeConfidence(input: {
  * Yedek yön korunuyor: mesajın olmadığı (yalnız başlıkla yaratılan) görevlerde
  * başlık hâlâ konuyu verir.
  */
-function canonicalTopic(
+function cleanCanonicalSubject(value: unknown): string | undefined {
+  const compact = compactText(String(value ?? "")).replace(/^[\s:;,-]+|[\s:;,-]+$/gu, "");
+  return compact.slice(0, 160) || undefined;
+}
+
+/**
+ * Mesajın tamamı konu değildir. Konu, typed metadata varsa onu; yoksa
+ * cümledeki konu-ilişki yapısını kullanır. Böylece "X hakkında makale yaz,
+ * masaüstüne kaydet" komutunun başlığı yalnızca "X" olur.
+ *
+ * Bu bir kelime/özel isim listesi değildir: ilişki belirteci, metadata ve
+ * cümle sınırı gibi yapısal sinyaller kullanılır. Bilinmeyen konular aynı
+ * boru hattından geçer.
+ */
+export function canonicalTopic(
   message: string | undefined,
   title: string | undefined,
+  metadata?: Record<string, unknown>,
 ): string | undefined {
-  const fromMessage = compactText(message ?? "").slice(0, 160);
-  if (fromMessage) return fromMessage;
-  return compactText(title ?? "").slice(0, 160) || undefined;
+  const explicitSubject = cleanCanonicalSubject(
+    metadata?.subject ?? metadata?.canonicalTopic ?? metadata?.documentTitle,
+  );
+  if (explicitSubject) return explicitSubject;
+
+  const fromMessage = compactText(message ?? "");
+  if (fromMessage) {
+    const relationMatch = fromMessage.match(
+      /^(.{1,160}?)\s+(?:hakkında|konusunda|about|regarding)\b/iu,
+    );
+    const relationSubject = cleanCanonicalSubject(relationMatch?.[1]);
+    if (relationSubject) return relationSubject;
+
+    // İlk cümle sınırı, devamındaki ayrı talimatların (sayfa/format/hedef)
+    // konuya taşınmasını engeller. İlişki yapısı yoksa anlamı uydurmamak için
+    // cümlenin kendisi korunur.
+    const firstSentence = fromMessage.split(/[.!?\n]/u)[0] ?? fromMessage;
+    return cleanCanonicalSubject(firstSentence) ?? fromMessage.slice(0, 160);
+  }
+  return cleanCanonicalSubject(title);
 }
 
 export function buildEmptyUnderstandingEnvelope(
   input: TaskUnderstandingInput,
   intent: IntentClassification,
 ): UnderstandingEnvelope {
+  const subject = canonicalTopic(input.message, input.title, input.metadata);
   const envelope: UnderstandingEnvelope = {
     schema_version: "2026-07-understanding-envelope-v2",
     intent: {
       name: intent.primaryIntent,
       action: "reply",
-      topic: canonicalTopic(input.message, input.title),
+      topic: subject,
+      subject,
       confidence: 0,
       source: "legacy_fallback",
     },
@@ -1349,7 +1393,8 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
     desiredOutputs,
     outputContract,
   });
-  const entities = extractEntities(text);
+  const subject = canonicalTopic(input.message, input.title, metadata);
+  const entities = extractEntities(text, subject);
   const capabilities = buildCapabilities({ desiredOutputs, localPrivate, sideEffect });
   const memoryCandidates = extractMemoryCandidates(text, promptInjection);
   const ambiguities = buildAmbiguities({ desiredOutputs, format, localPrivate, sideEffect });
@@ -1384,7 +1429,8 @@ export function buildTypedUnderstandingEnvelope(input: BuildEnvelopeInput): Unde
     intent: {
       name: input.intent.primaryIntent,
       action,
-      topic: canonicalTopic(input.message, input.title),
+      topic: subject,
+      subject,
       confidence: clampConfidence(input.intent.confidence),
       source: "semantic_classifier",
     },

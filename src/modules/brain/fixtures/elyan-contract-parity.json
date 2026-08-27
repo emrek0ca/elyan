@@ -1,0 +1,99 @@
+{
+  "validPlan": {
+    "contract": "elyan.plan.v2",
+    "taskId": "task_parity",
+    "turnId": "turn_parity",
+    "planRevision": 3,
+    "goal": {
+      "objective": "Public kaynakları topla ve masaüstü çıktısı hazırla",
+      "constraints": [],
+      "successCriteria": ["Araştırma çıktısı belge yazma adımına aktarılmalı"]
+    },
+    "output": {
+      "operation": "document_write",
+      "kind": "docx",
+      "format": "docx",
+      "target": "desktop",
+      "artifactRequired": true
+    },
+    "steps": [
+      {
+        "id": "research",
+        "capability": "web_research",
+        "args": {"query": "Elyan sözleşme parity testi"},
+        "dependsOn": []
+      },
+      {
+        "id": "write",
+        "capability": "document_write",
+        "args": {
+          "title": "Elyan sözleşme parity testi",
+          "sourceContext": "{{steps.research.output}}",
+          "outputFormat": "docx"
+        },
+        "dependsOn": ["research"]
+      }
+    ]
+  },
+  "compiledTaskContract": {
+    "contract": "elyan.task_execution_contract.v2",
+    "taskId": "task_parity",
+    "turnId": "turn_parity",
+    "planRevision": 3,
+    "goal": {
+      "objective": "Public kaynakları topla ve masaüstü çıktısı hazırla",
+      "constraints": [],
+      "successCriteria": ["Araştırma çıktısı belge yazma adımına aktarılmalı"]
+    },
+    "output": {
+      "operation": "document_write",
+      "kind": "docx",
+      "format": "docx",
+      "target": "desktop",
+      "artifactRequired": true
+    },
+    "execution": {
+      "mode": "compiled",
+      "requiredRuntime": "desktop",
+      "allowedCapabilities": ["web_research", "document_write"],
+      "selectedTools": [],
+      "selectedSkills": [],
+      "steps": [
+        {
+          "id": "research",
+          "device": "desktop",
+          "capability": "web_research",
+          "args": {"query": "Elyan sözleşme parity testi"},
+          "dependsOn": []
+        },
+        {
+          "id": "write",
+          "device": "desktop",
+          "capability": "document_write",
+          "args": {
+            "title": "Elyan sözleşme parity testi",
+            "sourceContext": "{{steps.research.output}}",
+            "outputFormat": "docx"
+          },
+          "dependsOn": ["research"]
+        }
+      ],
+      "maxSteps": 16
+    },
+    "approval": {},
+    "verification": {},
+    "privacy": {},
+    "binding": {}
+  },
+  "invalidDecisionShape": {
+    "contract": "elyan.plan.v2",
+    "planRevision": 3,
+    "steps": [
+      {
+        "id": "research",
+        "capability": "web_research",
+        "args": {"query": "Elyan sözleşme parity testi"}
+      }
+    ]
+  }
+}

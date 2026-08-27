@@ -610,10 +610,18 @@ test("buildTaskTraceBlock exposes clarification without manufacturing computer p
     },
   });
 
-  assert.deepEqual(block.interaction, {
-    kind: "clarification",
-    question: "Hangi klasörü kullanmalıyım?",
-  });
+  assert.equal(block.interaction?.contract, "elyan.interaction.v1");
+  assert.equal(block.interaction?.taskId, "task-clarification");
+  assert.equal(block.interaction?.taskRunId, "task-clarification");
+  assert.equal(block.interaction?.kind, "clarification");
+  assert.equal(block.interaction?.question, "Hangi klasörü kullanmalıyım?");
+  assert.deepEqual(block.interaction?.availableActions, ["answer"]);
+  assert.equal(block.interaction?.resolution, null);
+  assert.equal(block.interaction?.revision, 1);
+  assert.ok(
+    block.interaction?.expiresAt &&
+      !Number.isNaN(Date.parse(block.interaction.expiresAt)),
+  );
   assert.equal(block.needsApproval, false);
   assert.deepEqual(block.availableActions, ["answer"]);
   assert.equal(block.updatedAt, updatedAt.toISOString());

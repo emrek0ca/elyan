@@ -581,20 +581,46 @@ function buildLifecycleBlocks(
   const hasResultSummary = (input.resultBlocks ?? []).some(
     (block) => block.type === "summary",
   );
+  const approvalRequest =
+    input.task.approvalRequest &&
+    typeof input.task.approvalRequest === "object" &&
+    !Array.isArray(input.task.approvalRequest)
+      ? (input.task.approvalRequest as Record<string, unknown>)
+      : null;
+  const interaction =
+    approvalRequest?.interaction &&
+    typeof approvalRequest.interaction === "object" &&
+    !Array.isArray(approvalRequest.interaction)
+      ? (approvalRequest.interaction as Record<string, unknown>)
+      : null;
+  const interactionKind = String(
+    interaction?.kind ?? approvalRequest?.kind ?? "permission",
+  ).trim().toLowerCase();
+  const isClarification = interactionKind === "clarification";
+  const interactionQuestion = String(
+    interaction?.question ?? approvalRequest?.question ?? approvalRequest?.message ?? "",
+  ).trim();
+  const interactionSummary = String(
+    interaction?.summary ?? approvalRequest?.summary ?? "",
+  ).trim();
 
   if (input.task.status === "waiting_approval") {
     blocks.push(
       buildAssistantStatusBlock({
         status: "waiting_approval",
-        title: "Onay bekleniyor",
-        detail: "Devam etmek için kullanıcı onayı gerekiyor.",
+        title: isClarification ? "Netleştirme gerekiyor" : "Onay bekleniyor",
+        detail: isClarification
+          ? interactionQuestion || interactionSummary || "Devam etmek için ek bilgi gerekiyor."
+          : "Devam etmek için kullanıcı onayı gerekiyor.",
       }),
     );
     blocks.push(
       buildAssistantActionableBlock({
         kind: "approval_needed",
-        title: "Onayı aç",
-        detail: "İlgili onayı verdikten sonra görev devam eder.",
+        title: isClarification ? "Yanıtla" : "Onayı aç",
+        detail: isClarification
+          ? interactionQuestion || interactionSummary || "Devam etmek için ek bilgi gerekiyor."
+          : "İlgili onayı verdikten sonra görev devam eder.",
       }),
     );
   } else if (

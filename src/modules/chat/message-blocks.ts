@@ -2071,6 +2071,55 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
       ? (value.interaction as Record<string, unknown>)
       : null;
   const interactionKind = String(interactionRecord?.kind ?? "").trim().toLowerCase();
+  const normalizedInteraction = ["permission", "clarification", "approval"].includes(
+    interactionKind,
+  )
+    ? {
+        contract: "elyan.interaction.v1" as const,
+        id:
+          normalizeTextValue(interactionRecord?.id, 255) ??
+          `${taskId}:interaction:${
+            typeof interactionRecord?.revision === "number" &&
+            Number.isInteger(interactionRecord.revision) &&
+            interactionRecord.revision > 0
+              ? interactionRecord.revision
+              : 1
+          }`,
+        taskId,
+        taskRunId:
+          normalizeTextValue(interactionRecord?.taskRunId, 255) ?? taskId,
+        kind: interactionKind as "permission" | "clarification" | "approval",
+        revision:
+          typeof interactionRecord?.revision === "number" &&
+          Number.isInteger(interactionRecord.revision) &&
+          interactionRecord.revision > 0
+            ? interactionRecord.revision
+            : 1,
+        // Kind determines the action surface. Ignore stale or incompatible
+        // actions from legacy/persisted blocks while rebuilding the envelope.
+        availableActions:
+          interactionKind === "clarification"
+            ? ["answer"]
+            : ["approve", "reject"],
+        ...(normalizeTextValue(interactionRecord?.question, 1_000)
+          ? { question: normalizeTextValue(interactionRecord?.question, 1_000)! }
+          : {}),
+        ...(normalizeTextValue(interactionRecord?.summary, 1_000)
+          ? { summary: normalizeTextValue(interactionRecord?.summary, 1_000)! }
+          : {}),
+        expiresAt:
+          typeof interactionRecord?.expiresAt === "string" &&
+          !Number.isNaN(Date.parse(interactionRecord.expiresAt))
+            ? new Date(interactionRecord.expiresAt).toISOString()
+            : new Date(Date.now() + 60_000).toISOString(),
+        resolution:
+          interactionRecord?.resolution &&
+          typeof interactionRecord.resolution === "object" &&
+          !Array.isArray(interactionRecord.resolution)
+            ? (interactionRecord.resolution as Record<string, unknown>)
+            : null,
+      }
+    : null;
   const rawArtifacts = Array.isArray(value.artifacts) ? value.artifacts : [];
   const artifacts = rawArtifacts.flatMap((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -2131,14 +2180,9 @@ function parseTaskTraceBlock(value: Record<string, unknown>): ElyanTaskTraceBloc
           },
         }
       : {}),
-    ...(["permission", "clarification"].includes(interactionKind)
+    ...(normalizedInteraction
       ? {
-          interaction: {
-            kind: interactionKind as "permission" | "clarification",
-            ...(normalizeTextValue(interactionRecord?.question, 500)
-              ? { question: normalizeTextValue(interactionRecord?.question, 500)! }
-              : {}),
-          },
+          interaction: normalizedInteraction,
         }
       : {}),
     ...(artifacts.length > 0 ? { artifacts } : {}),

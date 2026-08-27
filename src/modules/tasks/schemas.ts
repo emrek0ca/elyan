@@ -70,6 +70,32 @@ export const listTasksQuerySchema = z.object({
 export const approvalBodySchema = z.object({
   approved: z.boolean(),
   notes: z.string().max(500).optional(),
+  // Canonical interaction identity. `approved` and `notes` remain the legacy
+  // wire fields so older mobile/runtime clients can still resolve a request.
+  interactionId: z.string().trim().min(1).max(255).optional(),
+  interactionRevision: z.number().int().positive().max(1_000_000).optional(),
+  // Envelope-shaped aliases accepted during the additive migration.
+  id: z.string().trim().min(1).max(255).optional(),
+  revision: z.number().int().positive().max(1_000_000).optional(),
+}).superRefine((value, ctx) => {
+  if (value.interactionId && value.id && value.interactionId !== value.id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["interactionId"],
+      message: "interactionId and id must match",
+    });
+  }
+  if (
+    value.interactionRevision !== undefined &&
+    value.revision !== undefined &&
+    value.interactionRevision !== value.revision
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["interactionRevision"],
+      message: "interactionRevision and revision must match",
+    });
+  }
 });
 
 export const feedbackBodySchema = z.object({

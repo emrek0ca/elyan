@@ -6,6 +6,10 @@ import {
   type ApprovalToolPermission,
   type UserApprovalMode,
 } from "../approval-policy/policy.js";
+import {
+  interactionEnvelopeSchema,
+  type InteractionEnvelope,
+} from "../../contracts/interaction.js";
 
 export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: string; now?: Date }) {
   return {
@@ -83,7 +87,11 @@ function readNumber(value: unknown): number | null {
 
 export function approvalRequestRevision(approvalRequest: unknown): number {
   const request = readRecord(approvalRequest);
-  return Math.max(1, Math.floor(readNumber(request?.revision) ?? 1));
+  const interaction = readRecord(request?.interaction);
+  return Math.max(
+    1,
+    Math.floor(readNumber(request?.revision) ?? readNumber(interaction?.revision) ?? 1),
+  );
 }
 
 export function approvalRequestKey(approvalRequest: unknown): string {
@@ -103,7 +111,11 @@ export function buildPublicTaskApprovalEventFields(
   input: { status?: string; updatedAt?: Date } = {},
 ) {
   const request = readRecord(approvalRequest);
-  const resolution = readRecord(request?.resolution);
+  const interactionResult = interactionEnvelopeSchema.safeParse(request?.interaction);
+  const interaction = interactionResult.success ? interactionResult.data : null;
+  const resolution =
+    readRecord(request?.resolution) ??
+    readRecord(readRecord(request?.interaction)?.resolution);
   const approved = typeof resolution?.approved === "boolean"
     ? resolution.approved
     : null;
@@ -115,6 +127,14 @@ export function buildPublicTaskApprovalEventFields(
       : readString(resolution?.state) || null;
 
   return {
+    ...(interaction
+      ? {
+          interaction,
+          interactionKind: interaction.kind,
+          interactionId: interaction.id,
+          interactionRevision: interaction.revision,
+        }
+      : {}),
     approvalKey: readString(request?.approvalKey) || null,
     approvalRevision: approvalRequestRevision(request),
     status: readString(input.status) || null,
@@ -137,7 +157,9 @@ export function approvalRequestExpiresAt(
   now: Date = new Date(),
 ): string {
   const request = readRecord(approvalRequest);
-  const existing = readString(request?.expiresAt);
+  const interaction = readRecord(request?.interaction);
+  const existing =
+    readString(interaction?.expiresAt) || readString(request?.expiresAt);
   if (existing) return existing;
   return new Date(now.getTime() + TASK_APPROVAL_TTL_MS).toISOString();
 }
@@ -146,14 +168,20 @@ export function isApprovalRequestExpired(
   approvalRequest: unknown,
   now: Date = new Date(),
 ): boolean {
-  const expiresAt = readString(readRecord(approvalRequest)?.expiresAt);
+  const request = readRecord(approvalRequest);
+  const interaction = readRecord(request?.interaction);
+  const expiresAt =
+    readString(interaction?.expiresAt) || readString(request?.expiresAt);
   if (!expiresAt) return false;
   const parsed = Date.parse(expiresAt);
   return Number.isFinite(parsed) && parsed <= now.getTime();
 }
 
 export function isApprovalAlreadyResolved(approvalRequest: unknown): boolean {
-  const resolution = readRecord(readRecord(approvalRequest)?.resolution);
+  const request = readRecord(approvalRequest);
+  const resolution =
+    readRecord(request?.resolution) ??
+    readRecord(readRecord(request?.interaction)?.resolution);
   return resolution?.approved === true || resolution?.approved === false;
 }
 
@@ -172,16 +200,24 @@ export function normalizeTaskApprovalRequest(
   surface: string;
   permissionSurface?: string;
   permissionSummary?: string;
-  interaction: { kind: "permission" | "clarification" };
+  interaction: InteractionEnvelope;
   availableActions: string[];
 } {
   const now = input.now ?? new Date();
   const request = readRecord(approvalRequest) ?? {};
   const revision = approvalRequestRevision(request);
   const existingKey = approvalRequestKey(request);
-  const taskKey = readString(input.taskId) || "task";
+  const taskKey = (readString(input.taskId) || "task").slice(0, 255);
   const kind = readString(request.kind) || "permission";
   const interaction = readRecord(request.interaction) ?? {};
+  const rawInteractionKind = (readString(interaction.kind) || kind).toLowerCase();
+  const interactionKind = (
+    rawInteractionKind === "clarification"
+      ? "clarification"
+      : ["approval", "desktop_plan", "plan_approval"].includes(rawInteractionKind)
+        ? "approval"
+        : "permission"
+  ) as "clarification" | "permission" | "approval";
   const {
     surface: _surface,
     permissionSurface: _permissionSurface,
@@ -189,32 +225,95 @@ export function normalizeTaskApprovalRequest(
     availableActions: _availableActions,
     ...baseRequest
   } = request;
+  const rawExpiresAt = approvalRequestExpiresAt(request, now);
+  const parsedExpiresAt = Date.parse(rawExpiresAt);
+  const expiresAt = Number.isFinite(parsedExpiresAt) && parsedExpiresAt > now.getTime()
+    ? new Date(parsedExpiresAt).toISOString()
+    : new Date(now.getTime() + TASK_APPROVAL_TTL_MS).toISOString();
   const common = {
     ...baseRequest,
     kind,
     source: readString(request.source) || "desktop_runtime",
     approvalKey: existingKey || `${taskKey}:${revision}`,
     revision,
-    expiresAt: approvalRequestExpiresAt(request, now),
+    expiresAt,
   };
-  if (kind === "clarification") {
+  const interactionId =
+    readString(interaction.id) ||
+    readString(request.interactionId) ||
+    readString(request.id) ||
+    `${taskKey}:interaction:${revision}`;
+  const taskRunId =
+    readString(interaction.taskRunId) ||
+    readString(request.taskRunId) ||
+    readString(request.runId) ||
+    taskKey;
+  const question =
+    readString(interaction.question) ||
+    readString(request.question) ||
+    readString(request.message);
+  const summary =
+    readString(interaction.summary) ||
+    readString(request.summary) ||
+    readString(request.permissionSummary);
+  const boundedInteractionId = interactionId.slice(0, 255);
+  const boundedTaskRunId = taskRunId.slice(0, 255);
+  const boundedQuestion = question.slice(0, 1_000);
+  const boundedSummary = summary.slice(0, 1_000);
+  const interactionResolution =
+    readRecord(request.resolution) ?? readRecord(interaction.resolution);
+  const availableActions = interactionKind === "clarification"
+    ? (["answer"] as const)
+    : (["approve", "reject"] as const);
+  const canonicalInteraction = interactionEnvelopeSchema.parse({
+    contract: "elyan.interaction.v1",
+    id: boundedInteractionId,
+    taskId: taskKey,
+    taskRunId: boundedTaskRunId,
+    kind: interactionKind,
+    revision,
+    availableActions,
+    ...(boundedQuestion ? { question: boundedQuestion } : {}),
+    ...(boundedSummary ? { summary: boundedSummary } : {}),
+    expiresAt,
+    resolution: interactionResolution,
+  });
+  if (interactionKind === "clarification") {
     return {
       ...common,
+      expiresAt,
       surface: "clarification",
-      interaction: { ...interaction, kind: "clarification" as const },
-      availableActions: ["answer"],
+      interaction: canonicalInteraction,
+      availableActions: [...availableActions],
     };
   }
   return {
     ...common,
+    expiresAt,
     surface: "full_computer_access",
     permissionSurface: "full_computer_access",
-    interaction: { ...interaction, kind: "permission" as const },
-    availableActions: ["approve", "reject"],
+    interaction: canonicalInteraction,
+    availableActions: [...availableActions],
     permissionSummary:
       readString(request.permissionSummary) ||
       "Elyan bu görevi tamamlamak için bilgisayar erişimini tek onay altında kullanacak.",
   };
+}
+
+/**
+ * Normalize an approval payload at every public read boundary as well as on
+ * writes. Empty approval fields stay empty; an actual interaction gets the
+ * same canonical envelope in REST, history, bootstrap and SSE consumers.
+ */
+export function normalizePublicTaskApprovalRequest(
+  approvalRequest: unknown,
+  taskId: string,
+): unknown {
+  const request = readRecord(approvalRequest);
+  if (!request || Object.keys(request).length === 0) {
+    return approvalRequest ?? null;
+  }
+  return normalizeTaskApprovalRequest(request, { taskId });
 }
 
 const trustedDesktopIdempotentWriteCapabilities = new Set([
@@ -443,9 +542,19 @@ export function buildTaskApprovalResolution(
   };
 
   if (approvalRequest && typeof approvalRequest === "object" && !Array.isArray(approvalRequest)) {
+    const request = approvalRequest as Record<string, unknown>;
+    const interaction = readRecord(request.interaction);
     return {
-      ...(approvalRequest as Record<string, unknown>),
+      ...request,
       resolution,
+      ...(interaction
+        ? {
+            interaction: {
+              ...interaction,
+              resolution,
+            },
+          }
+        : {}),
     };
   }
 
@@ -470,13 +579,16 @@ export function buildTaskApprovalResumeUpdate(
     taskId: readString(task.id),
     now,
   });
+  const resolutionMessage = approvalRequest.interaction.kind === "clarification"
+    ? "Bilgi yanıtı alındı. Görev devam ediyor."
+    : "Onay alındı. Görev devam ediyor.";
   const update: Partial<typeof tasks.$inferInsert> = {
     status: "waiting_approval" as TaskStatus,
     approvalRequest: buildTaskApprovalResolution(approvalRequest, {
       notes: input.notes,
       now,
     }),
-    summary: "Onay alındı. Görev devam ediyor.",
+    summary: resolutionMessage,
     error: null,
     updatedAt: now,
   };

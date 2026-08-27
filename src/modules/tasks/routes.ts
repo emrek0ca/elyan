@@ -353,6 +353,8 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       userId: auth.sub,
       approved: body.approved,
       notes: body.notes,
+      interactionId: body.interactionId ?? body.id,
+      interactionRevision: body.interactionRevision ?? body.revision,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
       requestId: context.requestId,

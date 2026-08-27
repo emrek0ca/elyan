@@ -91,6 +91,7 @@ export type DesktopWorkOrder = {
   };
   semanticGoal?: {
     contract: "elyan.semantic_task_contract.v1";
+    subject?: string;
     objective: string;
     constraints: string[];
     successCriteria: string[];
@@ -786,7 +787,10 @@ function detectLanguage(value: string): "tr" | "en" | "unknown" {
     : "en";
 }
 
-function extractEntities(message: string): DesktopWorkOrder["entities"] {
+function extractEntities(
+  message: string,
+  canonicalSubject?: string,
+): DesktopWorkOrder["entities"] {
   const entities: DesktopWorkOrder["entities"] = [];
   const seen = new Set<string>();
   const add = (type: DesktopWorkOrder["entities"][number]["type"], value: string) => {
@@ -826,9 +830,10 @@ function extractEntities(message: string): DesktopWorkOrder["entities"] {
   }
 
   const topic = compactText(
-    message
-      .replace(/https?:\/\/\S+/gi, " ")
-      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " "),
+    canonicalSubject ||
+      message
+        .replace(/https?:\/\/\S+/gi, " ")
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " "),
     4_000,
   );
   if (topic) add("topic", topic);
@@ -1896,7 +1901,11 @@ function buildSteps(input: {
   // as a pending heuristic plan.
   const directAppCommand = parseDirectDesktopAppCommand(input.message);
   const resolvedAppHint = directAppCommand?.appName || appHint;
-  const topic = input.entities.find((entity) => entity.type === "topic")?.value ?? "";
+  const topic =
+    input.envelope?.intent.subject ??
+    input.envelope?.intent.topic ??
+    input.entities.find((entity) => entity.type === "topic")?.value ??
+    "";
   const directImageFetch = parseDirectImageFetchCommand(topic);
   const directFolderCreate = parseDirectFolderCreateCommand(topic || input.title);
   if (directFolderCreate) {
@@ -1948,7 +1957,7 @@ function buildSteps(input: {
     )
     .filter((value) => value.length > 0);
   const semanticBrief = compactText([
-    input.envelope?.intent.topic,
+    input.envelope?.intent.subject || input.envelope?.intent.topic,
     ...(input.envelope?.entities ?? [])
       .map((entity) => (entity.normalized ?? entity.value ?? "").toString().trim())
       .filter((value) => value.length > 0),
@@ -2601,7 +2610,10 @@ export function buildDesktopWorkOrder(input: {
     ].filter(Boolean).join(" — "),
     280,
   );
-  const entities = extractEntities(message);
+  const semanticSubject =
+    input.understandingEnvelope?.intent.subject ??
+    input.understandingEnvelope?.intent.topic;
+  const entities = extractEntities(message, semanticSubject);
   const localContextNeeded = inferLocalContext(
     message,
     capabilities,
@@ -2897,8 +2909,11 @@ export function buildDesktopWorkOrder(input: {
     },
     semanticGoal: {
       contract: "elyan.semantic_task_contract.v1",
+      subject: semanticSubject
+        ? compactText(semanticSubject, 160)
+        : undefined,
       objective: compactText(
-        input.understandingEnvelope?.intent.topic || message || summary,
+        semanticSubject || message || summary,
         1_000,
       ),
       constraints,

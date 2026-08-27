@@ -387,6 +387,105 @@ test("syncChatTaskLifecycle uses approval message for waiting approval chat snap
   assert.equal(updates[0]?.content, "Alıcı: ali@example.com\nKonu: Atatürk hakkında notlar");
 });
 
+test("syncChatTaskLifecycle derives waiting copy from interaction kind", async () => {
+  const published: Array<Record<string, unknown>> = [];
+  const updates: Array<Record<string, unknown>> = [];
+  const app = {
+    config: { ELYAN_BLOCKS_V11_ENABLED: true },
+    db: {
+      update() {
+        return {
+          set(values: Record<string, unknown>) {
+            updates.push(values);
+            return {
+              where() {
+                return {
+                  returning: async () => [
+                    {
+                      id: "assistant-1",
+                      sessionId: "session-1",
+                      userId: "user-1",
+                      taskId: "task-clarification",
+                      role: "assistant",
+                      status: values.status,
+                      content: values.content,
+                      error: null,
+                    },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    services: {
+      eventBus: {
+        publish(event: Record<string, unknown>) {
+          published.push(event);
+        },
+      },
+    },
+  };
+
+  await syncChatTaskLifecycle(app as never, {
+    originalTask: {
+      id: "task-clarification",
+      userId: "user-1",
+      targetDeviceId: "device-1",
+      payload: {
+        metadata: {
+          presentation: "chat",
+          chat: { sessionId: "session-1", assistantMessageId: "assistant-1" },
+        },
+      },
+    } as never,
+    updatedTask: {
+      id: "task-clarification",
+      userId: "user-1",
+      targetDeviceId: "device-1",
+      title: "Belge oluştur",
+      status: "waiting_approval",
+      summary: "Eksik bilgi bekleniyor.",
+      approvalRequest: {
+        interaction: {
+          contract: "elyan.interaction.v1",
+          id: "task-clarification:interaction:1",
+          taskId: "task-clarification",
+          taskRunId: "run-1",
+          kind: "clarification",
+          revision: 1,
+          availableActions: ["answer"],
+          question: "Hangi klasöre kaydedeyim?",
+          expiresAt: "2030-01-01T00:01:00.000Z",
+          resolution: null,
+        },
+      },
+      result: null,
+      payload: {
+        metadata: {
+          presentation: "chat",
+          chat: { sessionId: "session-1", assistantMessageId: "assistant-1" },
+        },
+      },
+    } as never,
+  });
+
+  const payload = published[0]?.payload as {
+    assistantMessage?: { blocks?: Array<Record<string, unknown>> };
+  };
+  const blocks = payload.assistantMessage?.blocks ?? [];
+  const status = blocks.find((block) => block.type === "status");
+  const actionable = blocks.find((block) => block.type === "actionable");
+  const dispatch = blocks.find((block) => block.type === "dispatch_widget");
+  assert.equal(status?.title, "Netleştirme gerekiyor");
+  assert.equal(status?.detail, "Hangi klasöre kaydedeyim?");
+  assert.equal(actionable?.title, "Yanıtla");
+  assert.equal(dispatch?.interaction && typeof dispatch.interaction, "object");
+  assert.deepEqual(dispatch?.availableActions, ["answer"]);
+  assert.equal(updates[0]?.status, "waiting_approval");
+});
+
 test("syncChatTaskLifecycle prefers resume summary for approved waiting approval snapshots", async () => {
   const updates: Array<Record<string, unknown>> = [];
   const app = {

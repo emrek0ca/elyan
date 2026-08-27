@@ -5,6 +5,7 @@ import {
   elyanAssistantBlockTypeValues,
   elyanAssistantBlockVisibilityValues,
 } from "./assistant-block-schemas.js";
+import { interactionEnvelopeSchema } from "./interaction.js";
 
 export {
   ELYAN_ASSISTANT_BLOCK_ENVELOPE_VERSION,
@@ -461,10 +462,7 @@ export const elyanTaskTraceBlockSchema = z.object({
    * değildir: sözleşme burada, açıkça yazılır.
    */
   needsApproval: z.boolean().optional(),
-  interaction: z.object({
-    kind: z.enum(["permission", "clarification"]),
-    question: z.string().min(1).max(500).optional(),
-  }).optional(),
+  interaction: interactionEnvelopeSchema.optional(),
   artifacts: z.array(z.object({
     id: z.string().min(1).max(255).optional(),
     title: z.string().min(1).max(180),

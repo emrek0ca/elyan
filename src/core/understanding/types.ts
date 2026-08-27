@@ -179,6 +179,8 @@ export const understandingIntentSchema = z.object({
   name: z.enum(intentValues),
   action: z.string().min(1).max(64),
   topic: z.string().max(160).optional(),
+  /** Kullanıcının konusu; operasyon/format/hedef komutlarından ayrıştırılmış. */
+  subject: z.string().max(160).optional(),
   speechAct: understandingSpeechActSchema.optional(),
   confidence: z.number().min(0).max(1),
   source: z.enum(["typed_extractor", "semantic_classifier", "policy_rules", "legacy_fallback"]),

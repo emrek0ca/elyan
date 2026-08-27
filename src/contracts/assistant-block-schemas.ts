@@ -1,5 +1,38 @@
 import { z } from "zod/v4";
 
+// `domain.ts` uses the repository's zod/v3 compatibility import while this
+// transport schema intentionally uses zod/v4. Keep the wire shape identical
+// without nesting a schema instance from the other runtime.
+const interactionEnvelopeCompatBaseShape = {
+  contract: z.literal("elyan.interaction.v1"),
+  id: z.string().min(1).max(255),
+  taskId: z.string().min(1).max(255),
+  taskRunId: z.string().min(1).max(255),
+  revision: z.number().int().positive().max(1_000_000),
+  question: z.string().min(1).max(1_000).optional(),
+  summary: z.string().min(1).max(1_000).optional(),
+  expiresAt: z.string().datetime(),
+  resolution: z.record(z.string(), z.unknown()).nullable(),
+} as const;
+
+const interactionEnvelopeCompatSchema = z.union([
+  z.object({
+    ...interactionEnvelopeCompatBaseShape,
+    kind: z.literal("clarification"),
+    availableActions: z.tuple([z.literal("answer")]),
+  }).passthrough(),
+  z.object({
+    ...interactionEnvelopeCompatBaseShape,
+    kind: z.literal("permission"),
+    availableActions: z.tuple([z.literal("approve"), z.literal("reject")]),
+  }).passthrough(),
+  z.object({
+    ...interactionEnvelopeCompatBaseShape,
+    kind: z.literal("approval"),
+    availableActions: z.tuple([z.literal("approve"), z.literal("reject")]),
+  }).passthrough(),
+]);
+
 /**
  * Canonical per-block envelope version. This is intentionally independent of
  * the existing `elyan_blocks.v2` transport contract, which remains unchanged.
@@ -197,10 +230,7 @@ const taskTraceDataSchema = z.looseObject({
   // durumlarından türetiyordu, sunucu hiçbir adımı öyle işaretlemiyordu,
   // kullanıcıya onay düğmesi HİÇ çıkmadı. Türetme sözleşme değildir.
   needsApproval: z.boolean().optional(),
-  interaction: z.object({
-    kind: z.enum(["permission", "clarification"]),
-    question: z.string().min(1).max(500).optional(),
-  }).optional(),
+  interaction: interactionEnvelopeCompatSchema.optional(),
   verification: z.object({
     status: z.enum(["pending", "passed", "repaired", "failed"]),
     summary: z.string().min(1).max(240).optional(),

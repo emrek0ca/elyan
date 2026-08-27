@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { generateGovernedSharedBrainReply } from "./inference.js";
+import {
+  validateMaterializedPlanContracts,
+} from "../tasks/plan-validators.js";
+import type { DesktopWorkOrderStep } from "../tasks/desktop-work-order.js";
 
 /**
  * Desktop yapılandırılmış planlama köprüsü — elyan.plan.v2.
@@ -23,7 +27,7 @@ export type DesktopPlanInput = {
   userId: string;
   /** Masaüstünün structured_planner.planning_prompt() çıktısı. */
   prompt: string;
-  /** İstek zarfı sözleşmesi — şimdilik yalnızca elyan.plan.v2. */
+  /** İstek zarfı sözleşmesi — yalnızca elyan.plan.v2. */
   contract: string;
   /** Onarım turu: geçersiz yanıt + doğrulama hataları veri olarak gelir. */
   repair?: boolean;
@@ -116,6 +120,124 @@ const PLANNER_SYSTEM_PREFIX = [
   "If the user only asks to observe, list, find, check, or read and forbids changes, deletion, writing, or saving, ignore conflicting artifact metadata and use read-only capabilities only; never add a writer step.",
   "Prefer the smallest correct plan; chain steps with dependsOn when a step consumes a previous step's output.",
 ].join(" ");
+
+function normalizePlanSteps(
+  value: unknown,
+  options: { allowEmpty?: boolean } = {},
+): { steps: DesktopWorkOrderStep[]; errors: string[] } {
+  if (!Array.isArray(value)) return { steps: [], errors: ["steps_not_array"] };
+  if (value.length === 0 && options.allowEmpty !== true) {
+    return { steps: [], errors: ["steps_empty"] };
+  }
+  if (value.length > 16) return { steps: [], errors: ["steps_limit_exceeded"] };
+
+  const ids = new Set<string>();
+  const steps: DesktopWorkOrderStep[] = [];
+  const errors: string[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      errors.push(`steps_${index + 1}_not_object`);
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const id = String(record.id ?? `step_${index + 1}`).trim().slice(0, 80);
+    const capability = String(record.capability ?? "").trim();
+    const args = record.args;
+    if (!id || ids.has(id)) {
+      errors.push(`steps_${index + 1}_duplicate_id`);
+      continue;
+    }
+    if (!capability) {
+      errors.push(`steps_${index + 1}_capability_missing`);
+      continue;
+    }
+    if (!args || typeof args !== "object" || Array.isArray(args)) {
+      errors.push(`steps_${index + 1}_args_not_object`);
+      continue;
+    }
+    const dependsOn = record.dependsOn;
+    if (dependsOn !== undefined && !Array.isArray(dependsOn)) {
+      errors.push(`steps_${index + 1}_depends_on_not_array`);
+      continue;
+    }
+    ids.add(id);
+    steps.push({
+      id,
+      capability,
+      description: String(record.description ?? capability).trim().slice(0, 240) || capability,
+      args: args as Record<string, unknown>,
+      ...(Array.isArray(dependsOn)
+        ? {
+            dependsOn: dependsOn
+              .map((dependency) => String(dependency ?? "").trim().slice(0, 80))
+              .filter(Boolean),
+          }
+        : {}),
+      ...(Array.isArray(record.resourceScope)
+        ? {
+            resourceScope: record.resourceScope
+              .map((scope) => String(scope ?? "").trim().slice(0, 240))
+              .filter(Boolean)
+              .slice(0, 12),
+          }
+        : {}),
+      ...(typeof record.forEach === "string" && record.forEach.trim()
+        ? { forEach: record.forEach.trim().slice(0, 240) }
+        : {}),
+    });
+  }
+  if (errors.length > 0) return { steps: [], errors };
+  const contractErrors = validateMaterializedPlanContracts(steps);
+  return { steps, errors: contractErrors };
+}
+
+/**
+ * Backend ve desktop aynı plan kabul/red kapısını paylaşır.
+ *
+ * Modelden gelen nesne burada normalize edilmeden masaüstüne gönderilmez;
+ * özellikle `steps` taşıyan bir planın `agent_decision.v1` gibi görünmesine
+ * izin verilmez.
+ */
+export function validateDesktopPlanPayload(
+  value: Record<string, unknown> | null,
+  input: Pick<DesktopPlanInput, "taskId"> = {},
+): { plan: Record<string, unknown> | null; error?: string } {
+  if (!value || value.contract !== DESKTOP_PLAN_CONTRACT) {
+    return { plan: null, error: "plan_contract_invalid" };
+  }
+  const clarification = value.clarification;
+  const clarificationRecord =
+    clarification && typeof clarification === "object" && !Array.isArray(clarification)
+      ? (clarification as Record<string, unknown>)
+      : null;
+  const clarificationNeeded = clarificationRecord?.needed === true;
+  const clarificationQuestion = String(clarificationRecord?.question ?? "").trim();
+  if (clarificationNeeded && !clarificationQuestion) {
+    return { plan: null, error: "clarification_question_missing" };
+  }
+  const normalized = normalizePlanSteps(value.steps, {
+    // A valid clarification is a terminal planner result, not an executable
+    // empty plan. Keep it in the same plan.v2 envelope so the desktop can
+    // route it to the interaction flow without inventing a tool step.
+    allowEmpty: clarificationNeeded,
+  });
+  if (normalized.errors.length > 0) {
+    return { plan: null, error: `plan_schema_invalid:${normalized.errors[0]}` };
+  }
+  const planRevision = Number(value.planRevision ?? value.revision ?? 1);
+  if (!Number.isInteger(planRevision) || planRevision < 1 || planRevision > 1_000_000) {
+    return { plan: null, error: "plan_revision_invalid" };
+  }
+  return {
+    plan: {
+      ...value,
+      contract: DESKTOP_PLAN_CONTRACT,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      planRevision,
+      steps: normalized.steps,
+    },
+  };
+}
 
 export async function generateDesktopPlan(
   app: FastifyInstance,
@@ -211,17 +333,16 @@ export async function generateDesktopPlan(
   }
 
   const plan = extractFirstJsonObject(inference.text);
-  const validPlan =
-    plan !== null &&
-    (typeof plan.contract === "string" || Array.isArray(plan.steps));
+  const validated = validateDesktopPlanPayload(plan, { taskId: input.taskId });
+  const validPlan = validated.plan !== null;
   return {
     ok: validPlan,
     contract: DESKTOP_PLAN_CONTRACT,
-    plan: validPlan ? plan : null,
+    plan: validated.plan,
     text: inference.text,
     provider: inference.provider,
     model: inference.model,
     latencyMs: inference.latencyMs,
-    error: validPlan ? undefined : "plan_json_not_found",
+    error: validPlan ? undefined : validated.error ?? "plan_json_not_found",
   };
 }

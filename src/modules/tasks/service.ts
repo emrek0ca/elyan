@@ -274,6 +274,7 @@ import {
   buildTaskRuntimeUpdate,
   isApprovalAlreadyResolved,
   isApprovalRequestExpired,
+  normalizePublicTaskApprovalRequest,
   normalizeTaskApprovalRequest,
   shouldAutoApproveDesktopTask,
 } from "./service-lifecycle.js";
@@ -308,7 +309,11 @@ import {
   enqueueTaskDispatch,
   sendPendingDesktopPlanStatus,
 } from "./dispatch-queue.js";
-import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
+import {
+  assertTaskTransition,
+  isTerminalTaskStatus,
+  shouldIgnoreLateRuntimeUpdate,
+} from "./transitions.js";
 import { canUseDesktopConnections } from "../billing/catalog.js";
 import {
   normalizeRemoteMcpSelectionMetadata,
@@ -11718,7 +11723,10 @@ export async function getTaskDetail(
       payload: sanitizePublicTaskEventPayload(hydratedTask.payload),
       result: sanitizePublicInferenceValue(hydratedTask.result),
       approvalRequest: sanitizePublicInferenceValue(
-        hydratedTask.approvalRequest,
+        normalizePublicTaskApprovalRequest(
+          hydratedTask.approvalRequest,
+          hydratedTask.id,
+        ),
       ),
       chatSessionId: extractTaskChatSessionId(hydratedTask.payload),
     },
@@ -12751,6 +12759,8 @@ export async function resolveTaskApproval(
     userId: string;
     approved: boolean;
     notes?: string;
+    interactionId?: string;
+    interactionRevision?: number;
     ipAddress?: string;
     userAgent?: string;
     requestId: string;
@@ -12767,6 +12777,24 @@ export async function resolveTaskApproval(
       duplicate: true,
       task: shapeTaskFeedItem(task),
     };
+  }
+  const normalizedInteraction = normalizeTaskApprovalRequest(task.approvalRequest, {
+    taskId: task.id,
+  }).interaction;
+  // A response to an older card must not resolve a newer interaction. Legacy
+  // clients omit these fields and remain supported; once supplied, both
+  // identity and revision are checked against the current canonical envelope.
+  if (
+    input.interactionId &&
+    input.interactionId !== normalizedInteraction.id
+  ) {
+    throw conflict("Interaction is stale");
+  }
+  if (
+    input.interactionRevision !== undefined &&
+    input.interactionRevision !== normalizedInteraction.revision
+  ) {
+    throw conflict("Interaction revision is stale");
   }
   if (task.status !== "waiting_approval") {
     if (isTerminalTaskStatus(task.status)) {
@@ -12945,12 +12973,19 @@ export async function resolveTaskApproval(
     throw conflict("Task approval changed before resolution");
   }
 
+  const interactionKind = normalizedInteraction.kind;
+  const resolutionMessage = interactionKind === "clarification"
+    ? "Bilgi yanıtı alındı. Görev devam ediyor."
+    : "Onay alındı. Görev devam ediyor.";
+
   await insertTaskEvent(app, {
     taskId: task.id,
     userId: task.userId,
     status: "waiting_approval",
-    message: "Onay alındı. Görev devam ediyor.",
+    message: resolutionMessage,
     payload: {
+      interaction: normalizedInteraction,
+      interactionKind,
       notes: input.notes,
     },
   });
@@ -12976,6 +13011,8 @@ export async function resolveTaskApproval(
     task: shapeTaskFeedItem(updatedTask),
     taskId: updatedTask.id,
     approved: true,
+    interaction: normalizedInteraction,
+    interactionKind,
     notes: input.notes,
     ...buildPublicTaskApprovalEventFields(updatedTask.approvalRequest, {
       status: updatedTask.status,
@@ -12986,7 +13023,7 @@ export async function resolveTaskApproval(
   await syncChatTaskLifecycle(app, {
     originalTask: task,
     updatedTask,
-    message: "Onay alındı. Görev devam ediyor.",
+    message: resolutionMessage,
   });
 
   await app.services.realtimeHub.sendToRuntimeDistributed(
@@ -12995,6 +13032,8 @@ export async function resolveTaskApproval(
       type: "task.approval",
       taskId: updatedTask.id,
       approved: true,
+      interaction: normalizedInteraction,
+      interactionKind,
       notes: input.notes,
     },
   );
@@ -13350,6 +13389,14 @@ export async function updateTaskFromRuntime(
       task,
       storedArtifacts: [],
       replaySkipped: true,
+    };
+  }
+  if (shouldIgnoreLateRuntimeUpdate(task.status, input.status)) {
+    return {
+      task,
+      storedArtifacts: [],
+      replaySkipped: true,
+      staleTerminal: true,
     };
   }
   const ownedTask = await ensureTaskRuntimeOwnership(app, task, auth);

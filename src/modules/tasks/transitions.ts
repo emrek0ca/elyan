@@ -37,3 +37,15 @@ export function assertTaskTransition(currentStatus: TaskStatus, nextStatus: Task
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
   return ["completed", "failed", "canceled"].includes(status);
 }
+
+/**
+ * Runtime ağ/worker gecikmesi terminal görevi yeniden canlandıramaz.
+ * Aynı terminal durumun replay'i ayrı duplicate kapısından geçer; farklı bir
+ * non-terminal veya terminal durum ise güvenli no-op olarak kabul edilir.
+ */
+export function shouldIgnoreLateRuntimeUpdate(
+  currentStatus: TaskStatus,
+  nextStatus: TaskStatus,
+): boolean {
+  return isTerminalTaskStatus(currentStatus) && currentStatus !== nextStatus;
+}

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertTaskTransition, isTerminalTaskStatus } from "./transitions.js";
+import {
+  assertTaskTransition,
+  isTerminalTaskStatus,
+  shouldIgnoreLateRuntimeUpdate,
+} from "./transitions.js";
 
 test("assertTaskTransition allows active task progressions", () => {
   assert.doesNotThrow(() => assertTaskTransition("queued", "planning"));
@@ -27,4 +31,12 @@ test("isTerminalTaskStatus reports terminal states correctly", () => {
   assert.equal(isTerminalTaskStatus("failed"), true);
   assert.equal(isTerminalTaskStatus("canceled"), true);
   assert.equal(isTerminalTaskStatus("running"), false);
+});
+
+test("late runtime updates cannot revive or replace a terminal task", () => {
+  assert.equal(shouldIgnoreLateRuntimeUpdate("canceled", "waiting_approval"), true);
+  assert.equal(shouldIgnoreLateRuntimeUpdate("completed", "running"), true);
+  assert.equal(shouldIgnoreLateRuntimeUpdate("failed", "completed"), true);
+  assert.equal(shouldIgnoreLateRuntimeUpdate("completed", "completed"), false);
+  assert.equal(shouldIgnoreLateRuntimeUpdate("running", "completed"), false);
 });
