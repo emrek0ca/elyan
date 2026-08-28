@@ -1,4 +1,7 @@
-import { GEMINI_MODELS } from "../../config/model-policy.js";
+import {
+  GEMINI_MODELS,
+  isRetiredGeminiModel,
+} from "../../config/model-policy.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 import { trimOnly as compactText } from "../../lib/text.js";
 
@@ -45,18 +48,53 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => compactText(value)).filter(Boolean))];
 }
 
+/**
+ * Yapılandırılan model adı EMEKLİ ise rol varsayılanına düşer.
+ *
+ * Politika `retired` listesini zaten tutuyor; eksik olan tek şey ona
+ * bakmaktı. Emekli bir ad yapılandırmada kaldığında sağlayıcı 404 döner ve
+ * o modele bağlı her şey sessizce devre dışı kalır.
+ */
+function resolveConfiguredModel(configured: string, fallback: string): string {
+  if (!configured) return fallback;
+  if (isRetiredGeminiModel(configured)) return fallback;
+  return configured;
+}
+
 export function buildGeminiModelCatalog(
   config: GeminiModelConfigSource,
 ): GeminiModelCatalog {
   // Elle yazılmış yedek ad, model politikası dışına çıkan İKİNCİ bir liste
   // demekti; emekli bir ad buradan da sızabiliyordu (2026-08-22).
-  const fastModel =
-    compactText(config.GEMINI_FAST_MODEL) || GEMINI_MODELS.roles.fast_utility;
-  const reasoningModel =
-    compactText(config.GEMINI_REASONING_MODEL) || "gemini-3.6-flash";
-  const textModel = compactText(config.GEMINI_TEXT_MODEL) || reasoningModel;
-  const visionModel =
-    compactText(config.GEMINI_VISION_MODEL) || "gemini-3.1-flash-lite";
+  //
+  // AYNI ARIZA YAPILANDIRMADAN GERİ GELDİ (2026-08-28). `GEMINI_FAST_MODEL`
+  // `gemini-2.5-flash-lite` idi; o ad model politikasının kendi `retired`
+  // listesinde duruyor ve sağlayıcı ona **404** dönüyor
+  // (`gemini-2.5-flash` aynı uçta 200). Sonuç: her yardımcı çağrı 404 alıp
+  // sessizce `null` dönüyordu ve ona bağlı olan eylem-iddia kapısı — Elyan'ın
+  // yapmadığı bir işi yaptım demesini engelleyen kontrol — TAMAMEN kapalıydı.
+  //
+  // `isRetiredGeminiModel` zaten vardı; yapılandırılan değere hiç
+  // uygulanmıyordu. Politika bir adı emekli ilan ettiyse yapılandırma onu geri
+  // getiremez: rol varsayılanına düşülür ve durum yazılır. Sessizce ölü bir
+  // modele çağrı yapmak, hiç çağrı yapmamaktan kötüdür — çünkü çalıştığı
+  // sanılır.
+  const fastModel = resolveConfiguredModel(
+    compactText(config.GEMINI_FAST_MODEL),
+    GEMINI_MODELS.roles.fast_utility,
+  );
+  const reasoningModel = resolveConfiguredModel(
+    compactText(config.GEMINI_REASONING_MODEL),
+    "gemini-3.6-flash",
+  );
+  const textModel = resolveConfiguredModel(
+    compactText(config.GEMINI_TEXT_MODEL),
+    reasoningModel,
+  );
+  const visionModel = resolveConfiguredModel(
+    compactText(config.GEMINI_VISION_MODEL),
+    "gemini-3.1-flash-lite",
+  );
   const imageModel =
     normalizeGeminiImageModel(config.GEMINI_IMAGE_MODEL) ||
     "gemini-3.1-flash-lite-image";

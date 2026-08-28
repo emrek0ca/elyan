@@ -18,6 +18,7 @@ import {
   getNativeChatPath,
   type SharedBrainConversationMessage,
 } from "./provider-request.js";
+import { buildGeminiModelCatalog } from "./gemini-models.js";
 
 function extractJson(text: string): unknown | null {
   const trimmed = text.trim();
@@ -80,7 +81,13 @@ export async function callGeminiFreeStructured<T>(
     images?: Array<{ base64Data: string; mimeType: "image/png" | "image/jpeg" | "image/webp" }>;
   },
 ): Promise<T | null> {
-  const model = String(app.config.GEMINI_FAST_MODEL || "").trim();
+  // MODEL KATALOGDAN OKUNUR, HAM YAPILANDIRMADAN DEĞİL.
+  //
+  // Emekli adları eleyen kapı `buildGeminiModelCatalog` içinde; burası
+  // `app.config`i doğrudan okuduğu için o kapıyı atlıyordu ve
+  // `gemini-2.5-flash-lite` (politikanın `retired` listesinde, sağlayıcıda
+  // 404) buradan geçmeye devam ediyordu.
+  const model = buildGeminiModelCatalog(app.config).fastModel;
   if (!(await isGeminiFreeOutputBudgetAvailable(app, input.feature))) {
     return geminiUtilityUnavailable(app, input.feature, "output_budget_exhausted");
   }
@@ -153,8 +160,17 @@ export async function callGeminiFreeStructured<T>(
     },
   });
   if (!permit.allowed) {
-    app.log.debug?.({ feature: input.feature, reason: permit.reason }, "Gemini free utility skipped");
-    return null;
+    // BU SATIR `debug` SEVİYESİNDEYDİ ve sunucu `info` ile çalışıyor — yani
+    // görünmezdi. Eylem-iddia kapısının neden kapalı olduğunu araştırırken
+    // diğer altı çıkışı görünür yaptım ama sayaç sıfır kaldı; sebep buydu.
+    // Bir arıza, yalnız kimsenin açmadığı bir seviyede yazılıyorsa
+    // kaydedilmemiş sayılır.
+    return geminiUtilityUnavailable(
+      app,
+      input.feature,
+      "permit_denied_primary",
+      permit.reason ?? null,
+    );
   }
 
   let response = await postJson(

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
+import { buildGeminiModelCatalog } from "./gemini-models.js";
 
 export type GeminiFreeFeature =
   | "brain_response"
@@ -191,7 +192,10 @@ export async function acquireGeminiFreePermit(
     dataLineage?: GeminiFreeDataLineage;
   },
 ): Promise<GeminiFreePermit> {
-  const model = String(input.model || app.config.GEMINI_FAST_MODEL || "").trim();
+  // Katalog emekli adları eler; ham yapılandırma elemez.
+  const model =
+    String(input.model || "").trim() ||
+    buildGeminiModelCatalog(app.config).fastModel;
   const estimatedInputTokens = Math.max(
     1,
     Math.trunc(

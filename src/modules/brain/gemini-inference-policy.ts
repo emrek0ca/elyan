@@ -6,6 +6,7 @@ import {
   type GeminiFreeDataLineage,
   type GeminiFreeFeature,
 } from "./gemini-free-tier-guard.js";
+import { buildGeminiModelCatalog } from "./gemini-models.js";
 
 export type GeminiInferencePermit = {
   allowed: boolean;
@@ -65,7 +66,10 @@ export async function acquireGeminiInferencePermit(
     return { ...permit, mode: "free" };
   }
 
-  const model = String(input.model || app.config.GEMINI_FAST_MODEL || "").trim();
+  // Katalog emekli adları eler; ham yapılandırma elemez.
+  const model =
+    String(input.model || "").trim() ||
+    buildGeminiModelCatalog(app.config).fastModel;
   const estimatedInputTokens = Math.max(
     1,
     Math.trunc(
