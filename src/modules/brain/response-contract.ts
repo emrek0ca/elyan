@@ -1,4 +1,5 @@
 import { classifyWebGroundingDecision } from "./web-grounding.js";
+import { containsRoboticVerificationPhrase } from "./response-policy.js";
 import {
   sharedBrainWorkloadValues,
   type SharedBrainWorkload,
@@ -56,8 +57,6 @@ const ARTIFACT_CREATION_PATTERN =
   /(?=.*(?<!\p{L})(pdf|docx|xlsx|pptx|belge|doküman|dokuman|dosya|spreadsheet|sunum|presentation)(?!\p{L}))(?=.*(?<!\p{L})(oluştur|olustur|üret|uret|hazırla|hazirla|create|generate|export)(?!\p{L})).+/iu;
 const INTERNAL_PATTERN =
   /```elyan:blocks|(?:^|\n)\s*(?:analysis|reasoning|system[_ -]?prompt|tool[_ -]?trace|route[_ -]?decision|debug|internal)\s*[:=]|"(?:reasoning|toolTrace|routeDecision|systemPrompt|debug)"\s*:/iu;
-const ROBOTIC_PATTERN =
-  /(?<!\p{L})(bir ai olarak|model olarak|elimde kesin kayıtlı kanıt yok|kesin kayıtlı bir kanıt bulunmuyor|kanıt olmadığı için|bunu doğrulayamıyorum|kaynaklara göre)(?!\p{L})/iu;
 const FALSE_SUCCESS_PATTERN =
   /(?<!\p{L})(hazır|hazir|oluşturdum|olusturdum|ürettim|urettim|tamamlandı|tamamlandi|created|generated|completed|ready)(?!\p{L})/iu;
 const HONEST_ARTIFACT_FAILURE_PATTERN =
@@ -213,7 +212,9 @@ export function inspectElyanFinalResponse(input: {
   }
   if (looksIncomplete(text)) issues.push("incomplete_answer");
   if (hasRepeatedParagraph(text)) issues.push("repeated_answer");
-  if (ROBOTIC_PATTERN.test(text) && contract.toolPolicy === "none") {
+  // Liste `response-policy`de TEK yerde tanımlı; burada kopyası vardı ve
+  // aksan körüydü (aksansız yazım hiç yakalanmıyordu).
+  if (containsRoboticVerificationPhrase(text) && contract.toolPolicy === "none") {
     issues.push("robotic_verification_language");
   }
   if (INTERNAL_PATTERN.test(text)) issues.push("internal_state_leak");

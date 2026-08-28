@@ -167,6 +167,27 @@ export function responsePolicyForPrompt(prompt: string): {
  * kaçamak dili hedefler. Kapının kasıtlı cümlesi ise turun ta kendisidir —
  * silinirse kullanıcı ne dürüst cevabı görür ne sebebini.
  */
+/**
+ * Metnin herhangi bir yerinde kaçamak dil var mı?
+ *
+ * TEK TANIM OLMASININ SEBEBİ: aynı ifade listesi kod tabanında ÜÇ yere
+ * kopyalanmıştı — burada, `response-contract` (sözleşme ihlali) ve
+ * `evaluator` (puan düşürme). Üçü aynı politikayı uyguluyor ama kopyalar
+ * şimdiden ayrışmıştı: biri `(?:elimde|bende)` yazarken diğerleri yalnız
+ * `elimde`, biri çıplak `doğrulayamıyorum` ararken diğerleri yalnız `bunu
+ * doğrulayamıyorum`. Yani aynı cevap, hangi kapıdan geçtiğine göre farklı
+ * muamele görüyordu.
+ *
+ * Üçü de aksan körüydü; düzeltmenin üç ayrı yerde tekrarlanması gerekseydi
+ * biri kaçınılmaz olarak atlanırdı.
+ */
+export function containsRoboticVerificationPhrase(text: string): boolean {
+  const folded = foldTurkishDiacritics(compactText(text));
+  if (!folded) return false;
+  if (isGateOwnHonestSentence(text)) return false;
+  return ROBOTIC_PHRASE_PATTERNS.some((pattern) => pattern.test(folded));
+}
+
 function isGateOwnHonestSentence(sentence: string): boolean {
   const normalized = foldTurkishDiacritics(compactText(sentence));
   return (

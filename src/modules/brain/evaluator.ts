@@ -1,6 +1,8 @@
 import { buildClarificationPrompt, isMateriallyAmbiguousUserPrompt } from "./chat-heuristics.js";
 import { ELYAN_CONSTITUTION_RULES, getElyanConstitution, getElyanConstitutionRule } from "./constitution.js";
 import { containsProtectedElyanDisclosure } from "../../lib/elyan-public-identity.js";
+import { containsRoboticVerificationPhrase } from "./response-policy.js";
+import { foldTurkishDiacritics } from "../../lib/text.js";
 import type { SharedBrainWorkload } from "./workloads.js";
 
 export type BrainEvalFailureType =
@@ -178,9 +180,8 @@ function analyzeOutputQuality(input: BrainEvalInput) {
     flags.push("repeated_answer");
   }
   if (
-    /(?<!\p{L})(bir ai olarak|model olarak|elimde kesin kayıtlı kanıt yok|kesin kayıtlı bir kanıt bulunmuyor|kanıt olmadığı için|bunu doğrulayamıyorum|kaynaklara göre)(?!\p{L})/iu.test(
-      normalizedAnswer,
-    ) &&
+    // Liste `response-policy`de TEK yerde; burada üçüncü kopyası vardı.
+    containsRoboticVerificationPhrase(normalizedAnswer) &&
     !/(?<!\p{L})(bugün|bugun|güncel|guncel|canlı|canli|kaynak|araştır|arastir|web|today|current|live|source|research)(?!\p{L})/iu.test(
       normalizedPrompt,
     )
@@ -309,13 +310,21 @@ function isElyanDeveloperQuestion(prompt: string): boolean {
   );
 }
 
+/**
+ * Kimlik sorusuna "bilmiyorum" denmiş mi?
+ *
+ * İki kusur düzeltildi: liste aksan körüydü (cevap "dogrulayamiyorum" ya da
+ * "elimde dogrulanmis bilgi yok" derse — model Türkçeyi çoğu zaman böyle
+ * yazar — reddediş SAYILMIYOR ve tur uydurma sanılıyordu), ve
+ * `doğrulayamıyorum` girişi iki kez yazılmıştı. İkisi de aynı sebebin
+ * belirtisi: liste elle bakılıyordu.
+ */
 function refusesIdentityAnswer(answer: string): boolean {
-  const lowered = answer.toLowerCase();
-  return includesAny(lowered, [
+  const folded = foldTurkishDiacritics(answer);
+  return includesAny(folded, [
     "bilmiyorum",
-    "doğrulayamıyorum",
-    "doğrulayamıyorum",
-    "elimde doğrulanmış bilgi yok",
+    "dogrulayamiyorum",
+    "elimde dogrulanmis bilgi yok",
     "elimde bilgi yok",
     "uydurmak istemem",
     "cannot verify",
