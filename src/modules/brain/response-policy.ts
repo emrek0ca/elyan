@@ -1,5 +1,9 @@
 import type { SharedBrainWorkload } from "./workloads.js";
 import { collapseWhitespace as compactText } from "../../lib/text.js";
+import {
+  FACTUALITY_FALLBACK_EN,
+  FACTUALITY_FALLBACK_TR,
+} from "./factuality-gate.js";
 
 export type ElyanTurnIntent =
   | "casual_chat"
@@ -125,6 +129,39 @@ export function responsePolicyForPrompt(prompt: string): {
   };
 }
 
+/**
+ * Kapının KENDİ dürüst cümlesi bu süzgece takılmaz.
+ *
+ * BULUNAN BAĞ (2026-08-28): olgusallık kapısının yedek cümlesi aylarca
+ * aksansız yazılıydı ("iddiayi", "kanitlarla", "dogrulayamiyorum") ve
+ * kullanıcıya öyle gidiyordu — makine metni gibi. Yazımı düzeltme denemesi
+ * daha önce geri alınmıştı çünkü sebebi anlaşılmayan bir şekilde turu
+ * bozuyordu: cümle üretiliyor, `factualityGateFallbackApplied` doğru
+ * işaretleniyor, ama nihai metin genel yedeğe dönüyordu.
+ *
+ * Sebep buradaydı. `ROBOTIC_PHRASE_PATTERNS` yalnız DİAKRİTİKLİ yazılmış:
+ * `/doğrulayamıyorum/`. Aksansız hâli listeye hiç takılmıyordu; yazımı
+ * düzeltmek cümleyi kendi yasağının içine sokuyor, süzgeç onu siliyor ve
+ * geriye boş metin kalınca tur genel yedeğe düşüyordu. Yani kusuru ayakta
+ * tutan şey, kusurun kendisiydi.
+ *
+ * Doğru ayrım yazım değil KAYNAK: bu yasak MODELİN kendiliğinden ürettiği
+ * kaçamak dili hedefler. Kapının kasıtlı cümlesi ise turun ta kendisidir —
+ * silinirse kullanıcı ne dürüst cevabı görür ne sebebini.
+ */
+function isGateOwnHonestSentence(sentence: string): boolean {
+  const normalized = compactText(sentence);
+  return (
+    normalized === compactText(FACTUALITY_FALLBACK_TR) ||
+    normalized === compactText(FACTUALITY_FALLBACK_EN)
+  );
+}
+
+function isRoboticVerificationSentence(sentence: string): boolean {
+  if (isGateOwnHonestSentence(sentence)) return false;
+  return ROBOTIC_PHRASE_PATTERNS.some((pattern) => pattern.test(sentence));
+}
+
 function removeRoboticVerificationLanguage(value: string, allowVerificationLanguage: boolean): string {
   if (allowVerificationLanguage) {
     return value;
@@ -149,7 +186,7 @@ function removeRoboticVerificationLanguage(value: string, allowVerificationLangu
       .split(/(?<=[.!?…])\s+/u)
       .map((sentence) => sentence.trim())
       .filter(Boolean)
-      .filter((sentence) => !ROBOTIC_PHRASE_PATTERNS.some((pattern) => pattern.test(sentence)))
+      .filter((sentence) => !isRoboticVerificationSentence(sentence))
       .join(" ");
     if (kept) {
       lines.push(kept);

@@ -133,7 +133,7 @@ test("applyDeterministicFactualityFallback softens unsupported factual sentences
   });
 
   assert.match(fallback, /Bu kismini biliyorum/);
-  assert.match(fallback, /dogrulayamiyorum|cannot verify/);
+  assert.match(fallback, /doğrulayamıyorum|cannot verify/);
   assert.doesNotMatch(fallback, /2027 yilinda cikti/);
 });
 
@@ -151,7 +151,11 @@ test("deterministic fallback defaults to Turkish for non-English prompts", () =>
     prompt: "2+2 kac",
   });
 
-  assert.match(fallback, /dogrulayamiyorum/);
+  // Yazım DİAKRİTİKLİ olmalı: bu cümle kullanıcının cevabına birebir girer.
+  // Aksansız hâli ("dogrulayamiyorum") aylarca kullanıcıya makine metni gibi
+  // gitti ve testler o kusuru ŞART KOŞUYORDU — yani düzeltmeyi engelleyen
+  // şey testin kendisiydi.
+  assert.match(fallback, /doğrulayamıyorum/);
   assert.doesNotMatch(fallback, /cannot verify/);
 });
 

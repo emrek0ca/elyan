@@ -369,24 +369,24 @@ function splitSentences(text: string): string[] {
   return matches.map((item) => item.trim()).filter(Boolean);
 }
 
+/**
+ * Kapının kendi dürüst cümleleri.
+ *
+ * DIŞA AÇIK OLMALARININ SEBEBİ: `response-policy` "robot gibi konuşma"
+ * listesiyle kaçamak dili cevaptan siler ve o listede `doğrulayamıyorum`
+ * da var. O yasak MODELİN kendiliğinden ürettiği kaçamağı hedefler; bu iki
+ * cümle ise sistemin KASITLI çıktısıdır — iddia doğrulanamadığında
+ * söylenmesi gereken şeyin ta kendisi. İki kapı aynı cümle üzerinde ters
+ * yönde çalışırsa kullanıcı ne dürüst cevabı görür ne de sebebini.
+ */
+export const FACTUALITY_FALLBACK_TR =
+  "Bu iddiayı elimdeki kanıtlarla doğrulayamıyorum; istersen bakabilirim.";
+export const FACTUALITY_FALLBACK_EN =
+  "I cannot verify that from the available evidence; want me to check?";
+
 function fallbackSentence(sample: string): string {
-  // BİLİNEN KUSUR: bu cümle kullanıcının cevabına girer ve Türkçesi aksansız
-  // ("iddiayi", "kanitlarla", "dogrulayamiyorum"). Makine metni gibi okunur.
-  //
-  // Aksanları düzeltmek DENENDİ ve geri alındı (2026-08-28): tek başına bu
-  // dizgeyi düzeltmek `generateGovernedSharedBrainReply runs factuality gate`
-  // testini düşürüyor — tur cümleyi üretiyor, `factualityGateFallbackApplied`
-  // doğru işaretleniyor, ama nihai metin genel yedeğe dönüyor. Sebep
-  // bulunamadı: taranan hiçbir kapı (`isPlaceholderRefusal`,
-  // `classifyReasoningDump`, `sanitizeAssistantVisibleText`,
-  // `polishAssistantVisibleText`, blok kurucular) iki yazım arasında farklı
-  // davranmıyor.
-  //
-  // Anlaşılmayan bir etkiyle göndermektense kusuru GÖRÜNÜR bırakmak doğru:
-  // burada bir yerde yazıma duyarlı gizli bir bağ var ve onu bulmak bu
-  // düzeltmenin ön koşulu.
-  const turkish = "Bu iddiayi elimdeki kanitlarla dogrulayamiyorum; istersen bakabilirim.";
-  const english = "I cannot verify that from the available evidence; want me to check?";
+  const turkish = FACTUALITY_FALLBACK_TR;
+  const english = FACTUALITY_FALLBACK_EN;
   // Elyan Türkçe-öncelikli: örnek metin AÇIKÇA İngilizce değilse Türkçe fallback
   // kullan. Kısa Türkçe girdiler ("2+2 kac", "Selam") aksan içermeyince yanlışlıkla
   // İngilizce fallback alıyordu.
