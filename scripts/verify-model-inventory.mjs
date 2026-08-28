@@ -109,4 +109,48 @@ if (results.every((result) => result.skipped)) {
   console.error("hiçbir sağlayıcı anahtarı yok — doğrulama yapılamadı.");
   process.exit(2);
 }
+
+// ENVANTER DOĞRUYKEN YAPILANDIRMA YANLIŞ OLABİLİR.
+//
+// Bu araç bugüne kadar yalnız `contracts/model-policy.json` envanterini
+// doğruluyordu ve o hep yeşildi — ama üretimde kullanılan ad ortam
+// değişkeninden geliyor. `GEMINI_FAST_MODEL=gemini-2.5-flash-lite` aylarca
+// öyle kaldı: politikanın kendi `retired` listesinde bir ad, sağlayıcıda 404.
+// Sonuç, ona bağlı her yardımcı çağrının sessizce null dönmesi ve uydurma
+// kapısının tamamen kapanmasıydı (2026-08-28).
+//
+// Envanteri doğrulayıp yapılandırmayı doğrulamamak, doğru listeyi kontrol
+// edip yanlış listeyi kullanmaktır.
+const retiredGemini = new Set(policy.gemini.retired);
+const retiredGroq = new Set(policy.groq?.retired ?? []);
+const CONFIGURED_MODEL_VARS = [
+  ["GEMINI_FAST_MODEL", retiredGemini],
+  ["GEMINI_TEXT_MODEL", retiredGemini],
+  ["GEMINI_REASONING_MODEL", retiredGemini],
+  ["GEMINI_VISION_MODEL", retiredGemini],
+  ["GEMINI_IMAGE_MODEL", retiredGemini],
+  ["GROQ_FAST_MODEL", retiredGroq],
+  ["GROQ_REASONING_MODEL", retiredGroq],
+  ["GROQ_FALLBACK_MODEL", retiredGroq],
+];
+
+const configuredRetired = [];
+for (const [variable, retired] of CONFIGURED_MODEL_VARS) {
+  const value = String(process.env[variable] ?? "").trim();
+  if (value && retired.has(value)) {
+    configuredRetired.push(`${variable}=${value}`);
+  }
+}
+
+if (configuredRetired.length > 0) {
+  console.error("\nEMEKLİ MODEL YAPILANDIRILMIŞ:");
+  for (const entry of configuredRetired) console.error(`  ${entry}`);
+  console.error(
+    "Bu adlar politikada emekli; sağlayıcı 404 döner ve onlara bağlı çağrılar " +
+      "sessizce devre dışı kalır. Ortam değişkenini kaldır ya da canlı bir ada çevir.",
+  );
+  process.exit(1);
+}
+
 console.log("\nenvanterin tamamı canlı üretim yapıyor.");
+console.log("yapılandırılmış model adlarında emekli ad yok.");
