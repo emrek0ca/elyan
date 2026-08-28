@@ -1,5 +1,6 @@
 import type { PlanBrainProfile } from "../billing/catalog.js";
 import type { SharedBrainWorkload } from "./workloads.js";
+import { contentTerms } from "./lexical-turkish.js";
 
 const GREETING_EXACT_MATCHES = new Set([
   "selam",
@@ -203,15 +204,59 @@ export function isGreetingLikePrompt(prompt: string): boolean {
   return GREETING_PREFIX_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+/**
+ * SOSYAL TURDA SELAM MESAJIN KENDİSİDİR — İÇİNDEKİ İÇERİK DEĞİL.
+ *
+ * ÖLÇÜLEN ARIZA (2026-08-28): "Bu cümleyi İngilizceye çevir: yarın
+ * görüşürüz" isteği ucuz sosyal yola düşüyor ve kullanıcı çeviri yerine
+ * "Görüşürüz." cevabını alıyordu. Model doğru cevabı üretiyordu ("See you
+ * tomorrow."); tur ona hiç ulaşmıyordu. Aynı şekilde:
+ *   "Şu cümleyi düzelt: merhaba nasilsin"
+ *   "\"iyi geceler\" ne demek İngilizce?"
+ *   "Günaydın kelimesinin kökeni nedir?"
+ * Desenler istemin HERHANGİ bir yerinde eşleşiyordu; oysa o selamlar
+ * kullanıcının SORDUĞU şeydi.
+ *
+ * Ayırt edici yapısaldır ve yeni kelime listesi gerektirmez: sosyal
+ * eşleşmeler çıkarıldıktan sonra geriye ANLAMLI kelime kalıyor mu?
+ *
+ *   sosyal   "Merhaba, nasılsın?"          → 0 terim
+ *            "Selam Elyan, nasıl gidiyor?" → 1 terim (bir isim)
+ *   istek    "Şu cümleyi düzelt: …"        → 2 terim [cümle, düzelt]
+ *            "Günaydın kelimesinin kökeni" → 3 terim [kelime, köken, nedir]
+ *            "…İngilizceye çevir: …"       → 4 terim
+ *
+ * Bir artık kelime bir isim ya da dolgudur; iki ve üstü bir istektir.
+ */
+const MAX_SOCIAL_RESIDUE_TERMS = 1;
+
+function socialResidueTermCount(normalized: string): number {
+  let residue = normalized;
+  for (const pattern of [...GREETING_PREFIX_PATTERNS, ...SOCIAL_CHAT_PATTERNS]) {
+    residue = residue.replace(new RegExp(pattern.source, "giu"), " ");
+  }
+  for (const exact of GREETING_EXACT_MATCHES) {
+    residue = residue.replaceAll(exact, " ");
+  }
+  return contentTerms(residue, { limit: 12 }).length;
+}
+
 export function isSocialChatPrompt(prompt: string): boolean {
   const normalized = compactText(prompt).toLowerCase();
   if (!normalized) {
     return false;
   }
-  if (isGreetingLikePrompt(normalized)) {
+  // Tam eşleşme zaten istemin TAMAMIDIR; artık kontrolüne gerek yok.
+  if (GREETING_EXACT_MATCHES.has(normalized)) {
     return true;
   }
-  return SOCIAL_CHAT_PATTERNS.some((pattern) => pattern.test(normalized));
+  const matchesSocial =
+    isGreetingLikePrompt(normalized) ||
+    SOCIAL_CHAT_PATTERNS.some((pattern) => pattern.test(normalized));
+  if (!matchesSocial) {
+    return false;
+  }
+  return socialResidueTermCount(normalized) <= MAX_SOCIAL_RESIDUE_TERMS;
 }
 
 export function isMateriallyAmbiguousUserPrompt(prompt: string): boolean {

@@ -12,6 +12,7 @@ import {
 import { buildAgentToolCatalogForTurn } from "./tool-registry.js";
 import { isHostedImageEditIntent } from "./image-generation.js";
 import { isGeminiFallbackQueueConfigured } from "./chat-generation-queue.js";
+import { isSocialChatPrompt } from "./chat-heuristics.js";
 import {
   ASSISTANT_TURN_FAILURE_FALLBACK_TR,
   assistantTurnFailureMessage,
@@ -535,4 +536,42 @@ test("a provider that policy forbids is not a fallback", () => {
     },
   } as never;
   assert.equal(isGeminiFallbackQueueConfigured(noKey), false);
+});
+
+test("a greeting inside a request is content, not a greeting", () => {
+  // ÖLÇÜLEN ARIZA (2026-08-28): "Bu cümleyi İngilizceye çevir: yarın
+  // görüşürüz" ucuz sosyal yola düşüyor ve kullanıcı çeviri yerine
+  // "Görüşürüz." alıyordu. Model doğru cevabı üretiyordu ("See you
+  // tomorrow."); tur ona hiç ulaşmıyordu.
+  const requests = [
+    "Bu cümleyi İngilizceye çevir: yarın görüşürüz",
+    "Şu cümleyi düzelt: merhaba nasilsin",
+    '"iyi geceler" ne demek İngilizce?',
+    "Günaydın kelimesinin kökeni nedir?",
+    "Bana merhaba diyen bir şiir yaz",
+  ];
+  for (const prompt of requests) {
+    assert.equal(isSocialChatPrompt(prompt), false, prompt);
+  }
+
+  // Gerçek sosyal turlar ucuz yolda kalır.
+  for (const prompt of [
+    "Selam",
+    "Merhaba, nasılsın?",
+    "selam nasılsın",
+    "Teşekkürler",
+    "iyi geceler",
+    "naber",
+  ]) {
+    assert.equal(isSocialChatPrompt(prompt), true, prompt);
+  }
+});
+
+test("a greeting carrying extra words costs a model call, not a wrong answer", () => {
+  // "Selam Elyan, nasıl gidiyor?" ucuz yolu KAYBEDER, çünkü "nasıl gidiyor"
+  // sosyal desenlerde yok ve geriye iki terim kalıyor. Bilinçli takas: bu
+  // istem modele gider ve model onu zaten doğru cevaplar. Bir model çağrısı,
+  // yanlış cevaptan ucuzdur. Eşiği gevşetmek "Şu cümleyi düzelt: merhaba
+  // nasilsin" istemini (aynı iki terim) geri sokardı.
+  assert.equal(isSocialChatPrompt("Selam Elyan, nasıl gidiyor?"), false);
 });
