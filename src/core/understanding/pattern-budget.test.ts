@@ -25,10 +25,16 @@ import { readFileSync } from "node:fs";
  * güncellenmeli — ratchet yalnız aşağı doğru hareket eder.
  */
 
-/** Ölçüm: 2026-08-28. Bu sayılar yalnız AZALABİLİR. */
+/**
+ * Ölçüm: 2026-08-28, YORUMLAR ÇIKARILARAK. Bu sayılar yalnız AZALABİLİR.
+ *
+ * İlk sayım yorum düzyazısını da desen sayıyordu ve bu yüzden şişkindi
+ * (inference.ts 56 görünüyordu, gerçek sayı 46). Şişkin bir tavan borcu
+ * olduğundan küçük gösterir ve kapıyı gevşetir.
+ */
 const PATTERN_BUDGET: Record<string, number> = {
-  "src/modules/brain/inference.ts": 56,
-  "src/modules/brain/image-generation.ts": 45,
+  "src/modules/brain/inference.ts": 46,
+  "src/modules/brain/image-generation.ts": 36,
   "src/modules/brain/chat-heuristics.ts": 48,
   "src/core/understanding/understanding-envelope.ts": 25,
 };
@@ -40,8 +46,23 @@ const PATTERN_BUDGET: Record<string, number> = {
  */
 const TURKISH_WORDLIST = /[çğıöşüÇĞİÖŞÜ]|\|(?:yap|yaz|çiz|göster|oluştur|kaydet|sil|aç|kapat)/;
 
+/**
+ * Yorumlar sayıma GİRMEZ.
+ *
+ * İlk sürüm ham kaynağı tarıyordu ve düzyazıyı desen sanıyordu:
+ * `// Widget/structured output sinyalleri: ... chart/table/` satırı bir regex
+ * literaline birebir benziyor. Sonuç, bir yorum eklendiğinde ratchet'in
+ * kırmızıya dönmesiydi — yani ölçtüğünü iddia ettiği şeyi ölçmüyordu.
+ * Bir borç sayacının yanlış saydığı an, sayaç olmaktan çıkar.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+}
+
 function countWordlistPatterns(file: string): number {
-  const source = readFileSync(file, "utf8");
+  const source = stripComments(readFileSync(file, "utf8"));
   const patterns = source.match(/\/[^/ ][^/\n]{10,}\/[gimsuy]*/g) ?? [];
   return patterns.filter((pattern) => TURKISH_WORDLIST.test(pattern)).length;
 }
