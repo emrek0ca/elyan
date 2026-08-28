@@ -79,19 +79,40 @@ run_shard() {
   local started
   started="$(date +%s)"
 
+  # Çıktı hem GÖSTERİLİR hem saklanır: bir başarısızlığın SEBEBİNİ söylemek
+  # için sonradan okunması gerekiyor.
+  local logfile
+  logfile="$(mktemp -t elyan-test-XXXXXX)"
+
   # shellcheck disable=SC2086
   node --test \
     --test-timeout="${TIMEOUT_MS}" \
     --test-concurrency="${CONCURRENCY}" \
     --test-force-exit \
-    ${files}
-  local status=$?
+    ${files} 2>&1 | tee "${logfile}"
+  local status=${PIPESTATUS[0]}
 
   local elapsed=$(( $(date +%s) - started ))
   if [[ ${status} -ne 0 ]]; then
     echo "==> ${shard} BAŞARISIZ (${elapsed}s, çıkış ${status})" >&2
+    # ZAMAN AŞIMI ≠ GERÇEK HATA.
+    #
+    # Bu kapı bir asılmanın adıyla düşmesi için zaman aşımlı kuruldu. Bedeli:
+    # makine yüklüyken (ör. paralel bir Xcode derlemesi) sağlam testler de
+    # zaman aşımına uğrayıp kırmızı veriyor. Aynı paket tek başına koşunca
+    # geçiyor. Hangi durumda olduğunu söylemeyen bir kapı, birkaç yanlış
+    # alarmdan sonra görmezden gelinir — ki bu, kapının hiç olmamasıdır.
+    if grep -q "test timed out" "${logfile}"; then
+      echo "    NOT: en az bir test ZAMAN AŞIMINA uğradı (${TIMEOUT_MS}ms)." >&2
+      echo "    Sistem yükü: $(uptime | sed 's/.*averages*: //')" >&2
+      echo "    Yük yüksekse tek başına doğrula: bash scripts/run-tests.sh ${shard}" >&2
+    else
+      echo "    Doğrulama hatası (zaman aşımı yok) — gerçek bir gerileme." >&2
+    fi
+    rm -f "${logfile}"
     return "${status}"
   fi
+  rm -f "${logfile}"
   echo "==> ${shard} tamam (${elapsed}s)"
   return 0
 }
