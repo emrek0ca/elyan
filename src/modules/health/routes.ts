@@ -4,6 +4,7 @@ import { getPerfSnapshot } from "../../lib/perf-telemetry.js";
 import { summarizeProactiveHealth } from "../brain/proactive-metrics.js";
 import { getDesktopPlanCacheTelemetry } from "../tasks/plan-cache.js";
 import { getPlanningCatalogCacheStats } from "../tasks/materialize-plan.js";
+import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import {
   evaluateVoiceLatencyTargets,
   getVoiceStreamingTelemetry,
@@ -48,6 +49,10 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
   // süre istatistikleri — operasyonel teşhis için.
   app.get("/internal/perf", async () => ({
     ...getPerfSnapshot(),
+    // C NLP çekirdeği. Bakılacak alan `degraded`: süreç AYAKTA olduğu hâlde
+    // istekler üst üste düşüyorsa anlama katmanı sessizce JS yedeğinde
+    // çalışıyor demektir — ölüm görünürdü, bu hâl değildi.
+    nlpDaemon: nlpDaemon.stats(),
     desktopPlanCache: getDesktopPlanCacheTelemetry(),
     desktopPlanningCatalogCache: getPlanningCatalogCacheStats(),
     // Live voice (CANLI-SES-PLANI.md §4). The p95 targets live in the stage

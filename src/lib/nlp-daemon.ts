@@ -55,11 +55,36 @@ export class NlpDaemon {
   private available  = false;
   private readonly binPath: string;
 
+  /**
+   * SAĞLIK SAYAÇLARI — "yaşıyor ama işe yaramıyor" hâli için.
+   *
+   * Süreç ölürse `exit` olayı uyarı basar ve `available` false olur; o hâl
+   * görünür. GÖRÜNMEYEN hâl şuydu: daemon ayakta ama takılı. İstekler
+   * 2500 ms'de zaman aşımına uğrar, her çağıran sessizce `null` döner,
+   * çağıranlar JS yedeğine düşer ve `available` HÂLÂ true kalır. Elyan
+   * gözle görülür biçimde aptallaşır (semantik sıralama, duygu, anahtar
+   * kelime hepsi zayıf yedeğe iner) ve hiçbir yerde tek satır iz kalmaz.
+   *
+   * Bu kod tabanında aynı körlük ölçüldü: bir Gemini yardımcı çağrısı
+   * emekliye ayrılmış model adı yüzünden 404 alıyor, beş ayrı yerde sessizce
+   * `null` dönüyordu; hata ancak dönüşler GÖRÜNÜR kılındığında bulundu.
+   * Yedeği olan bir başarısızlık sessiz olmayı hak etmez — yalnız ölümcül
+   * olmamayı hak eder.
+   */
+  private failures            = 0;
+  private timeouts            = 0;
+  private consecutiveFailures = 0;
+  private lastFailureReason   = "";
+  private lastFailureAt       = 0;
+  private degradedSince       = 0;
+  private logger: { info: (msg: string) => void; warn: (msg: string) => void } | null = null;
+
   constructor(binPath?: string) {
     this.binPath = binPath ?? process.env.ELYAN_NLP_BIN ?? DEFAULT_BIN;
   }
 
   start(logger?: { info: (msg: string) => void; warn: (msg: string) => void }): void {
+    this.logger = logger ?? null;
     if (!existsSync(this.binPath)) {
       logger?.warn(`[nlp-daemon] binary not found at ${this.binPath} — running without C NLP`);
       return;
@@ -117,6 +142,64 @@ export class NlpDaemon {
     }
   }
 
+  /**
+   * Ardışık başarısızlık eşiği.
+   *
+   * Uyarı İSTEK BAŞINA basılmaz: takılı bir daemon saniyede onlarca istek
+   * reddedebilir ve log'u boğan bir uyarı, okunmayan bir uyarıdır. Bir kez
+   * "bozuldu", bir kez de "düzeldi" denir.
+   */
+  private static readonly DEGRADED_AFTER = 5;
+
+  private _noteSuccess(): void {
+    if (this.degradedSince) {
+      const seconds = Math.round((Date.now() - this.degradedSince) / 1000);
+      this.logger?.warn(
+        `[nlp-daemon] tekrar yanıt veriyor (${seconds}sn bozuktu, ` +
+          `${this.failures} başarısız istek) — C NLP geri döndü`,
+      );
+      this.degradedSince = 0;
+    }
+    this.consecutiveFailures = 0;
+  }
+
+  private _noteFailure(reason: string): void {
+    this.failures += 1;
+    this.consecutiveFailures += 1;
+    this.lastFailureReason = reason;
+    this.lastFailureAt = Date.now();
+    if (reason === "nlp_daemon_timeout") this.timeouts += 1;
+    if (this.consecutiveFailures === NlpDaemon.DEGRADED_AFTER && !this.degradedSince) {
+      this.degradedSince = Date.now();
+      this.logger?.warn(
+        `[nlp-daemon] süreç ayakta ama ${NlpDaemon.DEGRADED_AFTER} istek üst üste ` +
+          `başarısız (son sebep: ${reason}) — anlama katmanı JS yedeğinde çalışıyor`,
+      );
+    }
+  }
+
+  /** Operasyonel teşhis: `/internal/perf` bunu yayınlar. Kimlik verisi yok. */
+  stats(): {
+    available: boolean;
+    failures: number;
+    timeouts: number;
+    consecutiveFailures: number;
+    degraded: boolean;
+    lastFailureReason: string;
+    lastFailureAgoMs: number | null;
+  } {
+    return {
+      available: this.available,
+      failures: this.failures,
+      timeouts: this.timeouts,
+      consecutiveFailures: this.consecutiveFailures,
+      // Bakılacak tek alan bu: süreç ayakta olduğu hâlde işe yaramıyor.
+      degraded: this.degradedSince > 0,
+      lastFailureReason: this.lastFailureReason,
+      lastFailureAgoMs: this.lastFailureAt ? Date.now() - this.lastFailureAt : null,
+    };
+  }
+
   private _onLine(line: string): void {
     let resp: NlpResponse;
     try {
@@ -129,6 +212,7 @@ export class NlpDaemon {
     if (pending) {
       clearTimeout(pending.timer);
       this.pending.delete(id);
+      this._noteSuccess();
       pending.resolve(resp);
     }
   }
@@ -136,6 +220,7 @@ export class NlpDaemon {
   private _send(req: NlpRequest): Promise<NlpResponse> {
     return new Promise((resolve, reject) => {
       if (!this.available || !this.proc) {
+        this._noteFailure("nlp_daemon_unavailable");
         reject(new Error("nlp_daemon_unavailable"));
         return;
       }
@@ -145,6 +230,7 @@ export class NlpDaemon {
       const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
+          this._noteFailure("nlp_daemon_timeout");
           reject(new Error("nlp_daemon_timeout"));
         }
       }, REQUEST_TIMEOUT_MS);
@@ -155,6 +241,7 @@ export class NlpDaemon {
       if (!stdin) {
         clearTimeout(timer);
         this.pending.delete(id);
+        this._noteFailure("nlp_daemon_no_stdin");
         reject(new Error("nlp_daemon_no_stdin"));
         return;
       }
@@ -163,6 +250,7 @@ export class NlpDaemon {
         if (err) {
           clearTimeout(timer);
           this.pending.delete(id);
+          this._noteFailure(`nlp_daemon_write:${err.message}`);
           reject(err);
         }
       });
