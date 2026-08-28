@@ -83,7 +83,30 @@ const FIRST_PERSON_PERSONAL_PATTERN = new RegExp(
   "iu",
 );
 
-function featureBudgetLimit(total: number, feature: GeminiFreeFeature): number {
+/**
+ * GÜVENLİK KONTROLÜ, İSTEĞE BAĞLI ÖZELLİKLERLE AYNI PAYDA OLAMAZ.
+ *
+ * `execution_validate` uydurma-iddia kapısının motorudur: Elyan'ın yapmadığı
+ * bir işi yaptım demesini engelleyen kontrol. Pay tablosunda %10 alıyordu ve
+ * günlük istek limiti 200 olduğunda bu GÜNDE 20 ÇAĞRI demek. Yirmi birinci
+ * eylem iddiasından sonra kapı günün geri kalanında kapalı kalıyor.
+ *
+ * ÖLÇÜLEN (2026-08-28): "Bana bir hatırlatıcı kur" turu bir koşuda kapıya
+ * takıldı, birkaç tur sonra aynı istem `feature_request_limit` yüzünden
+ * kontrolsüz geçti ve kullanıcı masaüstü bağlı değilken "Hatırlatıcı eklendi"
+ * cevabını aldı. Aralıklı çalışan bir güvenlik kapısı, çalışmayan bir güvenlik
+ * kapısıdır — çünkü hangi turun korunduğu bilinemez.
+ *
+ * Diğer özelliklerin payları KORUNUYOR; yalnız güvenlik kontrolü kendi alt
+ * tavanından muaf. Maliyet yine sınırlı: global günlük limit ve token
+ * bütçeleri aynen geçerli, bu kapı onları aşamaz.
+ */
+const UNCAPPED_SAFETY_FEATURES: ReadonlySet<GeminiFreeFeature> = new Set([
+  "execution_validate",
+]);
+
+export function featureBudgetLimit(total: number, feature: GeminiFreeFeature): number {
+  if (UNCAPPED_SAFETY_FEATURES.has(feature)) return total;
   return Math.max(1, Math.floor(total * FEATURE_BUDGET_SHARE[feature]));
 }
 

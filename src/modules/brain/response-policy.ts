@@ -529,6 +529,15 @@ const ASSISTANT_TURN_FAILURE_BY_CAUSE: Record<string, string> = {
     "Şu anda düşünme servisine ulaşamıyorum. Birazdan yeniden dener misin?",
   timeout:
     "Yanıt beklenenden uzun sürdü ve kesildi. Yeniden dener misin?",
+  // Uydurma iddia kapısı turu DURDURDUĞUNDA kullanıcı bugüne kadar iç
+  // politika cümlesini görüyordu: "Bu turda gerçekleştirilmemiş bir işlem
+  // yapılmış gibi anlatıldı; yanıt yayınlanmadı." Doğru ama kullanıcıya
+  // değil, sisteme yazılmış. İstediği şey bir hatırlatıcıydı; ne olduğunu ve
+  // ne yapabileceğini duymalı.
+  fabricated_action_claim:
+    "Bu işlemi gerçekten yapamadım, o yüzden yapmış gibi anlatmak istemedim. " +
+    "Cihaz üzerinde çalışan işler için Elyan masaüstü uygulamasının bağlı " +
+    "olması gerekiyor.",
   provider_timeout:
     "Yanıt beklenenden uzun sürdü ve kesildi. Yeniden dener misin?",
 };
