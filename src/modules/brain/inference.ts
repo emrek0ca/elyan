@@ -6014,6 +6014,12 @@ function resolveCloudVisionWorkload(
     : workload;
 }
 
+/** Bir sözü zamanlar ve sonucu aynen geçirir. */
+function withStageTiming<T>(name: string, promise: Promise<T>): Promise<T> {
+  const end = startStage(name);
+  return promise.finally(() => end());
+}
+
 export async function generateSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
@@ -7042,13 +7048,16 @@ export async function generateSharedBrainReply(
                 results: [],
                 degradedReason: null,
               }),
+          // Kanıt fazının üç kolu paralel ama toplam en yavaşına eşit. Web
+          // kolu ağ üzerinden çalışan tek koldur ve p95'te 7,3 saniyeye
+          // çıkıyordu; hangisinin yavaş olduğunu söyleyen sayaç yoktu.
           webAuthorized && webGroundingAllowed
-            ? searchPublicWebGrounding(app, {
+            ? withStageTiming("augment.web", searchPublicWebGrounding(app, {
                 prompt: webGroundingPrompt,
                 workload,
                 attachmentContextUsed: input.attachmentContext?.used === true,
                 forceSearch: input.skillWebGroundingRequired === true,
-              }).catch(() =>
+              })).catch(() =>
                 buildUnavailableWebGroundingResult({
                   enabled:
                     app.config.ELYAN_WEB_GROUNDING_ENABLED &&
