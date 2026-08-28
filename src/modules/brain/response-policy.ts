@@ -1,5 +1,8 @@
 import type { SharedBrainWorkload } from "./workloads.js";
-import { collapseWhitespace as compactText } from "../../lib/text.js";
+import {
+  collapseWhitespace as compactText,
+  foldTurkishDiacritics,
+} from "../../lib/text.js";
 import {
   FACTUALITY_FALLBACK_EN,
   FACTUALITY_FALLBACK_TR,
@@ -51,15 +54,30 @@ const LONG_FORM_PATTERN =
 const SHORT_FORM_PATTERN =
   /(?<!\p{L})(kısaca|kisaca|çok kısa|cok kisa|tek cümle|tek cumle|uzatma|kısa ve net|kisa ve net)(?!\p{L})/iu;
 
+/**
+ * Desenler AKSANSIZ yazılır; karşılaştırılan cümle de aksansıza indirilir.
+ *
+ * ÖLÇÜLEN HATA (2026-08-28): liste yalnız aksanlı yazılmıştı
+ * (`/doğrulayamıyorum/`). Model ve kullanıcı Türkçeyi çoğu zaman aksansız
+ * yazar — nitekim olgusallık kapısının KENDİ cümlesi de aksansızdı ve bu
+ * listeye hiç takılmıyordu. Yani "bunu dogrulayamiyorum" diyen bir cevap
+ * süzgeçten geçip doğrudan kullanıcıya gidiyordu: kapı, yakalaması gereken
+ * asıl yazımda sessizce açıktı.
+ *
+ * Çözüm deseni ikiye katlamak DEĞİL (`doğrula|dogrula` her giriş için iki
+ * kat bakım demek, ve biri unutulduğunda kapı yine açılır); metni tek
+ * yazıma indirip deseni bir kez yazmak. Liste bu yüzden büyümedi, kısaldı:
+ * `bunu doğrulayamıyorum` girişi `doğrulayamıyorum` tarafından zaten
+ * kapsanıyordu.
+ */
 const ROBOTIC_PHRASE_PATTERNS = [
-  /(?:elimde|bende)\s+kesin\s+kayıtlı\s+kanıt\s+yok/iu,
-  /kesin\s+kayıtlı\s+bir\s+kanıt\s+bulunmuyor/iu,
-  /bunu\s+doğrulayamıyorum/iu,
-  /doğrulayamıyorum/iu,
-  /kanıt\s+olmadığı\s+için/iu,
+  /(?:elimde|bende)\s+kesin\s+kayitli\s+kanit\s+yok/iu,
+  /kesin\s+kayitli\s+bir\s+kanit\s+bulunmuyor/iu,
+  /dogrulayamiyorum/iu,
+  /kanit\s+olmadigi\s+icin/iu,
   /bir\s+ai\s+olarak/iu,
   /model\s+olarak/iu,
-  /kaynaklara\s+göre/iu,
+  /kaynaklara\s+gore/iu,
 ];
 
 const INTERNAL_FENCE_PATTERN = /```elyan:blocks\s*[\s\S]*?```/giu;
@@ -150,16 +168,17 @@ export function responsePolicyForPrompt(prompt: string): {
  * silinirse kullanıcı ne dürüst cevabı görür ne sebebini.
  */
 function isGateOwnHonestSentence(sentence: string): boolean {
-  const normalized = compactText(sentence);
+  const normalized = foldTurkishDiacritics(compactText(sentence));
   return (
-    normalized === compactText(FACTUALITY_FALLBACK_TR) ||
-    normalized === compactText(FACTUALITY_FALLBACK_EN)
+    normalized === foldTurkishDiacritics(compactText(FACTUALITY_FALLBACK_TR)) ||
+    normalized === foldTurkishDiacritics(compactText(FACTUALITY_FALLBACK_EN))
   );
 }
 
 function isRoboticVerificationSentence(sentence: string): boolean {
   if (isGateOwnHonestSentence(sentence)) return false;
-  return ROBOTIC_PHRASE_PATTERNS.some((pattern) => pattern.test(sentence));
+  const folded = foldTurkishDiacritics(sentence);
+  return ROBOTIC_PHRASE_PATTERNS.some((pattern) => pattern.test(folded));
 }
 
 function removeRoboticVerificationLanguage(value: string, allowVerificationLanguage: boolean): string {

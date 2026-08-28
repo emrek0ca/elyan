@@ -67,3 +67,27 @@ export function asNonEmptyString(value: unknown): string | null {
 export function asFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
+
+/**
+ * Türkçe aksanları düşürür: "doğrulayamıyorum" → "dogrulayamiyorum".
+ *
+ * NEDEN GEREKLİ: model ve kullanıcı Türkçeyi çoğu zaman aksansız yazar. Bir
+ * kapının deseni yalnız aksanlı yazılmışsa, aksansız yazımda SESSİZCE AÇILIR
+ * — yani yakalaması gereken metin doğrudan kullanıcıya gider.
+ *
+ * Bu tam olarak ölçülmüş bir hatadır: `ROBOTIC_PHRASE_PATTERNS` yalnız
+ * `/doğrulayamıyorum/` yazıyordu ve olgusallık kapısının kendi cümlesi
+ * aksansız olduğu için listeye hiç takılmıyordu (bkz. `response-policy`).
+ *
+ * Deseni ikiye katlamak (`doğrula|dogrula`) her yeni giriş için iki kat bakım
+ * demektir ve biri unutulduğunda kapı yine sessizce açılır. Doğru olan METNİ
+ * tek yazıma indirip deseni bir kez yazmaktır.
+ */
+export function foldTurkishDiacritics(value: string): string {
+  return String(value ?? "")
+    .replace(/İ/g, "I")
+    .replace(/ı/g, "i")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
