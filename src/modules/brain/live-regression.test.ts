@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTemporalFactsPromptBlock } from "./inference.js";
+import {
+  buildTemporalFactsPromptBlock,
+  isWholeReplyJson,
+} from "./inference.js";
 import { routeSkill } from "../skills/router.js";
 import {
   isReferentlessVisualEdit,
   resolveCompletionAssistantBlocks,
 } from "../tasks/service.js";
 import { buildAgentToolCatalogForTurn } from "./tool-registry.js";
+import { isHostedImageEditIntent } from "./image-generation.js";
 import {
   ASSISTANT_TURN_FAILURE_FALLBACK_TR,
   assistantTurnFailureMessage,
@@ -417,4 +421,76 @@ test("an async dispatch failure tells the user what went wrong", () => {
     getSharedBrainFallbackMessage(null),
     ASSISTANT_TURN_FAILURE_FALLBACK_TR,
   );
+});
+
+test("a reply that is entirely JSON is not an answer", () => {
+  // ÖLÇÜLEN ARIZA (2026-08-28): "Bana bir hatırlatıcı kur: yarın 09:00
+  // toplantı" isteğine kullanıcı ham araç çağrısını gördü:
+  //   {"action":"add_reminder","title":"Toplantı","time":"2026-08-29T09:00:00"}
+  // Mevcut sızıntı koruması ANAHTAR arıyordu (`tool_requests`, `tool:`,
+  // konektör adı) ve bu şemada hiçbiri yoktu.
+  const leaked = [
+    '{\n"action": "add_reminder",\n"title": "Toplantı",\n"time": "2026-08-29T09:00:00"\n}',
+    '{"tool":"x"}',
+    '[{"step":1}]',
+    '  { "a": 1 }  ',
+    // İkinci vaka: JSON kapısı konduktan SONRA aynı sızıntı fonksiyon çağrısı
+    // biçiminde geri geldi. Anahtar listesi değil, ŞEKİL kapısı gerekiyordu.
+    'add_reminder({"title":"Doktor randevusu","time":"2026-08-29T10:00:00"})',
+    'web.search({"q":"hava"})',
+    'do_thing()',
+  ];
+  for (const text of leaked) {
+    assert.equal(isWholeReplyJson(text), true, text.slice(0, 40));
+  }
+
+  // Gerçek cevaplar etkilenmez — JSON İÇEREN metin, JSON OLAN metin değildir.
+  const answers = [
+    "Hatırlatıcıyı kurdum: yarın 09:00, Toplantı.",
+    "Ankara.",
+    'Şöyle bir JSON kullanabilirsin: {"a": 1} — bu örnek yeterli.',
+    "```json\n{\"a\":1}\n```",
+    "{ bu bir cümle, JSON değil }",
+    "",
+    // Cümlenin İÇİNDE çağrı geçmesi serbest; yasak olan cevabın kendisinin
+    // bir çağrı olması.
+    "Bunun için add_reminder({...}) çağrısını kullanırım.",
+    "Hatırlatıcı kuruldu (add_reminder).",
+  ];
+  for (const text of answers) {
+    assert.equal(isWholeReplyJson(text), false, text.slice(0, 40));
+  }
+});
+
+test("a bare everyday verb does not make a turn an image edit", () => {
+  // ÖLÇÜLEN ARIZA (2026-08-28): "Hatırlatıcı ekle: cuma 15:00 diş hekimi"
+  // görsel düzenleme şeridine düşüyor ve kullanıcı "Düzenlenecek son görseli
+  // bu sohbet içinde bulamadım" cevabını alıyordu. Desen genel fiillerin
+  // (`ekle`, `sil`, `değiştir`, `add`, `remove`) düz listesiydi.
+  const notVisual = [
+    "Hatırlatıcı ekle: cuma 15:00 diş hekimi",
+    "Takvime toplantı ekle",
+    "Bu dosyayı sil",
+    "Randevuyu değiştir",
+    "Listeye süt ekle",
+    "Notu düzenle",
+  ];
+  for (const prompt of notVisual) {
+    assert.equal(isHostedImageEditIntent(prompt), false, prompt);
+  }
+
+  // Gerçek görsel istekleri etkilenmez — fiil bir GÖRSEL NESNEYE bağlı.
+  const visual = [
+    "Bu görseli düzenle",
+    "Fotoğraftaki arka planı sil",
+    "Arka planı beyaz yap",
+    "Resmi kırp",
+    "Bu fotoğrafı iyileştir",
+    // Türkçe ekli biçim: nesne KÖK olarak eşleşmeli, tam kelime olarak değil.
+    "Görseldeki yazıyı kaldır",
+    "remove the background from the photo",
+  ];
+  for (const prompt of visual) {
+    assert.equal(isHostedImageEditIntent(prompt), true, prompt);
+  }
 });

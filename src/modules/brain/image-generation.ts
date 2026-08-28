@@ -299,7 +299,28 @@ export function isHostedImageGenerationRequest(prompt: string): boolean {
 }
 
 const IMAGE_EDIT_REQUEST_PATTERNS = [
-  /\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|netleştir|netlestir|bulanıklaştır|bulaniklastir|kırp|kirp|büyüt|buyut|küçült|kucult|retouch|edit|remove|replace|erase|add|enhance|upscale|crop|blur)\b/i,
+  // ÇIPLAK FİİL GÖRSEL İDDİASI DEĞİLDİR.
+  //
+  // ÖLÇÜLEN ARIZA (2026-08-28): bu desen genel fiillerin düz listesiydi ve
+  // "Hatırlatıcı ekle: cuma 15:00 diş hekimi" ile "Takvime toplantı ekle"
+  // isteklerini görsel düzenleme şeridine sokuyordu. Kullanıcı hatırlatıcı
+  // istiyor, "Düzenlenecek son görseli bu sohbet içinde bulamadım" cevabını
+  // alıyordu. "ekle", "sil", "değiştir", "add", "remove" günlük dilin en sık
+  // fiilleri; tek başlarına hiçbir şey hakkında değiller.
+  //
+  // İki sınıf ayrılıyor:
+  //   (a) YALNIZ görsel işlemi adlandıran fiiller — nesne gerekmez
+  //       (kırp/crop, bulanıklaştır/blur, netleştir, retouch, upscale).
+  //   (b) genel fiiller — ancak yakınında bir GÖRSEL NESNE varsa sayılır.
+  //
+  // Nesneler KÖK olarak yazılır, tam kelime olarak değil: Türkçe eklemeli bir
+  // dil ve "görseldeki", "resmi", "fotoğraftaki" hepsi aynı nesnedir. Ekli
+  // biçimleri tek tek listelemek, kapatmaya çalıştığımız kelime-listesi
+  // döngüsünün ta kendisidir.
+  //
+  // Liste büyümüyor, tek desen ikiye ayrılıyor: aynı kelimeler, artık bir
+  // nesneye bağlı.
+  /\b(retouch|upscale|crop|blur|kırp|kirp|bulanıklaştır|bulaniklastir|netleştir|netlestir)\b|\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|büyüt|buyut|küçült|kucult|edit|remove|replace|erase|add|enhance)\b[\s\S]{0,60}\b(?:görsel|gorsel|resim|resm|fotoğraf|fotograf|foto|image|photo|picture|arka plan|background)|\b(?:görsel|gorsel|resim|resm|fotoğraf|fotograf|foto|image|photo|picture|arka plan|background)[\s\S]{0,60}\b(düzenle|duzenle|değiştir|degistir|kaldır|kaldir|sil|ekle|düzelt|duzelt|iyileştir|iyilestir|büyüt|buyut|küçült|kucult|edit|remove|replace|erase|add|enhance)\b/i,
   /\b(arka plan|rengini|stilini|ışığı|isigi|kontrastı|kontrasti)\b/i,
   /\b(hayır|hayir|yok|olmadı|olmadi|değil|degil)\b.{0,80}\b(olsun|yap|çevir|cevir|değiştir|degistir)\b/iu,
   /\b(beyaz|siyah|kırmızı|kirmizi|mavi|yeşil|yesil|sarı|sari|mor|pembe|turuncu|gri|lacivert|kahverengi|altın|altin|gümüş|gumus)\b.{0,50}\b(olsun|yap|çevir|cevir|görünsün|gorunsun)\b/iu,

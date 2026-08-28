@@ -6014,6 +6014,47 @@ function resolveCloudVisionWorkload(
     : workload;
 }
 
+/**
+ * Görünür cevabın TAMAMI bir makine çağrısı mı?
+ *
+ * İki şekil sayılır ve ikisi de kullanıcıya söylenmiş bir söz DEĞİLDİR:
+ *
+ *   1. Saf JSON     `{"action":"add_reminder","title":"Toplantı", ...}`
+ *   2. Araç çağrısı `add_reminder({"title":"Doktor randevusu", ...})`
+ *
+ * ÖLÇÜLEN ARIZA (2026-08-28): "Bana bir hatırlatıcı kur" isteğine kullanıcı
+ * önce (1)'i, düzeltmeden sonra (2)'yi gördü. Model çağrıyı ÜRETİYOR, çağrı
+ * yürütülmüyor ve ham hâliyle sohbet balonuna basılıyor.
+ *
+ * Kontrol ŞEKLE bakar, anahtar ya da araç adına değil: `tool_requests`,
+ * `tool:` gibi anahtar listeleri her yeni şemada güncellenmek zorunda kalır
+ * ve tam da bu iki vakayı kaçırdılar. Bir cümlenin içinde JSON GEÇMESİ
+ * serbesttir; yasak olan cevabın kendisinin bir çağrı olmasıdır.
+ */
+export function isWholeReplyJson(value: string): boolean {
+  const trimmed = String(value ?? "").trim();
+  if (trimmed.length < 2) return false;
+  if (parsesAsJsonObject(trimmed)) return true;
+
+  // `ad({...})` ya da `ad([...])` — başka hiçbir şey içermeyen çağrı.
+  const call = /^[A-Za-z_][A-Za-z0-9_.]*\s*\(([\s\S]*)\)$/.exec(trimmed);
+  if (!call) return false;
+  const args = call[1].trim();
+  return args.length === 0 || parsesAsJsonObject(args);
+}
+
+function parsesAsJsonObject(value: string): boolean {
+  const opens = value.startsWith("{") || value.startsWith("[");
+  const closes = value.endsWith("}") || value.endsWith("]");
+  if (!opens || !closes) return false;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** Bir sözü zamanlar ve sonucu aynen geçirir. */
 function withStageTiming<T>(name: string, promise: Promise<T>): Promise<T> {
   const end = startStage(name);
@@ -8599,19 +8640,48 @@ export async function generateSharedBrainReply(
                     !streamEnvelope &&
                     streamSalvagedReplyText == null &&
                     looksLikeTurnEnvelopeJson(text);
+                  // TAMAMI JSON OLAN BİR CEVAP, CEVAP DEĞİLDİR.
+                  //
+                  // ÖLÇÜLEN ARIZA (2026-08-28): "Bana bir hatırlatıcı kur:
+                  // yarın 09:00 toplantı" isteğine kullanıcı şunu gördü:
+                  //   {"action":"add_reminder","title":"Toplantı",
+                  //    "time":"2026-08-29T09:00:00"}
+                  // Model bir araç çağrısı ÜRETMİŞ, o çağrı yürütülmemiş ve
+                  // ham hâliyle sohbet balonuna basılmış.
+                  //
+                  // Mevcut sızıntı koruması bunu kaçırdı çünkü ANAHTAR ARIYOR:
+                  // `tool_requests`, `tool:`/`args:` ya da duyurulmuş konektör
+                  // adı. Buradaki JSON'da hiçbiri yok — `action` alanı ve bir
+                  // masaüstü yeteneği adı var. Anahtar listesi genişletmek bu
+                  // sınıfı kapatmaz; her yeni şema yeni bir anahtar demek.
+                  //
+                  // Şeklin kendisi yeterli kanıttır: görünür cevabın TAMAMI
+                  // ayrıştırılabilir bir JSON nesnesi/dizisiyse, o metin
+                  // kullanıcıya söylenmiş bir şey değildir. Boş cevap gibi ele
+                  // alınır; zincir yeniden dener.
+                  // Akışlı kolda da aynı sınır: yapılandırılmış çıktı isteyen
+                  // tur meşru olarak JSON döndürür.
+                  const wholeReplyIsJson =
+                    responseFormat === "text" &&
+                    !attempt.turnEnvelopeMode &&
+                    input.responseSchemaOverride === undefined &&
+                    isWholeReplyJson(visibleForGuard || text);
                   if (
                     !text ||
                     placeholderHallucination ||
                     confirmedDumpNoRescue ||
                     missingRequiredEnvelope ||
                     rawEnvelopeJsonLeak ||
+                    wholeReplyIsJson ||
                     missingRequiredConnectorTool
                   ) {
                     lastError = {
                       status: 503,
                       provider: candidate.provider,
                       path: attempt.path,
-                      reason: placeholderHallucination
+                      reason: wholeReplyIsJson
+                        ? "whole_reply_is_json"
+                        : placeholderHallucination
                         ? "placeholder_refusal_hallucination"
                         : confirmedDumpNoRescue
                           ? "reasoning_dump_stream_response"
@@ -8905,11 +8975,32 @@ export async function generateSharedBrainReply(
                         envelope,
                         requiredConnectorReadHint,
                       ));
+                  // AKIŞSIZ KOLDA DA AYNI KAPI.
+                  //
+                  // Kapı ilk olarak yalnız akışlı kola konmuştu ve sızıntı
+                  // devam etti: hatırlatıcı turu akışsız yoldan geçiyor
+                  // (`mobile_chat_fast`, fallback → success) ve kullanıcı
+                  // `add_reminder({"title":"Spor", ...})` görmeye devam etti.
+                  // İki kolun aynı sözleşmeyi uygulaması gerekir.
+                  // KAPI YALNIZ NESİR BEKLENEN TURLARDA GEÇERLİDİR.
+                  //
+                  // Yapılandırılmış çıktı isteyen turlar (beceri şeması, plan
+                  // zarfı, makine-JSON rotası) MEŞRU olarak JSON döndürür ve o
+                  // metin kullanıcıya hiç gitmez — bloklara çevrilir. İlk
+                  // sürüm bunu ayırmıyordu ve görme becerisi ile skillHint
+                  // testlerini `server_brain_unavailable` ile düşürdü.
+                  const expectsProse =
+                    responseFormat === "text" &&
+                    !attempt.turnEnvelopeMode &&
+                    input.responseSchemaOverride === undefined;
+                  const wholeReplyIsMachineCall =
+                    expectsProse && isWholeReplyJson(visibleText || text);
                   if (
                     !visibleText ||
                     placeholderHallucination ||
                     missingRequiredEnvelope ||
                     missingRequiredConnectorTool ||
+                    wholeReplyIsMachineCall ||
                     // Ham zarf JSON'u kullanıcıya ASLA gitmez. Kurtarma
                     // başarılıysa `visibleText` nesirdir ve bu kapı geçilir.
                     (attempt.turnEnvelopeMode &&
@@ -8921,7 +9012,9 @@ export async function generateSharedBrainReply(
                       status: 503,
                       provider: candidate.provider,
                       path: attempt.path,
-                      reason: placeholderHallucination
+                      reason: wholeReplyIsMachineCall
+                        ? "whole_reply_is_machine_call"
+                        : placeholderHallucination
                         ? "placeholder_refusal_hallucination"
                         : missingRequiredEnvelope
                           ? "required_turn_envelope_missing"

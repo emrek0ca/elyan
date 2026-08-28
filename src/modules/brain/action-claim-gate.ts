@@ -169,7 +169,18 @@ export async function detectActionClaimSemantics(
       timeoutMs: 3_500,
     });
     return result;
-  } catch {
+  } catch (error) {
+    // SEBEBİ YUTMA. Bu kapı daha önce sessizce ölmüştü (emekli model, 404) ve
+    // "semantics_unavailable" uyarısı NEDEN'i söylemediği için arıza aylarca
+    // görünmez kaldı. Uyarı hâlâ fail-open'dır; yalnız artık teşhis edilebilir.
+    app.log?.warn?.(
+      {
+        gate: "action_claim",
+        reason: "semantic_call_failed",
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "action claim semantics call failed",
+    );
     return null;
   }
 }
