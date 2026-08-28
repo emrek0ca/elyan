@@ -12,6 +12,7 @@ import {
   assistantTurnFailureMessage,
   isGenericAssistantFallbackReply,
 } from "./response-policy.js";
+import { getSharedBrainFallbackMessage } from "../tasks/service-helpers.js";
 import type { SkillSummary } from "../skills/types.js";
 
 /**
@@ -374,4 +375,46 @@ test("a failure tells the user what happened, and is still recognised as a failu
 
   // Gerçek bir cevap asla arıza sayılmaz.
   assert.equal(isGenericAssistantFallbackReply("Ankara."), false);
+});
+
+test("an async dispatch failure tells the user what went wrong", () => {
+  // ÖLÇÜLEN (2026-08-28): sağlayıcı hız sınırı verdiğinde tur asenkron
+  // düşüyor ve kullanıcı sebebi öğrenemiyordu. Sınıf zaten elimizdeydi.
+  class FakeAppError extends Error {
+    code: string;
+    details: Record<string, unknown>;
+    constructor(code: string, message: string, details: Record<string, unknown> = {}) {
+      super(message);
+      this.code = code;
+      this.details = details;
+    }
+  }
+
+  const rateLimited = getSharedBrainFallbackMessage(
+    new FakeAppError("rate_limited", "429 Too Many Requests from upstream"),
+  );
+  assert.equal(rateLimited, assistantTurnFailureMessage("rate_limited"));
+  assert.equal(
+    rateLimited.includes("429"),
+    false,
+    "sağlayıcının teknik metni kullanıcıya sızmamalı",
+  );
+
+  // Sebep `failureClass` içinde taşınıyorsa da okunur.
+  assert.equal(
+    getSharedBrainFallbackMessage(
+      new FakeAppError("", "boş", { failureClass: "provider_empty_output" }),
+    ),
+    assistantTurnFailureMessage("provider_empty_output"),
+  );
+
+  // Tanınmayan sebep: mevcut davranış korunur, uydurma yapılmaz.
+  assert.equal(
+    getSharedBrainFallbackMessage(new Error("Anlaşılır bir açıklama.")),
+    "Anlaşılır bir açıklama.",
+  );
+  assert.equal(
+    getSharedBrainFallbackMessage(null),
+    ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  );
 });

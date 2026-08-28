@@ -1,4 +1,7 @@
-import { ASSISTANT_TURN_FAILURE_FALLBACK_TR } from "../brain/response-policy.js";
+import {
+  ASSISTANT_TURN_FAILURE_FALLBACK_TR,
+  assistantTurnFailureMessage,
+} from "../brain/response-policy.js";
 import type { TaskStatus } from "../../contracts/domain.js";
 import { createIdempotencyFingerprint } from "../../lib/idempotency.js";
 import { AppError, unprocessableEntity } from "../../lib/errors.js";
@@ -1207,12 +1210,44 @@ export function getSharedBrainFallbackMessage(
   error: unknown,
   fallback = ASSISTANT_TURN_FAILURE_FALLBACK_TR,
 ) {
+  // SEBEBİ BİLİNEN ARIZA, SEBEBİNİ SÖYLER.
+  //
+  // ÖLÇÜLEN (2026-08-28): sağlayıcı hız sınırı verdiğinde tur asenkron olarak
+  // düşüyor (`shared brain chat dispatch failed asynchronously`,
+  // errorCode=rate_limited) ve kullanıcı ne olduğunu anlamıyordu. Hata
+  // sınıfı zaten elimizde; tek eksik onu kullanıcıya taşımaktı.
+  //
+  // Ham `error.message` yalnız tanınmayan sebeplerde kullanılır: bizim kendi
+  // fırlattığımız hatalarda o mesaj zaten kullanıcı metnidir, ama sağlayıcıdan
+  // gelen bir hatada teknik olabilir.
+  const cause = readErrorFailureCause(error);
+  if (cause) {
+    const message = assistantTurnFailureMessage(cause);
+    if (message !== ASSISTANT_TURN_FAILURE_FALLBACK_TR) return message;
+  }
+
   if (error instanceof Error && error.message.trim()) {
     const message = error.message.trim();
     return looksLikeUnsafeBackendError(message) ? fallback : message;
   }
 
   return fallback;
+}
+
+/** Hatanın taşıdığı bilinen arıza sebebi (`code` ya da `failureClass`). */
+function readErrorFailureCause(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const record = error as { code?: unknown; details?: unknown };
+  const code = typeof record.code === "string" ? record.code.trim() : "";
+  if (code) return code;
+  const details = record.details;
+  if (details && typeof details === "object") {
+    const failureClass = (details as { failureClass?: unknown }).failureClass;
+    if (typeof failureClass === "string" && failureClass.trim()) {
+      return failureClass.trim();
+    }
+  }
+  return null;
 }
 
 const CONTINUITY_CHAT_WORKLOADS = new Set([
