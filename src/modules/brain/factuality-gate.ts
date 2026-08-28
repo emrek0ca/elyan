@@ -370,6 +370,21 @@ function splitSentences(text: string): string[] {
 }
 
 function fallbackSentence(sample: string): string {
+  // BİLİNEN KUSUR: bu cümle kullanıcının cevabına girer ve Türkçesi aksansız
+  // ("iddiayi", "kanitlarla", "dogrulayamiyorum"). Makine metni gibi okunur.
+  //
+  // Aksanları düzeltmek DENENDİ ve geri alındı (2026-08-28): tek başına bu
+  // dizgeyi düzeltmek `generateGovernedSharedBrainReply runs factuality gate`
+  // testini düşürüyor — tur cümleyi üretiyor, `factualityGateFallbackApplied`
+  // doğru işaretleniyor, ama nihai metin genel yedeğe dönüyor. Sebep
+  // bulunamadı: taranan hiçbir kapı (`isPlaceholderRefusal`,
+  // `classifyReasoningDump`, `sanitizeAssistantVisibleText`,
+  // `polishAssistantVisibleText`, blok kurucular) iki yazım arasında farklı
+  // davranmıyor.
+  //
+  // Anlaşılmayan bir etkiyle göndermektense kusuru GÖRÜNÜR bırakmak doğru:
+  // burada bir yerde yazıma duyarlı gizli bir bağ var ve onu bulmak bu
+  // düzeltmenin ön koşulu.
   const turkish = "Bu iddiayi elimdeki kanitlarla dogrulayamiyorum; istersen bakabilirim.";
   const english = "I cannot verify that from the available evidence; want me to check?";
   // Elyan Türkçe-öncelikli: örnek metin AÇIKÇA İngilizce değilse Türkçe fallback

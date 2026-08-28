@@ -38,6 +38,31 @@ function extractJson(text: string): unknown | null {
   return null;
 }
 
+/**
+ * FAIL-OPEN SESSİZ OLMAMALI.
+ *
+ * Bu fonksiyon yedi ayrı sebeple `null` dönüyor ve hepsi aynı görünüyordu.
+ * Üstündeki çağıranlar (eylem-iddia kapısı gibi) o `null`ı "semantik yok"
+ * diye yorumlayıp KENDİLERİNİ devre dışı bırakıyor — ama neden devre dışı
+ * kaldıklarını kimse göremiyordu. Canlıda bunun bedeli ölçüldü: emekli bir
+ * modele işaret eden yapılandırma yüzünden kapı aylarca kapalıydı ve tek bir
+ * uyarı düşmedi (2026-08-22 yorumu).
+ *
+ * Bu sarmalayıcı davranışı DEĞİŞTİRMEZ; yalnız sebebi kaydeder.
+ */
+function geminiUtilityUnavailable(
+  app: FastifyInstance,
+  feature: string,
+  reason: string,
+  detail?: unknown,
+): null {
+  app.log?.warn?.(
+    { utility: "gemini_free", feature, reason, ...(detail ? { detail } : {}) },
+    "gemini utility call unavailable",
+  );
+  return null;
+}
+
 export async function callGeminiFreeStructured<T>(
   app: FastifyInstance,
   input: {
@@ -56,7 +81,9 @@ export async function callGeminiFreeStructured<T>(
   },
 ): Promise<T | null> {
   const model = String(app.config.GEMINI_FAST_MODEL || "").trim();
-  if (!(await isGeminiFreeOutputBudgetAvailable(app, input.feature))) return null;
+  if (!(await isGeminiFreeOutputBudgetAvailable(app, input.feature))) {
+    return geminiUtilityUnavailable(app, input.feature, "output_budget_exhausted");
+  }
   const maxOutputTokens = Math.min(1_200, Math.max(120, input.maxOutputTokens ?? 600));
   const messages: SharedBrainConversationMessage[] = [
     { role: "system", content: input.system },
@@ -154,7 +181,9 @@ export async function callGeminiFreeStructured<T>(
         ...(input.images?.length ? { attachment: true } : {}),
       },
     });
-    if (!compatibilityPermit.allowed) return null;
+    if (!compatibilityPermit.allowed) {
+      return geminiUtilityUnavailable(app, input.feature, "permit_denied", compatibilityPermit.reason ?? null);
+    }
     response = await postJson(
       app,
       "gemini",
@@ -163,7 +192,9 @@ export async function callGeminiFreeStructured<T>(
       Math.min(8_000, Math.max(1_000, input.timeoutMs ?? 5_000)),
     ).catch(() => null);
   }
-  if (!response) return null;
+  if (!response) {
+    return geminiUtilityUnavailable(app, input.feature, "no_response");
+  }
   const providerPayload = await response.json().catch(() => null);
   if (!response.ok) {
     if (isGeminiFreeResourceExhausted(response.status, providerPayload)) {
@@ -172,7 +203,7 @@ export async function callGeminiFreeStructured<T>(
         readGeminiRetryAfterMs(response.headers),
       ).catch(() => undefined);
     }
-    return null;
+    return geminiUtilityUnavailable(app, input.feature, "http_" + response.status);
   }
   const responseText = extractResponseText("gemini", providerPayload);
   // Count every successful provider response, including malformed JSON, so a
@@ -181,6 +212,8 @@ export async function callGeminiFreeStructured<T>(
     () => undefined,
   );
   const parsed = input.schema.safeParse(extractJson(responseText));
-  if (!parsed.success) return null;
+  if (!parsed.success) {
+    return geminiUtilityUnavailable(app, input.feature, "schema_mismatch");
+  }
   return parsed.data;
 }
