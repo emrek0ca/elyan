@@ -246,6 +246,17 @@ export async function loadBenchmarkCases(
     .filter((name) => !categoryFilter || name.startsWith(categoryFilter))
     .sort();
   const cases: BenchmarkCase[] = [];
+  // BİR BOZUK SATIR, GEÇERLİ VAKALARI GİZLEMEMELİ.
+  //
+  // Eskiden ilk hatalı satırda fırlatılıyordu. `desktop_semantic_execution
+  // .jsonl` baştan beri farklı bir şemayla yazılmış (`prompt`/`expect`,
+  // diğerlerinde `input`/`expected`) ve alfabetik sırada erken geldiği için
+  // TÜM koşuyu iptal ediyordu: 190 geçerli vaka hiç çalışmadı ve hata mesajı
+  // yalnız bir satırdan söz ettiği için sorunun ölçeği görünmedi.
+  //
+  // Hâlâ HATA veriyoruz — bozuk fikstür sessizce atlanmaz — ama tüm sorunlar
+  // toplanıp bir kez bildiriliyor; böylece tek geçişte düzeltilebilir.
+  const fixtureErrors: string[] = [];
   for (const file of jsonlFiles) {
     const raw = await readFile(path.join(dir, file), "utf8");
     for (const [lineIndex, line] of raw.split("\n").entries()) {
@@ -256,11 +267,17 @@ export async function loadBenchmarkCases(
       try {
         cases.push(normalizeBenchmarkCase(JSON.parse(trimmed), file));
       } catch (error) {
-        throw new Error(
-          `Invalid benchmark fixture ${file}:${lineIndex + 1}: ${error instanceof Error ? error.message : "parse_failed"}`,
+        fixtureErrors.push(
+          `${file}:${lineIndex + 1}: ${error instanceof Error ? error.message : "parse_failed"}`,
         );
       }
     }
+  }
+  if (fixtureErrors.length > 0) {
+    throw new Error(
+      `${fixtureErrors.length} geçersiz benchmark fikstür satırı ` +
+        `(${cases.length} geçerli vaka yüklendi):\n  ${fixtureErrors.join("\n  ")}`,
+    );
   }
   return cases;
 }
