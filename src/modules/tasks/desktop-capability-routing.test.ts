@@ -48,42 +48,26 @@ test("only desktop-authority capabilities can escalate a turn", () => {
   }
 });
 
-test("the escalation threshold sits between the measured clusters", () => {
+test("the capability index alone cannot decide the route", () => {
+  // ÖLÇÜM (2026-08-28): masaüstüne yükseltmeyi yetenek indeksi skoruna
+  // bağlamak DENENDİ ve geri alındı. On iki örnekte boşluk temiz görünüyordu;
+  // set genişletilince çöktü:
+  //
+  //   sunucuda kalmalı   "Yarın için motivasyon sözü ver"  0.9988
+  //                      "Bu cümleyi İngilizceye çevir…"   0.9302
+  //   masaüstü gereken   "Bana bir hatırlatıcı kur…"       0.9819
+  //
+  // Sunucu istemi gerçek masaüstü isteminden yüksek puan alıyor; hiçbir eşik
+  // ikisini ayırmaz. Bu test o kararın kod tabanında kayıtlı kalmasını
+  // sağlıyor: yükseltme kodu geri gelirse ölçüm de gelmeli.
   const source = readFileSync("src/modules/tasks/service.ts", "utf8");
-  const match = source.match(
-    /const DESKTOP_CAPABILITY_ROUTE_THRESHOLD = ([\d.]+);/,
-  );
-  assert.ok(match, "eşik sabiti bulunamadı");
-  const threshold = Number(match[1]);
-
-  // Ölçülen dağılım (yorumda tam listesi var):
-  //   masaüstü gereken, en düşük eşleşme            0.981
-  //   sunucuda kalmalı, masaüstü-yetkili en yüksek  0.873
-  assert.ok(
-    threshold > 0.873,
-    `eşik ${threshold}, sunucuda kalması gerekenlerin en yükseğinin üstünde olmalı`,
+  assert.equal(
+    source.includes("DESKTOP_CAPABILITY_ROUTE_THRESHOLD"),
+    false,
+    "yükseltme eşiği geri gelmiş — önce ölçüm setini genişlet",
   );
   assert.ok(
-    threshold < 0.981,
-    `eşik ${threshold}, masaüstü gerekenlerin en düşüğünün altında olmalı`,
+    source.includes("DENENDİ VE GERİ ALINDI"),
+    "geri alma gerekçesi kaynakta kalmalı",
   );
-});
-
-test("an escalated decision is coherent, not half-changed", () => {
-  // İlk denemede yalnız `route` ve `requiredRuntime` değiştirilmişti; kalan
-  // alanlar sohbet kararının değerlerinde kaldı ve kullanıcı masaüstüne
-  // yönlenen bir turda "Bu istek sohbet olarak işlenecek." gördü.
-  const source = readFileSync("src/modules/tasks/service.ts", "utf8");
-  const block = source.slice(
-    source.indexOf("escalated to desktop by capability index"),
-  ).slice(0, 1200);
-
-  for (const field of [
-    'route: "desktop_runtime"',
-    'requiredRuntime: "desktop"',
-    'mode: "executable_task"',
-    "userFacingMessage:",
-  ]) {
-    assert.ok(block.includes(field), `yükseltme ${field} alanını da ayarlamalı`);
-  }
 });

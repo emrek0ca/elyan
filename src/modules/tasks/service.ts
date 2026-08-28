@@ -2300,19 +2300,6 @@ function isEmptyOrDeadEndAssistantReply(reply: {
   return !text || isGenericAssistantFallbackReply(text);
 }
 
-/**
- * Anlamsal yetenek eşleşmesinin masaüstüne yükseltme eşiği.
- *
- * Ölçüm (2026-08-28, Türkçe örnekler):
- *   masaüstü gereken   add_reminder 0.981 · directory_tree 1.00 ·
- *                      make_directory 1.10 · add_calendar_event 1.14–1.20 ·
- *                      close_app 1.20
- *   sunucuda kalmalı   email_send 0.721 · browser_session.click 0.724 ·
- *                      get_calendar_events 0.873
- * Aradaki boşluk 0.873 → 0.981; eşik ortada.
- */
-const DESKTOP_CAPABILITY_ROUTE_THRESHOLD = 0.93;
-
 export function shouldUseVisualImageFastPath(input: {
   prompt: string;
   visualIntent: VisualIntentContract;
@@ -9622,69 +9609,35 @@ export async function createTask(
       brainProfile: usageAccess.brainProfile,
       quota: undefined,
     }));
-  // YETENEK İNDEKSİ ROTA KARARINDAN SONRA DEĞİL, ONUN İÇİN SORULMALI.
+  // DENENDİ VE GERİ ALINDI: yetenek indeksiyle masaüstüne yükseltme.
   //
-  // ÖLÇÜLEN ARIZA (2026-08-28): "Bana bir hatırlatıcı kur: yarın 11:00 spor"
-  // sunucu beyninde kalıyordu (`route: server_brain`, `capabilities: []`).
-  // Model orada bir araç çağrısı üretiyor, hiçbir şey onu yürütmüyor ve
-  // kullanıcı ya ham çağrıyı ya da uydurma bir "Hatırlatıcı eklendi" cevabını
-  // alıyordu.
+  // Fikir şuydu: "Bana bir hatırlatıcı kur" sunucuda kalıyor, model orada
+  // yürütülemeyen bir araç çağrısı üretiyor; oysa anlamsal yetenek indeksi
+  // `add_reminder`ı 0.981 ile biliyor. Rota kararına o skoru sokmak sorunu
+  // çözüyor göründü — on iki örnekte temiz bir boşluk vardı (masaüstü ≥0.981,
+  // sunucu ≤0.873) ve eşiği ortaya koydum.
   //
-  // Oysa anlamsal yetenek indeksi doğru cevabı BİLİYOR: aynı cümle için
-  // `add_reminder` 0.981 puan alıyor. Sorun indeksin yanlış olması değil,
-  // yalnızca masaüstü rotası ZATEN seçilmişse sorulmasıydı — rota ise
-  // yetenek bulunduğu için seçiliyor. Döngü, sinyalin hiç kullanılmaması
-  // demekti.
+  // ÖRNEKLEM KÜÇÜKTÜ. Set genişletilince ayrım çöktü:
   //
-  // Kapı iki koşulu birden ister ve ikisi de ölçümle seçildi:
+  //   sunucuda kalmalı   "Yarın için motivasyon sözü ver"  0.9988  ← en yüksek
+  //                      "Bu cümleyi İngilizceye çevir…"   0.9302
+  //                      "1350 TL'nin KDV'si"              0.9247
+  //   masaüstü gereken   "Bana bir hatırlatıcı kur…"       0.9819  ← en düşük
   //
-  //   yetki      Yeteneğin yürütme YETKİSİ `desktop` olmalı. `hybrid`
-  //              yetenekler (math_solve, document_write) sunucuda da
-  //              çalışabilir; onları masaüstüne göndermek gereksiz gecikme.
-  //   skor       Masaüstü gerektiren turların en düşük eşleşmesi 0.981,
-  //              sunucuda kalması gerekenlerin masaüstü-yetkili en yüksek
-  //              eşleşmesi 0.873 ("Selam nasılsın?" → get_calendar_events).
-  //              Eşik aradaki boşluğun ortasında; her iki yöne ~0.05 pay var.
+  // Sunucuda kalması gereken bir istem, gerçek bir masaüstü isteminden YÜKSEK
+  // puan alıyor; hiçbir eşik ikisini ayıramaz. Marj da ayırmıyor (motivasyon
+  // 0.1606, "Ekran görüntüsü al" 0.0359). Canlıda görüldü: çeviri isteği
+  // "Bu görev masaüstünde çalışacak." cevabını aldı.
   //
-  // Yalnız YÜKSELTİR: zaten masaüstüne giden bir turu geri çekmez.
-  if (
-    routeDecision.route !== "desktop_runtime" &&
-    routeDecision.taskRoute?.operationalRoute !== "desktop_runtime"
-  ) {
-    const capabilityMatches = await matchDesktopCapabilitiesWithEmbeddings({
-      query: prompt,
-      limit: 1,
-      logger: app.log,
-    }).catch(() => []);
-    const top = capabilityMatches[0];
-    if (
-      top &&
-      top.score >= DESKTOP_CAPABILITY_ROUTE_THRESHOLD &&
-      resolveDesktopCapabilityExecutionPolicy(top.capability)?.authority ===
-        "desktop"
-    ) {
-      app.log?.info?.(
-        { capability: top.capability, score: top.score, route: routeDecision.route },
-        "turn escalated to desktop by capability index",
-      );
-      // Kararın TAMAMI tutarlı olmalı. İlk denemede yalnız `route` ve
-      // `requiredRuntime` değiştirildi; geri kalan alanlar sohbet kararının
-      // değerlerinde kaldı (`mode: "chat"`, `requiresLocalRuntime: false`,
-      // `userFacingMessage: "Bu istek sohbet olarak işlenecek."`). Sonuç:
-      // masaüstüne yönlenen tur kullanıcıya o anlamsız cümleyi veriyordu.
-      // Bir kararın yarısını değiştirmek, kararı değiştirmek değildir.
-      routeDecision = {
-        ...routeDecision,
-        route: "desktop_runtime",
-        requiredRuntime: "desktop",
-        mode: "executable_task",
-        userFacingMessage: "Bu görev masaüstünde çalışacak.",
-        capabilities: [
-          ...new Set([...(routeDecision.capabilities ?? []), top.capability]),
-        ],
-      };
-    }
-  }
+  // Ham benzerlik bu uzayda her istem için yüksektir — aynı ders olgu
+  // sağlayıcılarında da öğrenildi. Orada AYIRT EDİCİ marjdı; burada ne skor ne
+  // marj işe yarıyor, çünkü yetenek açıklamaları günlük dille fazla örtüşüyor
+  // ("yarın", "toplantı", "program"). Yükseltmeyi ayakta tutmak, sıradan
+  // sohbeti bozma pahasına hatırlatıcıyı düzeltmek olurdu.
+  //
+  // Uydurma iddiaya karşı asıl koruma zaten var ve yeniden çalışıyor:
+  // eylem-iddia kapısı (emekli model düzeltildikten sonra). Rota sinyali
+  // istenirse ayrı bir fazda, kendi ölçüm setiyle ele alınmalı.
 
   // Device admission uses only explicit client/system requirements plus
   // registry-validated desktop tools from the structured model decision.
