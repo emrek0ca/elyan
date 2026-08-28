@@ -7649,6 +7649,11 @@ async function processSharedBrainChatTask(
     let streamingPreviewPublished = false;
     let lastStreamingSnapshotAt = 0;
     const STREAMING_SNAPSHOT_INTERVAL_MS = 900;
+    /**
+     * İlerleme önizlemesinin bekleme süresi. Ölçülen `inference_total` p50'si
+     * ~930 ms; bunun altına inmek hızlı turlarda titreme üretir.
+     */
+    const PROGRESS_PREVIEW_DELAY_MS = 1_200;
 
     if (chatStreaming && !resumedQueueAttempt) {
       const now = new Date().toISOString();
@@ -7915,6 +7920,10 @@ async function processSharedBrainChatTask(
             }
             const nowMs = Date.now();
             const now = new Date(nowMs).toISOString();
+            if (progressPreviewTimer) {
+              clearTimeout(progressPreviewTimer);
+              progressPreviewTimer = null;
+            }
             if (!streamingPreviewPublished && ackTaskTrace) {
               streamingPreviewPublished = true;
               const previewBlocks = composeAssistantMessageBlocks({
@@ -7971,10 +7980,53 @@ async function processSharedBrainChatTask(
           }
         : undefined,
     };
+    // ÖLÜ HAVA: kanıt toplayan turlarda kullanıcı boş balona bakıyor.
+    //
+    // ÖLÇÜLEN (2026-08-28): hava durumu turunda son olay +1242 ms'de, ilk
+    // token +4631 ms'de — arada 3,4 saniye HİÇBİR ŞEY. En kötü koşuda bu süre
+    // 10,8 saniyeydi. Cevap doğru geliyor, ama tur donmuş görünüyor.
+    //
+    // `block.preview` olayı ve `task_trace` bloğu bu iş için ZATEN var; tek
+    // eksikleri ne zaman yayınlandıklarıydı. Bugün yalnız İLK TOKEN geldiğinde
+    // yayınlanıyorlar — yani sessizlik bittikten sonra, tam da gereksiz
+    // oldukları anda.
+    //
+    // Gecikmeli yayın bilinçli: hızlı turlar (p50 ~930 ms) zaten cevabı
+    // veriyor ve önce "düşünüyorum" gösterip hemen üstüne yazmak titreme
+    // yaratırdı. Eşik, ölçülen p50'nin üstünde durur; yalnız GERÇEKTEN uzun
+    // süren turlar ilerleme gösterir.
+    let progressPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+    if (chatStreaming && !resumedQueueAttempt) {
+      const previewChatStreaming = chatStreaming;
+      progressPreviewTimer = setTimeout(() => {
+        if (streamingPreviewPublished) return;
+        streamingPreviewPublished = true;
+        const progressBlocks = composeAssistantMessageBlocks({
+          content: "",
+          blocks: [buildTaskTraceBlock({ task: runningTask })],
+          streaming: true,
+        });
+        void publishVolatileChatStreamEvent(app, {
+          userId: input.userId,
+          deviceId: runningTask.targetDeviceId,
+          taskId: runningTask.id,
+          sessionId: previewChatStreaming.sessionId,
+          messageId: previewChatStreaming.assistantMessageId,
+          event: "block.preview",
+          seq: ++streamSeq,
+          payload: {
+            blocks: progressBlocks,
+            streaming: { firstDeltaMs: null },
+          },
+        }).catch(() => undefined);
+      }, PROGRESS_PREVIEW_DELAY_MS);
+      progressPreviewTimer.unref?.();
+    }
     let inference = await generateGovernedSharedBrainReply(
       app,
       governedInferenceRequest,
     ).finally(() => {
+      if (progressPreviewTimer) clearTimeout(progressPreviewTimer);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (inferenceVision !== input.ephemeralVision) {
         clearEphemeralVisionCarrier(inferenceVision);

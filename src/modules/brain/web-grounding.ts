@@ -1184,6 +1184,7 @@ async function fetchBraveSearchQuery(
   app: FastifyInstance,
   query: string,
   policy: FreshDataPolicy,
+  timeoutMs: number = app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
 ): Promise<{
   query: string;
   results: WebGroundingSearchResult[];
@@ -1202,7 +1203,7 @@ async function fetchBraveSearchQuery(
   url.searchParams.set("safesearch", "moderate");
   url.searchParams.set("extra_snippets", "true");
 
-  const { controller, timeout } = createTimedAbortController(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS);
+  const { controller, timeout } = createTimedAbortController(timeoutMs);
   try {
     const response = await fetch(url.toString(), {
       method: "GET",
@@ -1290,6 +1291,7 @@ async function fetchSearXNGQuery(
   app: FastifyInstance,
   query: string,
   policy: FreshDataPolicy,
+  timeoutMs: number = app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
 ): Promise<{
   query: string;
   results: WebGroundingSearchResult[];
@@ -1313,7 +1315,7 @@ async function fetchSearXNGQuery(
   url.searchParams.set("engines", "google,bing,duckduckgo,brave,yahoo,wikipedia");
   url.searchParams.set("pageno", "1");
 
-  const { controller, timeout } = createTimedAbortController(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS);
+  const { controller, timeout } = createTimedAbortController(timeoutMs);
   try {
     const response = await fetch(url.toString(), {
       method: "GET",
@@ -1387,12 +1389,13 @@ async function fetchDuckDuckGoQuery(
   app: FastifyInstance,
   query: string,
   policy: FreshDataPolicy,
+  timeoutMs: number = app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
 ): Promise<{
   query: string;
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
 }> {
-  const { controller, timeout } = createTimedAbortController(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS);
+  const { controller, timeout } = createTimedAbortController(timeoutMs);
   try {
     const searchUrl = new URL(app.config.ELYAN_WEB_SEARCH_BASE_URL);
     searchUrl.searchParams.set("q", query);
@@ -1452,42 +1455,82 @@ async function fetchDuckDuckGoQuery(
   }
 }
 
+/**
+ * ARAMA İÇİN TEK BÜTÇE — deneme başına değil.
+ *
+ * ÖLÇÜLEN ARIZA (2026-08-28): `augment.web` bir hava durumu turunda 7359 ms
+ * sürdü ve kullanıcı 9 saniye boyunca donmuş bir balona baktı. Sebep yapısal:
+ * `fetchSearchQuery` sağlayıcıları SIRAYLA deniyor (SearXNG → Brave →
+ * DuckDuckGo) ve her denemeye TAM `ELYAN_WEB_GROUNDING_TIMEOUT_MS` (6.5 sn)
+ * veriliyordu. Üç deneme, en kötü durumda 19,5 saniye — bir sohbet turunun
+ * tüm bütçesinin yirmi katı.
+ *
+ * Zaman aşımı bir arama sağlayıcısı için makul olabilir; sorun onun bir TUR
+ * bütçesiyle hiç ilişkilendirilmemiş olmasıydı. Sohbet turu ölçülen p50'sini
+ * (~930 ms) zaten aşan bir aramayı beklemeye devam edemez: elindeki kanıtla
+ * cevap vermek, doğru cevabı on saniye sonra vermekten iyidir.
+ *
+ * Araştırma iş yükleri yapılandırılmış değeri aynen korur — orada kullanıcı
+ * zaten bir araştırmanın sürmesini bekliyor.
+ */
+function webSearchBudgetMs(
+  app: FastifyInstance,
+  workload: SharedBrainWorkload,
+): number {
+  const configured = app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS;
+  const conversational =
+    workload === "mobile_chat_fast" ||
+    workload === "mobile_chat_balanced" ||
+    workload === "fast_route" ||
+    workload === "intent";
+  return conversational ? Math.min(configured, 2_500) : configured;
+}
+
 async function fetchSearchQuery(
   app: FastifyInstance,
   query: string,
   policy: FreshDataPolicy,
+  /** Bu aramanın TAMAMI için kalan süre; denemeler bunu paylaşır. */
+  budgetMs: number = app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
 ): Promise<{
   query: string;
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
 }> {
-  const attempts: Array<() => Promise<{
+  const attempts: Array<(timeoutMs: number) => Promise<{
     query: string;
     results: WebGroundingSearchResult[];
     degradedReason: string | null;
   }>> = [];
   if (app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL) {
-    attempts.push(() => fetchSearXNGQuery(app, query, policy));
+    attempts.push((timeoutMs) => fetchSearXNGQuery(app, query, policy, timeoutMs));
     if (app.config.BRAVE_SEARCH_API_KEY) {
-      attempts.push(() => fetchBraveSearchQuery(app, query, policy));
+      attempts.push((timeoutMs) => fetchBraveSearchQuery(app, query, policy, timeoutMs));
     }
   } else if (app.config.ELYAN_SEARCH_PROVIDER === "brave" && app.config.BRAVE_SEARCH_API_KEY) {
-    attempts.push(() => fetchBraveSearchQuery(app, query, policy));
+    attempts.push((timeoutMs) => fetchBraveSearchQuery(app, query, policy, timeoutMs));
     if (app.config.SEARXNG_BASE_URL) {
-      attempts.push(() => fetchSearXNGQuery(app, query, policy));
+      attempts.push((timeoutMs) => fetchSearXNGQuery(app, query, policy, timeoutMs));
     }
   } else if (app.config.SEARXNG_BASE_URL) {
-    attempts.push(() => fetchSearXNGQuery(app, query, policy));
+    attempts.push((timeoutMs) => fetchSearXNGQuery(app, query, policy, timeoutMs));
   } else if (app.config.BRAVE_SEARCH_API_KEY) {
-    attempts.push(() => fetchBraveSearchQuery(app, query, policy));
+    attempts.push((timeoutMs) => fetchBraveSearchQuery(app, query, policy, timeoutMs));
   }
   if (attempts.length < 2) {
-    attempts.push(() => fetchDuckDuckGoQuery(app, query, policy));
+    attempts.push((timeoutMs) => fetchDuckDuckGoQuery(app, query, policy, timeoutMs));
   }
 
   const degradedReasons: string[] = [];
+  // Bütçe denemeler ARASINDA paylaşılır. Biten bütçe yeni deneme başlatmaz:
+  // sıradaki sağlayıcı da aynı süreyi harcasaydı tur iki katına çıkardı.
+  const deadlineAt = Date.now() + Math.max(0, budgetMs);
   for (const attempt of attempts) {
-    const result = await attempt();
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) break;
+    const result = await attempt(
+      Math.min(remainingMs, app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS),
+    );
     if (result.results.length > 0) {
       return {
         ...result,
@@ -1519,6 +1562,8 @@ function finiteWeatherNumber(value: unknown): number | null {
 async function verifyResult(
   app: FastifyInstance,
   input: WebGroundingSearchResult,
+  /** Sayfa içeriğini çekmek için bu turda ayrılan süre. */
+  budgetMs: number = app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
 ): Promise<WebGroundingSearchResult> {
   if (!isSafePublicHttpUrl(input.url)) {
     return {
@@ -1529,7 +1574,7 @@ async function verifyResult(
   }
   /* When Jina Reader is enabled, use it for clean markdown content */
   if (app.config.JINA_READER_ENABLED) {
-    return verifyResultViaJina(app, input);
+    return verifyResultViaJina(app, input, budgetMs);
   }
   return verifyResultViaHtml(app, input);
 }
@@ -1537,9 +1582,17 @@ async function verifyResult(
 async function verifyResultViaJina(
   app: FastifyInstance,
   input: WebGroundingSearchResult,
+  budgetMs: number = app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS,
 ): Promise<WebGroundingSearchResult> {
   const jinaUrl = `https://r.jina.ai/${input.url}`;
-  const timeoutMs = Math.max(3000, Math.min(app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 7000));
+  // ÖLÇÜLEN ARIZA (2026-08-28): `augment.web` p50'si tam 6500 ms çıkıyordu —
+  // yani yapılandırılmış zaman aşımının kendisi. Süre ARAMADA değil, arama
+  // sonuçlarının sayfa içeriğini çekmekteydi ve buranın da bir tur bütçesi
+  // yoktu. Alt sınır 3000 ms sabitti; sohbet turunun tamamı bundan kısa.
+  const timeoutMs = Math.max(
+    800,
+    Math.min(budgetMs, app.config.ELYAN_WEB_GROUNDING_TIMEOUT_MS, 7000),
+  );
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -2342,7 +2395,16 @@ export async function searchPublicWebGrounding(
         policy: freshDataPolicy,
       }), freshDataPolicy);
       const searchRuns = await Promise.allSettled(
-        queries.map((candidate) => fetchSearchQuery(app, candidate, freshDataPolicy)),
+        // Her sorgu kendi bütçesini alır; sorgular paralel koştuğu için
+        // turun toplam arama süresi de bu bütçeyle sınırlı kalır.
+        queries.map((candidate) =>
+          fetchSearchQuery(
+            app,
+            candidate,
+            freshDataPolicy,
+            webSearchBudgetMs(app, input.workload),
+          ),
+        ),
       );
       const degradedReasons: string[] = [];
       const merged = new Map<string, WebGroundingSearchResult>();
@@ -2401,7 +2463,14 @@ export async function searchPublicWebGrounding(
         getWebVerificationLimit(input.workload, freshDataPolicy),
         freshDataPolicy,
       );
-      const verifiedResults = await Promise.allSettled(verifiedCandidates.map((result) => verifyResult(app, result)));
+      // Doğrulama da turun bütçesine tabidir; sayfalar paralel çekildiği için
+      // toplam süre tek bir sayfanın bütçesini aşmaz.
+      const verificationBudgetMs = webSearchBudgetMs(app, input.workload);
+      const verifiedResults = await Promise.allSettled(
+        verifiedCandidates.map((result) =>
+          verifyResult(app, result, verificationBudgetMs),
+        ),
+      );
       for (let index = 0; index < verifiedCandidates.length; index += 1) {
         const settled = verifiedResults[index];
         if (settled?.status === "fulfilled") {
