@@ -4,6 +4,7 @@ import {
   evaluateActionClaimEvidence,
   type ActionClaimSemantics,
 } from "./action-claim-gate.js";
+import { ASSISTANT_TURN_FAILURE_FALLBACK_TR } from "./response-policy.js";
 
 const performedActionSemantics: ActionClaimSemantics = {
   assertsPerformedAction: true,
@@ -25,7 +26,6 @@ test("fabricated: action claim on shared_brain with no executed tools is rejecte
     route: "shared_brain",
     executedToolCount: 0,
     hasArtifactEvidence: false,
-    fallbackUsed: false,
     hasVisibleText: true,
     semantics: performedActionSemantics,
   });
@@ -40,7 +40,6 @@ test("not fabricated: executed tools count as evidence even with an action claim
     route: "shared_brain",
     executedToolCount: 2,
     hasArtifactEvidence: false,
-    fallbackUsed: false,
     hasVisibleText: true,
     semantics: performedActionSemantics,
   });
@@ -54,7 +53,6 @@ test("not fabricated: a produced artifact counts as evidence", () => {
     route: "shared_brain",
     executedToolCount: 0,
     hasArtifactEvidence: true,
-    fallbackUsed: false,
     hasVisibleText: true,
     semantics: performedActionSemantics,
   });
@@ -68,7 +66,6 @@ test("not fabricated: a plain conversational reply is never blocked", () => {
     route: "shared_brain",
     executedToolCount: 0,
     hasArtifactEvidence: false,
-    fallbackUsed: false,
     hasVisibleText: true,
     semantics: noActionSemantics,
   });
@@ -83,7 +80,6 @@ test("not fabricated: semantics unavailable never over-rejects", () => {
     route: "shared_brain",
     executedToolCount: 0,
     hasArtifactEvidence: false,
-    fallbackUsed: false,
     hasVisibleText: true,
     semantics: null,
   });
@@ -92,17 +88,36 @@ test("not fabricated: semantics unavailable never over-rejects", () => {
 });
 
 // Etiketli continuity/degraded geri-düşüş zaten dürüst bir yanıttır → geçer.
-test("not fabricated: labeled fallback turns are exempt", () => {
+// ETİKETLİ YEDEK METNİN KENDİSİDİR, SAĞLAYICI DEĞİŞİKLİĞİ DEĞİL.
+//
+// Bu test eskiden `fallbackUsed: true` ile muafiyet bekliyordu; o bayrak
+// "zincirin birincil adayı kullanılmadı" demek ve sık sık doğru oluyor. Yani
+// uydurma koruması, model değiştiği her turda kapanıyordu — ölçülen sonuç:
+// masaüstü bağlı değilken "Hatırlatıcı eklendi: Yarın saat 11:00'da spor."
+test("not fabricated: an honest failure sentence claims nothing", () => {
   const decision = evaluateActionClaimEvidence({
     route: "shared_brain",
     executedToolCount: 0,
     hasArtifactEvidence: false,
-    fallbackUsed: true,
     hasVisibleText: true,
+    responseText: ASSISTANT_TURN_FAILURE_FALLBACK_TR,
     semantics: performedActionSemantics,
   });
   assert.equal(decision.fabricated, false);
   assert.equal(decision.reason, "labeled_fallback");
+});
+
+test("fabricated: a provider fallback does not excuse an invented action", () => {
+  // Model değişmiş olabilir; iddia yine uydurmadır.
+  const decision = evaluateActionClaimEvidence({
+    route: "shared_brain",
+    executedToolCount: 0,
+    hasArtifactEvidence: false,
+    hasVisibleText: true,
+    responseText: "Hatırlatıcı eklendi: Yarın saat 11:00'da spor.",
+    semantics: performedActionSemantics,
+  });
+  assert.equal(decision.fabricated, true);
 });
 
 // Masaüstü rotası gerçek yürütme semantiğine sahiptir → bu kapı devreye girmez.
@@ -111,7 +126,6 @@ test("not fabricated: non-shared_brain routes are out of scope", () => {
     route: "desktop",
     executedToolCount: 0,
     hasArtifactEvidence: false,
-    fallbackUsed: false,
     hasVisibleText: true,
     semantics: performedActionSemantics,
   });
@@ -125,7 +139,6 @@ test("not fabricated: low-confidence action claim stays below threshold", () => 
     route: "shared_brain",
     executedToolCount: 0,
     hasArtifactEvidence: false,
-    fallbackUsed: false,
     hasVisibleText: true,
     semantics: {
       assertsPerformedAction: true,

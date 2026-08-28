@@ -314,6 +314,7 @@ import {
 } from "../../core/understanding/learning-signal-quality.js";
 import {
   evaluateDesktopFastPath,
+  matchDesktopCapabilitiesWithEmbeddings,
   refineDesktopCapabilityHints,
 } from "./desktop-capability-embedding-match.js";
 import { resolveDesktopCapabilityExecutionPolicy } from "./desktop-capability-execution-policy.js";
@@ -2298,6 +2299,19 @@ function isEmptyOrDeadEndAssistantReply(reply: {
   }
   return !text || isGenericAssistantFallbackReply(text);
 }
+
+/**
+ * Anlamsal yetenek eşleşmesinin masaüstüne yükseltme eşiği.
+ *
+ * Ölçüm (2026-08-28, Türkçe örnekler):
+ *   masaüstü gereken   add_reminder 0.981 · directory_tree 1.00 ·
+ *                      make_directory 1.10 · add_calendar_event 1.14–1.20 ·
+ *                      close_app 1.20
+ *   sunucuda kalmalı   email_send 0.721 · browser_session.click 0.724 ·
+ *                      get_calendar_events 0.873
+ * Aradaki boşluk 0.873 → 0.981; eşik ortada.
+ */
+const DESKTOP_CAPABILITY_ROUTE_THRESHOLD = 0.93;
 
 export function shouldUseVisualImageFastPath(input: {
   prompt: string;
@@ -6146,7 +6160,6 @@ async function completeServerBrainTask(
       Boolean(generatedImageArtifact) ||
       artifactPipeline.kind === "rendered" ||
       hasVisualDataBlock,
-    fallbackUsed: input.fallbackUsed ?? false,
   });
   const localTaskWithoutExecutionEvidence =
     input.route === "shared_brain" &&
@@ -9609,6 +9622,70 @@ export async function createTask(
       brainProfile: usageAccess.brainProfile,
       quota: undefined,
     }));
+  // YETENEK İNDEKSİ ROTA KARARINDAN SONRA DEĞİL, ONUN İÇİN SORULMALI.
+  //
+  // ÖLÇÜLEN ARIZA (2026-08-28): "Bana bir hatırlatıcı kur: yarın 11:00 spor"
+  // sunucu beyninde kalıyordu (`route: server_brain`, `capabilities: []`).
+  // Model orada bir araç çağrısı üretiyor, hiçbir şey onu yürütmüyor ve
+  // kullanıcı ya ham çağrıyı ya da uydurma bir "Hatırlatıcı eklendi" cevabını
+  // alıyordu.
+  //
+  // Oysa anlamsal yetenek indeksi doğru cevabı BİLİYOR: aynı cümle için
+  // `add_reminder` 0.981 puan alıyor. Sorun indeksin yanlış olması değil,
+  // yalnızca masaüstü rotası ZATEN seçilmişse sorulmasıydı — rota ise
+  // yetenek bulunduğu için seçiliyor. Döngü, sinyalin hiç kullanılmaması
+  // demekti.
+  //
+  // Kapı iki koşulu birden ister ve ikisi de ölçümle seçildi:
+  //
+  //   yetki      Yeteneğin yürütme YETKİSİ `desktop` olmalı. `hybrid`
+  //              yetenekler (math_solve, document_write) sunucuda da
+  //              çalışabilir; onları masaüstüne göndermek gereksiz gecikme.
+  //   skor       Masaüstü gerektiren turların en düşük eşleşmesi 0.981,
+  //              sunucuda kalması gerekenlerin masaüstü-yetkili en yüksek
+  //              eşleşmesi 0.873 ("Selam nasılsın?" → get_calendar_events).
+  //              Eşik aradaki boşluğun ortasında; her iki yöne ~0.05 pay var.
+  //
+  // Yalnız YÜKSELTİR: zaten masaüstüne giden bir turu geri çekmez.
+  if (
+    routeDecision.route !== "desktop_runtime" &&
+    routeDecision.taskRoute?.operationalRoute !== "desktop_runtime"
+  ) {
+    const capabilityMatches = await matchDesktopCapabilitiesWithEmbeddings({
+      query: prompt,
+      limit: 1,
+      logger: app.log,
+    }).catch(() => []);
+    const top = capabilityMatches[0];
+    if (
+      top &&
+      top.score >= DESKTOP_CAPABILITY_ROUTE_THRESHOLD &&
+      resolveDesktopCapabilityExecutionPolicy(top.capability)?.authority ===
+        "desktop"
+    ) {
+      app.log?.info?.(
+        { capability: top.capability, score: top.score, route: routeDecision.route },
+        "turn escalated to desktop by capability index",
+      );
+      // Kararın TAMAMI tutarlı olmalı. İlk denemede yalnız `route` ve
+      // `requiredRuntime` değiştirildi; geri kalan alanlar sohbet kararının
+      // değerlerinde kaldı (`mode: "chat"`, `requiresLocalRuntime: false`,
+      // `userFacingMessage: "Bu istek sohbet olarak işlenecek."`). Sonuç:
+      // masaüstüne yönlenen tur kullanıcıya o anlamsız cümleyi veriyordu.
+      // Bir kararın yarısını değiştirmek, kararı değiştirmek değildir.
+      routeDecision = {
+        ...routeDecision,
+        route: "desktop_runtime",
+        requiredRuntime: "desktop",
+        mode: "executable_task",
+        userFacingMessage: "Bu görev masaüstünde çalışacak.",
+        capabilities: [
+          ...new Set([...(routeDecision.capabilities ?? []), top.capability]),
+        ],
+      };
+    }
+  }
+
   // Device admission uses only explicit client/system requirements plus
   // registry-validated desktop tools from the structured model decision.
   // Planner hints remain separate: embedding expansion must never make a

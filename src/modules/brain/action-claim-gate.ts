@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { callGeminiFreeStructured } from "./gemini-utility-client.js";
+import { isGenericAssistantFallbackReply } from "./response-policy.js";
 
 /**
  * Eylem-taahhüdü kapısı (RC-2).
@@ -100,10 +101,11 @@ const SYSTEM_PROMPT = [
  * yoktur.
  */
 export function evaluateActionClaimEvidence(input: {
+  /** Görünür cevap metni — etiketli yedek kontrolü bunun üzerinden yapılır. */
+  responseText?: string;
   route: string;
   executedToolCount: number;
   hasArtifactEvidence: boolean;
-  fallbackUsed: boolean;
   hasVisibleText: boolean;
   semantics: ActionClaimSemantics | null;
   confidenceThreshold?: number;
@@ -120,7 +122,23 @@ export function evaluateActionClaimEvidence(input: {
   if (input.hasArtifactEvidence) {
     return { fabricated: false, reason: "artifact_produced", actionSummary: "" };
   }
-  if (input.fallbackUsed) {
+  // ETİKETLİ YEDEK, METNİN KENDİSİDİR — SAĞLAYICI DEĞİŞİKLİĞİ DEĞİL.
+  //
+  // ÖLÇÜLEN ARIZA (2026-08-28): "Bana bir hatırlatıcı kur" isteğine masaüstü
+  // bağlı olmadığı hâlde "Hatırlatıcı eklendi: Yarın saat 11:00'da spor."
+  // cevabı verildi. Hiçbir araç çalışmadı, hiçbir hatırlatıcı kurulmadı ve
+  // uydurma kapısı HİÇ çalışmadı.
+  //
+  // Sebep bu satırdı. `fallbackUsed` çıkarım tarafında "zincirin BİRİNCİL
+  // adayı kullanılmadı" demektir (bkz. inference.ts: `candidate.provider !==
+  // primaryCandidate?.provider || attemptedModel !== ...preferredModels[0]`).
+  // Yani başka bir model cevapladığında kapı kendini kapatıyordu — ve zincir
+  // ilk adayı sık sık atlıyor. Uydurma koruması, en çok gerektiği anda
+  // (model değişmiş, çıktı öngörülemez) devre dışı kalıyordu.
+  //
+  // Atlanması gereken şey, metnin KENDİSİNİN dürüst bir "yapamadım" cümlesi
+  // olmasıdır: öyle bir metin zaten hiçbir eylem iddia etmez.
+  if (isGenericAssistantFallbackReply(input.responseText ?? "")) {
     return { fabricated: false, reason: "labeled_fallback", actionSummary: "" };
   }
   if (!input.hasVisibleText) {
@@ -199,7 +217,6 @@ export async function detectFabricatedActionClaim(
     responseText: string;
     executedToolCount: number;
     hasArtifactEvidence: boolean;
-    fallbackUsed: boolean;
   },
 ): Promise<{ fabricated: boolean; reason: string; actionSummary: string }> {
   const hasVisibleText = Boolean(String(input.responseText ?? "").trim());
@@ -210,7 +227,9 @@ export async function detectFabricatedActionClaim(
     route: input.route,
     executedToolCount: input.executedToolCount,
     hasArtifactEvidence: input.hasArtifactEvidence,
-    fallbackUsed: input.fallbackUsed,
+    // Etiketli yedek kontrolü metnin kendisine bakar; bu yüzden metin
+    // ön-elemeye de geçmek zorunda.
+    responseText: input.responseText,
     hasVisibleText,
     semantics: null,
   });
@@ -250,7 +269,7 @@ export async function detectFabricatedActionClaim(
     route: input.route,
     executedToolCount: input.executedToolCount,
     hasArtifactEvidence: input.hasArtifactEvidence,
-    fallbackUsed: input.fallbackUsed,
+    responseText: input.responseText,
     hasVisibleText,
     semantics,
   });
