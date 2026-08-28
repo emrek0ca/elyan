@@ -27,7 +27,15 @@ import type { FactProvider } from "./types.js";
  * Böylece bu modül ikinci bir sözcük-deseni sahibi hâline gelmez.
  */
 
-const ABSOLUTE_THRESHOLD = 0.82;
+/**
+ * Ham skor tabanı. 0.82'den 0.85'e ÇIKARILDI (2026-08-28).
+ *
+ * Sebep canlı bir arıza: "Bir önceki cevabını kısalt" isteğine kullanıcı
+ * DEPREM RAPORU aldı. İstem `usgs_earthquake` sağlayıcısına 0.8608 puan
+ * veriyor ve eski taban 0.82 idi; sağlayıcı çağrıldı, sonucu kanıt olarak
+ * isteme girdi ve model onunla cevap verdi.
+ */
+const ABSOLUTE_THRESHOLD = 0.85;
 
 /**
  * EN İYİ ADAYIN İKİNCİYE FARKI — asıl kapı budur.
@@ -63,7 +71,33 @@ const ABSOLUTE_THRESHOLD = 0.82;
  * Tek sağlayıcı varsa marj tanımsızdır ve kapı uygulanmaz — ölçemediği bir
  * şey yüzünden turu kısıtlamak yanlış tarafa düşmek olurdu.
  */
-const MIN_SELECTION_MARGIN = 0.012;
+const MIN_SELECTION_MARGIN = 0.015;
+
+/**
+ * EŞİKLER DAR — VE BU BİLİNÇLİ.
+ *
+ * 18 Türkçe istemlik birleşik ölçümde (2026-08-28) İKİ SİNYAL DE TEK BAŞINA
+ * ayırmıyor:
+ *
+ *   skor    olgu 0.8555–0.9418   olgusal değil 0.7788–0.8608   → örtüşüyor
+ *   marj    olgu 0.0174–0.0670   olgusal değil 0.0001–0.0251   → örtüşüyor
+ *
+ * Birlikte ayırıyorlar (skor ≥ 0.85 VE marj ≥ 0.015) ama paylar ince:
+ * skorda 0.0057 ("Bir önceki cevabını uzat" 0.8498 ↔ "İstanbul'da hava kaç
+ * derece?" 0.8555), marjda 0.0037 ("Bir önceki cevabını kısalt" 0.0137 ↔
+ * "Dolar kaç TL?" 0.0174). Bu, ölçülen kümeye uydurulmuş bir sınırdır; bir
+ * ilke değildir ve genelleme garantisi yoktur.
+ *
+ * Yine de sıkılaştırmak doğru, çünkü HATALAR SİMETRİK DEĞİL:
+ *   yanlış pozitif → alakasız canlı veri isteme kanıt olarak girer ve model
+ *                    onunla cevap verir (deprem raporu). YANLIŞ CEVAP.
+ *   yanlış negatif → canlı veri alınmaz, model kendi bilgisiyle cevaplar.
+ *                    Muhtemelen BAYAT ama yanlış değil.
+ *
+ * Sınırı gevşetmek isteyen, önce ölçüm setini genişletmeli — bu kod tabanında
+ * aynı hata iki kez küçük örneklemle yapıldı (olgu seçimi ve masaüstü rota
+ * yükseltmesi; ikincisi geri alındı).
+ */
 /** Top-1'e bu kadar yakın adaylar da denenir. */
 const SHORTLIST_WINDOW = 0.03;
 const SHORTLIST_MAX = 2;

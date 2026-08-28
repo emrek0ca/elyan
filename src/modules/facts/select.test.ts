@@ -36,13 +36,16 @@ test("the margin threshold sits between the measured clusters", () => {
   // Ölçülen dağılım (yorumda tam listesi var):
   //   olgusal DEĞİL → en yüksek marj 0.0061
   //   olgusal       → en düşük marj 0.0174
+  // 18 istemlik BİRLEŞİK ölçümde olgusal olmayanların en yüksek marjı 0.0251
+  // ("Sen kimsin…"), olgusalların en düşüğü 0.0174 ("Dolar kaç TL?"). Marj
+  // TEK BAŞINA ayırmıyor; skor tabanıyla BİRLİKTE ayırıyor.
   assert.ok(
-    threshold > 0.0061,
-    `eşik ${threshold}, olgusal olmayanların en yükseğinin (0.0061) üstünde olmalı`,
+    threshold > 0.0137,
+    `eşik ${threshold}, "Bir önceki cevabını kısalt" marjının (0.0137) üstünde olmalı`,
   );
   assert.ok(
     threshold < 0.0174,
-    `eşik ${threshold}, olgusal olanların en düşüğünün (0.0174) altında olmalı`,
+    `eşik ${threshold}, olgusalların en düşük marjının (0.0174) altında olmalı`,
   );
 });
 
@@ -56,7 +59,7 @@ test("a single candidate is never rejected for lack of a runner-up", () => {
 test("the measured distribution stays written down next to the threshold", () => {
   // Eşik bir tahmin değil, bir ölçümün sonucudur. Ölçüm kaybolursa bir
   // sonraki kişi onu yeniden tahmine çevirir.
-  for (const marker of ["0.0061", "0.0174", "Fotosentezi", "Bugün hava"]) {
+  for (const marker of ["0.0174", "Bir önceki cevabını kısalt", "0.8608", "SİMETRİK DEĞİL"]) {
     assert.ok(
       SOURCE.includes(marker),
       `ölçüm kaydı eksik: ${marker}`,
