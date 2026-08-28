@@ -8465,7 +8465,27 @@ async function processSharedBrainChatTask(
               eq(chatMessages.taskId, completedTask.id),
               isNull(chatMessages.taskId),
             ),
-            sql`${chatMessages.status} <> 'completed'`,
+            // FENCE RAKİP BİR ÜRETİME KARŞIDIR — KENDİ GÖREV SENKRONUMUZA
+            // DEĞİL.
+            //
+            // Görev `completed`e geçtiğinde `chat/task-sync` asistan mesajını
+            // da tamamlanmış işaretliyor. Hızlı turlarda bu, buradaki
+            // finalizasyondan ÖNCE oluyor; `status <> 'completed'` koşulu
+            // hiçbir satır bulamıyor ve tur bayat sayılıp HİÇBİR stream olayı
+            // yayınlanmadan dönülüyordu.
+            //
+            // ÖLÇÜLEN ARIZA (2026-08-28): "Selam, nasılsın?" cevabı
+            // veritabanına yazılıyor ama canlı istemciye ne `message.delta`
+            // ne `message.completed` gidiyor — mobilde tur hiç bitmemiş gibi
+            // görünüyor.
+            //
+            // Ayrım artık kesin: satır BU TURUN üretim damgasını taşıyorsa
+            // bizimdir. Rakip bir üretim kendi damgasını basar ve bu koşulu
+            // geçemez, yani fence'in koruduğu şey aynen korunur.
+            or(
+              sql`${chatMessages.status} <> 'completed'`,
+              sql`${chatMessages.metadata} #>> '{chatGeneration,generationAttemptId}' = ${generationAttemptId}`,
+            ),
           ),
         )
         .returning({ id: chatMessages.id });
@@ -10612,6 +10632,22 @@ export async function createTask(
     } else {
       void processSharedBrainChatTask(app, {
         currentTask,
+        // TURUN KİMLİĞİ ÜRETİCİYLE PAYLAŞILIR.
+        //
+        // Asistan mesajı satırı oluşturulurken `chatGeneration
+        // .generationAttemptId` ile damgalanıyor. Bu kimlik geçirilmezse
+        // `processSharedBrainChatTask` kendine YENİ bir UUID üretir; sonra
+        // finalizasyon CAS'ı satırı "başka bir denemeye ait" sanıp turu bayat
+        // ilan eder ve HİÇBİR stream olayı yayınlamadan döner.
+        //
+        // ÖLÇÜLEN ARIZA (2026-08-28): "Selam, nasılsın?" gibi hızlı turlarda
+        // istemciye ne `message.delta` ne `message.completed` gidiyordu.
+        // Cevap veritabanına yazılıyor ("Merhaba."), ama canlı istemci boş
+        // balonda kalıyordu — mobilde tur hiç bitmemiş gibi görünür.
+        //
+        // Kuyruk yolu bu kimliği zaten geçiriyordu (aşağıdaki dispatch);
+        // eksik olan yalnız satır içi yoldu.
+        generationAttemptId: readChatGenerationAttemptId(currentTask),
         userId: input.userId,
         requestId: input.requestId,
         prompt,
