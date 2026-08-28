@@ -7,6 +7,7 @@ import type {
 import {
   buildTaskExecutionContract,
   syncTaskExecutionContractWithWorkOrder,
+  taskExecutionContractHash,
   validateTaskExecutionContract,
 } from "./task-execution-contract.js";
 import type { DesktopWorkOrder } from "./desktop-work-order.js";
@@ -81,9 +82,42 @@ test("buildTaskExecutionContract produces one bounded canonical snapshot", () =>
   assert.equal(contract.execution.maxSteps, 12);
   assert.equal(contract.execution.mode, "dynamic");
   assert.equal(contract.execution.allowedCapabilities.includes("sys_info"), true);
+  assert.match(contract.execution.toolSelection?.manifestHash ?? "", /^[a-f0-9]{64}$/u);
+  assert.deepEqual(
+    contract.execution.toolSelection?.candidates.map((candidate) => candidate.capability),
+    ["sys_info"],
+  );
   assert.match(contract.binding.hash, /^[a-f0-9]{64}$/u);
   assert.equal(contract.privacy.class, "local_private");
   assert.equal(validateTaskExecutionContract(contract).ok, true);
+});
+
+test("tool candidates cannot widen the allowed capability scope", () => {
+  const contract = buildTaskExecutionContract({
+    taskId: "task-selection-scope",
+    turnId: "turn-selection-scope",
+    message: "Sistem bilgisini getir",
+    routeDecision: route(),
+    turnContract: turn(),
+  });
+  contract.execution.toolSelection?.candidates.push({
+    capability: "open_app",
+    score: 0.9,
+    reason: "tampered_candidate",
+    readiness: "unknown",
+    sideEffect: "write",
+    approvalRequired: true,
+  });
+  const { binding: _binding, ...unbound } = contract;
+  contract.binding.hash = taskExecutionContractHash(unbound);
+
+  const validation = validateTaskExecutionContract(contract);
+
+  assert.equal(validation.ok, false);
+  assert.equal(
+    validation.ok ? null : validation.errors.some((error) => error.code === "TASK_CONTRACT_TOOL_CANDIDATE_OUTSIDE_SCOPE"),
+    true,
+  );
 });
 
 test("dynamic contracts never widen beyond the policy-filtered direct shortlist", () => {

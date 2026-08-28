@@ -1,194 +1,251 @@
-# Elyan Backend — Agent Reference
+# Elyan Backend — Çalışma Sözleşmesi ve Aktif Oturum Devri
 
-Bu repo Elyan'ın backend/control-plane ve server-brain katmanıdır.
-Elyan bir chatbot değil; veri okuyan, veri yazan, state yöneten, ölçülen ve zamanla
-tool/goal-loop ile iş yürüten bir ajan altyapısıdır.
+Bu dosya yeni bir oturumun mevcut işi sıfırdan araştırmadan güvenle sürdürmesi için tek başlangıç kaynağıdır. Önce tamamını oku, sonra repo durumunu doğrula.
 
-## Repo Özeti
+## 1. Repo ve Kesin Checkpoint
 
-- Stack: Node.js, TypeScript, Fastify, PostgreSQL + Drizzle, Redis + BullMQ.
-- Realtime: SSE event contract korunur.
-- AI provider: Groq ve ileride Elyan model provider planı; provider/model adı kullanıcıya sızdırılmaz.
-- Mobile/desktop contract: mevcut API shape, SSE event isimleri ve `elyan_blocks.v2` blok şeması bozulmaz.
-- Deploy: sadece kullanıcı istediğinde VPS'e deploy edilir.
+- Repo: `/Users/emrekoca/elyan-backend`
+- Branch: `perf/chat-first-token`
+- HEAD: `4713a35454abcf761f87e532363b437b3a6bd0af`
+- HEAD commit mesajı: `fix: C NLP takıldığında sessizce JS yedeğine düşüyorduk`
+- Tarih: 2026-08-28
+- Aktif değişiklikler commit edilmedi.
+- Deploy yapılmadı.
+- Bu değişikliklerde test, build, eval veya `tsc` çalıştırılmadı.
+- Önceki HEAD için kullanıcı `tsc --noEmit` temiz bilgisini verdi; bu bilgi mevcut dirty diff'i doğrulamaz.
 
-Temel komutlar:
-
-```bash
-npm run build
-npm test
-npx tsc --noEmit
-npm run evaluate:block-output
-JWT_SECRET=benchmark-test-secret-32-characters npm run benchmark:security
-JWT_SECRET=benchmark-test-secret-32-characters npm run benchmark:routing
-```
-
-Standart VPS deploy:
+Yeni oturumun ilk komutları yalnız durum okumalıdır:
 
 ```bash
-bash scripts/deploy-v1-release.sh
+cd /Users/emrekoca/elyan-backend
+git branch --show-current
+git rev-parse HEAD
+git status --short
+git diff --check
 ```
 
-## Mimari İlke
+Dirty worktree'yi resetleme, stashleme, geri alma veya başka branch'e taşıma. Mevcut değişikliklerin tamamı aktif işin parçasıdır.
 
-Düz metin sadece kullanıcının gördüğü son yüzeydir. Backend içinde kararlar ve
-hafıza düz metinden kazınmaz; mümkün olduğunca tipli JSON, canonical state,
-event log, metric ve policy kayıtlarıyla yürür.
+### Sahibi Biz Olmayan Değişiklik
 
-Ana akış:
+`DEVIR.md` silinmiş görünüyor. Bu silme bu çalışma sırasında başka bir aktör/kullanıcı tarafından ortaya çıktı. Dosyayı geri getirme, silmeyi stage etme, içeriğini değiştirme veya kendi işinmiş gibi raporlama. Olduğu gibi koru.
+
+## 2. Kullanıcının Aktif Talimatı
+
+Yalnız backend değiştirilecek:
+
+- Mobile repo'suna dokunma: `/Users/emrekoca/Desktop/mobile-elyan`
+- Desktop repo'suna dokunma: `/Users/emrekoca/Desktop/elyan`
+- Yeni mimari veya paralel runtime kurma; mevcut Elyan yapısını geliştir.
+- Dış REST, SSE ve `elyan_blocks.v2` sözleşmelerini kırma.
+- Yeni kod içi açıklama satırı ekleme.
+- Test dosyası ekleme.
+- Kullanıcı talimatı değişmedikçe test, build, eval veya `tsc` çalıştırma.
+- Kullanıcı ayrıca istemedikçe commit alma ve deploy yapma.
+- Gereksiz sohbet veya plan tekrarı yapma; doğrudan kodu tamamla.
+
+## 3. Elyan Mimari Sınırı
+
+Elyan chatbot değil; anlayan, planlayan, araç kullanan, doğrulayan, state/hafıza yöneten bir ajan sistemidir.
 
 ```text
 Mobile/Desktop client
-  -> Fastify API
-  -> routing/admission/security policy
-  -> server brain inference
-  -> typed blocks + memory/state/goal/tool metadata
-  -> PostgreSQL/Redis event state
-  -> SSE/REST response
+  -> Backend control-plane
+  -> canonical understanding + routing + safety
+  -> server brain / retrieval / memory / read-only server tools
+  -> typed result + event/state truth
+  -> REST/SSE/elyan_blocks.v2
 ```
 
-Backend private local computer actions çalıştırmaz. Desktop runtime özel dosya,
-browser, computer-use ve MCP execution sınırıdır. Backend sadece auth, billing,
-routing, orchestration metadata, memory/state, learning events ve realtime truth
-yönetir.
+Backend:
 
-## Korunacak Public Contract
+- auth, billing, devices, routing, task state, retrieval, memory, learning, model orchestration ve realtime truth yönetir;
+- private yerel dosya, browser, computer-use veya masaüstü aksiyonu çalıştırmaz;
+- private local execution gereken işi mevcut desktop task flow'una yönlendirir;
+- client metadata'yı authoritative state saymaz;
+- kullanıcı/session kimliği eşleşmeyen state veya hafızayı prompt'a sokmaz.
 
-Asla breaking change yapma:
+Desktop local/private executor'dır. Mobile yalnız backend sözleşmesini tüketir; execution authority değildir.
+
+## 4. Kırılmayacak Public Sözleşmeler
 
 - `/v1/chat/messages`
 - `/v1/realtime/stream`
 - `/v1/tasks`
 - `/v1/billing/*`
-- SSE events: `message.created`, `message.delta`, `message.completed`, `heartbeat`
+- SSE: `message.created`, `message.delta`, `message.completed`, `heartbeat`
 - `elyan_blocks.v2`
 
-Yeni alan eklenebilir. Var olan alan silinmez, yeniden adlandırılmaz, anlamı sessizce
-değiştirilmez.
+Yeni alan eklemeli olabilir. Mevcut alan silinmez, yeniden adlandırılmaz veya sessizce farklı anlamda kullanılmaz.
 
-Streaming monotoniktir: yayınlanan delta geri alınmaz.
+Streaming monotoniktir: yayımlanan delta geri alınmaz. Structured table/chart turunda doğrulama gerekiyorsa delta yayımlanmadan tamponlanır.
 
-## Son Yapılanlar
+## 5. Aktif İş: Backend Bağlam, Hafıza ve RAG Onarımı
 
-### Benchmark ve Telemetri Foundation
+Amaç: model kullanıcıyı ve önceki typed cevabı kaybetmeden anlamalı; takip sorusunu gereksiz web aramasına çevirmemeli; hafıza tek semantik aramayla bütçe içinde gelmeli; tool sonucu normal evidence/factuality/finalization zincirinden geçmeli; uydurma tablo/grafik veya sahte clarification oluşmamalı.
 
-- JSONL benchmark loader artık `input` yanında `message` formatını da normalize eder.
-- `expectedWorkload` workload benchmark beklentisine çevrilir.
-- `block-output-policy.jsonl` ana benchmark özetine uyumlu hale getirildi.
-- `turn_metrics` tablosu eklendi.
-- `recordTurnMetric` fire-and-forget çalışır; DB hatası kullanıcı cevabını, SSE'i veya billing'i etkilemez.
-- Prompt/content/private text turn metrics'e yazılmaz.
+Bulunan kök nedenler:
 
-### Memory ve Tercih Güncelleme
+1. `mobile_chat_fast`, canonical understanding yerine `emptyUnderstanding` kullanıyordu.
+2. Fast memory aynı sorgu ve adayları ikinci kez embed ediyordu; 320 ms dolunca hafıza yok oluyordu.
+3. `sourceReference` alt katmanlarda tekrar türetiliyordu.
+4. Önceki table/chart bloklarının gerçek satır ve noktaları modele taşınmıyordu.
+5. Server tool-loop erken return ile evidence, factuality, memory write, goal ve typed-block zincirini atlıyordu.
+6. `planIntent` tekrar hesaplanıp normal konuşmaya sahte clarification ekliyordu.
+7. Free plan katalog limiti 5 saatlik pencerede yalnız 4 budget unit idi.
 
-- Preferred-name gibi tek değerli kullanıcı tercihleri canonical key üzerinden yönetilir.
-- En son açık kullanıcı isteği kazanır; eski hitap adları aktif prompt'a karışmaz.
-- Explicit memory write yolu güçlendirildi; "bana X diye hitap et" gibi bilgiler bir sonraki turda etkili olacak şekilde yazılır.
-- Memory okumada safe, scoped ve dedupe edilmiş paketler tercih edilir.
+## 6. Uygulanmış Ancak Henüz Doğrulanmamış Değişiklikler
 
-### Dialogue State Store
+### Canonical Understanding ve Kaynak Referansı
 
-- `dialogue_states` tablosu eklendi.
-- Server-owned dialogue state modeli eklendi: goal, stage, open loops, user memory, tool history, style and mood signals.
-- Client metadata artık kaynak değil, en fazla destekleyici ipucudur.
-- Server state metadata'sı `server_dialogue_state.v1` kaynağıyla damgalanır.
+- `buildFastTaskUnderstanding` eklendi; fast/durable chat yolları artık typed intent + understanding envelope üretiyor.
+- Chat create aşamasında önceki konuşma server tarafından okunuyor.
+- `authoritativeSourceReference` bir kez belirlenip output contract'a taşınıyor.
+- “Az önce…”, “bunu…”, “son cevabını…”, “verdiğin/yazdığın/oluşturduğun…” takipleri önceki cevaba bağlanıyor.
+- Eski fallback davranışı geriye uyumluluk için korunuyor.
 
-### Kullanıcılar Arası Veri İzolasyonu
+### Typed Reference Context
 
-Kritik düzeltme: Backend artık mobilin gönderdiği untrusted `compactContext`,
-`rollingSummary`, `recentMessages` veya `userMemory` alanlarına körü körüne güvenmez.
+- `elyan.reference_context.v1` eklendi.
+- Alanlar: source reference, source message ID, block digest, bounded text, table rows/columns, chart series/points, artifact identity.
+- Veri yalnız server'da saklanan normalize edilmiş `elyan_blocks.v2` bloklarından türetiliyor.
+- Snapshot hash'i typed turn verisini kapsıyor.
+- Snapshot verification, `priorAssistant` ve `referenceContext` değerlerini hash'e bağlı prior turns ile çapraz doğruluyor.
+- Önceki typed table/chart takiplerinde retrieval ve web araçları kapatılıyor; kullanıcı açıkça güncel/harici kaynak isterse yeniden açılıyor.
 
-Yeni kural:
+### Fast Context ve Memory
 
-- Dialogue metadata sadece server tarafından `server_dialogue_state.v1` olarak damgalandıysa güvenilir.
-- Metadata `userId` ile eşleşmek zorunda.
-- Session varsa `sessionId` de eşleşmek zorunda.
-- Eşleşmeyen client cache prompt'a, continuity summary'ye veya fallback dialogue state'e girmez.
+- `elyan.fast_context.v1` paketi eklendi.
+- Canonical facts/preferences, dialogue state/open loops, en fazla 3 semantik hafıza ve typed reference context taşınıyor.
+- Dialogue state, canonical memory ve semantic memory aynı 320 ms deadline altında paralel okunuyor.
+- Model prompt'una user/session/memory ID listesi değil, sınırlı güvenli state projeksiyonu giriyor.
+- `searchBrainMemory` artık `semanticScore` döndürüyor ve opsiyonel `budgetMs` kabul ediyor.
+- Fast path ikinci embedding/rerank yapmıyor.
+- Eşik 0.86, aday 6, çıktı 3 ve bütçe 320 ms.
+- Stale, contested, superseded, deleted veya inactive kayıtlar prompt'a girmiyor.
+- `semanticScore` type alanı eski cache/test literal uyumluluğu için optional; fast path eksik değeri 0 sayıyor.
 
-Bu, hesap değişimi sonrası başka kullanıcının eski mobil cache'inden state sızmasını keser.
+### RAG ve Query
 
-### Agent Foundation
+- Retrieval sorgusu önce typed subject/topic, sonra entity, sonra bounded prompt fallback'inden kuruluyor.
+- Kullanıcının tüm “Az önce verdiğin tabloda…” cümlesi web sorgusu yapılmıyor.
+- Retrieval `lowConfidence`, semantic response gate'e `insufficient` evidence olarak taşınıyor.
+- Low-confidence table/chart/web_search blokları reddediliyor.
 
-- `tool-registry` ve sınırlı `agent-loop` temeli eklendi.
-- İlk server-brain tool seti mevcut yetenekleri tool olarak paketler:
-  - `web.search`
-  - `memory.query`
-  - `memory.write`
-  - `goals.update`
-- Write/side-effect tool'lar policy ile kapalı gelir; state write sadece açıkça izin verilen internal yolda çalışır.
-- `session_goals` yanında append-only goal event modeli için foundation eklendi.
+### Tool Loop
 
-### Proactive Foundation
+- Server tool-loop artık erken return etmiyor.
+- Araç istemeyen ilk model yanıtı ikinci provider çağrısı yapılmadan normal zincirde kullanılıyor.
+- Tool sonuçları `AgentToolResult` biçimine normalize edilip dialogue, memory/goal ve completion metadata yollarına aktarılıyor.
+- Table/chart isteklerinde tool sonuçlarından `authoritativeArtifactData` üretiliyor.
+- Request-scoped allowlist artık yalnız modele gösterimde değil execution anında da uygulanıyor.
+- Model, advertise edilmemiş veya write/side-effect bir tool adını uydurursa çalıştırılmıyor.
+- Son turda tool call kabul edilmiyor.
+- Provider timeout ve request key seed tool-loop turlarına taşınıyor.
+- Tool kullanılmış ama final text boş kalmışsa unguided ikinci normal provider çağrısına düşülmüyor; bounded retry yoluna kalıyor.
 
-- `proactive_triggers` tablosu eklendi.
-- Follow-up trigger, user mute, daily cap ve quiet-hour policy temeli eklendi.
-- Proactive engine flag kapalıyken inert kalır.
+### Table, Chart ve Clarification
 
-### Cost ve Latency Guard
+- Önceki typed table/chart verisi `VerifiedNumericPoint` olarak çıkarılıyor.
+- “En yüksek/en düşük” cevabı model nesrinden değil typed noktalardan deterministik üretiliyor.
+- Yüzde/para birimli hücreler mevcut `coerceFiniteNumber` ile okunuyor.
+- Numeric table/chart blokları prompt/context/tool/reference kanıtı olmadan yayımlanmıyor.
+- Chart bloğu yoksa “işte grafik/trend” vaat cümlesi temizleniyor; doğrulanmış veri yoksa açık fallback veriliyor.
+- Generic plan clarification branch kaldırıldı.
+- `planIntent` yalnız canonical turn contract'tan okunuyor.
 
-- Kısa sosyal turlar, refinement/self-critique, model çağrı sayısı ve token budget policy ayrıştırıldı.
-- AI cost reporting scriptleri ve provider invocation özetleri eklendi.
-- Amaç pahalı ikinci pass'leri kalite gerektirmeyen kısa turlardan çıkarmak, kalite isteyen işlerde korumaktır.
+### Kota
 
-### Elyan Model Learning Foundation
+- Free plan `fiveHourBudgetUnits`: 4 -> 12.
+- `dailyBudgetUnits`: 4 -> 12 ve mevcut 5 saatlik pencere alias'ı olarak kalıyor.
+- `weeklyBudgetUnits`: 72, değişmedi.
 
-- Approved correction dataset export eklendi.
-- Training queue preflight ve model artifact promotion policy eklendi.
-- Elyan model provider planı Groq yanında shadow/canary/primary aday olarak tasarlandı.
-- Canlı routing hâlâ flag ve kalite kapıları arkasındadır.
+## 7. Değişen Dosyalar
 
-## Güncel Doğrulama Durumu
+- `src/core/understanding/output-contract.ts`
+- `src/core/understanding/user-understanding-service.ts`
+- `src/modules/billing/catalog.ts`
+- `src/modules/brain/fast-path-memory.ts`
+- `src/modules/brain/inference.ts`
+- `src/modules/brain/memory.ts`
+- `src/modules/brain/semantic-response-gate.ts`
+- `src/modules/brain/tool-loop.ts`
+- `src/modules/chat/chat-context-snapshot.ts`
+- `src/modules/chat/service.ts`
+- `src/modules/tasks/completion-blocks.ts`
+- `src/modules/tasks/service.ts`
 
-Son local gate:
+`AGENTS.md` bu devir için yeniden yazıldı. `DEVIR.md` silinmesi bu çalışmanın parçası değildir.
 
-- `npm test`: 855/855 geçti.
-- `npx tsc --noEmit`: geçti.
-- `npm run evaluate:block-output`: 50/50 geçti.
-- `benchmark:security`: 20/20 geçti, secret leak 0%, system prompt leak 0%.
-- `benchmark:routing`: 15/15 geçti.
-- Full `npm run benchmark`: canlı provider erişimi gerektiren case'de `shared brain inference unavailable` ile kırılabilir; bunu kod regresyonu saymadan provider/env erişimiyle ayrıca doğrula.
+## 8. Tam Kesilen Nokta ve Sonraki Adım
 
-## Deploy Disiplini
+Oturum tam olarak tool sonucu evidence zinciri incelenirken kesildi.
 
-VPS:
+Mevcut durum:
 
-- Host: `root@84.247.172.213`
-- Remote repo: `/srv/elyan-backend`
-- Public API: `https://api.elyan.dev`
-- Standard script: `bash scripts/deploy-v1-release.sh`
+- Server tool-loop sonuçları `AgentToolResult` oluyor.
+- `summarizeToolResultsForMetadata` yalnız tool adı, durum, digest, output key'leri ve result count taşıyor.
+- `factuality-gate.ts::collectEvidenceSources`, `metadata.toolResults` okuyor ama gerçek bounded tool değerlerini görmüyor.
+- Table/chart için `authoritativeArtifactData` sayısal kanıt sağlıyor.
+- Genel read-only tool sonuçlarındaki isim/tarih/sayı iddiaları için factuality gate'in güvenli bir içerik kanalı hâlâ tamamlanmalı.
 
-Deploy script şunları yapar:
+Kritik güvenlik kuralı:
 
-- local `npm ci`, build, test
-- remote backup
-- repo sync
-- remote install, C NLP compile, build, test
-- schema bootstrap
-- Docker Compose rebuild/restart
-- post-deploy probe
+- Ham/private connector veya tool output'unu `result.metadata` içine koyma.
+- Governed response review logging, `activeInference.metadata` alanını spread ediyor; raw tool verisi oraya konursa log/public metadata sızıntısı olabilir.
+- Çözüm internal-only bounded evidence packet/channel olmalı ve public/review metadata oluşmadan çıkarılmalı; alternatif olarak doğrulanmış typed source block üretip gate'in yalnız o bounded bloğu okuması sağlanmalı.
+- `evidence-packet.ts` mevcut typed packet yapısını kullanıyor; yeni paralel sözleşme icat etme.
 
-İlk 502 restart settle olabilir; probe retry etmeden başarısız sayma.
+Sonraki oturum:
 
-## Kırmızı Çizgiler
+1. `src/modules/brain/inference.ts`, `tool-loop.ts`, `factuality-gate.ts`, `evidence-packet.ts` akışını bu noktadan tamamla.
+2. Tool evidence'i kullanıcı/log yüzeyine sızdırmadan factuality gate'e bağla.
+3. `authoritativeArtifactData`, typed block ve low-confidence kararlarının aynı kanıtı kullandığını statik olarak kontrol et.
+4. Son küçük patch'leri statik incele:
+   - execution allowlist map,
+   - timeout/requestKeySeed,
+   - empty final text retry davranışı,
+   - snapshot reference cross-check,
+   - optional `semanticScore` uyumluluğu.
+5. Yeni yorum satırı eklenmediğini ve yalnız izinli dosyaların değiştiğini diff üzerinden kontrol et.
+6. Kullanıcının test yasağı devam ediyorsa yalnız `git diff --check` ve diff/status incelemesi yap.
+7. Commit/deploy yapmadan sonucu kısa raporla.
 
-- API/SSE/mobile block contract kırılmaz.
-- Provider/system prompt/model adı kullanıcıya sızmaz.
-- Secret, private path, raw local file content loglanmaz.
-- Client-sent memory/dialogue state authoritative kabul edilmez.
-- Başka user'a ait memory/state/context prompt'a girmez.
-- Ham dosya/görsel backend'e zorla taşınmaz; mobile local export ve compact context sınırları korunur.
-- Desktop gerekmeyen iş desktop'a yönlendirilmez.
-- Backend private local computer tools çalıştırmaz.
-- Yeni sistemler flag/policy arkasında açılır.
+## 9. Kabul Senaryoları
 
-## Öncelikli Sonraki İşler
+Kodun hedef davranışı:
 
-1. Full benchmark'ı provider bağımlı olmadan deterministic/offline koşabilir hale getir.
-2. Turn Envelope yolunu flag arkasında production-shadow modda ölç.
-3. Dialogue state merge ve optimistic revision conflict davranışını canlı metriklerle izle.
-4. Memory Fabric v2'de tek değerli preference conflict/forget akışını tamamla.
-5. Agent loop tool calls için approval policy ve audit event kayıtlarını sıkılaştır.
-6. Proactive engine'i önce sadece follow-up kind ile sınırlı canlı shadow modda dene.
-7. Compute ayrıştırmada embedding/rerank işini API process dışına taşı.
-8. `inference.ts` god-file'ını davranış değiştirmeden küçük modüllere böl.
+- Selamlama normal cevap üretir; clarification kartı üretmez.
+- “Beni nasıl tanıyorsun?” canonical memory kullanır ve web araması yapmaz.
+- “Az önce verdiğin tabloda en yüksek yıl hangisi?” önceki typed tabloyu okuyup doğru yılı söyler; “Az” web sorgusu oluşmaz.
+- “Son cevabını kısalt” önceki asistan cevabını kaynak kabul eder.
+- “Bunu grafik olarak göster” aynı typed tablo verisinden chart üretir veya doğrulanmış veri yoksa açıkça yapılamadığını söyler.
+- Tool tabanlı tablo gerçek tool/reference/prompt verisi olmadan tamamlanmış sayılmaz.
+- Low-confidence RAG sonucu kanıtlanmamış isim, tarih veya sayı iddiası üretmez.
+- Fast memory tek semantic query/embedding ile 320 ms içinde tamamlanır veya sessizce yok sayılır.
+- Normal task en az 1 unit tüketmeye devam eder; free kullanıcı 5 saatlik pencerede 12 unit alır.
 
+## 10. Genel Kırmızı Çizgiler
+
+- Aynı karar ikinci yerde yeniden türetilmez.
+- Canonical state ve typed JSON authoritative; düz metin yalnız son yüzeydir.
+- Türkçe desenlerde yeni `\b` kullanma; Unicode harf lookaround veya mevcut Turkish normalization/stem yardımcılarını kullan.
+- Prompt, private içerik, secret, raw local path veya raw tool output loglanmaz.
+- Provider/model/system prompt kullanıcıya sızmaz.
+- Tool çağrısı registry + request allowlist + permission/safety policy eşleşmeden çalışmaz.
+- Backend private yerel bilgisayar aksiyonu çalıştırmaz.
+- Missing dependency kullanıcı akışını çökertmez.
+- Long-running işlem bounded timeout/retry/cancel davranışı taşır.
+- UI/mobile için execution truth türetilmez; backend typed contract tek kaynaktır.
+
+## 11. Commit ve Deploy Disiplini
+
+Şu anda commit/deploy yetkisi yoktur.
+
+Kullanıcı daha sonra commit isterse:
+
+- `DEVIR.md` silinmesini kendi değişikliğin gibi dahil etme; önce kullanıcı sahipliğini açıkça bildir.
+- Aktif backend diff'ini eksiksiz koru.
+- Commit SHA, branch, çalıştırılan/çalıştırılmayan kontroller ve deploy durumunu net raporla.
+
+Kullanıcı deploy isterse ancak o zaman mevcut release akışını incele ve uygula. Deploy başarısı yalnız commit veya `healthz` ile iddia edilmez; readiness ve gerçek authenticated chat/task/history akışı ayrıca doğrulanır. Kullanıcının o andaki doğrulama talimatı her zaman bu dosyadan üstündür.

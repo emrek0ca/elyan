@@ -52,8 +52,8 @@ const DOCS: EvalDoc[] = [
   // bunların üçünü de üst sıraya koyabilir ve bağlam penceresi tek kaynağın üç
   // kopyasıyla dolar; kapsama skoru da aynı terimleri üç kez sayıp şişer.
   { key: "kopya-a", title: "Elektrikli araç şarj notu", content: "Elektrikli araçlarda hızlı şarj bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır." },
-  { key: "kopya-b", title: "Elektrikli araç şarj notu (kopya)", content: "Elektrikli araçlarda hızlı şarj bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır." },
-  { key: "kopya-c", title: "Şarj notundan alıntı", content: "Elektrikli araçlarda hızlı şarj bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır." },
+  { key: "kopya-b", title: "Elektrikli araç şarj notu (kopya)", content: "Elektrikli araçlarda hızlı şarj bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır. Kopya not." },
+  { key: "kopya-c", title: "Şarj notundan alıntı", content: "Elektrikli araçlarda hızlı şarj, bataryayı yüzde seksene kadar yaklaşık otuz dakikada doldurur. Günlük kullanımda yüzde yirmi ile seksen arasında kalmak batarya ömrünü uzatır." },
 ];
 
 const CASES: EvalCase[] = [
@@ -129,7 +129,11 @@ async function main() {
     for (const evalCase of CASES) {
       const results = await searchKnowledge(app, { userId: EVAL_USER_ID, query: evalCase.query, limit: 5 });
       const expectedId = docIdByKey.get(evalCase.expect)!;
-      const ranked = results.results as Array<{ documentId: string }>;
+      const ranked = results.results as Array<{
+        documentId: string;
+        title: string;
+        score: number;
+      }>;
       // Yakın-kopya sınıfında "doğru belge" tek tek değil KÜMEdir: üçünden
       // hangisinin geldiği önemli değil, KAÇININ geldiği önemli.
       const rank =
@@ -142,7 +146,15 @@ async function main() {
       if (rank >= 1 && rank <= 5) bucket.hitAt5 += 1;
       bucket.rrSum += rank >= 1 ? 1 / rank : 0;
       byKind.set(evalCase.kind, bucket);
-      if (rank !== 1) misses.push(`${evalCase.kind} | rank=${rank || "-"} | ${evalCase.query}`);
+      if (rank !== 1) {
+        const top = ranked
+          .slice(0, 3)
+          .map((row) => `${row.title}:${Number(row.score).toFixed(4)}`)
+          .join(", ");
+        misses.push(
+          `${evalCase.kind} | rank=${rank || "-"} | ${evalCase.query} | top=${top}`,
+        );
+      }
       if (evalCase.maxDuplicateCopies != null) {
         const copies = ranked.filter((row) => duplicateDocIds.has(row.documentId)).length;
         const suppressed = results.orchestration?.suppressedDuplicates ?? 0;

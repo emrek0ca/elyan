@@ -49,7 +49,7 @@ test("consensus agrees on a direct local capability without storing model prose"
   assert.equal(JSON.stringify(result).includes("typed"), false);
 });
 
-test("consensus fails closed when semantic candidates disagree on execution surface", () => {
+test("consensus keeps model disagreement internal and selects the safer surface", () => {
   const result = buildUnderstandingConsensus({
     message: "Chrome u kapat",
     primary: classification(),
@@ -68,9 +68,45 @@ test("consensus fails closed when semantic candidates disagree on execution surf
     verifierInvoked: true,
   });
 
-  assert.equal(result.status, "clarification_required");
+  assert.equal(result.status, "fallback");
+  assert.equal(result.targetSurface, "desktop");
   assert.equal(result.conflict.targetSurface, true);
-  assert.equal(result.privacy.maySendPrivateContextToServer, true);
+  assert.equal(result.privacy.maySendPrivateContextToServer, false);
+});
+
+test("compatible server intents do not turn a typed table request into clarification", () => {
+  const result = buildUnderstandingConsensus({
+    message: "Şu verileri tablo olarak göster: 2021: 10, 2022: 20, 2023: 30",
+    primary: classification({
+      primaryIntent: "research",
+      requiresLocalRuntime: false,
+      requiresToolUse: false,
+      privacyRisk: "medium",
+      routingHints: {
+        mode: "research",
+        preferredCapabilities: [],
+        avoidCloud: false,
+        requiresLocalRuntime: false,
+      },
+    }),
+    verifier: classification({
+      primaryIntent: "document",
+      requiresLocalRuntime: false,
+      requiresToolUse: false,
+      privacyRisk: "medium",
+      routingHints: {
+        mode: "research",
+        preferredCapabilities: [],
+        avoidCloud: false,
+        requiresLocalRuntime: false,
+      },
+    }),
+    verifierInvoked: true,
+  });
+
+  assert.notEqual(result.status, "clarification_required");
+  assert.equal(result.targetSurface, "server");
+  assert.equal(result.privacy.class, "public");
 });
 
 // ---------------------------------------------------------------------------
@@ -98,7 +134,7 @@ test("açık masaüstü hedefi yüzey çatışmasını netleştirmeye çevirmez"
   assert.equal(consensus.targetSurface, "desktop");
 });
 
-test("açık hedef YOKKEN yüzey çatışması hâlâ netleştirme ister", () => {
+test("açık hedef yokken yüzey çatışması kullanıcı sorusuna dönüşmez", () => {
   const consensus = buildUnderstandingConsensus({
     message: "bunu bir pdf yap",
     primary: classification({ requiresLocalRuntime: true, privacyRisk: "high" }),
@@ -106,7 +142,8 @@ test("açık hedef YOKKEN yüzey çatışması hâlâ netleştirme ister", () =>
     verifierInvoked: true,
   });
 
-  assert.equal(consensus.status, "clarification_required");
+  assert.equal(consensus.status, "fallback");
+  assert.equal(consensus.targetSurface, "desktop");
 });
 
 test("açık hedef varken NİYET çatışması da netleştirme üretmez", () => {

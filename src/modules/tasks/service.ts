@@ -31,6 +31,7 @@ import {
 import type { RuntimeAuthTokenPayload } from "../../types/auth.js";
 import {
   recordBridgeLearningSignals,
+  buildFastTaskUnderstanding,
   buildTaskUnderstanding,
   emptyUnderstanding,
   recordTaskFeedback,
@@ -208,7 +209,9 @@ import {
   snapshotConversation,
   verifyChatContextSnapshot,
   type ChatContextSnapshot,
+  type ChatReferenceContext,
 } from "../chat/chat-context-snapshot.js";
+import { coerceFiniteNumber } from "../chat/chart-data.js";
 import { applyGoalProgressBlocks } from "../goals/service.js";
 import { recordStageDuration, startStage } from "../../lib/perf-telemetry.js";
 import {
@@ -347,7 +350,6 @@ import { artifactSpecToRenderRecipeBlocks } from "../artifacts/render-recipe-ada
 import type { ArtifactOutput } from "../artifacts/types.js";
 import { extractMoneyItems } from "../artifacts/utils.js";
 import { isDispatchWidgetType } from "../../contracts/assistant-block-schemas.js";
-import { suggestCapabilitiesSemantically } from "./capability-semantic-index.js";
 import { asRecord as readRecord } from "../../lib/record.js";
 import { resolveCompletionAssistantBlocks } from "./completion-blocks.js";
 // Blok kurma modülü buradan ÇIKARILDI; mevcut içe aktarmalar kırılmasın diye
@@ -789,6 +791,75 @@ function verifiedNumericPoints(
     ];
   });
   return points.length >= 2 ? points.slice(0, 240) : undefined;
+}
+
+function verifiedNumericPointsFromReferenceContext(
+  context: ChatReferenceContext | null | undefined,
+): VerifiedNumericPoint[] | undefined {
+  if (
+    !context ||
+    (context.sourceReference !== "previous_answer" &&
+      context.sourceReference !== "latest_artifact")
+  ) {
+    return undefined;
+  }
+  for (const block of context.blocks) {
+    if (block.type === "chart") {
+      const points = block.series.flatMap((series) => {
+        if (series.values.length > 0) {
+          return series.values.flatMap((value, index) => {
+            const label = series.labels[index]?.trim();
+            return label && Number.isFinite(value) ? [{ label, value }] : [];
+          });
+        }
+        return series.points.flatMap((point, index) => {
+          const value = point.value ?? point.y;
+          const label = point.label ?? String(point.x ?? index + 1);
+          return value != null && Number.isFinite(value) && label
+            ? [{ label, value }]
+            : [];
+        });
+      });
+      if (points.length >= 2) return points.slice(0, 240);
+    }
+    if (block.type === "table") {
+      const points = block.rows.flatMap((row) => {
+        const label = row[0]?.trim();
+        if (!label) return [];
+        for (let index = 1; index < row.length; index += 1) {
+          const value = coerceFiniteNumber(row[index]);
+          if (value != null) {
+            return [
+              {
+                label,
+                value,
+                ...(block.columns[index]?.trim()
+                  ? { unit: block.columns[index].trim() }
+                  : {}),
+              },
+            ];
+          }
+        }
+        return [];
+      });
+      if (points.length >= 2) return points.slice(0, 240);
+    }
+  }
+  return undefined;
+}
+
+function authoritativeDataFromReferenceContext(
+  context: ChatReferenceContext | null | undefined,
+): Record<string, unknown> | null {
+  const points = verifiedNumericPointsFromReferenceContext(context);
+  if (!points) return null;
+  return {
+    source: "reference_context",
+    kind: "table",
+    data: points,
+    sourceMessageId: context?.sourceMessageId ?? null,
+    sourceBlockDigest: context?.sourceBlockDigest ?? null,
+  };
 }
 
 function explicitPromptNumericPoints(
@@ -1436,6 +1507,12 @@ export function readServerBrainCompletionMetadata(
       metadata,
       "retrievalSemanticCandidateCount",
     ),
+    retrievalLowConfidence:
+      readInferenceBoolean(metadata, "retrievalLowConfidence") ?? false,
+    knowledgeEvidenceState: readInferenceString(
+      metadata,
+      "knowledgeEvidenceState",
+    ) as "none" | "verified" | "insufficient" | null,
     rerankUsed: readInferenceBoolean(metadata, "rerankUsed") ?? undefined,
     rerankDegradedReason: readInferenceString(metadata, "rerankDegradedReason"),
     completionLatencyMs: readInferenceNumber(metadata, "completionLatencyMs"),
@@ -5403,7 +5480,6 @@ async function completeServerBrainTask(
     route: string;
     workload: string;
     turnContract?: CommandTurnContract | null;
-    planningIntent?: boolean;
     modelRoute?: Record<string, unknown> | null;
     latencyMs: number;
     promptTokens: number;
@@ -5541,11 +5617,7 @@ async function completeServerBrainTask(
         ? payloadMetadata.selectedWorkload
         : null,
     planIntent:
-      input.workload === "planning" ||
-      input.turnContract?.planIntent === true ||
-      input.planningIntent === true ||
-      payloadMetadata.selectedWorkload === "planning" ||
-      persistedTurnContract?.planIntent === true,
+      effectiveTurnContract?.planIntent === true,
     contextTexts: derivationContextTexts,
     numericPoints: derivationNumericPoints,
     chartIntent,
@@ -7108,6 +7180,11 @@ async function processSharedBrainChatTask(
       snapshotCarrierPresent &&
       (chatContextSnapshot == null ||
         chatContextSnapshotVerification?.ok === false);
+    const referenceContext = chatContextSnapshotInvalid
+      ? null
+      : chatContextSnapshot?.referenceContext ?? null;
+    const referenceAuthoritativeData =
+      authoritativeDataFromReferenceContext(referenceContext);
     const deferredChatContext = readRecord(
       payloadMetadata.chatContextHydration,
     )?.deferred === true;
@@ -7309,8 +7386,11 @@ async function processSharedBrainChatTask(
               chatContextSnapshot.priorAssistant?.messageId ?? null,
             priorAssistantBlockDigest:
               chatContextSnapshot.priorAssistant?.blockDigest ?? null,
+            sourceReference:
+              referenceContext?.sourceReference ?? "current_prompt",
           }
         : null,
+      referenceContext,
     };
     const visualIntent = buildVisualIntentContract({
       prompt: input.prompt,
@@ -7832,7 +7912,13 @@ async function processSharedBrainChatTask(
       selectedWorkload === "mobile_chat_deep_refine" ||
       chatContextSnapshot?.turnKind === "correction" ||
       input.understanding.envelope?.conversation_state.turnKind ===
-        "correction";
+        "correction" ||
+      referenceContext?.blocks.some(
+        (block) => block.type === "table" || block.type === "chart",
+      ) === true ||
+      ["table", "chart"].includes(
+        String(turnContract?.outputContract.outputKind ?? "").toLowerCase(),
+      );
     const governedInferenceRequest: Parameters<
       typeof generateGovernedSharedBrainReply
     >[1] = {
@@ -8124,6 +8210,9 @@ async function processSharedBrainChatTask(
         toolCallCount: completionMetadata.toolFlow?.count ?? 0,
         verifiedEvidenceCount:
           completionMetadata.verifiedEvidenceCount ?? undefined,
+        retrievalLowConfidence: completionMetadata.retrievalLowConfidence,
+        knowledgeEvidenceState:
+          completionMetadata.knowledgeEvidenceState ?? undefined,
         artifactEvidence:
           completionMetadata.assistantBlocks.some((block) => {
             const type = String(
@@ -8150,7 +8239,9 @@ async function processSharedBrainChatTask(
               reason: semanticGate.reason,
               outputContract: semanticGate.outputContract,
               instruction:
-                "Önceki taslak mevcut turla semantik olarak uyuşmadı. Yalnızca mevcut kullanıcı isteğini yanıtla; kaynak, belge, web araması veya tamamlanma iddiası ekleme. Düzeltme turundaysa önceki cevabı aynen tekrarlama.",
+                semanticGate.evidenceState === "insufficient"
+                  ? "Bu turda zorunlu kanıt bulunamadı. İsim, tarih veya sayı uydurma; doğrulanmış kanıt bulunamadığını kısa ve doğal biçimde söyle."
+                  : "Önceki taslak mevcut turla semantik olarak uyuşmadı. Yalnızca mevcut kullanıcı isteğini yanıtla; kaynak, belge, web araması veya tamamlanma iddiası ekleme. Düzeltme turundaysa önceki cevabı aynen tekrarlama.",
             },
           },
           onDelta: undefined,
@@ -8181,6 +8272,9 @@ async function processSharedBrainChatTask(
           webSourceCount: repairMetadata.webSourceCount,
           toolCallCount: repairMetadata.toolFlow?.count ?? 0,
           verifiedEvidenceCount: repairMetadata.verifiedEvidenceCount ?? undefined,
+          retrievalLowConfidence: repairMetadata.retrievalLowConfidence,
+          knowledgeEvidenceState:
+            repairMetadata.knowledgeEvidenceState ?? undefined,
           artifactEvidence: repairMetadata.assistantBlocks.some((block) =>
             ["artifact", "document_block", "table", "chart"].includes(
               String((block as { type?: unknown }).type ?? "").toLowerCase(),
@@ -8200,7 +8294,7 @@ async function processSharedBrainChatTask(
         throw new AppError(
           502,
           "semantic_response_rejected",
-          "Yanıt mevcut isteğinle güvenli biçimde eşleşmedi. Lütfen isteği biraz daha açık yazıp tekrar dene.",
+          "Yanıt doğrulama kapısından geçmedi; görev güvenli biçimde durduruldu.",
           {
             transient: false,
             retrySuggested: false,
@@ -8308,13 +8402,15 @@ async function processSharedBrainChatTask(
       model: inference.model,
       route: inference.metadata.route as string,
       workload: inference.metadata.workload as string,
-      planningIntent: input.understanding.envelope?.intent.action === "plan",
       turnContract,
       latencyMs: inference.latencyMs,
       promptTokens: inference.promptTokens,
       completionTokens: inference.completionTokens,
       totalTokens: inference.totalTokens,
       ...completionMetadata,
+      authoritativeArtifactData:
+        completionMetadata.authoritativeArtifactData ??
+        referenceAuthoritativeData,
     });
     if (!completedTask.completionTransitionOwned) {
       return;
@@ -8414,18 +8510,15 @@ async function processSharedBrainChatTask(
         assistantBlocks: completedResultBlocks,
         prompt: input.prompt,
         selectedWorkload,
-        planIntent:
-          selectedWorkload === "planning" ||
-          turnContract?.planIntent === true ||
-          input.understanding.envelope?.intent.action === "plan",
+        planIntent: turnContract?.planIntent === true,
         contextTexts: (conversationHistory ?? [])
           .slice(-6)
           .reverse()
           .map((message) => String(message.content ?? "").trim())
           .filter(Boolean),
-        numericPoints: verifiedNumericPoints(
-          inference.metadata.authoritativeArtifactData,
-        ),
+        numericPoints:
+          verifiedNumericPoints(inference.metadata.authoritativeArtifactData) ??
+          verifiedNumericPoints(referenceAuthoritativeData),
       });
       const inferenceBlocks = inferenceResolved.blocks;
       const goalProgressBlocks = inferenceBlocks.filter(
@@ -9185,7 +9278,7 @@ export async function getQueuedSharedBrainChatTask(
   const baseUnderstanding =
     persistedUnderstanding ??
     (isDurableChatGeneration
-      ? emptyUnderstanding(understandingInput)
+      ? buildFastTaskUnderstanding(understandingInput)
       : await buildTaskUnderstanding(app, understandingInput).catch(() =>
           emptyUnderstanding(understandingInput),
         ));
@@ -9699,21 +9792,7 @@ export async function createTask(
         logger: app.log,
       }).catch(() => plannerCapabilitySeed)
     : plannerCapabilitySeed;
-  // Deterministik şeritler ve sözleşme ne bulduysa O önce gelir; anlamsal
-  // indeks yalnız ADAY EKLER. Öneriler bilerek çekirdeğe (`seed`) değil
-  // genişletme koluna giriyor: aşağıdaki filtre çekirdekteki yetenekleri
-  // sorgusuz geçirir, genişletmeleri ise politika kapısından geçirir. Yani
-  // anlamsal bir öneri, onay gerektiren ya da turun yan etki seviyesini aşan
-  // bir yeteneği sisteme sokamaz.
-  const semanticCapabilitySuggestions = desktopRouteSelected
-    ? await suggestCapabilitiesSemantically(app, planningPrompt).catch(() => [])
-    : [];
-  const plannerCapabilityHints = [
-    ...new Set([
-      ...refinedPlannerCapabilityHints,
-      ...semanticCapabilitySuggestions.map((suggestion) => suggestion.capability),
-    ]),
-  ].filter(
+  const plannerCapabilityHints = [...new Set(refinedPlannerCapabilityHints)].filter(
     (capability) => {
       if (plannerCapabilitySeed.includes(capability)) return true;
       const policy = resolveDesktopCapabilityExecutionPolicy(capability);
@@ -10000,7 +10079,7 @@ export async function createTask(
     },
   };
   const baseUnderstanding = useFastSharedBrainFlow || useDirectDesktopFastPath
-    ? emptyUnderstanding(understandingInput)
+    ? buildFastTaskUnderstanding(understandingInput)
     : await buildTaskUnderstanding(app, understandingInput).catch(() =>
         emptyUnderstanding(understandingInput),
       );
@@ -11011,7 +11090,6 @@ export async function createTask(
         route: inference.metadata.route as string,
         workload: inference.metadata.workload as string,
         turnContract,
-        planningIntent: turnContract?.planIntent === true,
         latencyMs: inference.latencyMs,
         promptTokens: inference.promptTokens,
         completionTokens: inference.completionTokens,

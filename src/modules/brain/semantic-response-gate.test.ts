@@ -44,3 +44,27 @@ test("semantic gate rejects web and completion claims without evidence", () => {
     "completion_claim_without_evidence",
   );
 });
+
+test("semantic gate blocks specific facts when required knowledge evidence is missing", () => {
+  const result = evaluateSemanticResponseGate({
+    prompt: "Türkiye'nin en yüksek dağı hangisi?",
+    text: "Ağrı Dağı 5.137 metre ile en yüksek dağdır.",
+    workload: "mobile_chat_fast",
+    blocks: [{ type: "text", blockId: "text-1" }],
+    evidence: { knowledgeEvidenceState: "insufficient" },
+  });
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, "required_evidence_missing_for_factual_claim");
+});
+
+test("semantic gate accepts an honest evidence limitation", () => {
+  const result = evaluateSemanticResponseGate({
+    prompt: "Türkiye'nin en yüksek dağı hangisi?",
+    text: "Bu bilgi için yeterli doğrulanmış kanıt bulamadım.",
+    workload: "mobile_chat_fast",
+    blocks: [{ type: "text", blockId: "text-1" }],
+    evidence: { knowledgeEvidenceState: "insufficient" },
+  });
+  assert.equal(result.accepted, true);
+  assert.equal(result.evidenceState, "insufficient");
+});

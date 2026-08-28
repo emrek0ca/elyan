@@ -718,7 +718,7 @@ test("decideCommandRoute ignores weak quantum feedback without liveness risk", a
   assert.equal(decision.qualityGuard, undefined);
 });
 
-test("decideCommandRoute keeps vague referential prompts in clarification mode", async () => {
+test("decideCommandRoute leaves referential clarification to canonical context", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -727,10 +727,8 @@ test("decideCommandRoute keeps vague referential prompts in clarification mode",
   });
 
   assert.equal(decision.route, "server_brain");
-  assert.equal(decision.shouldAskClarification, true);
-  assert.equal(decision.intent, "ambiguous_request");
-  // Belirsiz intent artık fast'ta bırakılmıyor: bir kademe yukarı (balanced)
-  // çıkar ki önceki tur bağlamıyla doğru yorumlanabilsin.
+  assert.equal(decision.shouldAskClarification, false);
+  assert.equal(decision.intent, "normal_chat");
   assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
 });
 
@@ -2182,6 +2180,86 @@ test("decideCommandRoute carries a structured desktop plan and approval decision
   );
 });
 
+test("decideCommandRoute asks only the structured missing-field question", async () => {
+  const app = createApp([]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain" as const,
+        operationalRoute: "server_brain" as const,
+        executionPlan: ["server_brain" as const],
+        reason: "A target file is required.",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDecision: {
+          contract: "elyan.agent_route_decision.v1" as const,
+          intent: "edit_document",
+          targetDevice: "control-plane" as const,
+          goalContract: { successCriteria: ["document_updated"] },
+          requiredCapabilities: [],
+          steps: [],
+          verification: { required: false, criteria: ["response_generated"] },
+          confidence: 0.91,
+          missingInformation: ["Hangi dosyayı düzenleyeyim?"],
+          requiresConfirmation: false,
+        },
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "typed-missing-field-user",
+    message: "Bunu düzenle",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.shouldAskClarification, true);
+  assert.equal(decision.userFacingMessage, "Hangi dosyayı düzenleyeyim?");
+});
+
+test("decideCommandRoute treats low model confidence as internal fallback", async () => {
+  const app = createApp([]);
+  Object.assign(app.services, {
+    commandRouteModel: {
+      decide: async () => ({
+        target: "server_brain" as const,
+        operationalRoute: "server_brain" as const,
+        executionPlan: ["server_brain" as const],
+        reason: "Low-confidence conversation route.",
+        needsDesktop: false,
+        needsPrivateDesktopData: false,
+        needsUserApproval: false,
+        requiredCapabilities: [],
+        semanticDecision: {
+          contract: "elyan.agent_route_decision.v1" as const,
+          intent: "conversation",
+          targetDevice: "control-plane" as const,
+          goalContract: { successCriteria: ["response_generated"] },
+          requiredCapabilities: [],
+          steps: [],
+          verification: { required: false, criteria: ["response_generated"] },
+          confidence: 0.4,
+          missingInformation: [],
+          requiresConfirmation: false,
+        },
+      }),
+    },
+  });
+
+  const decision = await decideCommandRoute(app as never, {
+    userId: "low-confidence-route-user",
+    message: "Kısa bir öneri ver",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.equal(decision.shouldAskClarification, false);
+});
+
 test("decideCommandRoute keeps a model desktop plan paired-required when offline", async () => {
   const app = createApp([]);
   Object.assign(app.services, {
@@ -2350,7 +2428,7 @@ test("decideCommandRoute fails closed when desktop execution is required but pla
   assert.equal(decision.requiredRuntime, "desktop");
 });
 
-test("decideCommandRoute escalates low-confidence ambiguous prompts to the balanced profile", async () => {
+test("decideCommandRoute does not reinterpret low-confidence text as clarification", async () => {
   const app = createApp([]);
   const decision = await decideCommandRoute(app as never, {
     userId: "user-1",
@@ -2358,10 +2436,8 @@ test("decideCommandRoute escalates low-confidence ambiguous prompts to the balan
     source: "mobile",
   });
 
-  assert.equal(decision.intent, "ambiguous_request");
-  assert.equal(decision.shouldAskClarification, true);
-  // Belirsiz kısa referans fast modele düşmemeli: balanced, önceki tur
-  // bağlamını (rolling summary + digest) taşıyabilen kademe.
+  assert.equal(decision.intent, "normal_chat");
+  assert.equal(decision.shouldAskClarification, false);
   assert.equal(decision.selectedWorkload, "mobile_chat_balanced");
 });
 

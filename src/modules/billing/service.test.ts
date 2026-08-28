@@ -703,7 +703,7 @@ test("billing catalog keeps desktop connections aligned with plan limits", () =>
   assert.equal(free.monthlyPrice, 0);
   assert.equal(free.taskLimitMonthly, 50);
   assert.equal(free.aiCreditsMonthly, 120);
-  assert.equal(free.fiveHourBudgetUnits, 4);
+  assert.equal(free.fiveHourBudgetUnits, 12);
   assert.equal(free.byokRequired, false);
   assert.equal(solo.desktopLimit, 1);
   assert.equal(solo.monthlyPrice, 6.99);

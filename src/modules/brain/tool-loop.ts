@@ -49,6 +49,14 @@ export type ToolLoopMessage = {
   tool_calls?: unknown;
 };
 
+export type ServerToolLoopResult = {
+  text: string;
+  steps: ToolLoopStep[];
+  rounds: number;
+  promptTokens: number;
+  completionTokens: number;
+};
+
 /** Bir turda izin verilen azami araç turu. Sonsuz döngüye karşı sert tavan. */
 export const TOOL_LOOP_MAX_ROUNDS = 4;
 /** Tek turda paralel çalıştırılacak azami araç. */
@@ -65,9 +73,7 @@ export function buildReadOnlyServerTools(options: {
   allowlist?: readonly string[];
 } = {}): ChatCompletionTool[] {
   const allow =
-    options.allowlist && options.allowlist.length > 0
-      ? new Set(options.allowlist)
-      : null;
+    options.allowlist === undefined ? null : new Set(options.allowlist);
   const tools: ChatCompletionTool[] = [];
   for (const entry of listAgentTools()) {
     if (entry.permission !== "read") continue;
@@ -140,6 +146,7 @@ export async function runToolCalls(
     sessionId?: string | null;
     taskId?: string | null;
     workload: AgentToolContext["workload"];
+    shouldAbort?: AgentToolContext["shouldAbort"];
     calls: Array<{ id: string; tool: string; args: Record<string, unknown> }>;
   },
 ): Promise<ToolLoopStep[]> {
@@ -153,6 +160,7 @@ export async function runToolCalls(
     // Gevşetilirse model, kullanıcı onayı olmadan yan etkili iş çalıştırabilir.
     allowSideEffects: false,
     allowStateWrites: false,
+    shouldAbort: input.shouldAbort,
   };
   const calls = input.calls.slice(0, TOOL_LOOP_MAX_PARALLEL);
   const results = await Promise.all(
@@ -222,13 +230,35 @@ export async function runServerToolLoop(
     taskId?: string | null;
     workload: AgentToolContext["workload"];
     allowlist?: readonly string[];
+    timeoutMs?: number;
+    requestKeySeed?: string;
+    shouldAbort?: AgentToolContext["shouldAbort"];
   },
-): Promise<{ text: string; steps: ToolLoopStep[]; rounds: number }> {
+): Promise<ServerToolLoopResult> {
   const tools = buildReadOnlyServerTools({ allowlist: input.allowlist });
+  const allowedToolByProviderName = new Map(
+    tools.flatMap((tool) => {
+      const providerName = tool.function.name;
+      const registryName = serverToolForName(providerName);
+      return registryName ? [[providerName, registryName] as const] : [];
+    }),
+  );
   const messages = [...input.messages];
   const steps: ToolLoopStep[] = [];
+  let promptTokens = 0;
+  let completionTokens = 0;
+  const finish = (text: string, rounds: number): ServerToolLoopResult => ({
+    text,
+    steps,
+    rounds,
+    promptTokens,
+    completionTokens,
+  });
 
   for (let round = 0; round < TOOL_LOOP_MAX_ROUNDS; round += 1) {
+    if (input.shouldAbort && (await input.shouldAbort())) {
+      throw new Error("task_canceled");
+    }
     const lastRound = round === TOOL_LOOP_MAX_ROUNDS - 1;
     const body = buildRequestBody(
       input.provider,
@@ -249,9 +279,16 @@ export async function runServerToolLoop(
       "auto",
     ) as Record<string, unknown>;
 
-    const response = await postJson(app, input.provider, input.url, body);
+    const response = await postJson(
+      app,
+      input.provider,
+      input.url,
+      body,
+      input.timeoutMs,
+      input.requestKeySeed,
+    );
     if (!response.ok) {
-      return { text: "", steps, rounds: round + 1 };
+      throw new Error(`server_tool_loop_http_${response.status}`);
     }
     const payload = (await response.json()) as {
       choices?: Array<{
@@ -260,14 +297,28 @@ export async function runServerToolLoop(
           tool_calls?: unknown;
         };
       }>;
+      usage?: {
+        prompt_tokens?: unknown;
+        completion_tokens?: unknown;
+        input_tokens?: unknown;
+        output_tokens?: unknown;
+      };
     };
+    promptTokens +=
+      Number(
+        payload.usage?.prompt_tokens ?? payload.usage?.input_tokens ?? 0,
+      ) || 0;
+    completionTokens +=
+      Number(
+        payload.usage?.completion_tokens ?? payload.usage?.output_tokens ?? 0,
+      ) || 0;
     const message = payload.choices?.[0]?.message;
     const rawCalls = message?.tool_calls;
     const requested = Array.isArray(rawCalls) ? rawCalls : [];
 
     if (requested.length === 0) {
       const text = typeof message?.content === "string" ? message.content : "";
-      return { text, steps, rounds: round + 1 };
+      return finish(text, round + 1);
     }
 
     // Modelin kendi araç isteği konuşmaya AYNEN geri konur; sağlayıcı bir
@@ -283,7 +334,7 @@ export async function runServerToolLoop(
         const record = item as Record<string, unknown>;
         const fn = record.function as Record<string, unknown> | undefined;
         const name = typeof fn?.name === "string" ? fn.name : "";
-        const tool = serverToolForName(name);
+        const tool = lastRound ? null : allowedToolByProviderName.get(name);
         if (!tool) return null;
         let args: Record<string, unknown> = {};
         const rawArgs = fn?.arguments;
@@ -309,7 +360,7 @@ export async function runServerToolLoop(
       // Model yalnız tanınmayan/bozuk araç istedi: yeni tur açmak aynı hatayı
       // tekrarlatır. Elimizdeki metinle dönmek daha dürüst.
       const text = typeof message?.content === "string" ? message.content : "";
-      return { text, steps, rounds: round + 1 };
+      return finish(text, round + 1);
     }
 
     const executed = await runToolCalls(app, {
@@ -317,6 +368,7 @@ export async function runServerToolLoop(
       sessionId: input.sessionId,
       taskId: input.taskId,
       workload: input.workload,
+      shouldAbort: input.shouldAbort,
       calls,
     });
     steps.push(...executed);
@@ -340,5 +392,5 @@ export async function runServerToolLoop(
     }
   }
 
-  return { text: "", steps, rounds: TOOL_LOOP_MAX_ROUNDS };
+  return finish("", TOOL_LOOP_MAX_ROUNDS);
 }

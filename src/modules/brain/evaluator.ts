@@ -1,4 +1,3 @@
-import { buildClarificationPrompt, isMateriallyAmbiguousUserPrompt } from "./chat-heuristics.js";
 import { ELYAN_CONSTITUTION_RULES, getElyanConstitution, getElyanConstitutionRule } from "./constitution.js";
 import { containsProtectedElyanDisclosure } from "../../lib/elyan-public-identity.js";
 import { containsRoboticVerificationPhrase } from "./response-policy.js";
@@ -370,7 +369,7 @@ export function evaluateBrainAnswer(input: BrainEvalInput): BrainEvalResult {
 
   const route = input.routeDecision?.route ?? "server_brain";
   const privacyClass = input.routeDecision?.privacyClass ?? "public_text";
-  const shouldClarify = isMateriallyAmbiguousUserPrompt(prompt);
+  const shouldClarify = input.clarificationDecision === "asked";
 
   if (route === "pairing_required" || route === "desktop_runtime" || privacyClass === "local_private") {
     expectedBehavior = getElyanConstitutionRule(
@@ -402,7 +401,8 @@ export function evaluateBrainAnswer(input: BrainEvalInput): BrainEvalResult {
       clarification = 0;
       failureTypes.push("missed_clarification");
       constitutionRuleIds.add("clarification_on_ambiguity");
-      correctedAnswer = correctedAnswer ?? buildClarificationPrompt(prompt);
+      correctedAnswer =
+        correctedAnswer ?? input.routeDecision?.userFacingMessage?.trim() ?? null;
     }
   }
 
@@ -761,7 +761,7 @@ export function buildBrainBenchmarkCases(): BrainBenchmarkCase[] {
     source: "mobile" as const,
     expectedRoute: "server_brain" as const,
     requiresClarification: true,
-    correctedAnswer: "Netleştireyim: hangi kısmı veya hangi hedefi iyileştirmemi istiyorsun?"
+    correctedAnswer: "Hangi kısmı veya hedefi iyileştireyim?"
   })));
 
   const toolUse = createCases("tool_use", Array.from({ length: 10 }, (_, index) => ({

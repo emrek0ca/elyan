@@ -117,7 +117,7 @@ export function mcpToolManifestEntry(
   // gibi davranıyordu. Sonucu iki katmanda görülüyordu: anlamsal indeks
   // pasajı bu alanlardan kurduğu için MCP araçları hiç bulunamıyor, ve dizi
   // alanları eksik olduğu için pasaj kurucusu çöküp ÖNERİ MOTORUNUN TAMAMINI
-  // susturuyordu (bkz. capability-semantic-index.ts).
+  // susturuyordu (bkz. desktop-capability-embedding-match.ts).
   //
   // Gereken veri zaten elde: sunucunun adı ve aracın kendi açıklaması. Buradan
   // türetilen metin elle yazılmış bir kalıp değil — sunucu adı ve araç adı

@@ -30,7 +30,6 @@ import type {
   UnderstandingIntent,
 } from "../../core/understanding/types.js";
 import {
-  isMateriallyAmbiguousUserPrompt,
   isShortFollowUpPrompt,
   isSocialChatPrompt,
   selectHybridMobileChatWorkload,
@@ -1520,14 +1519,10 @@ function deriveNormalizedIntent(input: {
   route: CommandRoute;
   privacyClass: CommandPrivacyClass;
   capabilities: string[];
-  message: string;
-  confidence: number;
   planIntent: boolean;
+  clarificationRequired: boolean;
 }): NormalizedCommandIntent {
-  if (
-    isMateriallyAmbiguousUserPrompt(input.message) ||
-    input.confidence < 0.55
-  ) {
+  if (input.clarificationRequired) {
     return "ambiguous_request";
   }
   if (input.route === "pairing_required" || input.route === "desktop_runtime") {
@@ -1935,6 +1930,7 @@ function buildDecision(input: {
   );
   const requiresApproval =
     input.requiresApproval || registryApprovalCapabilities.length > 0;
+  const clarificationRequired = input.clarificationOverride === true;
   const taskRoute = input.taskRoute
     ? {
         ...input.taskRoute,
@@ -1947,9 +1943,8 @@ function buildDecision(input: {
     route: input.route,
     privacyClass: input.privacyClass,
     capabilities: input.capabilities,
-    message: input.message,
-    confidence: input.confidence,
     planIntent,
+    clarificationRequired,
   });
   const routedSemanticContract = finalizeSemanticContractForRoute({
     contract: input.semanticContract,
@@ -2007,8 +2002,7 @@ function buildDecision(input: {
         : input.privacyClass === "side_effect"
           ? "medium"
           : "low",
-    shouldAskClarification:
-      input.clarificationOverride ?? intent === "ambiguous_request",
+    shouldAskClarification: clarificationRequired,
     failClosedReason:
       input.failClosedReason ??
       (input.route === "pairing_required" || input.route === "unavailable"
@@ -2417,6 +2411,12 @@ function boundedAgentTextList(value: unknown, maxItems: number): string[] {
         ),
     ),
   ].slice(0, maxItems);
+}
+
+function missingInformationQuestion(value: readonly string[]): string | null {
+  const question = redactAgentText(value[0], 160).replace(/[.!]+$/u, "").trim();
+  if (!question) return null;
+  return question.endsWith("?") ? question : `${question}?`;
 }
 
 function boundedAgentIntent(value: unknown, fallback: string): string {
@@ -2945,7 +2945,7 @@ export function buildCommandRouteModelPrompt(input: {
     "A request asking what the user should do, which approach to take, or for recommendations remains server_brain unless it also asks Elyan to perform the action now.",
     "For read-only local inspection set needsPrivateDesktopData=true and needsUserApproval=false. Side-effect actions may require approval according to capability policy.",
     "For server_brain routes set semanticDesktopContract to null. For desktop_runtime routes fill semanticDesktopContract from meaning, not keywords; requiredCapabilities remains [] unless the client explicitly supplied a system capability.",
-    "semanticDecision is mandatory and is the route authority. Set targetDevice from the actual execution location, keep steps semantic (capability/device/dependencies only), state missingInformation when clarification is needed, and require verification for every desktop action. Never invent a capability outside the advertised registry.",
+    "semanticDecision is mandatory and is the route authority. Set targetDevice from the actual execution location, keep steps semantic (capability/device/dependencies only), and require verification for every desktop action. Use missingInformation only when a specific missing field materially changes execution; each entry must be one short user-facing question in the user's language. Never use low confidence or model disagreement as missing information. Never invent a capability outside the advertised registry.",
     "goalContract.successCriteria and verification.criteria must be short, generic, and must not contain private paths, file contents, credentials, message bodies, or copied user text. The server derives objectiveHash; do not provide one.",
     "Always return requiredCapabilities as an empty array unless an authenticated client/system capability was explicitly supplied outside the user request.",
     "Semantic capability names are high-level and underscore_style, for example filesystem_read, filesystem_write, browser_control, desktop_operator.observe_screen, desktop_operator.run, document_read, document_write, spreadsheet_write, presentation_write, shell_run.",
@@ -3560,6 +3560,10 @@ export async function decideCommandRoute(
     .catch(() => semanticClassification)
     .finally(() => endVerifierStage());
   const verifierInvoked = classification !== semanticClassification;
+  const outputContract = compileOutputContract({
+    message: input.message,
+    metadata,
+  });
   let understandingConsensus = buildUnderstandingConsensus({
     message,
     primary: semanticClassification,
@@ -3582,14 +3586,11 @@ export async function decideCommandRoute(
       hasDesktopSaveExportSignal(message) && !isDesktopAdviceOnlyRequest(message)
         ? "desktop"
         : null,
+    outputContract,
   });
   // This is the only route-stage interpretation of the raw turn. The typed
   // contract is carried through workload selection, task persistence, and the
   // worker so later layers do not independently reclassify the prompt.
-  const outputContract = compileOutputContract({
-    message: input.message,
-    metadata,
-  });
   const semanticContract = buildSemanticContract({
     classification,
     outputContract,
@@ -3805,19 +3806,35 @@ export async function decideCommandRoute(
       })
     : null;
   const modelTaskRoute = modelRouteOutcome?.route ?? null;
-  const modelDecisionAuthoritative =
+  const acceptedStructuredModelRoute =
     modelTaskRoute !== null && modelRouteOutcome?.fallbackAllowed === false;
+  const modelMissingInformation =
+    modelTaskRoute?.semanticDecision?.source === "structured_model"
+      ? modelTaskRoute.semanticDecision.missingInformation
+      : [];
+  const modelNeedsClarification =
+    acceptedStructuredModelRoute && modelMissingInformation.length > 0;
+  const modelRouteLowConfidence =
+    acceptedStructuredModelRoute &&
+    modelTaskRoute?.semanticDecision?.source === "structured_model" &&
+    !modelNeedsClarification &&
+    (modelTaskRoute?.semanticDecision?.confidence ?? 1) < 0.55;
+  const modelDecisionAuthoritative =
+    acceptedStructuredModelRoute && !modelRouteLowConfidence;
   const deterministicFallbackAllowed =
     !modelDecisionAuthoritative &&
-    (modelRouteOutcome === null || modelRouteOutcome?.fallbackAllowed === true);
-  const modelNeedsClarification =
-    modelDecisionAuthoritative &&
-    modelTaskRoute?.semanticDecision?.source === "structured_model" &&
-    ((modelTaskRoute.semanticDecision.missingInformation.length > 0) ||
-      modelTaskRoute.semanticDecision.confidence < 0.55);
+    (modelRouteOutcome === null ||
+      modelRouteOutcome?.fallbackAllowed === true ||
+      modelRouteLowConfidence);
   if (modelNeedsClarification) {
     const clarificationReason =
       "Model planı güvenli yürütme için gerekli bilgilerin eksik olduğunu belirledi.";
+    const clarificationQuestion = missingInformationQuestion(
+      modelMissingInformation,
+    );
+    if (!clarificationQuestion) {
+      throw new Error("structured_missing_information_question_invalid");
+    }
     return buildDecision({
       route: "server_brain",
       taskRoute: buildTaskRoute({
@@ -3835,8 +3852,7 @@ export async function decideCommandRoute(
       privacyClass: "public_text",
       requiresApproval: false,
       reason: clarificationReason,
-      userFacingMessage:
-        "Bunu güvenle yapabilmem için eksik bilgiyi netleştirelim.",
+      userFacingMessage: clarificationQuestion,
       primaryIntent: classification.primaryIntent,
       confidence: modelTaskRoute.semanticDecision?.confidence ?? classification.confidence,
       requiresLocalRuntime: false,

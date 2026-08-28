@@ -67,6 +67,7 @@ export type OrchestratedRetrieval = {
     /** MMR ile elenen yakın-kopya sayısı — bütçe teşhisinin ilk sinyali. */
     suppressedDuplicates: number;
     lowConfidence: boolean;
+    evidenceState: "none" | "verified" | "insufficient";
     neighborExpanded: number;
   };
 };
@@ -75,6 +76,19 @@ const RRF_K = 60;
 const COVERAGE_RETRY_THRESHOLD = 0.34;
 const EVIDENCE_ACCEPTANCE_THRESHOLD = 0.45;
 const NEIGHBOR_EXPANSION_TOP = 3;
+
+export function evidenceStateForRetrieval(input: {
+  evidenceRequired: boolean;
+  resultCount: number;
+  lowConfidence: boolean;
+}): "none" | "verified" | "insufficient" {
+  if (input.evidenceRequired) {
+    return input.resultCount === 0 || input.lowConfidence
+      ? "insufficient"
+      : "verified";
+  }
+  return input.resultCount > 0 ? "verified" : "none";
+}
 
 const _TR_STOPWORDS = new Set([
   "acaba", "ama", "ancak", "bana", "bazı", "belki", "ben", "beni", "bir", "biraz",
@@ -227,7 +241,7 @@ function coverageTerms(query: string, limit = 10): string[] {
 /** Bir sonucun yakın-kopya karşılaştırması için terim kümesi. */
 function resultTermSet(result: RetrievalSearchResult): Set<string> {
   return new Set(
-    contentTerms(`${result.title} ${result.content}`, { limit: 48 }),
+    contentTerms(result.content || result.title, { limit: 48 }),
   );
 }
 
@@ -479,6 +493,7 @@ export async function searchKnowledge(
     userId: string;
     query: string;
     limit: number;
+    evidenceRequired?: boolean;
     neuralPolicy?: {
       neuralReady?: boolean;
       embeddingReady?: boolean;
@@ -489,6 +504,7 @@ export async function searchKnowledge(
   const strategy = classifyRetrievalStrategy(input.query);
   const hops = strategy === "multi_hop" ? decomposeQuery(input.query) : [input.query];
   const semanticRerankAdmitted =
+    input.neuralPolicy == null ||
     input.neuralPolicy?.neuralReady === true ||
     input.neuralPolicy?.embeddingReady === true;
   const selfCheckSensitivity =
@@ -589,6 +605,12 @@ export async function searchKnowledge(
     (sum, run) => sum + (run?.results?.length ?? 0),
     0,
   );
+  const lowConfidence =
+    (input.evidenceRequired === true && top.length === 0) ||
+    (top.length > 0 &&
+      (coverage < COVERAGE_RETRY_THRESHOLD ||
+        evidenceAcceptance.score < evidenceThreshold ||
+        evidenceAcceptance.unsupportedSubquestionCount > 0));
   return {
     retrievalMode: primaryCore?.retrievalMode ?? "lexical_fallback",
     results: top,
@@ -621,11 +643,12 @@ export async function searchKnowledge(
       },
       selfCheckRetried,
       suppressedDuplicates,
-      lowConfidence:
-        top.length > 0 &&
-        (coverage < COVERAGE_RETRY_THRESHOLD ||
-          evidenceAcceptance.score < evidenceThreshold ||
-          evidenceAcceptance.unsupportedSubquestionCount > 0),
+      lowConfidence,
+      evidenceState: evidenceStateForRetrieval({
+        evidenceRequired: input.evidenceRequired === true,
+        resultCount: top.length,
+        lowConfidence,
+      }),
       neighborExpanded,
     },
   };

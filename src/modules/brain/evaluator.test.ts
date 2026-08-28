@@ -142,6 +142,36 @@ test("evaluateBrainAnswer classifies robotic, repeated and generic non-answers",
   assert.ok(nonAnswer.failureTypes.includes("non_answer"));
 });
 
+test("evaluateBrainAnswer trusts the typed clarification decision", () => {
+  const continued = evaluateBrainAnswer({
+    prompt: "Bunu düzelt",
+    modelAnswer: "Önceki metindeki anlatım bozukluğunu düzelttim.",
+    answerSource: "model",
+    routeDecision: {
+      route: "server_brain",
+      mode: "chat",
+      privacyClass: "public_text",
+    },
+    clarificationDecision: "not_needed",
+  });
+  assert.equal(continued.failureTypes.includes("missed_clarification"), false);
+
+  const missingTarget = evaluateBrainAnswer({
+    prompt: "Bunu düzelt",
+    modelAnswer: "Düzenlemeye başlıyorum.",
+    answerSource: "model",
+    routeDecision: {
+      route: "server_brain",
+      mode: "chat",
+      privacyClass: "public_text",
+      userFacingMessage: "Hangi dosyayı düzenleyeyim?",
+    },
+    clarificationDecision: "asked",
+  });
+  assert.equal(missingTarget.failureTypes.includes("missed_clarification"), true);
+  assert.equal(missingTarget.correctedAnswer, "Hangi dosyayı düzenleyeyim?");
+});
+
 test("brain benchmark includes the ten ordinary chat routing regressions", () => {
   const cases = buildBrainBenchmarkCases().filter(
     (item) => item.family === "ordinary_chat",

@@ -249,6 +249,16 @@ function inferPageCount(text: string, metadata: Record<string, unknown> | null):
 }
 
 function inferReference(text: string, metadata: Record<string, unknown> | null): OutputReference {
+  const authoritative = readString(metadata, "authoritativeSourceReference");
+  if (
+    authoritative === "current_prompt" ||
+    authoritative === "previous_answer" ||
+    authoritative === "latest_artifact" ||
+    authoritative === "attachment" ||
+    authoritative === "none"
+  ) {
+    return authoritative;
+  }
   if (readBoolean(metadata, "hasAttachment") === true) return "attachment";
   if (readBoolean(metadata, "hasLatestArtifact") === true) return "latest_artifact";
   if (/^(?:devam|devam et|sürdür|surdur|aynen|tamam|hani|continue|go on|keep going)\b/iu.test(text)) {

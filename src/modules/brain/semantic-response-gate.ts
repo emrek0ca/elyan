@@ -18,6 +18,8 @@ export type SemanticResponseGateInput = {
     verifiedEvidenceCount?: number;
     artifactEvidence?: boolean;
     agentVerified?: boolean;
+    retrievalLowConfidence?: boolean;
+    knowledgeEvidenceState?: "none" | "verified" | "insufficient";
   };
 };
 
@@ -138,6 +140,23 @@ function hasDoneGoalWithoutEvidence(input: SemanticResponseGateInput): boolean {
   );
 }
 
+function hasSpecificFactualClaim(text: string): boolean {
+  const value = clean(text);
+  return (
+    /\d/u.test(value) ||
+    /(?<!\p{L})[A-ZÇĞİÖŞÜ][\p{L}'’.-]{2,}\s+[A-ZÇĞİÖŞÜ][\p{L}'’.-]{2,}(?!\p{L})/u.test(
+      value,
+    )
+  );
+}
+
+function isEvidenceLimitationResponse(text: string): boolean {
+  const value = normalized(text);
+  return /(?:doğrulanmış|dogrulanmis|yeterli|güvenilir|guvenilir)\s+(?:kanıt|kanit|kaynak|veri).{0,36}(?:yok|bulamadım|bulamadim|ulaşılamadı|ulasilamadi)|(?:kanıt|kanit|kaynak|veri).{0,36}(?:yetersiz|bulunamadı|bulunamadi)/u.test(
+    value,
+  );
+}
+
 export function evaluateSemanticResponseGate(
   input: SemanticResponseGateInput,
 ): SemanticResponseGateResult {
@@ -151,15 +170,32 @@ export function evaluateSemanticResponseGate(
         input.understandingEnvelope?.output_contract?.outputKind ?? "artifact",
       )
     : "chat_reply";
-  const evidenceState = hasWebEvidence || (evidence.verifiedEvidenceCount ?? 0) > 0
-    ? "verified"
-    : evidence.toolCallCount || evidence.artifactEvidence
-      ? "insufficient"
-      : "none";
+  const evidenceState = evidence.knowledgeEvidenceState === "insufficient"
+    ? "insufficient"
+    : evidence.knowledgeEvidenceState === "verified"
+      ? "verified"
+      : evidence.retrievalLowConfidence === true
+    ? "insufficient"
+    : hasWebEvidence || (evidence.verifiedEvidenceCount ?? 0) > 0
+      ? "verified"
+      : evidence.toolCallCount || evidence.artifactEvidence
+        ? "insufficient"
+        : "none";
 
   let reason: string | null = null;
   if (chatExpected && types.some((type) => ["document_block", "document_block_skeleton"].includes(type))) {
     reason = "chat_output_contract_document_block";
+  } else if (
+    evidenceState === "insufficient" &&
+    types.some((type) => ["web_search", "table", "chart"].includes(type))
+  ) {
+    reason = "low_confidence_retrieval_structured_claim";
+  } else if (
+    evidence.knowledgeEvidenceState === "insufficient" &&
+    hasSpecificFactualClaim(input.text) &&
+    !isEvidenceLimitationResponse(input.text)
+  ) {
+    reason = "required_evidence_missing_for_factual_claim";
   } else if (types.includes("web_search") && !hasWebEvidence) {
     reason = "web_block_without_evidence";
   } else if (hasUnsupportedSourceClaim(input.text) && !hasWebEvidence) {

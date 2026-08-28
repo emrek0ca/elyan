@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  matchDesktopCapabilitiesWithEmbeddings,
   refineDesktopCapabilityHints,
   resetDesktopCapabilityVectorsForTests,
 } from "./desktop-capability-embedding-match.js";
+import { mcpToolManifestEntry } from "./mcp-capability-bridge.js";
+import { setMcpCapabilityIndex } from "./task-execution-contract.js";
 
 test("cold-start refinement uses measured lexical evidence while vectors warm", async () => {
   resetDesktopCapabilityVectorsForTests();
@@ -51,6 +54,33 @@ test("cold-start refinement cannot expand capabilities excluded from degraded fa
       assert.deepEqual(refined, [], query);
     }
   } finally {
+    resetDesktopCapabilityVectorsForTests();
+  }
+});
+
+test("connected MCP tools participate in the canonical cold-start ranker", async () => {
+  resetDesktopCapabilityVectorsForTests();
+  setMcpCapabilityIndex(new Map([
+    [
+      "mcp:notion:create-pages",
+      mcpToolManifestEntry({
+        capabilityId: "mcp:notion:create-pages",
+        serverName: "Notion",
+        toolName: "create-pages",
+        description: "Notion'da yeni sayfa oluşturur.",
+        sideEffectClass: "write",
+        requiresApproval: true,
+      }),
+    ],
+  ]));
+  try {
+    const ranked = await matchDesktopCapabilitiesWithEmbeddings({
+      query: "Notion create pages",
+      limit: 3,
+    });
+    assert.equal(ranked[0]?.capability, "mcp:notion:create-pages");
+  } finally {
+    setMcpCapabilityIndex(new Map());
     resetDesktopCapabilityVectorsForTests();
   }
 });

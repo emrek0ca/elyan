@@ -4,6 +4,7 @@ import { z } from "zod";
 export const CHAT_CONTEXT_SNAPSHOT_VERSION = "chat_context.v2" as const;
 export const CHAT_CONTEXT_MAX_MESSAGES = 14;
 export const CHAT_CONTEXT_MAX_TOKENS = 3_200;
+export const CHAT_REFERENCE_CONTEXT_VERSION = "elyan.reference_context.v1" as const;
 
 export const chatTurnKindValues = [
   "new_request",
@@ -14,6 +15,46 @@ export const chatTurnKindValues = [
 
 export type ChatTurnKind = (typeof chatTurnKindValues)[number];
 
+export type ChatReferenceBlock =
+  | {
+      type: "table";
+      title?: string;
+      columns: string[];
+      rows: string[][];
+      totalRowCount: number;
+    }
+  | {
+      type: "chart";
+      title?: string;
+      chartType: string;
+      series: Array<{
+        name?: string;
+        labels: string[];
+        values: number[];
+        points: Array<{
+          label?: string;
+          x?: number;
+          y?: number;
+          value?: number;
+        }>;
+      }>;
+    }
+  | {
+      type: "artifact";
+      id?: string;
+      title?: string;
+      kind?: string;
+    };
+
+export type ChatReferenceContext = {
+  contract: typeof CHAT_REFERENCE_CONTEXT_VERSION;
+  sourceReference: "current_prompt" | "previous_answer" | "latest_artifact";
+  sourceMessageId: string | null;
+  sourceBlockDigest: string | null;
+  text: string | null;
+  blocks: ChatReferenceBlock[];
+};
+
 export type ChatContextSnapshotTurn = {
   messageId: string;
   role: "user" | "assistant";
@@ -22,6 +63,7 @@ export type ChatContextSnapshotTurn = {
   createdAt: string;
   blockDigest?: string | null;
   blockTypes?: string[];
+  structuredBlocks?: ChatReferenceBlock[];
 };
 
 export type ChatContextSnapshot = {
@@ -42,9 +84,62 @@ export type ChatContextSnapshot = {
     visibleSummary: string;
     blockDigest: string | null;
     blockTypes: string[];
+    structuredBlocks: ChatReferenceBlock[];
   } | null;
+  referenceContext?: ChatReferenceContext;
   integrity: "verified" | "reconstructed" | "degraded";
 };
+
+const chatReferencePointSchema = z.object({
+  label: z.string().min(1).max(120).optional(),
+  x: z.number().finite().optional(),
+  y: z.number().finite().optional(),
+  value: z.number().finite().optional(),
+});
+
+const chatReferenceBlockSchema = z.union([
+  z.object({
+    type: z.literal("table"),
+    title: z.string().min(1).max(120).optional(),
+    columns: z.array(z.string().max(120)).min(1).max(12),
+    rows: z.array(z.array(z.string().max(240)).max(12)).max(32),
+    totalRowCount: z.number().int().nonnegative().max(100_000),
+  }),
+  z.object({
+    type: z.literal("chart"),
+    title: z.string().min(1).max(120).optional(),
+    chartType: z.string().min(1).max(40),
+    series: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(120).optional(),
+          labels: z.array(z.string().max(120)).max(160),
+          values: z.array(z.number().finite()).max(160),
+          points: z.array(chatReferencePointSchema).max(160),
+        }),
+      )
+      .max(8),
+  }),
+  z.object({
+    type: z.literal("artifact"),
+    id: z.string().min(1).max(255).optional(),
+    title: z.string().min(1).max(180).optional(),
+    kind: z.string().min(1).max(80).optional(),
+  }),
+]);
+
+const chatReferenceContextSchema = z.object({
+  contract: z.literal(CHAT_REFERENCE_CONTEXT_VERSION),
+  sourceReference: z.enum([
+    "current_prompt",
+    "previous_answer",
+    "latest_artifact",
+  ]),
+  sourceMessageId: z.string().min(1).max(160).nullable(),
+  sourceBlockDigest: z.string().min(1).max(128).nullable(),
+  text: z.string().min(1).max(800).nullable(),
+  blocks: z.array(chatReferenceBlockSchema).max(4),
+});
 
 const snapshotTurnSchema = z.object({
   messageId: z.string().min(1).max(160),
@@ -54,6 +149,7 @@ const snapshotTurnSchema = z.object({
   createdAt: z.string().min(1).max(80),
   blockDigest: z.string().min(1).max(128).nullable().optional(),
   blockTypes: z.array(z.string().min(1).max(80)).max(32).optional(),
+  structuredBlocks: z.array(chatReferenceBlockSchema).max(4).optional(),
 });
 
 export const chatContextSnapshotSchema = z.object({
@@ -75,8 +171,10 @@ export const chatContextSnapshotSchema = z.object({
       visibleSummary: z.string().min(1).max(800),
       blockDigest: z.string().min(1).max(128).nullable(),
       blockTypes: z.array(z.string().min(1).max(80)).max(32),
+      structuredBlocks: z.array(chatReferenceBlockSchema).max(4).default([]),
     })
     .nullable(),
+  referenceContext: chatReferenceContextSchema.optional(),
   integrity: z.enum(["verified", "reconstructed", "degraded"]),
 });
 
@@ -142,6 +240,45 @@ function sortTurns(turns: ChatContextSnapshotTurn[]): ChatContextSnapshotTurn[] 
   });
 }
 
+function normalizeReferenceBlocks(value: unknown): ChatReferenceBlock[] {
+  if (!Array.isArray(value)) return [];
+  const blocks: ChatReferenceBlock[] = [];
+  let bytes = 0;
+  for (const item of value) {
+    const parsed = chatReferenceBlockSchema.safeParse(item);
+    if (!parsed.success) continue;
+    const nextBytes = Buffer.byteLength(JSON.stringify(parsed.data), "utf8");
+    if (bytes + nextBytes > 8_192) break;
+    blocks.push(parsed.data);
+    bytes += nextBytes;
+    if (blocks.length >= 4) break;
+  }
+  return blocks;
+}
+
+function buildReferenceContext(
+  turnKind: ChatTurnKind,
+  priorAssistant: ChatContextSnapshot["priorAssistant"],
+): ChatReferenceContext {
+  return priorAssistant != null && turnKind !== "new_request"
+    ? {
+        contract: CHAT_REFERENCE_CONTEXT_VERSION,
+        sourceReference: "previous_answer",
+        sourceMessageId: priorAssistant.messageId,
+        sourceBlockDigest: priorAssistant.blockDigest,
+        text: priorAssistant.visibleSummary,
+        blocks: priorAssistant.structuredBlocks,
+      }
+    : {
+        contract: CHAT_REFERENCE_CONTEXT_VERSION,
+        sourceReference: "current_prompt",
+        sourceMessageId: null,
+        sourceBlockDigest: null,
+        text: null,
+        blocks: [],
+      };
+}
+
 function normalizeTurns(turns: ChatContextSnapshotTurn[]): ChatContextSnapshotTurn[] {
   return sortTurns(
     turns
@@ -170,6 +307,7 @@ function normalizeTurns(turns: ChatContextSnapshotTurn[]): ChatContextSnapshotTu
               ),
             ).slice(0, 32)
           : [],
+        structuredBlocks: normalizeReferenceBlocks(turn.structuredBlocks),
       }))
       .filter((turn) => turn.messageId && turn.content),
   );
@@ -234,12 +372,16 @@ export function resolveChatTurnKind(input: {
   ) {
     return "correction";
   }
-  if (/^\s*(devam|devam et|sürdür|surdur|aynen|tamam)\b/iu.test(normalized)) {
+  if (
+    /^\s*(devam|devam et|sürdür|surdur|aynen|tamam)(?!\p{L})/iu.test(
+      normalized,
+    )
+  ) {
     return "continuation";
   }
   if (
     input.hasPriorAssistant &&
-    /\b(az önce|az once|önceki|onceki|yukarıdaki|yukaridaki|bunu|şunu|sunu|takip)\b/iu.test(
+    /(?<!\p{L})(az önce|az once|önceki|onceki|yukarıdaki|yukaridaki|bunu|şunu|sunu|onu|takip|son (?:cevab(?:ı|ın|ını|ından)?|yanıt(?:ı|ın|ını|ından)?)|verdiğin|verdigin|yazdığın|yazdigin|oluşturduğun|olusturdugun)(?!\p{L})/iu.test(
       normalized,
     )
   ) {
@@ -263,6 +405,7 @@ export function buildChatContextSnapshot(
         visibleSummary: priorAssistantTurn.content.slice(0, 800),
         blockDigest: priorAssistantTurn.blockDigest ?? null,
         blockTypes: priorAssistantTurn.blockTypes ?? [],
+        structuredBlocks: priorAssistantTurn.structuredBlocks ?? [],
       }
     : null;
   const historyRevision = {
@@ -274,22 +417,26 @@ export function buildChatContextSnapshot(
     turns: boundedTurns,
   });
 
+  const turnKind =
+    input.turnKind ??
+    resolveChatTurnKind({
+      prompt: input.prompt,
+      hasPriorAssistant: priorAssistant != null,
+    });
+  const referenceContext = buildReferenceContext(turnKind, priorAssistant);
+
   return {
     version: CHAT_CONTEXT_SNAPSHOT_VERSION,
     sessionId: normalizeText(input.sessionId, 160),
     userMessageId: normalizeText(input.userMessageId, 160),
     assistantMessageId: normalizeText(input.assistantMessageId, 160),
-    turnKind:
-      input.turnKind ??
-      resolveChatTurnKind({
-        prompt: input.prompt,
-        hasPriorAssistant: priorAssistant != null,
-      }),
+    turnKind,
     promptDigest: digest(normalizeText(input.prompt)),
     historyDigest,
     historyRevision,
     priorTurns: boundedTurns,
     priorAssistant,
+    referenceContext,
     integrity: input.integrity ?? "verified",
   };
 }
@@ -321,6 +468,33 @@ export function verifyChatContextSnapshot(input: {
   }
   if (input.snapshot.promptDigest !== digest(normalizeText(input.prompt))) {
     return { ok: false, reason: "prompt_digest_mismatch" };
+  }
+  const priorAssistantTurn = [...input.snapshot.priorTurns]
+    .reverse()
+    .find((turn) => turn.role === "assistant");
+  const expectedPriorAssistant = priorAssistantTurn
+    ? {
+        messageId: priorAssistantTurn.messageId,
+        visibleSummary: priorAssistantTurn.content.slice(0, 800),
+        blockDigest: priorAssistantTurn.blockDigest ?? null,
+        blockTypes: priorAssistantTurn.blockTypes ?? [],
+        structuredBlocks: priorAssistantTurn.structuredBlocks ?? [],
+      }
+    : null;
+  if (digest(input.snapshot.priorAssistant) !== digest(expectedPriorAssistant)) {
+    return { ok: false, reason: "prior_assistant_mismatch" };
+  }
+  if (
+    input.snapshot.referenceContext &&
+    digest(input.snapshot.referenceContext) !==
+      digest(
+        buildReferenceContext(
+          input.snapshot.turnKind,
+          expectedPriorAssistant,
+        ),
+      )
+  ) {
+    return { ok: false, reason: "reference_context_mismatch" };
   }
   const expectedHistoryDigest = digest({
     revision: input.snapshot.historyRevision,

@@ -3,6 +3,7 @@ import type {
   IntentClassification,
   UnderstandingIntent,
 } from "../../core/understanding/types.js";
+import type { OutputContract } from "../../core/understanding/output-contract.js";
 
 export type UnderstandingTargetSurface = "server" | "desktop" | "hybrid";
 
@@ -75,10 +76,21 @@ function privacyClassFor(
   sideEffect: boolean,
 ): "public" | "local_private" | "side_effect" {
   if (sideEffect) return "side_effect";
-  if (classification.requiresLocalRuntime || classification.privacyRisk !== "low") {
+  if (classification.requiresLocalRuntime) {
     return "local_private";
   }
   return "public";
+}
+
+function typedOutputResolvesIntentConflict(
+  outputContract: OutputContract | null | undefined,
+): boolean {
+  return Boolean(
+    outputContract &&
+      outputContract.confidence >= 0.6 &&
+      (outputContract.outputKind !== "chat_reply" ||
+        outputContract.operation !== "answer"),
+  );
 }
 
 function candidateDigest(candidate: ConsensusCandidate): string {
@@ -147,6 +159,7 @@ export function buildUnderstandingConsensus(input: {
   normalizedArgs?: Record<string, unknown>;
   successCriteria?: string[];
   approvalRequired?: boolean;
+  outputContract?: OutputContract | null;
   /**
    * Kullanıcı hedefi AÇIKÇA söylediyse ("masaüstüne … kaydet") burada gelir.
    *
@@ -199,8 +212,8 @@ export function buildUnderstandingConsensus(input: {
     input.sideEffect === true ||
     primarySurface === "desktop" ||
     selectedSurface === "desktop" ||
-    primaryCandidate.classification.privacyRisk !== "low" ||
-    selected.privacyRisk !== "low";
+    primaryCandidate.classification.privacyRisk === "high" ||
+    selected.privacyRisk === "high";
   // AÇIK HEDEF, KATMAN ANLAŞMAZLIĞINI TAMAMEN BİTİRİR.
   //
   // İlk sürümde yalnız yüzey ve gizlilik çatışmasını çözüyordum; niyet
@@ -222,23 +235,27 @@ export function buildUnderstandingConsensus(input: {
   // tavsiye sorularını (`isDesktopAdviceOnlyRequest`) bu bayrağın dışında
   // tutuyor.
   const explicitDesktop = input.explicitTargetSurface === "desktop";
-  const hardConflict = explicitDesktop
-    ? false
-    : conflict.targetSurface || conflict.privacy || (highRisk && conflict.intent);
+  const unresolvedIntentConflict =
+    conflict.intent &&
+    highRisk &&
+    !typedOutputResolvesIntentConflict(input.outputContract);
+  const internalConflict =
+    !explicitDesktop &&
+    (conflict.targetSurface || conflict.privacy || unresolvedIntentConflict);
   const lowConfidence = Math.min(
     primaryCandidate.classification.confidence,
     selected.confidence,
   ) < 0.55;
-  const status: UnderstandingConsensus["status"] = hardConflict
-    ? "clarification_required"
-    : input.verifierInvoked
-      ? "agreed"
-      : "fallback";
-  const targetSurface = hardConflict
-    ? "server"
-    : explicitDesktop
-      ? "desktop"
-      : selectedSurface;
+  const status: UnderstandingConsensus["status"] =
+    input.verifierInvoked && !internalConflict ? "agreed" : "fallback";
+  const targetSurface =
+    explicitDesktop || conflict.targetSurface ? "desktop" : selectedSurface;
+  const finalPrivacy =
+    input.sideEffect === true
+      ? "side_effect"
+      : targetSurface === "desktop"
+        ? "local_private"
+        : "public";
   const normalizedIntent = normalizedIntentFor(selected, targetSurface);
   const objectiveHash = createHash("sha256")
     .update(String(input.message ?? "").replace(/\s+/g, " ").trim())
@@ -269,16 +286,16 @@ export function buildUnderstandingConsensus(input: {
       scope: input.sideEffect === true ? ["validated_capability"] : [],
     },
     privacy: {
-      class: selectedPrivacy,
+      class: finalPrivacy,
       localContextRequired: targetSurface !== "server",
-      maySendPrivateContextToServer: selectedPrivacy === "public",
+      maySendPrivateContextToServer: finalPrivacy === "public",
     },
     confidence: Number(
       Math.min(primaryCandidate.classification.confidence, selected.confidence).toFixed(3),
     ),
     ambiguity: {
-      present: lowConfidence || hardConflict,
-      reason: hardConflict
+      present: lowConfidence || internalConflict,
+      reason: internalConflict
         ? "candidate_conflict"
         : lowConfidence
           ? "low_confidence"
@@ -307,4 +324,3 @@ export function buildUnderstandingConsensus(input: {
     ],
   };
 }
-

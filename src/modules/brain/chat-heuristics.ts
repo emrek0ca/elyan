@@ -275,20 +275,6 @@ export function buildSharedBrainAckText(workload: SharedBrainWorkload): string {
   return "";
 }
 
-export function buildClarificationPrompt(prompt: string): string {
-  const normalized = compactText(prompt).toLowerCase();
-  if (/^(bunu|şunu|sunu|this|that)$/i.test(normalized)) {
-    return "Netleştireyim: tam olarak hangi şeyi kastediyorsun?";
-  }
-  if (/(düzelt|duzelt|fix|improve|optimize|iyileştir|iyilestir)/i.test(normalized)) {
-    return "Netleştireyim: tam olarak hangi kısmı iyileştirmemi istiyorsun?";
-  }
-  if (/(anlat|açıkla|acikla|summarize|explain)/i.test(normalized)) {
-    return "Netleştireyim: hangi konuya odaklanmamı istiyorsun?";
-  }
-  return "Netleştireyim: tam olarak neyi yapmamı istiyorsun?";
-}
-
 export function selectHybridMobileChatWorkload(input: {
   message: string;
   primaryIntent: string;

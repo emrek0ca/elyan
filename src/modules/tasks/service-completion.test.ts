@@ -33,7 +33,7 @@ test("resolveCompletionAssistantBlocks promotes markdown tables into typed table
   assert.ok(result.text.includes("Asagidaki tablo"));
 });
 
-test("resolveCompletionAssistantBlocks never presents a one-line plan as complete", () => {
+test("resolveCompletionAssistantBlocks does not fabricate clarification from a one-line plan", () => {
   const result = resolveCompletionAssistantBlocks({
     prompt: "Bu hedef için bir plan oluştur",
     responseText: "Doktorluk hedefi için yol haritası hazırlandı.",
@@ -43,7 +43,7 @@ test("resolveCompletionAssistantBlocks never presents a one-line plan as complet
   });
 
   const blocks = result.blocks as Array<Record<string, unknown>>;
-  assert.ok(blocks.some((block) => block.type === "clarification"));
+  assert.ok(!blocks.some((block) => block.type === "clarification"));
   assert.ok(!blocks.some((block) => block.type === "next_steps"));
 });
 
@@ -229,12 +229,19 @@ test("resolveCompletionAssistantBlocks deduplicates repeated typed blocks", () =
   const repeatedTable = {
     type: "table",
     columns: ["Yil", "Gelir"],
-    rows: [["2025", "120"]],
+    rows: [
+      ["2024", "110"],
+      ["2025", "120"],
+    ],
   };
   const result = resolveCompletionAssistantBlocks({
     prompt: "Veriyi tablo olarak ver",
     assistantBlocks: [repeatedTable, repeatedTable],
     responseText: "",
+    numericPoints: [
+      { label: "2024", value: 110 },
+      { label: "2025", value: 120 },
+    ],
   });
 
   const blocks = result.blocks as Array<Record<string, unknown>>;

@@ -63,7 +63,7 @@ async function buildBackground(logger?: FastifyBaseLogger): Promise<number[][]> 
     }
   }
   if (queries.length === 0) return [];
-  // Aynı sebep, aynı çare (bkz. capability-semantic-index.ts): bu havuz ~200
+  // Aynı sebep, aynı çare (bkz. desktop-capability-embedding-match.ts): bu havuz ~200
   // cümle ve gömücünün varsayılan 8 saniyelik İSTEK zaman aşımına sığmıyor.
   // Canlıda tek çağrı olarak denendiğinde "semantic compute worker request
   // timed out" ile düşüyordu. Açılış işi partilere bölünür ve kendi süresini

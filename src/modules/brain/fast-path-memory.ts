@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { embedQueryForStorage, embedTextsForStorage } from "./semantic-embedder.js";
 import { searchBrainMemory } from "./memory.js";
 import { recordStageDuration } from "../../lib/perf-telemetry.js";
 
@@ -38,7 +37,6 @@ const RELEVANCE_THRESHOLD = 0.86;
 
 export type FastPathMemory = {
   lines: string[];
-  memoryIds: string[];
 };
 
 function withBudget<T>(promise: Promise<T>, budgetMs: number): Promise<T | null> {
@@ -70,14 +68,6 @@ function compact(value: string, max: number): string {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-function cosine(left: number[], right: number[]): number {
-  let dot = 0;
-  for (let index = 0; index < left.length && index < right.length; index += 1) {
-    dot += left[index] * right[index];
-  }
-  return dot;
-}
-
 export async function resolveFastPathMemory(
   app: FastifyInstance,
   input: { userId: string; prompt: string; budgetMs?: number },
@@ -93,6 +83,7 @@ export async function resolveFastPathMemory(
         userId: input.userId,
         query: prompt,
         limit: CANDIDATE_LIMIT,
+        budgetMs,
       }),
       budgetMs,
     );
@@ -100,46 +91,24 @@ export async function resolveFastPathMemory(
       (hit) =>
         hit.staleness === "fresh" &&
         hit.conflictStatus === "active" &&
+        hit.lifecycleStatus === "active" &&
         hit.deletedAt === null &&
-        compact(hit.content, 240).length > 0,
+        compact(hit.content, 240).length > 0 &&
+        (hit.semanticScore ?? 0) >= RELEVANCE_THRESHOLD,
     );
     if (candidates.length === 0) return null;
 
-    const remaining = budgetMs - (Date.now() - startedAt);
-    if (remaining <= 40) return null;
-
-    // Alaka kararı SEMANTİKTİR. Arama katmanının kendi skoru karma (leksik +
-    // vektör) ve ölçeği turlar arasında karşılaştırılabilir değil; kapıyı ona
-    // dayamak eşiği anlamsızlaştırırdı.
-    const [queryVector, candidateVectors] = await Promise.all([
-      withBudget(
-        embedQueryForStorage(prompt, app.log, "memory:fastpath:query", remaining),
-        remaining,
-      ),
-      withBudget(
-        embedTextsForStorage(
-          candidates.map((hit) => `${compact(hit.title, 80)} ${compact(hit.content, 240)}`),
-          app.log,
-          undefined,
-          remaining,
-        ),
-        remaining,
-      ),
-    ]);
-    if (!queryVector || !candidateVectors || candidateVectors.length !== candidates.length) {
-      return null;
-    }
-
     const relevant = candidates
-      .map((hit, index) => ({ hit, score: cosine(queryVector, candidateVectors[index]) }))
-      .filter((entry) => entry.score >= RELEVANCE_THRESHOLD)
-      .sort((left, right) => right.score - left.score)
+      .sort(
+        (left, right) =>
+          Number(right.isPinned) - Number(left.isPinned) ||
+          (right.semanticScore ?? 0) - (left.semanticScore ?? 0),
+      )
       .slice(0, MAX_LINES);
     if (relevant.length === 0) return null;
 
     return {
-      lines: relevant.map((entry) => compact(entry.hit.content, 200)),
-      memoryIds: relevant.map((entry) => entry.hit.id),
+      lines: relevant.map((hit) => compact(hit.content, 200)),
     };
   } finally {
     recordStageDuration("chat.fastpath_memory", Date.now() - startedAt);

@@ -4,10 +4,6 @@ import {
   ELYAN_PUBLIC_IDENTITY_TEXT,
   ELYAN_PUBLIC_MODEL_ABSTRACTION_TEXT,
 } from "../../lib/elyan-public-identity.js";
-import {
-  buildClarificationPrompt,
-  isMateriallyAmbiguousUserPrompt,
-} from "./chat-heuristics.js";
 import { unicodeWordPattern } from "../../lib/tr-word-boundary.js";
 
 export type BrainBoundaryGateResult = {
@@ -515,13 +511,9 @@ export function resolveElyanIdentityGate(prompt: string): BrainBoundaryGateResul
   };
 }
 
-export function isMateriallyAmbiguousPrompt(prompt: string): boolean {
-  return isMateriallyAmbiguousUserPrompt(prompt);
-}
-
 export function resolveBoundaryGate(
   routeDecision: CommandRouteDecision,
-  prompt: string,
+  _prompt: string,
 ): BrainBoundaryGateResult | null {
   if (routeDecision.route === "pairing_required") {
     return {
@@ -571,11 +563,12 @@ export function resolveBoundaryGate(
     };
   }
 
-  if (routeDecision.shouldAskClarification || isMateriallyAmbiguousPrompt(prompt)) {
+  const clarificationQuestion = routeDecision.userFacingMessage?.trim();
+  if (routeDecision.shouldAskClarification && clarificationQuestion) {
     return {
       triggered: true,
       answerSource: "backend_gate",
-      text: buildClarificationPrompt(prompt),
+      text: clarificationQuestion,
       gateRuleIds: ["clarification_on_ambiguity"],
       boundaryOutcome: "clarification_required",
       failureType: "missed_clarification",

@@ -4,9 +4,46 @@ import {
   isDirectElyanIdentityPrompt,
   isProtectedInternalDisclosurePrompt,
   resolveElyanIdentityGate,
+  resolveBoundaryGate,
   resolvePromptSecurityGate,
   resolveSecurityDecisionGate,
 } from "./boundary-gate.js";
+
+test("boundary gate consumes typed clarification without re-reading the prompt", () => {
+  const baseDecision = {
+    route: "server_brain" as const,
+    mode: "chat" as const,
+    capabilities: [],
+    privacyClass: "public_text" as const,
+    requiresApproval: false,
+    reason: "typed",
+    intent: "normal_chat" as const,
+    confidence: 0.4,
+    requiredRuntime: "server" as const,
+    privacyLevel: "low" as const,
+    failClosedReason: null,
+    selectedWorkload: "mobile_chat_fast" as const,
+  };
+
+  assert.equal(
+    resolveBoundaryGate(
+      { ...baseDecision, shouldAskClarification: false },
+      "Bunu düzelt",
+    ),
+    null,
+  );
+  assert.equal(
+    resolveBoundaryGate(
+      {
+        ...baseDecision,
+        shouldAskClarification: true,
+        userFacingMessage: "Hangi dosyayı düzenleyeyim?",
+      },
+      "Bunu düzelt",
+    )?.text,
+    "Hangi dosyayı düzenleyeyim?",
+  );
+});
 
 test("prompt security gate blocks Turkish and English instruction exfiltration attempts", () => {
   const prompts = [

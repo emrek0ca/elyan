@@ -500,6 +500,28 @@ export function summarizeToolResultsForMetadata(results: AgentToolResult[]): Arr
   }));
 }
 
+export function attachToolEvidenceForFactuality(
+  metadata: Record<string, unknown>,
+  results: AgentToolResult[],
+): void {
+  const evidence = results.flatMap((result) =>
+    result.ok && result.output != null
+      ? [
+          {
+            tool: result.tool,
+            output: compactToolOutput(result.output),
+          },
+        ]
+      : [],
+  );
+  if (evidence.length === 0) return;
+  Object.defineProperty(metadata, "toolEvidence", {
+    value: evidence,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
 function clipString(value: string, max = 1_200): string {
   const compact = value.replace(/\s+/g, " ").trim();
   return compact.length <= max ? compact : `${compact.slice(0, max - 1).trimEnd()}…`;
@@ -517,6 +539,9 @@ function compactToolOutput(value: unknown, depth = 0): unknown {
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value).slice(0, 16)) {
+      if (/token|secret|password|credential|authorization|cookie/i.test(key)) {
+        continue;
+      }
       out[key] = compactToolOutput(nested, depth + 1);
     }
     return out;

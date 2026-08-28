@@ -10,7 +10,7 @@ import {
   STORAGE_SEMANTIC_MODEL_TAG,
 } from "./semantic-embedder.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
-import { stemTurkish } from "./lexical-turkish.js";
+import { contentTerms, stemTurkish } from "./lexical-turkish.js";
 import { collapseWhitespace as compactText } from "../../lib/text.js";
 
 const RETRIEVAL_VECTOR_DIMENSIONS = 256;
@@ -476,7 +476,7 @@ function scoreLexicalKnowledgeMatch(
   },
 ): number {
   const haystack = `${input.title} ${input.content}`.toLowerCase();
-  const queryTokens = tokenize(query);
+  const queryTokens = contentTerms(query, { limit: 8 });
   const overlap = queryTokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0);
   const exactBonus = haystack.includes(query.trim().toLowerCase()) ? 4 : 0;
   const scopeBonus = input.scope === "user" ? 1 : 0;
@@ -492,7 +492,7 @@ async function searchKnowledgeLexical(
   },
 ): Promise<RetrievalSearchResult[]> {
   const normalizedQuery = input.query.trim();
-  const queryTokens = [...new Set(tokenize(normalizedQuery).slice(0, 8))];
+  const queryTokens = contentTerms(normalizedQuery, { limit: 8 });
   const lexicalClauses = [
     ilike(knowledgeChunks.content, `%${normalizedQuery}%`),
     ilike(knowledgeDocuments.title, `%${normalizedQuery}%`),
@@ -655,6 +655,32 @@ async function searchKnowledgeHybrid(
     .slice(0, input.limit);
 }
 
+export function fuseRetrievalCandidates(
+  lists: RetrievalSearchResult[][],
+): RetrievalSearchResult[] {
+  const fused = new Map<
+    string,
+    { item: RetrievalSearchResult; score: number }
+  >();
+  for (const results of lists) {
+    results.forEach((item, rank) => {
+      const contribution = 1 / (60 + rank + 1);
+      const existing = fused.get(item.chunkId);
+      if (existing) {
+        existing.score += contribution;
+      } else {
+        fused.set(item.chunkId, { item, score: contribution });
+      }
+    });
+  }
+  return [...fused.values()]
+    .sort((left, right) => right.score - left.score)
+    .map(({ item, score }) => ({
+      ...item,
+      score: Number(score.toFixed(6)),
+    }));
+}
+
 export async function searchKnowledge(
   app: FastifyInstance,
   input: {
@@ -672,15 +698,7 @@ export async function searchKnowledge(
       ])
     : [[], await searchKnowledgeLexical(app, input)];
   const mergedResults = hybridReady
-    ? [...hybridResults, ...lexicalResults]
-        .reduce<RetrievalSearchResult[]>((acc, item) => {
-          if (acc.some((existing) => existing.chunkId === item.chunkId)) {
-            return acc;
-          }
-          acc.push(item);
-          return acc;
-        }, [])
-        .sort((left, right) => right.score - left.score)
+    ? fuseRetrievalCandidates([hybridResults, lexicalResults])
     : lexicalResults;
   const reranked = await rerankSemanticCandidates({
     query: input.query,

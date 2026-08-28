@@ -36,6 +36,7 @@ import {
   buildAssistantTableBlock,
   normalizeAssistantMessageBlocks,
 } from "../chat/message-blocks.js";
+import { coerceFiniteNumber } from "../chat/chart-data.js";
 
 function isMarkdownTableDivider(line: string) {
   const normalized = line.trim();
@@ -468,39 +469,112 @@ function extractExplicitPlanningList(value: string): ExtractedPlanningList | nul
   return items.length >= 3 ? { items, sourceLines } : null;
 }
 
-/**
- * Cevabın kendisi gerçek bir içerik mi, yoksa yalnız bir "yaptım" onayı mı?
- *
- * Ölçüt YAPISALDIR, kelime değil: sıralı/madde işaretli satır sayısı ve
- * gövde uzunluğu. Amaç, tamamlanmış bir cevabın yanına uydurma bir soru
- * eklenmesini engellemek.
- *
- * CANLI GÖZLEM (yerel duman testi): "1350 TL'nin %18 KDV dahil hali kaç TL?
- * Adım adım göster." isteği sınıflandırıcı tarafından `planning` sayıldı,
- * model doğru cevabı (adımlar + 1593 TL) üretti, ama adım sayısı üçün altında
- * kaldığı için cevabın yanına "Önceliğin, süren veya mevcut durumun hangisini
- * esas alalım?" diye bir netleştirme kartı basıldı. Kullanıcı hem cevabı hem
- * cevaplanamaz bir soruyu birlikte gördü. Eksik olan bilgi yoktu; eksik olan
- * yalnız üçüncü maddeydi.
- */
-function responseCarriesSubstance(text: string): boolean {
-  const compact = String(text ?? "").replace(/\s+/g, " ").trim();
-  if (compact.length >= 240) return true;
-  let structuredLines = 0;
-  for (const line of String(text ?? "").split("\n")) {
-    if (/^\s*(?:\d+[.)-]|[-*•])\s+\S/u.test(line)) structuredLines += 1;
-  }
-  return structuredLines >= 2;
+function numericToken(value: unknown): number | null {
+  return coerceFiniteNumber(value);
 }
 
-function buildPlanClarificationBlock(): Record<string, unknown> {
-  return {
-    type: "clarification",
-    title: "Planı netleştirelim",
-    detail: "Planı doğru kurmam için bir kısıtı netleştirmem gerekiyor.",
-    question: "Önceliğin, süren veya mevcut durumun hangisini esas alalım?",
-    priority: 2,
-  };
+function collectNumericValues(value: unknown, output: number[] = []): number[] {
+  if (output.length >= 240) return output;
+  const direct = numericToken(value);
+  if (direct != null) {
+    output.push(direct);
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectNumericValues(item, output);
+    return output;
+  }
+  const record = readRecord(value);
+  if (record) {
+    for (const nested of Object.values(record)) {
+      collectNumericValues(nested, output);
+    }
+  }
+  return output;
+}
+
+function numericEvidenceValues(input: {
+  prompt?: string | null;
+  contextTexts?: Array<string | null | undefined>;
+}): number[] {
+  return [input.prompt ?? "", ...(input.contextTexts ?? [])]
+    .flatMap((value) =>
+      String(value ?? "")
+        .match(/-?\d+(?:[.,]\d+)?/gu)
+        ?.map(numericToken)
+        .filter((item): item is number => item != null) ?? [],
+    );
+}
+
+function isNumericBlockGrounded(input: {
+  block: unknown;
+  numericPoints?: VerifiedNumericPoint[];
+  prompt?: string | null;
+  contextTexts?: Array<string | null | undefined>;
+}): boolean {
+  const record = readRecord(input.block);
+  const type = String(record?.type ?? "");
+  if (type !== "table" && type !== "chart") return true;
+  if (String(readRecord(record?.renderHints)?.derivedBy ?? "").startsWith("server_")) {
+    return true;
+  }
+  const values = collectNumericValues(
+    type === "table"
+      ? record?.rows
+      : [record?.values, record?.points, record?.data, record?.series],
+  );
+  if (values.length === 0) return true;
+  if ((input.numericPoints?.length ?? 0) >= 2) return true;
+  const evidence = numericEvidenceValues(input);
+  return values.every((value) =>
+    evidence.some((candidate) => Math.abs(candidate - value) < 1e-9),
+  );
+}
+
+function deterministicNumericComparison(input: {
+  prompt?: string | null;
+  numericPoints?: VerifiedNumericPoint[];
+}): string | null {
+  const points = input.numericPoints ?? [];
+  if (points.length < 2) return null;
+  const prompt = String(input.prompt ?? "").toLocaleLowerCase("tr-TR");
+  const asksHighest = /(?<!\p{L})(en yüksek|en yuksek|en fazla|maksimum|maximum|highest|max)(?!\p{L})/iu.test(prompt);
+  const asksLowest = /(?<!\p{L})(en düşük|en dusuk|en az|minimum|lowest|min)(?!\p{L})/iu.test(prompt);
+  if (!asksHighest && !asksLowest) return null;
+  const selected = points.reduce((best, point) =>
+    asksLowest
+      ? point.value < best.value
+        ? point
+        : best
+      : point.value > best.value
+        ? point
+        : best,
+  );
+  const value = selected.value.toLocaleString("tr-TR", {
+    maximumFractionDigits: 6,
+  });
+  return `${asksLowest ? "En düşük" : "En yüksek"} değer ${selected.label}: ${value}.`;
+}
+
+function stripUnfulfilledChartPromise(value: string): string {
+  return value
+    .split(/(?<=[.!?])\s+/u)
+    .filter(
+      (sentence) =>
+        !(
+          /(?<!\p{L})(işte|iste|hazır|hazir|oluşturdum|olusturdum|çizdim|cizdim|gösterdim|gosterdim)(?:\s+\S+){0,3}\s+(grafik|grafiği|grafigi|chart)(?!\p{L})/iu.test(
+            sentence,
+          ) ||
+          /(?<!\p{L})(grafik|grafiği|grafigi|chart)(?:\s+\S+){0,2}\s+(hazır|hazir|oluşturdum|olusturdum|çizdim|cizdim|gösterdim|gosterdim)(?!\p{L})/iu.test(
+            sentence,
+          ) ||
+          /(?<!\p{L})(işte|iste)\s+(trend|dağılım|dagilim|görünüm|gorunum)(?!\p{L})/iu.test(
+            sentence,
+          )
+        ),
+    )
+    .join(" ")
+    .trim();
 }
 
 export function resolveCompletionAssistantBlocks(input: {
@@ -570,16 +644,6 @@ export function resolveCompletionAssistantBlocks(input: {
       if (nextSteps) {
         assistantBlocks.push(nextSteps);
         sourcesToStrip.push(...explicitList!.sourceLines);
-      } else if (!responseCarriesSubstance(text)) {
-        // A bare acknowledgement ("yol haritası hazırlandı") is not a plan and
-        // must not be presented as one; a single focused clarification is the
-        // honest surface, because the server has no authority to guess
-        // user-specific milestones from a one-line answer.
-        //
-        // But a cevap that already carries its own content is NOT missing
-        // information, and appending a canned question to it manufactures an
-        // interaction the user cannot act on.
-        assistantBlocks.push(buildPlanClarificationBlock());
       }
     }
   }
@@ -744,8 +808,28 @@ export function resolveCompletionAssistantBlocks(input: {
       blocks: assistantBlocks,
       prompt: input.prompt,
       selectedWorkload: input.selectedWorkload,
-    }),
+    }).filter((block) =>
+      isNumericBlockGrounded({
+        block,
+        numericPoints: input.numericPoints,
+        prompt: input.prompt,
+        contextTexts: input.contextTexts,
+      }),
+    ),
   });
+  const comparison = deterministicNumericComparison(input);
+  if (comparison) text = comparison;
+  if (
+    chartIntent.wantsChart &&
+    !blocks.some((block) =>
+      ["chart", "math_surface_3d"].includes(String(block.type)),
+    )
+  ) {
+    text = stripUnfulfilledChartPromise(text);
+    if (!text) {
+      text = "Grafik oluşturmak için doğrulanmış sayısal veri bulunamadı.";
+    }
+  }
   return {
     blocks,
     text,

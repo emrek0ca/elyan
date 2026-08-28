@@ -73,6 +73,7 @@ export type MemorySearchHit = {
   lifecycleStatus: MemoryLifecycleStatus;
   scope: "user" | "shared";
   score: number;
+  semanticScore?: number;
   lastVerifiedAt: string | null;
   deletedAt: string | null;
   deletedReason: string | null;
@@ -594,6 +595,7 @@ function buildMemoryHit(input: {
   const metadata = safeMetadata(input.metadata);
   const confidence = Number(input.confidence ?? 50);
   const importanceScore = Number(input.importanceScore ?? 50);
+  const semanticScore = Number(input.semanticScore ?? 0);
   const updatedAt = normalizeDateString(input.updatedAt) ?? new Date().toISOString();
   const conflictStatus =
     input.conflictStatus === "contested" || input.conflictStatus === "superseded"
@@ -628,10 +630,11 @@ function buildMemoryHit(input: {
       conflictStatus,
       updatedAt,
       lexicalScore: Number(input.lexicalScore ?? 0),
-      semanticScore: Number(input.semanticScore ?? 0),
+      semanticScore,
       metadata,
       lastVerifiedAt: normalizeDateString(input.lastVerifiedAt),
     }),
+    semanticScore,
     lastVerifiedAt: normalizeDateString(input.lastVerifiedAt),
     deletedAt: normalizeDateString(input.deletedAt),
     deletedReason: typeof input.deletedReason === "string" && input.deletedReason.trim() ? input.deletedReason : null,
@@ -768,9 +771,18 @@ function dedupeMemoryHits(results: MemorySearchHit[]): MemorySearchHit[] {
     const normalizedContent = result.content.replace(/\s+/g, " ").trim().toLocaleLowerCase("tr-TR");
     const key = result.id || `${result.memoryType}:${result.title}:${normalizedContent}`;
     const current = bestByKey.get(key);
-    if (!current || result.score > current.score) {
+    if (!current) {
       bestByKey.set(key, result);
+      continue;
     }
+    const selected = result.score > current.score ? result : current;
+    bestByKey.set(key, {
+      ...selected,
+      semanticScore: Math.max(
+        current.semanticScore ?? 0,
+        result.semanticScore ?? 0,
+      ),
+    });
   }
   return [...bestByKey.values()];
 }
@@ -1366,6 +1378,7 @@ export async function searchBrainMemory(
     userId: string;
     query: string;
     limit: number;
+    budgetMs?: number;
   },
 ) {
   if (typeof (app.db as { execute?: unknown }).execute !== "function") {
@@ -1379,12 +1392,16 @@ export async function searchBrainMemory(
   const endStage = startStage("memory_search");
   try {
     const startedAt = Date.now();
+    const searchBudgetMs = Math.max(
+      80,
+      Math.min(2_000, input.budgetMs ?? MEMORY_SEARCH_BUDGET_MS),
+    );
     // Memory retrieval has its own vector columns. Do not gate it on
     // knowledge_chunks readiness; otherwise personal memory can silently fall
     // back to lexical even when brain_memory_* is fully indexed.
     const hybridProbe = await withMemoryBudget(
       canUseMemoryHybridRetrieval(app),
-      MEMORY_SEARCH_BUDGET_MS,
+      searchBudgetMs,
     );
     if (hybridProbe === MEMORY_BUDGET_EXPIRED) {
       return {
@@ -1394,16 +1411,23 @@ export async function searchBrainMemory(
       };
     }
     const hybridReady = hybridProbe;
-    const remainingBudget = Math.max(
-      50,
-      MEMORY_SEARCH_BUDGET_MS - (Date.now() - startedAt),
-    );
     const queryVector = buildVectorSql(buildHashedKnowledgeEmbedding(input.query));
-    const semanticV2Ready = hybridReady
-      ? await ensureMemorySemanticV2Columns(app)
-      : false;
+    const semanticV2Ready = hybridReady;
+    const embeddingBudget = searchBudgetMs - (Date.now() - startedAt);
+    if (embeddingBudget <= 20) {
+      return {
+        retrievalMode: "lexical_fallback" as const,
+        results: [] as MemorySearchHit[],
+        degradedReason: "memory_search_budget_expired" as const,
+      };
+    }
     const semanticQueryVector = semanticV2Ready
-      ? await embedQueryForStorage(input.query, app.log, `user:${input.userId}`).catch(() => null)
+      ? await embedQueryForStorage(
+          input.query,
+          app.log,
+          `user:${input.userId}`,
+          embeddingBudget,
+        ).catch(() => null)
       : null;
     const semanticV2QueryVector = semanticQueryVector
       ? buildVectorSql(semanticQueryVector)
@@ -1606,6 +1630,14 @@ export async function searchBrainMemory(
     `)
       : Promise.resolve(null);
 
+    const remainingBudget = searchBudgetMs - (Date.now() - startedAt);
+    if (remainingBudget <= 20) {
+      return {
+        retrievalMode: "lexical_fallback" as const,
+        results: [] as MemorySearchHit[],
+        degradedReason: "memory_search_budget_expired" as const,
+      };
+    }
     const budgetResult = await withMemoryBudget(
       Promise.all([
         lexicalFactsQuery,
@@ -1681,6 +1713,13 @@ export async function searchBrainMemory(
       .sort((left, right) => right.score - left.score || right.confidence - left.confidence);
 
     if (!hybridReady) {
+      if (input.budgetMs != null) {
+        return {
+          retrievalMode: "lexical_fallback" as const,
+          results: lexicalResults.slice(0, Math.max(1, input.limit)),
+          degradedReason: "hybrid_retrieval_unavailable" as const,
+        };
+      }
       const rerankedLexical = await rerankSemanticCandidates({
         query: input.query,
         candidates: lexicalResults,
@@ -1761,6 +1800,22 @@ export async function searchBrainMemory(
       ),
     ]
       .sort((left, right) => right.score - left.score || right.confidence - left.confidence);
+
+    if (input.budgetMs != null) {
+      const fastResults = dedupeMemoryHits([
+        ...semanticResults,
+        ...lexicalResults,
+      ]).sort(
+        (left, right) =>
+          (right.semanticScore ?? 0) - (left.semanticScore ?? 0) ||
+          right.score - left.score,
+      );
+      return {
+        retrievalMode: "hybrid" as const,
+        results: fastResults.slice(0, Math.max(1, input.limit)),
+        degradedReason: null,
+      };
+    }
 
     const reranked = await rerankSemanticCandidates({
       query: input.query,

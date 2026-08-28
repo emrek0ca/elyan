@@ -1,6 +1,10 @@
 import type { FastifyBaseLogger } from "fastify";
+import { createHash } from "node:crypto";
 import { normalizeText } from "./desktop-capability-ontology.js";
-import { DESKTOP_CAPABILITY_MANIFEST } from "./desktop-capability-manifest.js";
+import {
+  DESKTOP_CAPABILITY_MANIFEST,
+  type DesktopCapabilityManifestEntry,
+} from "./desktop-capability-manifest.js";
 import {
   actionPolarityAdjustment,
   capabilitySafetyAdjustment,
@@ -23,6 +27,7 @@ import {
   type DesktopCapabilitySemanticMatch,
   type DesktopCapabilitySideEffectClass,
 } from "./desktop-capability-ontology.js";
+import { listMcpCapabilityEntries } from "./task-execution-contract.js";
 
 /**
  * Yetenek eşleştirmesinin GERÇEK anlamsal katmanı.
@@ -121,12 +126,16 @@ function normalizeScores(values: number[]): number[] {
 type CapabilityVectors = {
   capability: string;
   positives: number[][];
+  semanticBias: number;
   negatives: number[][];
   entry: DesktopCapabilityOntologyEntry;
 };
 
 let warmupPromise: Promise<CapabilityVectors[] | null> | null = null;
 let capabilityVectors: CapabilityVectors[] | null = null;
+let capabilityBackground: number[][] = [];
+const mcpVectorCache = new Map<string, CapabilityVectors>();
+const MAX_MCP_VECTOR_CACHE = 512;
 
 /** Bir yeteneğin seçilebilir olması için gereken asgari kullanıcı-dili örneği. */
 const MIN_SEMANTIC_PHRASES = 4;
@@ -209,6 +218,176 @@ function dot(left: number[], right: number[]): number {
   return sum;
 }
 
+function rawPositiveSimilarity(
+  queryVector: number[],
+  candidate: Pick<CapabilityVectors, "positives">,
+): { positive: number; identity: number; utterance: number } {
+  const identity = candidate.positives.length > 0
+    ? dot(queryVector, candidate.positives[0])
+    : 0;
+  let utterance = 0;
+  for (const vector of candidate.positives.slice(1)) {
+    utterance = Math.max(utterance, dot(queryVector, vector));
+  }
+  return {
+    positive: Math.max(identity * IDENTITY_DAMPENING, utterance),
+    identity,
+    utterance,
+  };
+}
+
+function averageCandidateSimilarity(
+  candidate: Pick<CapabilityVectors, "positives">,
+  background: number[][],
+): number {
+  if (background.length === 0) return 0;
+  let total = 0;
+  for (const backgroundVector of background) {
+    total += rawPositiveSimilarity(backgroundVector, candidate).positive;
+  }
+  return total / background.length;
+}
+
+function ontologyEntryForManifest(
+  manifest: DesktopCapabilityManifestEntry,
+): DesktopCapabilityOntologyEntry {
+  const runtimeNames = [
+    manifest.name,
+    manifest.name.replaceAll("_", "."),
+    manifest.name.replaceAll(".", "_"),
+  ];
+  return {
+    canonicalId: manifest.name,
+    aliases: [manifest.name, manifest.displayName, ...manifest.utterances]
+      .map(normalizeText)
+      .filter(Boolean),
+    examples: [manifest.description, manifest.usage, ...manifest.whenToUse]
+      .map(normalizeText)
+      .filter(Boolean),
+    negativeExamples: [...manifest.whenNotToUse, ...manifest.notFor]
+      .map(normalizeText)
+      .filter(Boolean),
+    privacyClass: manifest.privacyClass,
+    sideEffectClass: manifest.sideEffectClass,
+    requiresApproval: manifest.requiresApproval,
+    runtimeNames: [...new Set(runtimeNames)],
+    manifest,
+  };
+}
+
+function registryLexicalScore(
+  query: string,
+  manifest: DesktopCapabilityManifestEntry,
+): number {
+  const normalizedQuery = normalizeText(query);
+  const queryTokens = new Set(normalizedQuery.split(" ").filter(Boolean));
+  if (queryTokens.size === 0) return 0;
+  const phrases = [
+    manifest.name,
+    manifest.displayName,
+    manifest.description,
+    manifest.usage,
+    ...manifest.whenToUse,
+    ...manifest.utterances,
+  ];
+  let best = 0;
+  for (const phrase of phrases) {
+    const normalizedPhrase = normalizeText(phrase);
+    if (!normalizedPhrase) continue;
+    if (
+      normalizedPhrase === normalizedQuery ||
+      normalizedPhrase.includes(normalizedQuery)
+    ) {
+      best = Math.max(best, 1);
+      continue;
+    }
+    const phraseTokens = new Set(normalizedPhrase.split(" ").filter(Boolean));
+    let overlap = 0;
+    for (const token of queryTokens) {
+      if (phraseTokens.has(token)) overlap += 1;
+    }
+    if (overlap > 0) {
+      best = Math.max(
+        best,
+        overlap / Math.sqrt(queryTokens.size * phraseTokens.size),
+      );
+    }
+  }
+  return best;
+}
+
+function mcpVectorKey(entry: DesktopCapabilityManifestEntry): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      name: entry.name,
+      displayName: entry.displayName,
+      description: entry.description,
+      usage: entry.usage,
+      whenToUse: entry.whenToUse,
+      utterances: entry.utterances,
+      notFor: entry.notFor,
+    }))
+    .digest("hex");
+}
+
+async function resolveMcpCapabilityVectors(
+  entries: DesktopCapabilityOntologyEntry[],
+  logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">,
+): Promise<CapabilityVectors[]> {
+  const resolved: CapabilityVectors[] = [];
+  const pending: Array<{
+    key: string;
+    entry: DesktopCapabilityOntologyEntry;
+    positives: string[];
+    negatives: string[];
+  }> = [];
+  for (const entry of entries) {
+    const key = mcpVectorKey(entry.manifest);
+    const cached = mcpVectorCache.get(key);
+    if (cached) {
+      resolved.push(cached);
+      continue;
+    }
+    pending.push({
+      key,
+      entry,
+      positives: positiveTextsFor(entry),
+      negatives: negativeTextsFor(entry),
+    });
+  }
+  if (pending.length === 0) return resolved;
+  const texts = pending.flatMap((item) => [...item.positives, ...item.negatives]);
+  const vectors = await embedTextsForStorage(
+    texts,
+    logger,
+    CAPABILITY_CACHE_SCOPE,
+    QUERY_TIMEOUT_MS,
+  );
+  if (!vectors) return resolved;
+  let cursor = 0;
+  for (const item of pending) {
+    const positives = vectors.slice(cursor, cursor + item.positives.length);
+    cursor += item.positives.length;
+    const negatives = vectors.slice(cursor, cursor + item.negatives.length);
+    cursor += item.negatives.length;
+    const candidate: CapabilityVectors = {
+      capability: item.entry.canonicalId,
+      positives,
+      semanticBias: 0,
+      negatives,
+      entry: item.entry,
+    };
+    candidate.semanticBias = averageCandidateSimilarity(
+      candidate,
+      capabilityBackground,
+    );
+    if (mcpVectorCache.size >= MAX_MCP_VECTOR_CACHE) mcpVectorCache.clear();
+    mcpVectorCache.set(item.key, candidate);
+    resolved.push(candidate);
+  }
+  return resolved;
+}
+
 /**
  * Yetenek vektörlerini bir kez hesaplar ve süreç içinde tutar.
  *
@@ -259,12 +438,19 @@ export function warmDesktopCapabilityVectors(
       built.push({
         capability: slot.entry.canonicalId,
         positives,
+        semanticBias: 0,
         negatives,
         entry: slot.entry,
       });
     }
-    capabilityVectors = built;
-    return built;
+    capabilityBackground = built.flatMap((candidate) =>
+      candidate.positives.slice(1, 4),
+    );
+    capabilityVectors = built.map((candidate) => ({
+      ...candidate,
+      semanticBias: averageCandidateSimilarity(candidate, capabilityBackground),
+    }));
+    return capabilityVectors;
   })();
   return warmupPromise;
 }
@@ -275,7 +461,9 @@ export function isDesktopCapabilityVectorCacheReady(): boolean {
 
 export function resetDesktopCapabilityVectorsForTests(): void {
   capabilityVectors = null;
+  capabilityBackground = [];
   warmupPromise = null;
+  mcpVectorCache.clear();
 }
 
 /**
@@ -304,13 +492,39 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
   const lexicalByCapability = new Map(
     lexical.map((match) => [match.capability, match.score]),
   );
+  const staticCapabilities = new Set(
+    getDesktopCapabilityOntology().map((entry) => entry.canonicalId),
+  );
+  const mcpOntology = listMcpCapabilityEntries()
+    .filter((entry) => !staticCapabilities.has(entry.name))
+    .map(ontologyEntryForManifest);
+  for (const entry of mcpOntology) {
+    lexicalByCapability.set(
+      entry.canonicalId,
+      registryLexicalScore(input.query, entry.manifest),
+    );
+  }
+  const lexicalFallback = [
+    ...lexical,
+    ...mcpOntology.map((entry) => ({
+      capability: entry.canonicalId,
+      score: lexicalByCapability.get(entry.canonicalId) ?? 0,
+      entry,
+      positive: 0,
+      counterEvidence: 0,
+    })),
+  ].sort(
+    (left, right) =>
+      right.score - left.score ||
+      left.capability.localeCompare(right.capability),
+  );
 
   const vectors =
     capabilityVectors ??
     (input.allowWarmup === true
       ? await warmDesktopCapabilityVectors(input.logger)
       : null);
-  if (!vectors) return lexical.slice(0, input.limit ?? 8);
+  if (!vectors) return lexicalFallback.slice(0, input.limit ?? 8);
 
   const queryVector = await embedQueryForStorage(
     [input.query, ...(input.hints ?? [])].join(" "),
@@ -318,17 +532,32 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
     CAPABILITY_CACHE_SCOPE,
     QUERY_TIMEOUT_MS,
   );
-  if (!queryVector) return lexical.slice(0, input.limit ?? 8);
+  if (!queryVector) return lexicalFallback.slice(0, input.limit ?? 8);
 
-  const semantic = vectors.map((candidate) => {
-    // positives[0] kimlik metni, kalanı kullanıcı-dili örnekleri.
-    const identity = candidate.positives.length > 0 ? dot(queryVector, candidate.positives[0]) : 0;
-    let utterance = 0;
-    for (const vector of candidate.positives.slice(1)) {
-      const score = dot(queryVector, vector);
-      if (score > utterance) utterance = score;
-    }
-    const positive = Math.max(identity * IDENTITY_DAMPENING, utterance);
+  const dynamicVectors = await resolveMcpCapabilityVectors(
+    mcpOntology,
+    input.logger,
+  );
+  const dynamicVectorCapabilities = new Set(
+    dynamicVectors.map((candidate) => candidate.capability),
+  );
+  const allVectors = [
+    ...vectors,
+    ...dynamicVectors,
+    ...mcpOntology
+      .filter((entry) => !dynamicVectorCapabilities.has(entry.canonicalId))
+      .map((entry): CapabilityVectors => ({
+        capability: entry.canonicalId,
+        positives: [],
+        semanticBias: 0,
+        negatives: [],
+        entry,
+      })),
+  ];
+
+  const semantic = allVectors.map((candidate) => {
+    const raw = rawPositiveSimilarity(queryVector, candidate);
+    const adjustedPositive = raw.positive - candidate.semanticBias;
     let negative = 0;
     for (const vector of candidate.negatives) {
       const score = dot(queryVector, vector);
@@ -337,11 +566,20 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
     // Ceza yalnız karşı-örnek gerçekten öndeyken devreye girer: "git nedir"
     // sorgusu git_status'un olumlu örneklerine de benzer, ama karşı-örneğine
     // DAHA ÇOK benzer. Karşılaştırma kullanıcı-dili örnekleriyle yapılır.
-    const reference = candidate.positives.length > 1 ? utterance : positive;
-    return { candidate, positive, margin: Math.max(0, negative - reference) };
+    const reference = candidate.positives.length > 1
+      ? raw.utterance
+      : raw.identity;
+    return {
+      candidate,
+      rawPositive: raw.positive,
+      adjustedPositive,
+      margin: Math.max(0, negative - reference),
+    };
   });
 
-  const normalizedSemantic = normalizeScores(semantic.map((item) => item.positive));
+  const normalizedSemantic = normalizeScores(
+    semantic.map((item) => item.adjustedPositive),
+  );
   const normalizedLexical = normalizeScores(
     semantic.map((item) => lexicalByCapability.get(item.candidate.capability) ?? 0),
   );
@@ -371,7 +609,7 @@ export async function matchDesktopCapabilitiesWithEmbeddings(input: {
       capability: item.candidate.capability,
       score: Number(Math.max(0, combined).toFixed(4)),
       entry: item.candidate.entry,
-      positive: Number(item.positive.toFixed(4)),
+      positive: Number(item.rawPositive.toFixed(4)),
       counterEvidence: Number(item.margin.toFixed(4)),
     };
   });

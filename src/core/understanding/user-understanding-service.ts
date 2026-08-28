@@ -170,6 +170,33 @@ export function emptyUnderstanding(
   };
 }
 
+export function buildFastTaskUnderstanding(
+  input: TaskUnderstandingInput,
+): UserUnderstandingResult {
+  const intent = classifyIntent(input);
+  const envelope = buildTypedUnderstandingEnvelope({
+    ...input,
+    intent,
+    source: "typed_extractor",
+  });
+  const base = emptyUnderstanding(input);
+  return {
+    ...base,
+    intent,
+    routingHints: intent.routingHints,
+    envelope,
+    envelopeSource: "typed_extractor",
+    envelopeConfidence: envelope.confidence,
+    context: {
+      ...base.context,
+      intent: intent.primaryIntent,
+      taskFrame: intent.taskFrame,
+      ecosystemHints: intent.ecosystemHints,
+      understandingEnvelope: envelope,
+    },
+  };
+}
+
 export async function buildTaskUnderstanding(
   app: FastifyInstance,
   input: TaskUnderstandingInput,

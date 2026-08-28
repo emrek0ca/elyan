@@ -253,7 +253,7 @@ test("a complete answer is never handed a canned clarification", () => {
     false,
   );
 
-  // Buna karşılık, içeriksiz bir "yaptım" onayı hâlâ netleştirme alır.
+  // İçeriksiz bir onay da typed clarification olmadan soru üretemez.
   const acknowledgement = resolveCompletionAssistantBlocks({
     prompt: "Bu hedef için bir plan oluştur",
     responseText: "Doktorluk hedefi için yol haritası hazırlandı.",
@@ -265,7 +265,7 @@ test("a complete answer is never handed a canned clarification", () => {
     (acknowledgement.blocks as Array<Record<string, unknown>>).some(
       (block) => block.type === "clarification",
     ),
-    true,
+    false,
   );
 });
 

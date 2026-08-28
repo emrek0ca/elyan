@@ -26,6 +26,7 @@ export type FactualityGateInput = {
   answer: string;
   understandingContext?: UserUnderstandingContext | null;
   inferenceMetadata?: Record<string, unknown> | null;
+  toolEvidence?: unknown;
 };
 
 type EvidenceSource = {
@@ -81,9 +82,12 @@ export function evaluatePrePublishFactuality(input: FactualityGateInput): Factua
     };
   });
   const unsupportedClaims = supportedClaims.filter((claim) => !claim.supported);
-  const shouldCritique = unsupportedClaims.some(
-    (claim) => claim.kind !== "number" || claim.salience === "high",
-  );
+  const shouldCritique =
+    (input.inferenceMetadata?.retrievalLowConfidence === true &&
+      unsupportedClaims.length > 0) ||
+    unsupportedClaims.some(
+      (claim) => claim.kind !== "number" || claim.salience === "high",
+    );
   return {
     claimCount: supportedClaims.length,
     unsupportedClaims,
@@ -273,6 +277,7 @@ function collectEvidenceSources(input: FactualityGateInput): EvidenceSource[] {
   const metadata = input.inferenceMetadata ?? {};
   add("web_grounding", metadata.webSources);
   add("web_grounding_blocks", collectGroundingBlocks(metadata.blocks));
+  add("tool_evidence", input.toolEvidence ?? metadata.toolEvidence);
   add("tool_results", metadata.toolResults);
   add("retrieval", {
     memoryResultCount: metadata.memoryResultCount,
@@ -309,7 +314,7 @@ function collectStrings(value: unknown, depth = 0): string[] {
   if (typeof value === "object") {
     return Object.entries(value as Record<string, unknown>)
       .flatMap(([key, item]) => {
-        if (/token|secret|password|credential/i.test(key)) {
+        if (/token|secret|password|credential|authorization|cookie/i.test(key)) {
           return [];
         }
         return collectStrings(item, depth + 1);

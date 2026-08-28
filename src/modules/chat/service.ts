@@ -75,6 +75,7 @@ import {
   snapshotConversation,
   type ChatContextSnapshot,
   type ChatContextSnapshotTurn,
+  type ChatReferenceBlock,
 } from "./chat-context-snapshot.js";
 import {
   reconcileOrphanedChatMessagesForSession,
@@ -1467,6 +1468,7 @@ async function loadChatConversation(
             : new Date(row.createdAt).toISOString(),
         blockDigest,
         blockTypes,
+        structuredBlocks: projectAssistantReferenceBlocks(normalizedBlocks),
       } satisfies ChatContextSnapshotTurn;
     });
 
@@ -1521,6 +1523,157 @@ function visibleTextFromStoredAssistantBlocks(
     })
     .filter(Boolean);
   return visible.join("\n\n").replace(/\s+/g, " ").trim();
+}
+
+function boundedReferenceText(value: unknown, max: number): string | undefined {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, max) : undefined;
+}
+
+function boundedReferenceNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function projectReferencePoint(value: unknown) {
+  const record = readRecord(value);
+  if (!record) return null;
+  const label = boundedReferenceText(record.label ?? record.name, 120);
+  const x = boundedReferenceNumber(record.x);
+  const y = boundedReferenceNumber(record.y);
+  const pointValue = boundedReferenceNumber(record.value);
+  const point = {
+    ...(label ? { label } : {}),
+    ...(x != null ? { x } : {}),
+    ...(y != null ? { y } : {}),
+    ...(pointValue != null ? { value: pointValue } : {}),
+  };
+  return Object.keys(point).length > 0 ? point : null;
+}
+
+function projectReferenceSeries(value: unknown) {
+  const record = readRecord(value);
+  if (!record) return null;
+  const labels = (Array.isArray(record.labels) ? record.labels : [])
+    .map((item) => boundedReferenceText(item, 120))
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 160);
+  const values = (Array.isArray(record.values) ? record.values : [])
+    .map(boundedReferenceNumber)
+    .filter((item): item is number => item != null)
+    .slice(0, 160);
+  const points = (
+    Array.isArray(record.points)
+      ? record.points
+      : Array.isArray(record.data)
+        ? record.data
+        : []
+  )
+    .map(projectReferencePoint)
+    .filter(
+      (
+        item,
+      ): item is NonNullable<ReturnType<typeof projectReferencePoint>> =>
+        item != null,
+    )
+    .slice(0, 160);
+  if (values.length === 0 && points.length === 0) return null;
+  const name = boundedReferenceText(record.name, 120);
+  return {
+    ...(name ? { name } : {}),
+    labels,
+    values,
+    points,
+  };
+}
+
+function projectAssistantReferenceBlocks(
+  blocks: AssistantMessageBlock[],
+): ChatReferenceBlock[] {
+  return blocks
+    .flatMap((block): ChatReferenceBlock[] => {
+      const record = block as Record<string, unknown>;
+      if (block.type === "table") {
+        const columns = block.columns
+          .slice(0, 12)
+          .map((item: unknown) => boundedReferenceText(item, 120))
+          .filter(Boolean);
+        const rows = block.rows
+          .slice(0, 32)
+          .map((row: unknown) =>
+            (Array.isArray(row) ? row : [])
+              .slice(0, columns.length)
+              .map((cell: unknown) => boundedReferenceText(cell, 240)),
+          )
+          .filter((row: string[]) => row.length > 0);
+        const title = boundedReferenceText(block.title, 120);
+        return columns.length > 0 && rows.length > 0
+          ? [
+              {
+                type: "table",
+                ...(title ? { title } : {}),
+                columns,
+                rows,
+                totalRowCount: block.totalRowCount ?? block.rows.length,
+              },
+            ]
+          : [];
+      }
+      if (block.type === "chart") {
+        const rawSeries =
+          Array.isArray(block.series) && block.series.length > 0
+            ? block.series
+            : [
+                {
+                  labels: block.labels,
+                  values: block.values,
+                  points: block.points,
+                  data: block.data,
+                },
+              ];
+        const series = rawSeries
+          .map((item: unknown) => projectReferenceSeries(item))
+          .filter(
+            (
+              item: ReturnType<typeof projectReferenceSeries>,
+            ): item is NonNullable<ReturnType<typeof projectReferenceSeries>> =>
+              item != null,
+          )
+          .slice(0, 8);
+        const title = boundedReferenceText(block.title, 120);
+        return series.length > 0
+          ? [
+              {
+                type: "chart",
+                ...(title ? { title } : {}),
+                chartType: block.chartType,
+                series,
+              },
+            ]
+          : [];
+      }
+      if (block.type === "artifact") {
+        const id = boundedReferenceText(record.artifactId ?? record.id, 255);
+        const title = boundedReferenceText(record.title ?? record.name, 180);
+        const kind = boundedReferenceText(
+          record.kind ?? record.artifactType,
+          80,
+        );
+        return id || title || kind
+          ? [
+              {
+                type: "artifact",
+                ...(id ? { id } : {}),
+                ...(title ? { title } : {}),
+                ...(kind ? { kind } : {}),
+              },
+            ]
+          : [];
+      }
+      return [];
+    })
+    .slice(0, 4);
 }
 
 async function assertOwnedChatSession(
@@ -2235,21 +2388,48 @@ async function createChatMessageInner(
   // onay isteyerek. Fail-open: okunamazsa katalog yalnız yerel araçlarla kalır.
   await registerMcpCapabilitiesForTurn(app, input.userId);
 
-  const remoteMcpResolution = await (shouldResolveRemoteMcpForChat({
-    requestedCapabilities: input.requestedCapabilities,
-    metadata: input.metadata,
-    targetDeviceId: input.targetDeviceId,
-    existingSessionMetadata: existingSession?.metadata,
-  })
-    ? resolveRemoteMcpRequest(app, {
-        userId: input.userId,
-        prompt: input.content,
-        requestedCapabilities: input.requestedCapabilities,
-      })
-    : Promise.resolve({
-        requestedCapabilities: input.requestedCapabilities,
-        selection: null,
-      }));
+  const emptyPriorChatContext: LoadedChatContext = {
+    conversation: [],
+    turns: [],
+    attachmentCandidates: [],
+  };
+  const [remoteMcpResolution, priorChatContext] = await Promise.all([
+    shouldResolveRemoteMcpForChat({
+      requestedCapabilities: input.requestedCapabilities,
+      metadata: input.metadata,
+      targetDeviceId: input.targetDeviceId,
+      existingSessionMetadata: existingSession?.metadata,
+    })
+      ? resolveRemoteMcpRequest(app, {
+          userId: input.userId,
+          prompt: input.content,
+          requestedCapabilities: input.requestedCapabilities,
+        })
+      : Promise.resolve({
+          requestedCapabilities: input.requestedCapabilities,
+          selection: null,
+        }),
+    existingSession
+      ? loadChatConversation(app, {
+          userId: input.userId,
+          sessionId: existingSession.id,
+        })
+      : Promise.resolve(emptyPriorChatContext),
+  ]);
+  const authoritativeTurnKind = resolveChatTurnKind({
+    prompt: input.content,
+    hasPriorAssistant: priorChatContext.turns.some(
+      (turn) => turn.role === "assistant" && turn.status === "completed",
+    ),
+  });
+  const authoritativeSourceReference =
+    authoritativeTurnKind === "new_request"
+      ? "current_prompt"
+      : "previous_answer";
+  input.metadata = {
+    ...input.metadata,
+    authoritativeSourceReference,
+  };
   const effectiveRequestedCapabilities =
     remoteMcpResolution.requestedCapabilities;
   const routeStartedAt = Date.now();
@@ -2466,7 +2646,7 @@ async function createChatMessageInner(
   // These reads are independent once duplicate admission has succeeded.
   // Running them together removes one full DB/cache round trip from the
   // request-to-queue path without weakening either context source.
-  const [requestChatMetadata, priorChatContext] = await Promise.all([
+  const requestChatMetadata = await (
     useDirectDesktopFastPath || deferChatContextHydration
       ? Promise.resolve(
           buildChatMetadata(
@@ -2476,10 +2656,6 @@ async function createChatMessageInner(
                   chatContextHydration: {
                     mode: "worker",
                     deferred: true,
-                    // Conversation history is now snapshotted independently
-                    // below. `deferred` only describes richer mobile/world
-                    // context hydration; it must never authorize a worker
-                    // history reread.
                     conversationSnapshotProvided: true,
                   },
                 }
@@ -2491,18 +2667,8 @@ async function createChatMessageInner(
           sessionId: session.id,
           targetDeviceId: session.targetDeviceId ?? input.targetDeviceId,
           metadata: routingMetadata,
-        }),
-    existingSession
-      ? loadChatConversation(app, {
-          userId: input.userId,
-          sessionId: session.id,
         })
-      : Promise.resolve({
-          conversation: [],
-          turns: [],
-          attachmentCandidates: [],
-        }),
-  ]);
+  );
   // Skill/tool outcomes are server-owned completion truth. Never let request
   // metadata pre-seed an assistant badge before a verified execution occurs.
   const assistantRequestMetadata = {
@@ -2578,12 +2744,7 @@ async function createChatMessageInner(
     assistantMessageId,
     prompt: input.content,
     priorTurns: priorChatContext.turns,
-    turnKind: resolveChatTurnKind({
-      prompt: input.content,
-      hasPriorAssistant: priorChatContext.turns.some(
-        (turn) => turn.role === "assistant" && turn.status === "completed",
-      ),
-    }),
+    turnKind: authoritativeTurnKind,
   });
   const [userMessageBlob, assistantAckBlob] = await Promise.all([
     shouldStoreChatMessageContentBlob(input.content)

@@ -77,6 +77,19 @@ export const taskExecutionSkillSchema = z.object({
   confidence: z.number().min(0).max(1).optional(),
 });
 
+export const taskExecutionToolSelectionSchema = z.object({
+  registryRevision: z.string().min(1).max(120),
+  manifestHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  candidates: z.array(z.object({
+    capability: z.string().min(1).max(120),
+    score: z.number().min(0).max(1),
+    reason: z.string().min(1).max(240),
+    readiness: z.enum(["ready", "degraded", "unavailable", "unknown"]),
+    sideEffect: z.enum(["none", "read", "write", "destructive", "unknown"]),
+    approvalRequired: z.boolean(),
+  })).max(TASK_EXECUTION_DIRECT_TOOL_LIMIT),
+});
+
 export const taskExecutionStepSchema = z.object({
   id: z.string().min(1).max(100),
   device: z.enum(["desktop", "mobile", "control-plane"]).optional(),
@@ -182,6 +195,7 @@ export const taskExecutionContractSchema = z.object({
     workload: z.string().min(1).max(100),
     requiredRuntime: z.enum(["server", "desktop", "both"]),
     allowedCapabilities: z.array(z.string().min(1).max(120)).max(96),
+    toolSelection: taskExecutionToolSelectionSchema.optional(),
     selectedTools: z.array(taskExecutionToolSchema).max(32),
     selectedSkills: z.array(taskExecutionSkillSchema).max(16),
     steps: z.array(taskExecutionStepSchema).max(TASK_EXECUTION_MAX_STEPS),
@@ -731,6 +745,48 @@ function selectedToolsForInput(input: {
   return { selectedTools, rejectedToolIds: rejectedToolIds.slice(0, 16) };
 }
 
+function toolSelectionSnapshot(input: {
+  selectedTools: TaskExecutionTool[];
+  allowedCapabilities: string[];
+  steps: TaskExecutionStep[];
+}): z.output<typeof taskExecutionToolSelectionSchema> {
+  const allowed = new Set(input.allowedCapabilities);
+  const toolsById = new Map(input.selectedTools.map((tool) => [tool.id, tool] as const));
+  const capabilityIds = uniqueStrings([
+    ...input.steps.map((step) => step.capability),
+    ...input.selectedTools.map((tool) => tool.id),
+  ], TASK_EXECUTION_DIRECT_TOOL_LIMIT).filter((capability) => allowed.has(capability));
+  const registryEntries = [...capabilityManifestById.values(), ...mcpCapabilityIndex.values()]
+    .map((entry) => ({
+      name: entry.name,
+      requiredArgs: entry.requiredArgs,
+      inputContract: entry.inputContract,
+      requiresApproval: entry.requiresApproval,
+      sideEffectClass: entry.sideEffectClass,
+      executionAuthority: entry.executionAuthority,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const manifestHash = createHash("sha256")
+    .update(stableJson(registryEntries), "utf8")
+    .digest("hex");
+  return {
+    registryRevision: `elyan.desktop_capability_registry.v1:${manifestHash.slice(0, 16)}`,
+    manifestHash,
+    candidates: capabilityIds.map((capability) => {
+      const manifest = knownCapability(capability);
+      const tool = toolsById.get(capability);
+      return {
+        capability,
+        score: Math.max(0, Math.min(1, tool?.confidence ?? (input.steps.some((step) => step.capability === capability) ? 1 : 0))),
+        reason: compact(tool?.reason, 240) || (input.steps.some((step) => step.capability === capability) ? "compiled_plan_step" : "typed_route_selection"),
+        readiness: "unknown" as const,
+        sideEffect: manifest?.sideEffectClass ?? "unknown",
+        approvalRequired: manifest?.requiresApproval === true,
+      };
+    }),
+  };
+}
+
 function selectedSkillsForInput(
   envelope: UnderstandingEnvelope | null | undefined,
   confidence: number,
@@ -1004,6 +1060,11 @@ export function buildTaskExecutionContract(input: {
       workload: selectedWorkload,
       requiredRuntime,
       allowedCapabilities,
+      toolSelection: toolSelectionSnapshot({
+        selectedTools: toolSelection.selectedTools,
+        allowedCapabilities,
+        steps,
+      }),
       selectedTools: toolSelection.selectedTools,
       selectedSkills: skillSelection.selectedSkills,
       steps,
@@ -1145,6 +1206,11 @@ export function syncTaskExecutionContractWithWorkOrder(input: {
       ...contract.execution,
       mode: steps.length > 0 ? "compiled" : "dynamic",
       allowedCapabilities,
+      toolSelection: toolSelectionSnapshot({
+        selectedTools,
+        allowedCapabilities,
+        steps,
+      }),
       selectedTools,
       steps,
     },
@@ -1225,6 +1291,22 @@ export function validateTaskExecutionContract(
         code: "TASK_CONTRACT_TOOL_OUTSIDE_SCOPE",
         path: `execution.selectedTools.${index}.id`,
         message: "Seçili tool görev capability sınırının dışında.",
+      });
+    }
+  }
+  for (const [index, candidate] of contract.execution.toolSelection?.candidates.entries() ?? []) {
+    if (!knownCapabilities.has(candidate.capability)) {
+      errors.push({
+        code: "TASK_CONTRACT_UNKNOWN_TOOL_CANDIDATE",
+        path: `execution.toolSelection.candidates.${index}.capability`,
+        message: "Araç adayı registry dışında.",
+      });
+    }
+    if (!allowedCapabilities.has(candidate.capability)) {
+      errors.push({
+        code: "TASK_CONTRACT_TOOL_CANDIDATE_OUTSIDE_SCOPE",
+        path: `execution.toolSelection.candidates.${index}.capability`,
+        message: "Araç adayı görev capability sınırını genişletemez.",
       });
     }
   }
