@@ -476,6 +476,7 @@ import {
 import { collapseWhitespace as compactText } from "../../lib/text.js";
 import { isSideEffectTurn } from "../../core/understanding/turn-facts.js";
 import { buildMathSurface3DResult } from "./math-surface.js";
+import { startStage } from "../../lib/perf-telemetry.js";
 
 function providerBaseUrlForPath(
   candidate: {
@@ -6017,6 +6018,9 @@ export async function generateSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
 ): Promise<SharedBrainInferenceResult> {
+  // Sağlayıcıya gidene kadar yapılan hazırlık işi (bağlam, anlama, araç
+  // kataloğu). Ölçümde ilk token bütçesinin en büyük tek dilimi buydu.
+  const endPreAugmentationStage = startStage("chat.pre_augmentation");
   // Widget biçim kararı TUR BAŞINDA bir kez, semantik olarak hesaplanır.
   //
   // `decideStructuredResponseDecision` üç ayrı istem kurucusundan SENKRON
@@ -6993,6 +6997,18 @@ export async function generateSharedBrainReply(
     const brainCorpusDomains = detectBrainCorpusDomains(knowledgeQuery);
     const retrievalQuery = buildBrainCorpusRetrievalQuery(knowledgeQuery);
     const retrievalNeuralPolicy = buildRetrievalNeuralPolicy(input.brainProfile);
+    // KANIT TOPLAMA, İLK TOKEN'IN ÖNÜNDE DURUYOR.
+    //
+    // Bu blok (retrieval + hafıza + web araması) sağlayıcı çağrısından ÖNCE
+    // beklenir, çünkü cevabın kendisi bu kanıta dayanacak. Yapısal olarak
+    // doğru, ama bedeli ölçülmemişti: sağlayıcı ilk token'ı 518 ms'de veriyor
+    // (`chat.provider_ttft`) oysa kullanıcı bazı turlarda 8,4 saniye bekliyor
+    // (`inference_total`). Aradaki farkın nerede olduğunu söyleyen tek bir
+    // sayaç yoktu — bu yüzden bu faz artık kendi adıyla ölçülüyor.
+    endPreAugmentationStage();
+    const endAugmentationStage = shouldAugment
+      ? startStage("chat.knowledge_augmentation")
+      : null;
     const [retrieval, memory, webGrounding] = shouldAugment
       ? await Promise.all([
           retrievalAuthorized
@@ -7068,6 +7084,8 @@ export async function generateSharedBrainReply(
             degradedReason: null,
           }),
         ];
+    endAugmentationStage?.();
+    let endPromptBuildStage: (() => void) | null = startStage("chat.prompt_build");
     if (
       input.onDelta &&
       webGrounding.freshData.freshnessRequired &&
@@ -8040,6 +8058,11 @@ export async function generateSharedBrainReply(
       webGroundingUsed: webGrounding.used,
     });
 
+    // Kanıt toplandıktan SONRA, sağlayıcıya gidene kadar geçen süre: istem
+    // kurma, bağlam paketleme, araç kataloğu. Ölçülmemişti ve bir turun
+    // hesapsız kalan iki saniyesi buradaydı.
+    endPromptBuildStage?.();
+    const endProviderStage = startStage("chat.provider_total");
     providerLoop: for (const candidate of providerCandidates) {
       if (!candidate) {
         continue;
@@ -9072,6 +9095,7 @@ export async function generateSharedBrainReply(
       }
     }
 
+    endProviderStage();
     if (!successfulProvider) {
       logBrainDecisionObservation(app, {
         taskId: input.taskId ?? null,
@@ -11587,6 +11611,7 @@ export async function generateGovernedSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
 ): Promise<GovernedSharedBrainReplyResult> {
+  const endGovernedPreStage = startStage("chat.governed_pre");
   const routeDecision = input.routeDecision ?? null;
   const attachmentContext = input.attachmentContext ?? null;
   // Kimlik kapısı güvenlik kapılarından önce gelir: "kurucusu kim" gibi meşru
@@ -11952,7 +11977,13 @@ export async function generateGovernedSharedBrainReply(
     return skillReply;
   }
 
+  // Yönetilen sarmalayıcının SAĞLAYICI ÖNCESİ işi: güvenlik denetimi, rıza
+  // kontrolü, deterministik konektör denemesi, beceri yolu. Ölçülmemişti.
+  endGovernedPreStage();
+  const endCoreStage = startStage("chat.core_inference");
   const inference = await generateSharedBrainReply(app, input);
+  endCoreStage();
+  const endGovernedPostStage = startStage("chat.governed_post");
   if (isDesktopPlanMachineJsonRoute(input.route)) {
     // Gates, consent, provider policy and invocation accounting already ran.
     // The remaining pipeline is for user-visible prose and may polish, repair,
@@ -12768,5 +12799,6 @@ export async function generateGovernedSharedBrainReply(
     }),
   ).catch(() => undefined);
 
+  endGovernedPostStage();
   return governedResult;
 }

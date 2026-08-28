@@ -100,7 +100,11 @@ export async function resolveFactAnswer(
     // Anlamsal kısa liste: yakın-beraberlikteki adaylar sırayla denenir.
     // Sağlayıcı turda kendi varlığını bulamazsa `extract` zaten null döner,
     // yani bu döngü asla kullanıcının sormadığı veriyi getirmez.
+    // Kısa liste seçimi ile SAĞLAYICI DENEMELERİ ayrı ölçülür: 841 ms'lik
+    // olgu maliyetinin hangisinden geldiği ölçülmeden bilinemezdi.
+    const endSelectStage = recordFactStageNamed("facts.select");
     const shortlist = await selectFactProviders({ prompt, logger: app.log });
+    endSelectStage();
     const attempted = new Set<string>();
     for (const candidate of shortlist) {
       attempted.add(candidate.provider.id);
@@ -134,6 +138,11 @@ export async function resolveFactAnswer(
   } finally {
     endStage();
   }
+}
+
+function recordFactStageNamed(stage: string): () => void {
+  const startedAt = Date.now();
+  return () => recordStageDuration(stage, Date.now() - startedAt);
 }
 
 function recordFactStage(): () => void {

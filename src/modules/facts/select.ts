@@ -28,6 +28,42 @@ import type { FactProvider } from "./types.js";
  */
 
 const ABSOLUTE_THRESHOLD = 0.82;
+
+/**
+ * EN İYİ ADAYIN İKİNCİYE FARKI — asıl kapı budur.
+ *
+ * ÖLÇÜLEN ARIZA: ham skor bu uzayda HER ZAMAN yüksektir ve tek başına hiçbir
+ * turu elemiyordu. "Fotosentezi 3 cümleyle açıkla." hava durumu sağlayıcısına
+ * 0.839, "Selam nasılsın?" 0.829 veriyordu; eşik 0.82. Sonuç: HER sohbet turu
+ * iki sağlayıcılık bir kısa liste üretip her birini ağ üzerinden deniyordu.
+ * Bedeli ilk token'ın önünde 767 ms — modelin kendi 440 ms'sinden fazla.
+ *
+ * Doğru soru "skor yüksek mi?" değil, "model gerçekten BİR sağlayıcI seçti
+ * mi?". Olgusal olmayan bir istemde tüm sağlayıcılar neredeyse berabere kalır
+ * (model fikirsizdir); gerçek bir eşleşmede biri öne çıkar. Ölçüm:
+ *
+ *   olgusal DEĞİL   "Selam nasılsın?"           0.0001
+ *                   "Python'da liste sıralama"  0.0007
+ *                   "Fotosentezi açıkla"        0.0012
+ *                   "Bana bir şiir yaz"         0.0024
+ *                   "1350 TL'nin KDV'si"        0.0025
+ *                   "Atatürk'ün ilkeleri"       0.0061
+ *   ————————————————— eşik 0.012 (boşluğun ortası) —————————————————
+ *   olgusal         "Dolar kaç TL?"             0.0174
+ *                   "Bugün hava nasıl?"         0.0188
+ *                   "İstanbul'da hava kaç derece?" 0.0302
+ *                   "Bitcoin fiyatı"            0.0487
+ *                   "Euro ne kadar oldu?"       0.0595
+ *                   "Yarın yağmur yağacak mı?"  0.0670
+ *
+ * İki küme arasında 2.8 kat boşluk var. Aynı sinyal
+ * `rankSemanticTextCandidates` içinde `transformerMinMargin` olarak zaten
+ * kullanılıyor; olgu seçicisinde eksikti.
+ *
+ * Tek sağlayıcı varsa marj tanımsızdır ve kapı uygulanmaz — ölçemediği bir
+ * şey yüzünden turu kısıtlamak yanlış tarafa düşmek olurdu.
+ */
+const MIN_SELECTION_MARGIN = 0.012;
 /** Top-1'e bu kadar yakın adaylar da denenir. */
 const SHORTLIST_WINDOW = 0.03;
 const SHORTLIST_MAX = 2;
@@ -120,6 +156,8 @@ export async function selectFactProviders(input: {
 
   const top = scored[0];
   if (!top || top.score < ABSOLUTE_THRESHOLD) return [];
+  const runnerUp = scored[1];
+  if (runnerUp && top.score - runnerUp.score < MIN_SELECTION_MARGIN) return [];
   return scored
     .filter((entry) => entry.score >= top.score - SHORTLIST_WINDOW)
     .slice(0, SHORTLIST_MAX);

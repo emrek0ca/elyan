@@ -9,6 +9,7 @@ import type {
   UnderstandingIntent,
 } from "./types.js";
 import type { OutputContract } from "./output-contract.js";
+import { startStage } from "../../lib/perf-telemetry.js";
 
 /**
  * Semantic fallback for the regex intent classifier.
@@ -281,6 +282,12 @@ export async function rankSemanticTextCandidatesDetailed(
     return { match: null, embeddingsAvailable: false };
   }
 
+  // Bir turda bu sıralayıcı BİRDEN ÇOK kez çağrılıyor (konektör okuma,
+  // konektör yazma, MCP aracı, çekirdek araç) ve her çağrı bir gömme
+  // gidiş-dönüşü. Hepsi ilk token'ın ÖNÜNDE duruyor; toplam maliyetlerini
+  // gösteren bir sayaç yoktu.
+  const endRankStage = startStage("semantic.rank");
+
   const [semanticVectors, semanticQuery] = await Promise.all([
     embedTextsForStorage(
       usableCandidates.map((candidate) => candidate.description),
@@ -307,11 +314,13 @@ export async function rankSemanticTextCandidatesDetailed(
       match.score >= (options.transformerMinScore ?? 0.62) &&
       match.margin >= (options.transformerMinMargin ?? 0.015)
     ) {
+      endRankStage();
       return {
         match: { ...match, source: "transformer" },
         embeddingsAvailable: true,
       };
     }
+    endRankStage();
     return { match: null, embeddingsAvailable: true };
   }
 
@@ -327,8 +336,10 @@ export async function rankSemanticTextCandidatesDetailed(
     hashMatch.score < (options.hashMinScore ?? 0.18) ||
     hashMatch.margin < (options.hashMinMargin ?? 0.04)
   ) {
+    endRankStage();
     return { match: null, embeddingsAvailable: false };
   }
+  endRankStage();
   return {
     match: { ...hashMatch, source: "hash" },
     embeddingsAvailable: false,
