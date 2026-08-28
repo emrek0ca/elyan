@@ -204,10 +204,35 @@ export function isChatGenerationQueueEnabled(app: FastifyInstance): boolean {
   );
 }
 
+/**
+ * Gemini bu kurulumda gerçekten CEVAP ÜRETEBİLİR Mİ?
+ *
+ * Bu kontrol yalnız API anahtarına bakıyordu ve anahtar her zaman var. Oysa
+ * sohbet çıkarımı için Gemini ayrıca ücretli yolun açık ve beyan edilmiş
+ * olmasını istiyor (`gemini-inference-policy`); ikisi de varsayılan olarak
+ * KAPALI ve `.env`de açılmamış.
+ *
+ * ÖLÇÜLEN SONUÇ (2026-08-28): her tur zincire Gemini adaylarıyla başlıyor ve
+ * her seferinde `policy_blocked:paid:paid_fallback_disabled` alıp geçiyor.
+ * Kuyruğun ikinci aşaması (primary=groq → fallback=gemini) hiç cevap
+ * veremeyecek bir sağlayıcıya yükseliyor; satır içi kurtarma da öyle. Yani
+ * "yedek sağlayıcı var" diye bilinen şey yoktu.
+ *
+ * Anahtarın varlığı bir YETENEK değil, bir ön koşuldur. Yetenek, politikanın
+ * izin vermesidir.
+ */
 export function isGeminiFallbackQueueConfigured(
   app: FastifyInstance,
 ): boolean {
-  return Boolean(String(app.config.GEMINI_API_KEY || "").trim());
+  if (!String(app.config.GEMINI_API_KEY || "").trim()) return false;
+  // İKİ MEŞRU YOL VAR. `GEMINI_FREE_ONLY` modunda Gemini ücretli kapıya
+  // takılmadan hizmet verir; ilk düzeltmem bunu atlamıştı ve kuyruk testi
+  // haklı olarak düştü. Ücretli yol ise hem açık hem beyan edilmiş olmalı.
+  if (app.config.GEMINI_FREE_ONLY === true) return true;
+  return (
+    app.config.GEMINI_PAID_FALLBACK_ENABLED === true &&
+    app.config.GEMINI_PAID_DATA_PROCESSING_ATTESTED === true
+  );
 }
 
 async function queueResourcesFor(

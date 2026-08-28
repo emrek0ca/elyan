@@ -11,6 +11,7 @@ import {
 } from "../tasks/service.js";
 import { buildAgentToolCatalogForTurn } from "./tool-registry.js";
 import { isHostedImageEditIntent } from "./image-generation.js";
+import { isGeminiFallbackQueueConfigured } from "./chat-generation-queue.js";
 import {
   ASSISTANT_TURN_FAILURE_FALLBACK_TR,
   assistantTurnFailureMessage,
@@ -493,4 +494,45 @@ test("a bare everyday verb does not make a turn an image edit", () => {
   for (const prompt of visual) {
     assert.equal(isHostedImageEditIntent(prompt), true, prompt);
   }
+});
+
+test("a provider that policy forbids is not a fallback", () => {
+  // ÖLÇÜLEN (2026-08-28): her tur zincire Gemini ile başlayıp
+  // `policy_blocked:paid:paid_fallback_disabled` alıyordu. Kontrol yalnız API
+  // anahtarına bakıyordu; anahtar hep var, izin hiç yok.
+  const withKeyOnly = {
+    config: { GEMINI_API_KEY: "k" },
+  } as never;
+  assert.equal(isGeminiFallbackQueueConfigured(withKeyOnly), false);
+
+  const enabledButNotAttested = {
+    config: { GEMINI_API_KEY: "k", GEMINI_PAID_FALLBACK_ENABLED: true },
+  } as never;
+  assert.equal(isGeminiFallbackQueueConfigured(enabledButNotAttested), false);
+
+  const usable = {
+    config: {
+      GEMINI_API_KEY: "k",
+      GEMINI_PAID_FALLBACK_ENABLED: true,
+      GEMINI_PAID_DATA_PROCESSING_ATTESTED: true,
+    },
+  } as never;
+  assert.equal(isGeminiFallbackQueueConfigured(usable), true);
+
+  // Serbest-katman modu ücretli kapıdan bağımsızdır ve meşru bir yoldur.
+  assert.equal(
+    isGeminiFallbackQueueConfigured({
+      config: { GEMINI_API_KEY: "k", GEMINI_FREE_ONLY: true },
+    } as never),
+    true,
+  );
+
+  // Anahtar yoksa izin verilse bile yedek yoktur.
+  const noKey = {
+    config: {
+      GEMINI_PAID_FALLBACK_ENABLED: true,
+      GEMINI_PAID_DATA_PROCESSING_ATTESTED: true,
+    },
+  } as never;
+  assert.equal(isGeminiFallbackQueueConfigured(noKey), false);
 });
