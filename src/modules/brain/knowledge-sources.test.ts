@@ -25,10 +25,19 @@ test("a probe with no typed match returns an empty shortlist without failing", a
 });
 
 /**
- * SIK SORULAN SORUNUN BEDELİ BİR KEZ ÖDENİR. İkinci tur ne gömme ne de
- * seçim çalıştırır; karar önbellekten gelir. Önbelleğe giren şey KARARDIR
- * (sağlayıcı kimlikleri, korpus alanları) — sağlayıcının döndürdüğü değişken
- * veri değil; onun tazelik penceresi `facts/cache.ts` içindedir.
+ * SIK SORULAN SORUNUN BEDELİ BİR KEZ ÖDENİR.
+ *
+ * Bu test GÖMÜCÜNÜN VARLIĞINA BAĞLI OLAMAZ. İlk hâli "ikinci çağrı isabet
+ * eder" diyordu ve deploy kapısında düştü: `npm ci`, semantik modelin 118 MB
+ * önbelleğini `node_modules` içinden sildiği için tur modeli yeniden
+ * indirmeyi bekliyor, gömme zaman aşımına uğruyor ve seçim BİLEREK önbelleğe
+ * alınmıyordu. Yani test, sözleşmenin ihlalini değil ortamın soğukluğunu
+ * ölçüyordu.
+ *
+ * Sözleşmenin iki kolu da burada, ikisi de iddia edilir:
+ *   gömme başarılı  → karar önbelleğe girer, ikinci çağrı ödemez
+ *   gömme başarısız → karar önbelleğe GİRMEZ (bir anlık kesinti saatlerce
+ *                     her turu tipli kaynaksız bırakmasın diye)
  */
 test("a completed probe caches its decision for the repeat question", async () => {
   const first = await probeTypedKnowledgeSources(null, {
@@ -36,18 +45,24 @@ test("a completed probe caches its decision for the repeat question", async () =
     probeCorpus: false,
   });
   const second = await probeTypedKnowledgeSources(null, {
+    // Aynı soru, farklı yazım: anahtar aksansız ve boşluk-sıkıştırılmış.
     query: "  bugun   DOLAR kac tl? ",
     probeCorpus: false,
   });
   assert.equal(first.cacheState, "miss");
-  assert.equal(second.cacheState, "hit");
-  assert.deepEqual(
-    second.providerShortlist.map((entry) => entry.provider.id),
-    first.providerShortlist.map((entry) => entry.provider.id),
-  );
-  // Önbellek isabetinde bu turda gömme YAPILMAZ; aşağı akış `undefined`
-  // görür ve gerçekten ihtiyaç duyarsa kendi vektörünü hesaplar.
-  assert.equal(second.queryVector, undefined);
+
+  if (first.queryVector != null) {
+    assert.equal(second.cacheState, "hit");
+    assert.deepEqual(
+      second.providerShortlist.map((entry) => entry.provider.id),
+      first.providerShortlist.map((entry) => entry.provider.id),
+    );
+    // Önbellek isabetinde bu turda gömme YAPILMAZ; aşağı akış `undefined`
+    // görür ve gerçekten ihtiyaç duyarsa kendi vektörünü hesaplar.
+    assert.equal(second.queryVector, undefined);
+    return;
+  }
+  assert.equal(second.cacheState, "miss");
 });
 
 test("concurrent identical probes share one selection pass", async () => {
