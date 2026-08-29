@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { stdSerializers } from "pino";
 import { and, eq, isNull } from "drizzle-orm";
 import compress from "@fastify/compress";
 import cors from "@fastify/cors";
@@ -155,6 +156,26 @@ export async function buildApp(envInput?: AppEnv) {
   const app = Fastify({
     logger: {
       level: env.LOG_LEVEL,
+      // HATA NESNESİ `error` ANAHTARIYLA DA TAM SERİLEŞTİRİLMELİ.
+      //
+      // `Error.message` ve `Error.stack` ENUMERABLE DEĞİLDİR; pino yalnız
+      // `err` anahtarına serializer uygular. `logger.warn({ error }, "...")`
+      // yazan her çağrı bu yüzden sahaya şunu bırakıyordu:
+      //
+      //   {"error":{"code":"ERR_DLOPEN_FAILED"},"msg":"semantic compute worker crashed"}
+      //
+      // Mesaj yok, yığın yok, hangi kütüphanenin yüklenemediği yok. Aynı
+      // logdaki auth hataları TAM görünüyordu — çünkü onlar `err` anahtarını
+      // kullanıyordu. Yani teşhis edilebilirlik, çağıranın hangi kelimeyi
+      // seçtiğine bağlıydı.
+      //
+      // Bu, üretimde bir günlük teşhis kaybına mal oldu (2026-08-30, semantik
+      // işçi çökmesi). Çağrı yerlerini tek tek düzeltmek yerine `error`
+      // anahtarına aynı serializer bağlanıyor: bundan sonra hangi kelime
+      // yazılırsa yazılsın hata tam düşer.
+      serializers: {
+        error: stdSerializers.err,
+      },
       redact: {
         paths: [
           "req.headers.authorization",

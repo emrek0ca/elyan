@@ -187,7 +187,11 @@ function buildGeminiInteractionsRequestBody(
   const generationConfig: Record<string, unknown> = {
     temperature,
     max_output_tokens: maxTokens,
-    thinking_level: reasoningEffort,
+    thinking_level: capReasoningEffortForBudget(
+      reasoningEffort,
+      maxTokens,
+      Boolean(responseSchema) || jsonObjectMode,
+    ),
     thinking_summaries: "none",
   };
   if (visionImages.some((image) => image.detail === "high")) {
@@ -377,14 +381,11 @@ export function buildRequestBody(
     ...(resolveProviderModelCapabilities(provider, model).reasoningRequestControls
       ? {
           reasoning_format: reasoningPolicy === "visible" ? "parsed" : "hidden",
-          reasoning_effort:
-            reasoningEffort === "high" &&
-            maxTokens <
-              (responseSchema || jsonObjectMode
-                ? MACHINE_JSON_HIGH_REASONING_FLOOR
-                : FREE_TEXT_HIGH_REASONING_FLOOR)
-              ? "medium"
-              : reasoningEffort,
+          reasoning_effort: capReasoningEffortForBudget(
+            reasoningEffort,
+            maxTokens,
+            Boolean(responseSchema) || jsonObjectMode,
+          ),
         }
       : {}),
   };
@@ -445,8 +446,31 @@ function supportsTurnEnvelopeResponseFormat(
  * TAMAMEN geçersiz kılar (Groq 400 `json_validate_failed`) veya hiç görünür
  * token bırakmaz. Bu yüzden iki farklı taban.
  */
-const FREE_TEXT_HIGH_REASONING_FLOOR = 1_500;
-const MACHINE_JSON_HIGH_REASONING_FLOOR = 3_000;
+export const FREE_TEXT_HIGH_REASONING_FLOOR = 1_500;
+export const MACHINE_JSON_HIGH_REASONING_FLOOR = 3_000;
+
+/**
+ * TABAN HER SAĞLAYICIDA UYGULANIR, BİRİNDE DEĞİL.
+ *
+ * Koruma yalnız OpenAI-şekilli gövdede vardı. Gemini yolu aynı eforu
+ * `thinking_level` olarak KORUMASIZ gönderiyordu ve orada da düşünme
+ * `max_output_tokens`tan yeniyor — yani `document_analysis` 640 token
+ * bütçesiyle `high` düşünme istiyordu. Aynı açlık hatası, ikinci bir kapıda.
+ *
+ * Tek yerde durması, üçüncü bir sağlayıcı eklendiğinde korumanın unutulmasını
+ * da engeller.
+ */
+export function capReasoningEffortForBudget(
+  effort: "low" | "medium" | "high",
+  maxTokens: number,
+  machineJsonRequired: boolean,
+): "low" | "medium" | "high" {
+  if (effort !== "high") return effort;
+  const floor = machineJsonRequired
+    ? MACHINE_JSON_HIGH_REASONING_FLOOR
+    : FREE_TEXT_HIGH_REASONING_FLOOR;
+  return maxTokens < floor ? "medium" : effort;
+}
 
 function modelRejectsMachineJsonResponseFormat(model: unknown): boolean {
   return String(model ?? "").toLowerCase().startsWith("qwen/");

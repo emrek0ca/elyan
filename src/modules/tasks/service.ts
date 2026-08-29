@@ -5606,6 +5606,42 @@ function isChatGenerationSettled(status: TaskStatus): boolean {
   return isTerminalTaskStatus(status) || status === "waiting_approval";
 }
 
+/**
+ * ARIZANIN TEŞHİSİ, KONTEYNERDEN UZUN YAŞAMALI.
+ *
+ * Kullanıcı bir arızayı SONRADAN bildirir. Şu ana kadar geriye dönük bakılacak
+ * tek yer docker loglarıydı ve `docker compose up --build` konteynerleri
+ * yeniden yarattığı için HER DEPLOY o kanıtı siliyordu. Veritabanında ise
+ * yalnız kullanıcıya gösterilen kibar cümle ("Şu anda düşünme servisine
+ * ulaşamıyorum") ve tek bir `failureClass` duruyordu.
+ *
+ * Bu bedel ölçüldü (2026-08-30): bir PDF turu düştü, sebebini araştırmak için
+ * üç konteyner grep'lendi; sonra bir deploy koştu ve o turun bütün izi yok
+ * oldu — ikinci kez bakmak imkânsız hâle geldi.
+ *
+ * `attemptFailures` zaten NORMALİZE edilmiş veridir (sağlayıcı gövdeleri istek
+ * verisini yankılayabildiği için ham hâli hiçbir yere yazılmaz); kalıcı olması
+ * güvenlidir. Alanlar sınırlıdır: olay tablosu bir log deposu değildir.
+ */
+export function buildPersistedFailureDiagnostics(
+  error: unknown,
+): Record<string, unknown> {
+  const details = readRecord(error instanceof AppError ? error.details : null);
+  const attemptFailures = Array.isArray(details?.attemptFailures)
+    ? details.attemptFailures.slice(0, 12)
+    : [];
+  return {
+    failureClass: details?.failureClass ?? "unavailable",
+    ...(error instanceof AppError ? { errorCode: error.code } : {}),
+    ...(details?.workload ? { workload: details.workload } : {}),
+    ...(details?.providerStatus ? { providerStatus: details.providerStatus } : {}),
+    ...(Array.isArray(details?.attemptedModels)
+      ? { attemptedModels: details.attemptedModels.slice(0, 12) }
+      : {}),
+    ...(attemptFailures.length > 0 ? { attemptFailures } : {}),
+  };
+}
+
 async function completeServerBrainTask(
   app: FastifyInstance,
   input: {
@@ -8965,9 +9001,7 @@ async function finalizeSharedBrainChatFailure(
     message: fallbackMessage,
     payload: {
       route: "shared_brain",
-      failureClass:
-        readRecord(error instanceof AppError ? error.details : null)
-          ?.failureClass ?? "unavailable",
+      ...buildPersistedFailureDiagnostics(error),
     },
   });
   await publishTaskEvent(app, failedTask, "task.updated", {

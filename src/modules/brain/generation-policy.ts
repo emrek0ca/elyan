@@ -37,13 +37,28 @@ export function resolveReasoningEffort(
   // token akmadan önce gizli düşünme turu bitmek zorunda olduğu için cevaplar
   // fark edilir biçimde geç başlıyordu. (`groq-models.ts` içindeki yorum zaten
   // "medium'da tutuluyor" diyordu — yorum ile kod ayrışmıştı.)
+  // DERİN ŞERİT YALNIZ BÜTÇESİ OLANLARA AÇIK.
+  //
+  // `document_analysis` (640 token / 8,5 sn) ve `mobile_chat_deep_refine`
+  // (1024 token / 12 sn) bu listedeydi ama bütçeleri high eforu ZATEN
+  // kaldıramıyordu: gpt-oss'ta gizli düşünme `max_tokens`a sayılır ve
+  // sağlayıcı isteğindeki taban ikisini de sessizce `medium`a düşürüyordu.
+  // Yani beyan ile davranış AYRIŞMIŞTI — kod "high" diyor, tel üzerinden
+  // "medium" gidiyordu. Bu ayrışma, üçüncü bir iş yükü eklendiğinde kimsenin
+  // fark edemeyeceği türden bir yalandır.
+  //
+  // Burada davranış DEĞİŞMİYOR (ikisi de bugün medium koşuyor); yalnız beyan
+  // gerçeğe uyduruluyor. Bu iş yükleri gerçekten derinlik isterse önce
+  // bütçeleri ve zaman aşımları büyümeli — `reasoning-budget.test.ts` o günü
+  // yakalayacak.
+  if (workload === "planning" || workload === "document_generate") {
+    return "high";
+  }
   if (
-    workload === "planning" ||
-    workload === "document_generate" ||
     workload === "document_analysis" ||
     workload === "mobile_chat_deep_refine"
   ) {
-    return "high";
+    return "medium";
   }
   // Balanced chat is still the compatibility workload name used by routing,
   // but it now resolves to the fast model. Only a workload promoted to the

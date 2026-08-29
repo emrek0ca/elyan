@@ -2732,10 +2732,17 @@ test("resolveReasoningEffort escalates hard analytical work to high and keeps ch
   // Hard / deep work → deep reasoning.
   assert.equal(resolveReasoningEffort("planning", undefined), "high");
   assert.equal(resolveReasoningEffort("document_generate", undefined), "high");
-  assert.equal(resolveReasoningEffort("document_analysis", undefined), "high");
+  // BU İKİSİ BİLEREK `medium`. Beyan ile telin üzerinden gideni ayrıştıran
+  // bir yalandı: bütçeleri (640 ve 1024 token) `high` eforu ZATEN
+  // kaldıramıyordu ve sağlayıcı isteğindeki taban ikisini de sessizce
+  // `medium`a düşürüyordu. Gemini yolunda ise taban HİÇ YOKTU — 640 token
+  // bütçesiyle `thinking_level: high` gidiyordu, yani aynı açlık hatası
+  // korumasız koşuyordu. Gerçekten derinlik istenirse önce bütçe ve zaman
+  // aşımı büyümeli; `reasoning-budget.test.ts` o günü yakalar.
+  assert.equal(resolveReasoningEffort("document_analysis", undefined), "medium");
   assert.equal(
     resolveReasoningEffort("mobile_chat_deep_refine", undefined),
-    "high",
+    "medium",
   );
   // A fast workload still escalates when the understanding layer marked the
   // task frame as deep reasoning.
