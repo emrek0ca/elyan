@@ -80,7 +80,48 @@ test("buildRequestBody caps high reasoning effort when the token budget is tight
   assert.equal(body.reasoning_effort, "medium");
 });
 
-test("buildRequestBody never sends unsupported reasoning controls to Compound", () => {
+test("machine-JSON turns need a bigger budget before high reasoning is allowed", () => {
+  // CANLI ARIZA (2026-08-30, `document_generate`, görev d3d62fa8): gizli
+  // düşünme turu `max_tokens`a sayıldığı için görünür JSON'a yer kalmıyordu.
+  // İki belirti, tek kök: JSON yarıda kesilince Groq 400 `json_validate_failed`
+  // döndürüyor, hiç token kalmayınca akış boş dönüyor. 13 denemenin tamamı
+  // düştü ve kullanıcı "Şu anda düşünme servisine ulaşamıyorum" gördü.
+  //
+  // Eşik ÇIPLAK BİR SAYIYDI (1500) ve asıl kuralı ifade etmiyordu: çıktının
+  // geçerli JSON olmak ZORUNDA olduğu turlarda kesilme kalite kaybı değil,
+  // sert hatadır. Bu yüzden makine-JSON tabanı daha yüksek.
+  const machineJson = buildRequestBody(
+    "groq",
+    "openai/gpt-oss-120b",
+    [{ role: "user", content: "Bunu bana pdf olarak verir misin" }],
+    2_000,
+    undefined,
+    true,
+    [],
+    "hidden",
+    "high",
+    undefined,
+    undefined,
+    true,
+  ) as Record<string, unknown>;
+  assert.equal(machineJson.reasoning_effort, "medium");
+
+  // Aynı bütçe serbest metinde yeterlidir; orada kesilme yalnız kısaltır.
+  const freeText = buildRequestBody(
+    "groq",
+    "openai/gpt-oss-120b",
+    [{ role: "user", content: "Uzun uzun anlat" }],
+    2_000,
+    undefined,
+    true,
+    [],
+    "hidden",
+    "high",
+  ) as Record<string, unknown>;
+  assert.equal(freeText.reasoning_effort, "high");
+});
+
+test("never sends unsupported reasoning controls to Compound", () => {
   const body = buildRequestBody(
     "groq",
     "groq/compound-mini",

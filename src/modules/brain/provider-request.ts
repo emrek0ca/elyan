@@ -359,11 +359,30 @@ export function buildRequestBody(
           ["gemini", "groq", "openai", "openrouter"].includes(provider)
         ? { response_format: { type: "json_object" } }
         : {}),
+    // DÜŞÜNME BÜTÇESİ, GÖRÜNÜR ÇIKTIYI AÇ BIRAKMAMALI.
+    //
+    // gpt-oss ailesinde gizli düşünme turu `max_tokens`a SAYILIR. Eşik
+    // 1500'dü ve ÇIPLAK BİR SAYIYDI; asıl kuralı ifade etmiyordu.
+    //
+    // Kural şu: çıktının GEÇERLİ JSON OLMAK ZORUNDA olduğu turlarda kesilme
+    // bir kalite kaybı değil, SERT BİR HATADIR. Yarım cümle okunabilir ama
+    // yarım JSON'u Groq 400 `json_validate_failed` ile reddeder; hiç token
+    // kalmazsa da akış boş döner. İki belirti de canlıda ölçüldü
+    // (2026-08-30, `document_generate`): 13 denemenin tamamı bu iki sebeple
+    // düştü ve kullanıcı hiçbir çıktı alamadı.
+    //
+    // Bu yüzden taban makine-JSON turlarında daha yüksek: düşünme, gövdeyi
+    // yazacak yeri BIRAKMAK zorunda. Serbest metin turlarında eski taban
+    // korunur — orada kesilme yalnız cevabı kısaltır.
     ...(resolveProviderModelCapabilities(provider, model).reasoningRequestControls
       ? {
           reasoning_format: reasoningPolicy === "visible" ? "parsed" : "hidden",
           reasoning_effort:
-            reasoningEffort === "high" && maxTokens < 1500
+            reasoningEffort === "high" &&
+            maxTokens <
+              (responseSchema || jsonObjectMode
+                ? MACHINE_JSON_HIGH_REASONING_FLOOR
+                : FREE_TEXT_HIGH_REASONING_FLOOR)
               ? "medium"
               : reasoningEffort,
         }
@@ -419,6 +438,16 @@ function supportsTurnEnvelopeResponseFormat(
  *
  * Ölçülerek doldurulur, tahminle değil. Bugün tek üye qwen ailesi.
  */
+/**
+ * `reasoning_effort: "high"` için asgari token tabanları.
+ *
+ * Serbest metinde kesilme cevabı kısaltır; makine-JSON'da ise çıktıyı
+ * TAMAMEN geçersiz kılar (Groq 400 `json_validate_failed`) veya hiç görünür
+ * token bırakmaz. Bu yüzden iki farklı taban.
+ */
+const FREE_TEXT_HIGH_REASONING_FLOOR = 1_500;
+const MACHINE_JSON_HIGH_REASONING_FLOOR = 3_000;
+
 function modelRejectsMachineJsonResponseFormat(model: unknown): boolean {
   return String(model ?? "").toLowerCase().startsWith("qwen/");
 }

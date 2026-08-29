@@ -64,3 +64,21 @@ test("resolveAttachmentAwareSharedBrainWorkload keeps planning, non-server, and 
     "mobile_chat_fast",
   );
 });
+
+test("document generation reserves room for hidden reasoning and the JSON body", () => {
+  // `planning` ile AYNI ARIZA: gizli düşünme turu `max_tokens`a sayılıyor ve
+  // 1.600 token, çok bölümlü bir belgenin JSON gövdesine düşünmeyle
+  // PAYLAŞILDIĞINDA yetmiyordu. Canlıda 13 sağlayıcı denemesinin tamamı
+  // json_validate_failed / empty_stream_response ile düştü.
+  const profile = getSharedBrainWorkloadProfile("document_generate");
+  assert.ok(
+    profile.maxTokens >= 3_000,
+    `belge turu düşünme + gövde için yer bırakmalı, bulunan: ${profile.maxTokens}`,
+  );
+  // İlk GÖRÜNÜR token düşünme bitmeden akmaz; bütçe ona göre olmalı.
+  assert.ok(
+    (profile.firstDeltaBudgetMs ?? 0) >= 4_000,
+    "ilk delta bütçesi düşünmeyi karşılamalı",
+  );
+  assert.ok(profile.timeoutMs >= 20_000, "tur zaman aşımı bütçeyle orantılı olmalı");
+});

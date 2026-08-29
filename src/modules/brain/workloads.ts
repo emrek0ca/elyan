@@ -107,9 +107,26 @@ export const SHARED_BRAIN_WORKLOAD_PROFILES: Record<
   /* AI generates a structured multi-section document */
   document_generate: {
     workload: "document_generate",
-    timeoutMs: 14_000,
-    firstDeltaBudgetMs: 2_800,
-    maxTokens: 1_600,
+    // 30 sn + 4096 token: `planning` ile AYNI ARIZA, orada çözülmüş burada
+    // kalmıştı. Bu iş yükü `reasoning_effort: "high"` ile koşuyor
+    // (generation-policy.ts) ve gpt-oss'ta gizli düşünme turu max_tokens'a
+    // SAYILIR. 1.600 token, çok bölümlü bir belgenin JSON gövdesine tek
+    // başına yetmezken düşünme turuyla PAYLAŞILIYORDU.
+    //
+    // CANLI ÖLÇÜM (2026-08-30 02:03, görev d3d62fa8): "Bunu bana pdf olarak
+    // verir misin" turunda 13 sağlayıcı denemesinin TAMAMI düştü. İki belirti,
+    // tek kök:
+    //   json_validate_failed (400) → JSON yarıda kesildi, Groq reddetti
+    //   empty_stream_response (503) → düşünme bütçeyi bitirdi, görünür token yok
+    // Zincir tükenince `server_brain_unavailable` ve kullanıcı "Şu anda
+    // düşünme servisine ulaşamıyorum" gördü.
+    //
+    // Belge bir plandan büyüktür; taban `planning` ile aynı yerde. max_tokens
+    // bir TAVANdır: kısa belge erken durur, fatura gerçek kullanıma.
+    // İlk delta bütçesi de büyüdü — gizli düşünme ilk GÖRÜNÜR token'ı geciktirir.
+    timeoutMs: 30_000,
+    firstDeltaBudgetMs: 4_500,
+    maxTokens: 4_096,
     streamingEnabled: true,
     cachePolicy: "off",
     fallbackWorkload: "document_analysis",
