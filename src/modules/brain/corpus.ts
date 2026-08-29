@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { knowledgeChunks, knowledgeDocuments } from "../../db/schema.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
+import { contentTerms } from "./lexical-turkish.js";
 import { collapseWhitespace as compactText } from "../../lib/text.js";
 import {
   embedQueryForStorage,
@@ -553,7 +554,12 @@ async function loadCorpusSectionsCached(
     const sections = content
       .split(/\n(?=##\s+)/g)
       .map((section) => section.trim())
-      .filter(Boolean);
+      // İlk parça dokümanın `#` BAŞLIĞIDIR, bir rehber bölümü değil.
+      // Aday listesinde kaldığı için hiçbir bölüm eşleşmeyen turlarda o
+      // seçiliyor ve isteme yalnız başlık giriyordu: "Neden internete
+      // bakmadın?" turunda enjekte edilen blok 106 karakterdi ve tek bir
+      // yönerge içermiyordu.
+      .filter((section) => section.startsWith("##"));
     corpusSectionCache.set(domain, sections);
     return sections;
   } catch {
@@ -562,59 +568,146 @@ async function loadCorpusSectionsCached(
   }
 }
 
-function lexicalBestSectionIndex(prompt: string, sections: string[]): number {
-  const terms = new Set(
-    compactText(prompt)
-      .toLowerCase()
-      .split(" ")
-      .filter((term) => term.length > 2),
+/**
+ * Sözcük örtüşme puanı — BM25 yedeği.
+ *
+ * İKİ AYRI KUSUR VARDI, İKİSİ DE SESSİZDİ:
+ *
+ *   1. Yalnız "en iyi indeks" döndürüyordu; çağıran onu 1/0 işaretleyicisine
+ *      çeviriyordu. Bu, "ikinci bölüm de yeterince alakalıysa al" kuralını
+ *      C daemon'ı olmayan HER ortamda etkisiz bırakıyordu — ikinci bölümün
+ *      puanı tanımı gereği 0 ve hiçbir eşiği geçemez.
+ *
+ *   2. Ham `includes` ile boşluğa göre bölünmüş token karşılaştırıyordu.
+ *      Türkçe eklemeli bir dil: "bilgiyi" hiçbir zaman "Bilgi nereden gelir"
+ *      başlığına takılmıyor, buna karşılık "neler"/"ve" gibi durak kelimeler
+ *      her bölümü eşit puanlıyordu. Ölçüldü: "Neler yapabilirsin ve bilgiyi
+ *      nereden alıyorsun?" sorusu ikinci bölüm olarak "Neler yapamaz"ı
+ *      seçiyordu — soruda geçmeyen bir konu.
+ *
+ * `contentTerms` bu kod tabanında zaten var ve ikisini de çözüyor: aksan
+ * katlar, durak kelimeleri atar, kök bulur. Skorlayıcı onu kullanmıyordu.
+ */
+/**
+ * KÖK BULUCU AYNI KELİMEYİ BAĞLAMA GÖRE FARKLI KÖKE İNDİRİYOR.
+ *
+ * Ölçüldü: başlıktaki "Bilgi" → `bilg`, sorudaki "bilgiyi" → `bilgi`.
+ * `stemTurkish` tek geçişte TEK ek atar; hangi ekin atılacağı kelimenin
+ * yazımına bağlı olduğu için aynı kavram iki farklı anahtara düşebiliyor.
+ * Sonuç: "bilgiyi nereden alıyorsun?" sorusu "## Bilgi nereden gelir"
+ * bölümüne takılmıyordu.
+ *
+ * `stemTurkish` getirim yolunda da kullanılıyor; onu değiştirmek bu turun
+ * çok ötesine dokunur. Bunun yerine KARŞILAŞTIRMA ek-toleranslı: biri
+ * diğerinin öneki ve fark küçükse aynı kavram sayılır. Asgari uzunluk ve
+ * azami fark, "bir"/"birim" gibi ilgisiz çiftleri dışarıda tutar.
+ */
+const TERM_PREFIX_MIN_LENGTH = 4;
+const TERM_PREFIX_MAX_DELTA = 3;
+
+function termsMatch(left: string, right: string): boolean {
+  if (left === right) return true;
+  const [shorter, longer] = left.length <= right.length ? [left, right] : [right, left];
+  return (
+    shorter.length >= TERM_PREFIX_MIN_LENGTH &&
+    longer.length - shorter.length <= TERM_PREFIX_MAX_DELTA &&
+    longer.startsWith(shorter)
   );
-  let bestIndex = 0;
-  let bestScore = -1;
-  sections.forEach((section, index) => {
-    const text = section.toLowerCase();
-    let score = 0;
-    for (const term of terms) {
-      if (text.includes(term)) {
-        score += 1;
-      }
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      bestIndex = index;
-    }
-  });
-  return bestIndex;
 }
 
-async function pickBestCorpusSection(
+function matchesAnyTerm(term: string, candidates: Set<string>): boolean {
+  if (candidates.has(term)) return true;
+  for (const candidate of candidates) {
+    if (termsMatch(term, candidate)) return true;
+  }
+  return false;
+}
+
+function lexicalSectionScore(terms: Set<string>, section: string): number {
+  if (terms.size === 0) return 0;
+  // BAŞLIK İKİ KAT SAYAR. Ölçüldü: gövde üzerinden düz örtüşme üç bölümü
+  // 0.200'de BERABERE bırakıyor ("neler" her ikisinde de geçiyor) ve sıralama
+  // doküman sırasına düşüyor — "bilgiyi nereden alıyorsun?" sorusu ikinci
+  // bölüm olarak "Neler yapamaz"ı seçiyordu. Bölümün konusunu söyleyen yer
+  // başlığıdır: "## Bilgi nereden gelir" sorunun iki terimini de taşır.
+  const [headingLine, ...bodyLines] = section.split("\n");
+  const headingTerms = new Set(contentTerms(headingLine, { limit: 16 }));
+  const bodyTerms = new Set(contentTerms(bodyLines.join(" "), { limit: 120 }));
+  let score = 0;
+  for (const term of terms) {
+    if (matchesAnyTerm(term, headingTerms)) score += 2;
+    else if (matchesAnyTerm(term, bodyTerms)) score += 1;
+  }
+  return score / (terms.size * 2);
+}
+
+function lexicalSectionTerms(prompt: string): Set<string> {
+  return new Set(contentTerms(prompt, { limit: 24 }));
+}
+
+/**
+ * ÇOK PARÇALI SORU TEK BÖLÜMLE CEVAPLANMAZ.
+ *
+ * ÖLÇÜLEN ARIZA: "Neler yapabilirsin ve bilgiyi nereden alıyorsun?" turunda
+ * yalnız `## Neler yapabilir` enjekte edildi; `## Bilgi nereden gelir`
+ * isteme hiç girmedi ve model kaynak sırasını UYDURDU — "önce sohbet,
+ * ardından güncel web kaynakları ve eğitim verilerim" dedi. Korpusun
+ * yazdığı sıra ise konuşma → hafıza → tipli sağlayıcı → korpus → (gerekiyorsa)
+ * web. Yani kullanıcıya sistemin kendi mimarisi yanlış anlatıldı.
+ *
+ * İkinci bölüm BEDAVA DEĞİL, hak ederek gelir: yalnız tek alan eşleştiğinde
+ * (yani soru tek konuda ama çok parçalı olduğunda) ve puanı en iyinin yarısına
+ * ulaştığında alınır. Böylece iki alanlı istemlerin token bütçesi büyümez.
+ */
+const SECOND_SECTION_SCORE_RATIO = 0.5;
+
+async function rankCorpusSections(
   prompt: string,
   sections: string[],
-): Promise<string | null> {
-  if (sections.length === 0) {
-    return null;
-  }
-  if (sections.length === 1) {
-    return sections[0];
-  }
+): Promise<Array<{ section: string; score: number }>> {
   try {
     const scores = await nlpDaemon.bm25Batch(
       prompt,
       sections.map((section) => compactText(section)),
     );
     if (scores && scores.length === sections.length) {
-      let bestIndex = 0;
-      for (let index = 1; index < scores.length; index += 1) {
-        if (scores[index] > scores[bestIndex]) {
-          bestIndex = index;
-        }
-      }
-      return sections[bestIndex];
+      return sections
+        .map((section, index) => ({ section, score: scores[index] }))
+        .sort((left, right) => right.score - left.score);
     }
   } catch {
     // daemon unavailable — fall through to lexical
   }
-  return sections[lexicalBestSectionIndex(prompt, sections)];
+  const terms = lexicalSectionTerms(prompt);
+  return sections
+    .map((section) => ({ section, score: lexicalSectionScore(terms, section) }))
+    .sort((left, right) => right.score - left.score);
+}
+
+async function pickCorpusSections(
+  prompt: string,
+  sections: string[],
+  limit: number,
+): Promise<string[]> {
+  if (sections.length === 0) return [];
+  if (sections.length === 1 || limit <= 1) {
+    if (sections.length === 1) return [sections[0]];
+    const ranked = await rankCorpusSections(prompt, sections);
+    return ranked[0] ? [ranked[0].section] : [];
+  }
+  const ranked = await rankCorpusSections(prompt, sections);
+  const best = ranked[0];
+  if (!best) return [];
+  const picked = [best.section];
+  const runnerUp = ranked[1];
+  if (
+    runnerUp &&
+    best.score > 0 &&
+    runnerUp.score >= best.score * SECOND_SECTION_SCORE_RATIO
+  ) {
+    picked.push(runnerUp.section);
+  }
+  return picked.slice(0, limit);
 }
 
 /**
@@ -636,12 +729,18 @@ export async function buildBrainCorpusGuidanceBlock(
     .map((entry) => entry.domain)
     .slice(0, GUIDANCE_DOMAIN_LIMIT);
 
+  // Tek alan eşleştiyse soru muhtemelen tek konuda ama çok parçalı; ikinci
+  // bölüme yer var. İki alan eşleştiyse bütçe zaten iki bölüme gidiyor.
+  const sectionsPerDomain = orderedDomains.length === 1 ? 2 : 1;
   const picked: string[] = [];
   for (const domain of orderedDomains) {
     const sections = await loadCorpusSectionsCached(domain);
-    const best = await pickBestCorpusSection(prompt, sections);
-    if (best) {
-      picked.push(best.slice(0, GUIDANCE_SECTION_CHARS).trim());
+    for (const section of await pickCorpusSections(
+      prompt,
+      sections,
+      sectionsPerDomain,
+    )) {
+      picked.push(section.slice(0, GUIDANCE_SECTION_CHARS).trim());
     }
   }
   if (picked.length === 0) {

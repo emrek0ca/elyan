@@ -13097,6 +13097,20 @@ export async function generateGovernedSharedBrainReply(
   // completed payload'ını değiştirmek chat yüzeyinde çift/çelişkili cevap gibi
   // görünür. Bu yüzden stream edilen mobil yolda gate çalışmaz. Gate yalnızca
   // non-streaming ve gerçek olgu/doğrulama işi olan turlarda devrededir.
+  // KANIT TOPLANMAMIŞ TURDA OLGUSALLIK KAPISI DARALIR — KAPANMAZ.
+  //
+  // Yönlendirici turu `source:"none"`, `evidenceRequired:false` olarak
+  // kapattıysa sistem bilerek hiç kanıt toplamamıştır; orada her cümle
+  // "desteksiz" çıkar ve genel bir açıklama sistemin kendi uyarısıyla
+  // açılırdı ("Bu iddiayı elimdeki kanıtlarla doğrulayamıyorum"). Kapıyı
+  // tümden kapatmak ise uydurma SAYI iddialarını serbest bırakırdı; ayrım
+  // `factuality-gate` içinde iddianın türüne göre yapılıyor.
+  const routedKnowledgeNeed = readRecord(
+    readRecord(activeInference.metadata)?.knowledgeNeed,
+  );
+  const evidenceFreeTurn =
+    routedKnowledgeNeed?.source === "none" &&
+    routedKnowledgeNeed.evidenceRequired === false;
   const skipFactualityGate =
     responseMutationUnsafe ||
     isSocialChatPrompt(compactText(input.prompt)) ||
@@ -13129,6 +13143,7 @@ export async function generateGovernedSharedBrainReply(
       understandingContext: input.understandingContext,
       inferenceMetadata: activeInference.metadata,
       toolEvidence: factualityToolEvidence,
+      evidenceFreeTurn,
     });
     factualityGateMetadata = buildFactualityGateMetadata({
       decision: factualityDecision,
@@ -13181,6 +13196,7 @@ export async function generateGovernedSharedBrainReply(
             ...factChecked.metadata,
           },
           toolEvidence: factualityToolEvidence,
+          evidenceFreeTurn,
         });
         unsupportedAfter = afterDecision.unsupportedClaims.length;
         if (

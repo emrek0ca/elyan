@@ -12,6 +12,7 @@ import {
   type AssistantMessageBlock,
 } from "../chat/message-blocks.js";
 import { parseArtifactIntent } from "./parser.js";
+import { asRecord, recordString } from "../../lib/record.js";
 import { buildArtifactSpec, artifactSpecSummary } from "./spec-builder.js";
 import type {
   ArtifactIntent,
@@ -158,6 +159,33 @@ export async function buildArtifactPipeline(input: {
   });
   if (!intent.type) {
     return { kind: "none", intent, latencyMs: Date.now() - startedAt };
+  }
+  // ÖNCEKİ TURUN ÇIKTI BİÇİMİ SONRAKİ TURA MİRAS KALMAZ.
+  //
+  // ÖLÇÜLEN ARIZA: bir tablo turunun ardından "Beni nasıl tanıyorsun?"
+  // sorulduğunda cevap "İstenen görseli/tabloyu güvenilir veriye
+  // dayandıramadığım için üretmedim." ile açılıyordu. Kullanıcı görsel de
+  // tablo da istememişti — istemin KENDİSİNDE hiçbir artefakt sinyali yok
+  // (`detectArtifactType` metin üzerinde `null` döner). Tip, önceki turdan
+  // taşınan anlama zarfının `desired_outputs` alanından geldi.
+  //
+  // Kişisel durum turunun cevabı kullanıcı hakkında düzyazıdır; yetkili bir
+  // VERİ KÜMESİ yoktur ve olamaz. Böyle bir turda artefakt boru hattı
+  // yalnızca başarısız olabilir, ve başarısızlığı da kullanıcının hiç
+  // sormadığı bir şeyin reddi olarak görünür.
+  //
+  // Kapı DAR: yalnız zarftan/metadata'dan MİRAS ALINAN tipi düşürür.
+  // Kullanıcı o turda açıkça "bunu tablo yap" derse metin sinyali kendisi
+  // oluşur ve boru hattı normal çalışır.
+  const routedKnowledgeSource = recordString(
+    asRecord(asRecord(input.metadata)?.knowledgeNeed),
+    "source",
+  );
+  if (routedKnowledgeSource === "memory" || routedKnowledgeSource === "conversation") {
+    const textOnlyIntent = parseArtifactIntent({ userRequest: input.userRequest });
+    if (!textOnlyIntent.type) {
+      return { kind: "none", intent: textOnlyIntent, latencyMs: Date.now() - startedAt };
+    }
   }
   if (intent.requiresDesktopRuntime) {
     return { kind: "desktop_required", intent, latencyMs: Date.now() - startedAt };

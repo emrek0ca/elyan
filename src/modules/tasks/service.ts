@@ -1518,6 +1518,10 @@ export function readServerBrainCompletionMetadata(
         ? metadata.attachmentCacheHit
         : metadata.cacheHit,
     ),
+    // Yönlendirme kararı artefakt boru hattına KADAR taşınmalı: kişisel
+    // durum turunda önceki turdan miras kalan tablo/grafik niyeti orada
+    // düşürülüyor (bkz. `artifacts/service.ts`).
+    knowledgeNeed: readRecord(metadata.knowledgeNeed),
     retrievalMode: readInferenceString(metadata, "retrievalMode"),
     retrievalResultCount: readInferenceNumber(metadata, "retrievalResultCount"),
     retrievalCandidateCount: readInferenceNumber(
@@ -5647,6 +5651,7 @@ async function completeServerBrainTask(
     validationStatus?: string | null;
     cacheHit?: boolean;
     attachmentCacheHit?: boolean;
+    knowledgeNeed?: Record<string, unknown> | null;
     retrievalMode?: string | null;
     retrievalResultCount?: number | null;
     retrievalCandidateCount?: number | null;
@@ -5817,7 +5822,9 @@ async function completeServerBrainTask(
     userRequest: prompt,
     responseText: visibleResponseText,
     assistantBlocks: resolvedAssistantBlocks,
-    metadata: payloadMetadata,
+    metadata: input.knowledgeNeed
+      ? { ...payloadMetadata, knowledgeNeed: input.knowledgeNeed }
+      : payloadMetadata,
     understandingEnvelope:
       extractUnderstandingEnvelopeFromMetadata(payloadMetadata),
     userId: input.userId,

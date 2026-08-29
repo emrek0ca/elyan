@@ -27,6 +27,12 @@ export type FactualityGateInput = {
   understandingContext?: UserUnderstandingContext | null;
   inferenceMetadata?: Record<string, unknown> | null;
   toolEvidence?: unknown;
+  /**
+   * Yönlendirici bu tur için hiç kanıt toplamadı (`knowledge_need.source`
+   * "none" ve `evidenceRequired` false). Kapı kapanmaz, DARALIR: yalnız sert
+   * sayı/tarih iddiaları sorgulanır.
+   */
+  evidenceFreeTurn?: boolean;
 };
 
 type EvidenceSource = {
@@ -82,11 +88,34 @@ export function evaluatePrePublishFactuality(input: FactualityGateInput): Factua
     };
   });
   const unsupportedClaims = supportedClaims.filter((claim) => !claim.supported);
+  // KANIT TOPLANMAMIŞ TURDA KAPI DAHA DAR ÇALIŞIR — AMA KAPANMAZ.
+  //
+  // ÖLÇÜLEN ARIZA: "iOS canlı etkinlikleri ile push bildirimlerini
+  // karşılaştır" cevabının başına "Bu iddiayı elimdeki kanıtlarla
+  // doğrulayamıyorum" ekleniyordu. Yönlendirici o turu doğru biçimde
+  // `source:"none"` olarak kapatmıştı: sistem BİLEREK hiç kanıt toplamadı.
+  // Kanıt yokken her cümle "desteksiz" çıkar ve genel bir teknik açıklama
+  // sistemin kendi uyarısıyla açılır.
+  //
+  // Kapıyı tamamen kapatmak da YANLIŞ olurdu: kanıtsız bir turda model
+  // "2030'da 50 milyon USD gelir" gibi uydurma bir SAYI da üretebilir ve o
+  // yakalanmalıdır (regresyon testi tam olarak bunu tutuyor). Ayrım iddianın
+  // TÜRÜNDE: sert, denetlenebilir bir sayı/tarih iddiası kanıtsız turda da
+  // sorgulanır; açıklayıcı düzyazı sorgulanmaz.
+  const evidenceFreeTurn = input.evidenceFreeTurn === true;
+  const criticalUnsupported = evidenceFreeTurn
+    ? unsupportedClaims.filter(
+        (claim) => claim.kind === "number" || claim.kind === "date",
+      )
+    : unsupportedClaims;
   const shouldCritique =
     (input.inferenceMetadata?.retrievalLowConfidence === true &&
-      unsupportedClaims.length > 0) ||
-    unsupportedClaims.some(
-      (claim) => claim.kind !== "number" || claim.salience === "high",
+      criticalUnsupported.length > 0) ||
+    criticalUnsupported.some(
+      (claim) =>
+        evidenceFreeTurn ||
+        claim.kind !== "number" ||
+        claim.salience === "high",
     );
   return {
     claimCount: supportedClaims.length,

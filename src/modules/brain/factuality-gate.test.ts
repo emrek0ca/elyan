@@ -183,3 +183,66 @@ test("extractFactualClaims identifies dates, numeric facts, and names", () => {
   assert.equal(claims.some((claim) => claim.kind === "number" && claim.salience === "high"), true);
   assert.equal(claims.some((claim) => claim.kind === "name" && claim.text === "Acme Labs"), true);
 });
+
+/**
+ * CANLI ARIZA (mobil, 2026-08-29): "iOS canlı etkinlikleri ile normal push
+ * bildirimlerini karşılaştır" cevabının BAŞINA "Bu iddiayı elimdeki kanıtlarla
+ * doğrulayamıyorum" ekleniyordu. Yönlendirici o turu DOĞRU biçimde kanıtsız
+ * kapatmıştı (`source:"none"`); kanıt toplanmadığı için cevaptaki ürün adları
+ * ("APNs", "iOS, Android") desteksiz çıkıyor ve genel bir teknik karşılaştırma
+ * sistemin kendi uyarısıyla açılıyordu.
+ *
+ * Düz metin bu kapıyı zaten tetiklemiyordu; tetikleyen, tablodaki AD
+ * iddialarıydı. Bu yüzden test gerçek çıktı şekliyle yazılı.
+ */
+const COMPARISON_ANSWER =
+  "Canlı Etkinlikleri ana ekranda sürekli güncellenir. Örnek kullanım: Spor skorları, taksi takibi, takvim davetleri. Push sertifikası ve APNs entegrasyonu gerekir. iOS, Android ve web tarafında çapraz platform çalışır.";
+// İSTEM TERİMLERİ KANITTIR. İstem "canlı etkinlikler" sözünü içerirse o ad
+// iddiası zaten DESTEKLİ sayılır ve kapı hiç tetiklenmez; bu testin ölçtüğü
+// şey o değil. Bu yüzden istem, cevaptaki adları TAŞIMAYAN bir devam turu.
+const COMPARISON_PROMPT = "İkisini artı eksi yönleriyle karşılaştır";
+
+test("an evidence-free turn does not flag names inside an explanatory answer", () => {
+  assert.ok(
+    extractFactualClaims(COMPARISON_ANSWER).some((claim) => claim.kind === "name"),
+    "test verisi ad iddiası taşımalı, yoksa kapı zaten tetiklenmez",
+  );
+  assert.equal(
+    evaluatePrePublishFactuality({
+      prompt: COMPARISON_PROMPT,
+      answer: COMPARISON_ANSWER,
+      evidenceFreeTurn: true,
+    }).shouldCritique,
+    false,
+  );
+});
+
+/**
+ * Fark yalnız KANIT TOPLANIP TOPLANMADIĞINDA. Aynı cevap, kanıt beklenen bir
+ * turda hâlâ sorgulanır — bayrak kapıyı gevşetmez, kapsamını daraltır.
+ */
+test("the same answer is still gated on a turn that was supposed to gather evidence", () => {
+  assert.equal(
+    evaluatePrePublishFactuality({
+      prompt: COMPARISON_PROMPT,
+      answer: COMPARISON_ANSWER,
+      evidenceFreeTurn: false,
+    }).shouldCritique,
+    true,
+  );
+});
+
+/**
+ * Kapı DARALIR, KAPANMAZ. Kanıtsız turda da uydurma bir SAYI yakalanmalı;
+ * aksi hâlde "kanıt istemeyen tur" hallüsinasyon için serbest bölge olurdu.
+ */
+test("an evidence-free turn still flags a fabricated hard number", () => {
+  assert.equal(
+    evaluatePrePublishFactuality({
+      prompt: "Kısa cevap ver.",
+      answer: "Şirket 2030'da 50 milyon USD gelir elde etti.",
+      evidenceFreeTurn: true,
+    }).shouldCritique,
+    true,
+  );
+});

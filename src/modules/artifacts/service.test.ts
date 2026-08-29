@@ -894,3 +894,50 @@ test("gerçek cevap metni belge gövdesi OLABİLİR", async () => {
 
   assert.equal(result.kind, "rendered");
 });
+
+/**
+ * CANLI ARIZA (mobil, 2026-08-29): bir tablo turunun ardından "Beni nasıl
+ * tanıyorsun?" sorulduğunda cevap "İstenen görseli/tabloyu güvenilir veriye
+ * dayandıramadığım için üretmedim." ile açılıyordu. Kullanıcı görsel de tablo
+ * da istememişti — istemin KENDİSİNDE hiçbir artefakt sinyali yok. Tip,
+ * önceki turdan taşınan anlama zarfından geldi; kişisel durum turunda yetkili
+ * bir VERİ KÜMESİ olamayacağı için boru hattı yalnızca başarısız olabiliyor
+ * ve başarısızlığı kullanıcının hiç sormadığı bir şeyin reddi olarak
+ * görünüyordu.
+ */
+test("an inherited artifact type is dropped on a personal-state turn", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "Beni nasıl tanıyorsun?",
+    responseText: "Seni Türkçe yazdığın ve kısa cevap sevdiğin için tanıyorum.",
+    metadata: {
+      artifactType: "table",
+      knowledgeNeed: { source: "memory", evidenceRequired: true },
+    },
+  });
+  assert.equal(result.kind, "none");
+  assert.equal(result.intent.type, null);
+});
+
+test("an explicit artifact request on a memory turn still runs", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "Hakkımda bildiklerini tablo olarak göster",
+    responseText: "Dil: Türkçe. Üslup: kısa.",
+    metadata: {
+      artifactType: "table",
+      knowledgeNeed: { source: "memory", evidenceRequired: true },
+    },
+  });
+  assert.notEqual(result.kind, "none");
+});
+
+test("an inherited artifact type survives on an ordinary knowledge turn", async () => {
+  const result = await buildArtifactPipeline({
+    userRequest: "Son bir haftalık seyri göster",
+    responseText: "Seyir yukarı yönlü.",
+    metadata: {
+      artifactType: "chart",
+      knowledgeNeed: { source: "provider", evidenceRequired: true },
+    },
+  });
+  assert.notEqual(result.kind, "none");
+});

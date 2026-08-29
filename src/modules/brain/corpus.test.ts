@@ -128,3 +128,58 @@ test("public brain profile exposes corpus readiness without corpus content", () 
   assert.match(serialized, /systemCorpus/);
   assert.match(serialized, /design/);
 });
+
+/**
+ * CANLI ARIZA (mobil, 2026-08-29): "Neler yapabilirsin ve bilgiyi nereden
+ * alıyorsun?" turunda yalnız `## Neler yapabilir` enjekte edildi;
+ * `## Bilgi nereden gelir` isteme hiç girmedi ve model kaynak sırasını
+ * UYDURDU — "önce sohbet, ardından güncel web kaynakları ve eğitim verilerim"
+ * dedi. Korpusun yazdığı sıra ise konuşma → hafıza → tipli sağlayıcı →
+ * korpus → (gerekiyorsa) web. Kullanıcıya sistemin kendi mimarisi yanlış
+ * anlatıldı; bu, cevabın kalitesinden önce bir DOĞRULUK sorunudur.
+ */
+test("a two-part question reaches both corpus sections", async () => {
+  const block = await buildBrainCorpusGuidanceBlock(
+    "Neler yapabilirsin ve bilgiyi nereden alıyorsun?",
+    ["capabilities"],
+  );
+  const headings = block?.match(/^##\s+.*$/gm) ?? [];
+  assert.ok(
+    headings.some((heading) => /Neler yapabilir/.test(heading)),
+    "yetenek bölümü gelmeli",
+  );
+  assert.ok(
+    headings.some((heading) => /Bilgi nereden gelir/.test(heading)),
+    "kaynak sırası bölümü gelmeli",
+  );
+});
+
+/**
+ * Dokümanın `#` başlığı bir rehber bölümü DEĞİLDİR. Aday listesinde kaldığı
+ * için hiçbir bölümün eşleşmediği turlarda o seçiliyor ve isteme tek bir
+ * yönerge içermeyen 106 karakterlik bir blok giriyordu.
+ */
+test("the document title is never injected as guidance", async () => {
+  for (const [prompt, domain] of [
+    ["Neden internete bakmadın?", "capabilities"],
+    ["Görev neden bekliyor?", "support"],
+  ] as const) {
+    const block = await buildBrainCorpusGuidanceBlock(prompt, [domain]);
+    assert.ok(block, prompt);
+    assert.ok(/^##\s+/m.test(block!), `en az bir '##' bölümü gelmeli: ${prompt}`);
+    assert.doesNotMatch(block!, /^#\s+Elyan/m, prompt);
+  }
+});
+
+/**
+ * İki alan eşleştiğinde bütçe büyümez: ikinci bölüm yalnız TEK alan
+ * eşleştiğinde (soru tek konuda ama çok parçalı olduğunda) alınır.
+ */
+test("guidance stays token-disciplined when two domains match", async () => {
+  const block = await buildBrainCorpusGuidanceBlock(
+    "rapor tablosu ve pdf tasarımı yap",
+    ["design", "data"],
+  );
+  assert.ok(block);
+  assert.ok(block!.length < 1600, `blok kompakt kalmalı, ${block!.length}`);
+});
