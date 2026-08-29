@@ -110,8 +110,33 @@ const SOFTWARE_SECURITY_PATTERN =
   /(?<!\p{L})(cve-\d{4}-\d+|cve|vulnerability|zero.?day|security advisory|güvenlik açığı|guvenlik acigi|security fix)(?!\p{L})/iu;
 const SOFTWARE_RELEASE_PATTERN =
   /(?<!\p{L})(son\s+s[üu]r[üu]m\p{L}*|latest version|release notes?|changelog|stable release|lts|deprecated|end of life|eol|npm|pypi|pub\.dev|crate|sdk|framework|library|kütüphane|kutuphane|paket|package)(?!\p{L})/iu;
+/**
+ * ZAMANSAL İŞARET — cevabın KENDİSİNİN bugüne ait olmasını isteyen sözcükler.
+ */
 const EXPLICIT_FRESHNESS_PATTERN =
-  /(?<!\p{L})(bugün|bugun|şu an|su an|güncel|guncel|latest|recent|today|canlı|canli|anlık|anlik|son durum|doğrula|dogrula)(?!\p{L})/iu;
+  /(?<!\p{L})(bugün|bugun|şu an|su an|güncel|guncel|latest|recent|today|son durum|doğrula|dogrula)(?!\p{L})/iu;
+
+/**
+ * "CANLI" VE "ANLIK" TEK BAŞLARINA TAZELİK SİNYALİ DEĞİLDİR.
+ *
+ * ÖLÇÜLEN ARIZA: "iOS canlı etkinlikleri ile normal push bildirimlerini
+ * karşılaştır" turu `freshnessRequired=true` üretiyordu. "canlı etkinlikler"
+ * bir ÜRÜN ÖZELLİĞİNİN ADIDIR (iOS Live Activities), bir tazelik talebi
+ * değil. Sonuç: sabit teknik bilgi soran bir tur `public_deep_research`
+ * iş yüküne yükseliyor ve açık web'e gidiyordu — tam olarak "web yalnız
+ * gerçekten güncel veri için açılsın" kuralının ihlali. Aynı tuzak
+ * "anlık bildirim" (instant notification) için de kuruluydu.
+ *
+ * Bu iki sözcük yalnız BİR VERİ ADINI niteleyerek tazelik ister: "canlı kur",
+ * "anlık fiyat", "canlı skor". Veri adı gelmiyorsa sözcük sıfattır ve
+ * turun konusu hakkında hiçbir şey söylemez.
+ *
+ * Not: "canlı skor"/"canlı borsa" gibi turlar zaten kendi alan desenlerine
+ * (`SPORTS_PATTERN`, `MARKET_PATTERN`) takılır; bu kapı yalnız `general`
+ * alanındaki turlar için son sözü söyler.
+ */
+const LIVE_QUALIFIER_PATTERN =
+  /(?<!\p{L})(canlı|canli|anlık|anlik)\s+(veri|data|kur|fiyat|değer|deger|skor|sonuç|sonuc|durum\p{L}*|takip|yayın|yayin|piyasa|oran\p{L}*)(?!\p{L})/iu;
 const GENERAL_INFORMATION_REQUEST_PATTERN =
   /\?|(?<!\p{L})(kim|nedir|neydi|ne\s+oldu|kaç|kac|hangi|nerede|where|who|what|when|how\s+many|bul|araştır|arastir|göster|goster|söyle|soyle|ver)(?!\p{L})/iu;
 
@@ -290,7 +315,9 @@ export function resolveFreshDataPolicy(
 ): FreshDataPolicy {
   const classified = classifyFreshDataDomain(prompt);
   const normalized = compactText(prompt);
-  const explicitFreshness = EXPLICIT_FRESHNESS_PATTERN.test(normalized);
+  const explicitFreshness =
+    EXPLICIT_FRESHNESS_PATTERN.test(normalized) ||
+    LIVE_QUALIFIER_PATTERN.test(normalized);
   const contextualGeneralFreshness =
     context == null
       ? explicitFreshness

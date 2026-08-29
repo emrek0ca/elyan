@@ -181,3 +181,37 @@ test("normalizeFreshDataEnvelope validates and trims persisted JSON envelopes", 
   assert.ok(lastReason.length <= 80);
   assert.equal(normalizeFreshDataEnvelope({ ...envelope, domain: "bad" }), null);
 });
+
+/**
+ * ÜRÜN ÖZELLİĞİ ADI TAZELİK TALEBİ DEĞİLDİR. Bu tur `public_deep_research`
+ * iş yüküne yükseliyor ve sabit teknik bilgi için açık web'e gidiyordu.
+ */
+test("live/instant adjectives only signal freshness when they qualify data", () => {
+  const featureComparison =
+    "iOS canlı etkinlikleri ile normal push bildirimlerini artı eksi yönleriyle karşılaştır.";
+  assert.equal(
+    resolveFreshDataPolicy(featureComparison, {
+      socialTurn: false,
+      publicKnowledgeRequest: true,
+    }).freshnessRequired,
+    false,
+  );
+  assert.equal(
+    resolveFreshDataPolicy("Anlık bildirimler nasıl çalışır?", {
+      socialTurn: false,
+      publicKnowledgeRequest: true,
+    }).freshnessRequired,
+    false,
+  );
+  // Veri adını niteleyen kullanım hâlâ tazelik ister.
+  for (const prompt of ["Canlı veri akışını göster", "Anlık fiyat nedir?"]) {
+    assert.equal(
+      resolveFreshDataPolicy(prompt, {
+        socialTurn: false,
+        publicKnowledgeRequest: true,
+      }).freshnessRequired,
+      true,
+      prompt,
+    );
+  }
+});

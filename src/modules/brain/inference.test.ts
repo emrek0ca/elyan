@@ -3469,9 +3469,16 @@ test("generateSharedBrainReply uses web grounding for short research prompts", a
   assert.equal(result.metadata.freshDataEvidenceSufficient, true);
   assert.equal(Array.isArray(result.metadata.webGroundingQueries), true);
   assert.equal(Array.isArray(result.metadata.webSources), true);
-  assert.equal(
-    (result.metadata.webSources as Array<Record<string, unknown>>)[0]?.url,
-    "https://example.com/apple-news",
+  // Kaynak sırası ARAMA SIRASI DEĞİL, ALAKA SIRASIDIR (`scoreResult`).
+  // Bu bekleyiş eskiden ham arama sırasını (`apple-news`) çakıyordu ve
+  // sıralama alakaya geçtiğinde kırmızıya döndü — kırmızı olan sözleşme
+  // değil, testin kendisiydi. "Güncel ekonomi haberleri" turunda ekonomi
+  // kaynağının önde olması sıralamanın DOĞRU çalıştığının kanıtıdır.
+  const webSources = result.metadata.webSources as Array<Record<string, unknown>>;
+  assert.equal(webSources[0]?.url, "https://news.example.org/economy");
+  assert.deepEqual(
+    [...webSources.map((source) => source.url)].sort(),
+    ["https://example.com/apple-news", "https://news.example.org/economy"],
   );
   assert.equal(Array.isArray(result.metadata.blocks), true);
   assert.equal(

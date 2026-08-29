@@ -17,7 +17,7 @@ import {
 } from "./retrieval-orchestrator.js";
 import { retrievalResultsToEvidencePacket } from "./evidence-packet.js";
 
-export const ELYAN_BRAIN_CORPUS_VERSION = "2026-08-v2";
+export const ELYAN_BRAIN_CORPUS_VERSION = "2026-08-v3";
 
 export type BrainCorpusDomain =
   | "memory"
@@ -31,7 +31,8 @@ export type BrainCorpusDomain =
   | "product"
   | "onboarding"
   | "support"
-  | "tasks";
+  | "tasks"
+  | "capabilities";
 
 type BrainCorpusSource = {
   id: string;
@@ -145,6 +146,22 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
       "Elyan masaüstü ne işe yarar?",
       "Mobil uygulama ile masaüstü arasındaki fark nedir?",
       "Elyan özel verilerimi nerede işler?",
+    ],
+  },
+  {
+    id: "elyan.knowledge.capabilities",
+    domain: "capabilities",
+    title: "Elyan Capabilities",
+    fileName: "capabilities.md",
+    tags: ["yetenek", "ne yapabilir", "sınır", "kaynak", "güncellik", "biçim"],
+    priority: 97,
+    purpose: "knowledge",
+    intents: [
+      "Elyan neler yapabilir?",
+      "Sen ne işe yararsın?",
+      "Hangi konularda yardım edebilirsin?",
+      "Bilgiyi nereden alıyorsun?",
+      "Neden internete bakmadın?",
     ],
   },
   {
@@ -496,6 +513,9 @@ export function detectBrainCorpusDomains(prompt: string): BrainCorpusDomain[] {
   }
   if (/\b(safety|guvenlik|gizli|private|permission|izin|provider|model|prompt|credential|token)\b/u.test(normalized)) {
     add("safety");
+  }
+  if (/\b(yapabilir|yapabilirsin|yetenek|capability|capabilities|ne ise yarar|neler yapar|sinirlarin|limitations)\b/u.test(normalized)) {
+    add("capabilities");
   }
 
   return domains;

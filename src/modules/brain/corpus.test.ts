@@ -30,13 +30,14 @@ test("brain corpus guidance is empty when no domain matches", async () => {
 test("brain corpus manifest is versioned and hash-backed", async () => {
   const manifest = await getBrainCorpusManifest();
 
-  assert.equal(manifest.length, 12);
+  assert.equal(manifest.length, 13);
   assert.equal(new Set(manifest.map((item) => item.id)).size, manifest.length);
   assert.ok(manifest.every((item) => item.version === ELYAN_BRAIN_CORPUS_VERSION));
   assert.ok(manifest.every((item) => /^[a-f0-9]{64}$/.test(item.contentHash)));
   assert.deepEqual(
     manifest.map((item) => item.domain).sort(),
     [
+      "capabilities",
       "code",
       "data",
       "design",

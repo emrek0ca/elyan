@@ -1677,6 +1677,39 @@ function hasQuantumQualityGuardSignal(brainProfile: unknown): boolean {
   return strongPolicyFeedback || livenessRepairRisk;
 }
 
+/**
+ * AÇIK ARAŞTIRMA İŞ YÜKÜ — TEK TANIM.
+ *
+ * Aynı koşul üç yerde ayrı ayrı yazılmıştı (erken kapı, `planning_request`
+ * dalı ve `research` dalı) ve ÜÇÜ AYNI DEĞİLDİ: yalnız `research` dalı
+ * kuantum uzmanlaşmasını biliyordu. Erken kapı sonradan eklenince daha
+ * genel olan kural daha özel olanı gölgeledi ve "QAOA literatüründe güncel
+ * kaynaklarla araştır" turu `public_quantum_research` yerine
+ * `public_deep_research` seçmeye başladı.
+ *
+ * Sıra ÖNEMLİ ve burada bir kez yazılı: en özel sınıflandırma önce gelir.
+ */
+function publicResearchWorkload(input: {
+  message: string;
+  semanticContract: SemanticContract;
+}): SharedBrainWorkload | null {
+  if (
+    !input.semanticContract.evidence.includes("fresh_public_research") ||
+    isCompoundUnsafeSubject(input.message)
+  ) {
+    return null;
+  }
+  if (
+    matchesAny(input.message, QUANTUM_TOPIC_PATTERNS) &&
+    !matchesAny(input.message, QUANTUM_EXECUTION_PATTERNS)
+  ) {
+    return "public_quantum_research";
+  }
+  return input.semanticContract.evidence.includes("deep_public_research")
+    ? "public_deep_research"
+    : "public_research";
+}
+
 function deriveSelectedWorkloadWithGuard(input: {
   route: CommandRoute;
   intent: NormalizedCommandIntent;
@@ -1715,17 +1748,9 @@ function deriveSelectedWorkloadWithGuard(input: {
   ) {
     return { selectedWorkload: contractWorkload };
   }
-  if (
-    input.semanticContract.evidence.includes("fresh_public_research") &&
-    !isCompoundUnsafeSubject(input.message)
-  ) {
-    return {
-      selectedWorkload: input.semanticContract.evidence.includes(
-        "deep_public_research",
-      )
-        ? "public_deep_research"
-        : "public_research",
-    };
+  const earlyPublicResearchWorkload = publicResearchWorkload(input);
+  if (earlyPublicResearchWorkload) {
+    return { selectedWorkload: earlyPublicResearchWorkload };
   }
   // Structured workload rules live in a data-backed policy table so examples
   // can become fixtures instead of hidden routing branches.
@@ -1736,19 +1761,10 @@ function deriveSelectedWorkloadWithGuard(input: {
     return { selectedWorkload: prePlanningPolicyWorkload };
   }
   if (input.intent === "planning_request") {
-    if (
-      input.semanticContract.evidence.includes("fresh_public_research") &&
-      !isCompoundUnsafeSubject(input.message)
-    ) {
-      return {
-        selectedWorkload: input.semanticContract.evidence.includes(
-          "deep_public_research",
-        )
-          ? "public_deep_research"
-          : "public_research",
-      };
-    }
-    return { selectedWorkload: "planning" };
+    const planningResearchWorkload = publicResearchWorkload(input);
+    return {
+      selectedWorkload: planningResearchWorkload ?? "planning",
+    };
   }
   const postPlanningPolicyWorkload = selectPolicyWorkload(input.message, {
     phase: "post_planning",
@@ -1760,6 +1776,8 @@ function deriveSelectedWorkloadWithGuard(input: {
   // message length — a short "enflasyon analizi yap" still needs retrieval
   // grounding and reasoning depth that mobile_chat_fast can't provide.
   if (input.primaryIntent === "research") {
+    // Kuantum konusu, tazelik kanıtı OLMASA da kendi iş yükünü hak eder;
+    // `publicResearchWorkload` yalnız taze-açık turlarda konuşur.
     if (
       matchesAny(input.message, QUANTUM_TOPIC_PATTERNS) &&
       !matchesAny(input.message, QUANTUM_EXECUTION_PATTERNS) &&
@@ -1767,19 +1785,9 @@ function deriveSelectedWorkloadWithGuard(input: {
     ) {
       return { selectedWorkload: "public_quantum_research" };
     }
-    if (
-      input.semanticContract.evidence.includes("fresh_public_research") &&
-      !isCompoundUnsafeSubject(input.message)
-    ) {
-      return {
-        selectedWorkload: input.semanticContract.evidence.includes(
-          "deep_public_research",
-        )
-          ? "public_deep_research"
-          : "public_research",
-      };
-    }
-    return { selectedWorkload: "mobile_chat_deep_refine" };
+    return {
+      selectedWorkload: publicResearchWorkload(input) ?? "mobile_chat_deep_refine",
+    };
   }
   if (input.primaryIntent === "math") {
     return { selectedWorkload: "mobile_chat_balanced" };

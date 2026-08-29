@@ -178,9 +178,13 @@ import {
   searchKnowledge,
 } from "./retrieval-orchestrator.js";
 import {
+  classifyPersonalStateNeed,
   deriveKnowledgeNeed,
+  planKnowledgeRoute,
   resolveKnowledgeEvidenceState,
+  type KnowledgeNeedInput,
 } from "./knowledge-need.js";
+import { probeTypedKnowledgeSources } from "./knowledge-sources.js";
 import {
   attachKnowledgeNeedToFastContext,
   buildCanonicalKnowledgeQuery,
@@ -191,11 +195,7 @@ import {
   readAuthoritativeReferenceContext,
 } from "./fast-context.js";
 import { resolveFreshDataPolicy } from "./fresh-data-policy.js";
-import {
-  searchStableBrainCorpus,
-  selectBrainCorpusDomains,
-} from "./corpus.js";
-import { embedQueryForStorage } from "./semantic-embedder.js";
+import { searchStableBrainCorpus } from "./corpus.js";
 import {
   findRecentContinuityEpisode,
   maybeQueueMemoryExtractionJob,
@@ -452,7 +452,6 @@ import { parseStrictJsonObject } from "../skills/validator.js";
 import { getTurkicLanguagePromptHint } from "../../core/understanding/turkic-language.js";
 import { primeWidgetShapeSemantic } from "../../core/understanding/widget-shape-semantic.js";
 import { buildFactDirectAnswer, resolveFactEvidence } from "../facts/direct-answer.js";
-import { selectFactProviders } from "../facts/select.js";
 import { resolveFastPathMemory } from "./fast-path-memory.js";
 import type { FactAnswer } from "../facts/types.js";
 import { buildFactOutputBlocks } from "../facts/blocks.js";
@@ -2136,9 +2135,17 @@ async function buildSessionContinuityBlock(
     userId: string;
     conversationLength: number;
     cognitiveContext?: UserUnderstandingContext["cognitiveContext"];
+    /**
+     * Kullanıcı BIRAKILAN İŞİ adıyla istedi ("dünkü görevi sürdür").
+     * O turda blok bir ipucu değil, cevabın KAYNAĞIDIR ve turun kaçıncı
+     * mesajı olduğu önemsizdir — eski kapı yalnız oturumun ilk mesajında
+     * açıldığı için bu istek oturum ortasında hiçbir tipli duruma erişemiyor,
+     * modelin tahminine kalıyordu.
+     */
+    priorTaskStateRequested?: boolean;
   },
 ): Promise<string | null> {
-  if (input.conversationLength > 1) {
+  if (input.conversationLength > 1 && input.priorTaskStateRequested !== true) {
     return null;
   }
   const cognitiveEpisode = input.cognitiveContext?.episodic[0];
@@ -2165,6 +2172,13 @@ async function buildSessionContinuityBlock(
           ? `${days} days ago`
           : `${Math.floor(days / 7)} weeks ago`;
   const summary = episode.summary.slice(0, 260).trim();
+  if (input.priorTaskStateRequested === true) {
+    return [
+      `Recorded prior task state (${ago}):`,
+      `- ${summary}`,
+      "The user explicitly asked to continue this work. Answer from this recorded state; do not search the public web for it. If it does not cover what they asked, say plainly which part is not recorded rather than inventing continuity.",
+    ].join("\n");
+  }
   return [
     `Session continuity hint (fresh chat, ${ago} you discussed):`,
     `- ${summary}`,
@@ -7104,62 +7118,79 @@ export async function generateSharedBrainReply(
         understandingIntent?.requiresRetrieval === true ||
         understandingIntent?.requiresCitation === true,
     });
-    const knowledgeQueryVector =
-      !socialTurn && !localReferenceTurn && input.attachmentContext?.used !== true
-        ? await embedQueryForStorage(
-            knowledgeQuery,
-            app.log,
-            `knowledge:query:${input.userId}`,
-            2_500,
-          ).catch(() => null)
-        : null;
-    const [factProviderShortlist, corpusSelections] = await Promise.all([
-      !socialTurn && !localReferenceTurn && input.attachmentContext?.used !== true
-        ? selectFactProviders({
-            prompt: knowledgeQuery,
-            queryVector: knowledgeQueryVector,
-            logger: app.log,
-          }).catch(() => [])
-        : Promise.resolve([]),
-      !freshDataPolicy.freshnessRequired &&
-      !socialTurn &&
-      !localReferenceTurn &&
-      input.attachmentContext?.used !== true
-        ? selectBrainCorpusDomains({
-            prompt: knowledgeQuery,
-            queryVector: knowledgeQueryVector,
-            logger: app.log,
-          }).catch(() => [])
-        : Promise.resolve([]),
-    ]);
-    const providerAvailable =
-      input.factEvidence != null ||
-      factProviderShortlist.length > 0 ||
-      freshDataPolicy.domain === "market" ||
-      freshDataPolicy.domain === "weather";
-    const brainCorpusDomains = corpusSelections.map((selection) => selection.domain);
-    const knowledgeNeed = deriveKnowledgeNeed({
+    // YÖNLENDİRME İKİ FAZLIDIR VE FAZ 1 BEDAVADIR.
+    //
+    // İlk üç katman — yetkili konuşma referansı, kendi kendine yeterli tur,
+    // kullanıcının kendi durumu — hiçbir dış kaynağa bakmadan kapanır.
+    // Eskiden bu turlar da sorgu gömmesini VE iki anlamsal seçiciyi ödüyordu;
+    // üçü de ONNX işçisine gidiyor ve ilk token'ın önünde duruyordu. Karar
+    // aynı, yol kısa: `probeTypedSources` false ise hiçbiri başlatılmaz.
+    const knowledgeSubquestions = decomposeQuery(knowledgeQuery);
+    const personalStateNeed = classifyPersonalStateNeed(input.prompt);
+    const knowledgeRouteInput = {
       query: knowledgeQuery,
       subject: envelope?.intent.subject ?? envelope?.intent.topic ?? null,
       entities:
         envelope?.entities.map((entity) => entity.normalized ?? entity.value) ?? [],
-      subquestions: decomposeQuery(knowledgeQuery),
+      subquestions: knowledgeSubquestions,
       classification: understandingIntent,
       outputContract,
       referenceAvailable: authoritativeReferenceContext != null,
       socialTurn,
+      localReferenceAuthoritative: localReferenceTurn,
       freshPublicDataRequired: freshDataPolicy.freshnessRequired,
+      // TİPLİ gereksinim: beceri sözleşmesi ya da istemdeki URL. Anlamsal
+      // araç ipucu buraya GİRMEZ; o `webToolHint` olarak en alt katmanda
+      // konuşur ve konuşma/hafıza/sağlayıcı/korpus katmanlarını atlatamaz.
       publicWebExplicitlyRequired:
-        input.skillWebGroundingRequired === true ||
-        explicitUrl ||
-        semanticWebToolSelected,
+        input.skillWebGroundingRequired === true || explicitUrl,
+      webToolHint: semanticWebToolSelected,
       attachmentContextUsed: input.attachmentContext?.used === true,
-      providerAvailable,
-      corpusAvailable: corpusSelections.length > 0,
+      personalStateNeed,
       multiSourceResearch:
         understandingIntent?.primaryIntent === "research" &&
-        decomposeQuery(knowledgeQuery).length > 1,
-    });
+        knowledgeSubquestions.length > 1,
+    } satisfies KnowledgeNeedInput;
+    const knowledgeRoutePlan = planKnowledgeRoute(knowledgeRouteInput);
+    const typedSourceProbe = knowledgeRoutePlan.probeTypedSources
+      ? await withStageTiming(
+          "chat.typed_source_probe",
+          probeTypedKnowledgeSources(app, {
+            query: knowledgeQuery,
+            probeCorpus: knowledgeRoutePlan.probeCorpus,
+            logger: app.log,
+          }),
+        ).catch(() => null)
+      : null;
+    const factProviderShortlist = typedSourceProbe?.providerShortlist ?? [];
+    const corpusSelections = typedSourceProbe?.corpusSelections ?? [];
+    // Seçim önbellekten geldiyse bu turda gömme YAPILMADI. Aşağı akışa
+    // `undefined` geçilir — onlar gerçekten ihtiyaç duyarsa kendileri gömer.
+    // `null` geçmek onları kalıcı olarak karma-vektör yedeğine düşürürdü.
+    const knowledgeQueryVector = typedSourceProbe?.queryVector;
+    const providerAvailable =
+      knowledgeRoutePlan.probeTypedSources &&
+      (input.factEvidence != null ||
+        factProviderShortlist.length > 0 ||
+        freshDataPolicy.domain === "market" ||
+        freshDataPolicy.domain === "weather");
+    const brainCorpusDomains = corpusSelections.map((selection) => selection.domain);
+    // Ölçülemeyen kazanç kazanç değildir. Bu iki alan, turun gömme ve seçici
+    // maliyetini gerçekten ödeyip ödemediğini tek bakışta söyler:
+    //   settledLocally=true          → hiç ödemedi (faz 1'de kapandı)
+    //   probeCacheState="hit"        → ödemedi (karar önbellekten geldi)
+    //   probeCacheState="miss"       → ödedi (gömme + iki seçici)
+    const knowledgeRouteTelemetry = {
+      knowledgeRouteSettledLocally: knowledgeRoutePlan.settled != null,
+      knowledgeProbeCacheState: typedSourceProbe?.cacheState ?? "skipped",
+    } as const;
+    const knowledgeNeed =
+      knowledgeRoutePlan.settled ??
+      deriveKnowledgeNeed({
+        ...knowledgeRouteInput,
+        providerAvailable,
+        corpusAvailable: corpusSelections.length > 0,
+      });
     if (knowledgeNeed.source === "provider" && input.factEvidence === undefined) {
       input.factEvidence = await resolveFactEvidence(app, {
         prompt: knowledgeQuery,
@@ -7854,11 +7885,18 @@ export async function generateSharedBrainReply(
         // but neither belongs before the first token of a fast conversational
         // turn. The compact client/session snapshot remains authoritative for
         // that lane; deeper workloads still load both blocks.
-        loadOptionalMemoryContext && memoryAuthorized
+        // Bırakılan iş açıkça istendiğinde blok "isteğe bağlı zenginleştirme"
+        // değildir; turun cevabı odur. Hızlı metin şeridi onu atlarsa istek
+        // cevapsız kalır, bu yüzden o tek durumda kapı açık.
+        (loadOptionalMemoryContext ||
+          knowledgeNeed.reason === "prior_task_state_required") &&
+        memoryAuthorized
           ? buildSessionContinuityBlock(app, {
               userId: input.userId,
               conversationLength: boundedConversation.length,
               cognitiveContext: input.understandingContext?.cognitiveContext,
+              priorTaskStateRequested:
+                knowledgeNeed.reason === "prior_task_state_required",
             }).catch(() => null)
           : Promise.resolve(null),
         loadOptionalMemoryContext &&
@@ -9642,6 +9680,7 @@ export async function generateSharedBrainReply(
             retrievalMode: retrievalTelemetry.retrievalMode,
             retrievalResultCount: retrievalTelemetry.retrievalResultCount,
             brainCorpusDomains,
+            ...knowledgeRouteTelemetry,
             retrievalCandidateCount: retrievalTelemetry.candidateCount,
             retrievalLexicalCandidateCount:
               retrievalTelemetry.lexicalCandidateCount,
@@ -10088,6 +10127,7 @@ export async function generateSharedBrainReply(
               retrievalMode: retrievalTelemetry.retrievalMode,
               retrievalResultCount: retrievalTelemetry.retrievalResultCount,
               brainCorpusDomains,
+              ...knowledgeRouteTelemetry,
               retrievalCandidateCount: retrievalTelemetry.candidateCount,
               retrievalLexicalCandidateCount:
                 retrievalTelemetry.lexicalCandidateCount,
@@ -10480,6 +10520,7 @@ export async function generateSharedBrainReply(
         retrievalMode: retrievalTelemetry.retrievalMode,
         retrievalResultCount: retrievalTelemetry.retrievalResultCount,
         brainCorpusDomains,
+        ...knowledgeRouteTelemetry,
         retrievalCandidateCount: retrievalTelemetry.candidateCount,
         retrievalLexicalCandidateCount:
           retrievalTelemetry.lexicalCandidateCount,
