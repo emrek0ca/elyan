@@ -87,6 +87,10 @@ async function collectStaleRuntimeTaskScopes(app: FastifyInstance, now: Date) {
           ),
           and(
             eq(tasks.status, "running"),
+            lt(tasks.executionDeadlineAt, now),
+          ),
+          and(
+            eq(tasks.status, "running"),
             lt(tasks.updatedAt, cutoff),
             or(
               isNull(tasks.runtimeConnectionId),

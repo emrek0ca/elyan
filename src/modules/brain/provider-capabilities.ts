@@ -9,6 +9,7 @@ export type ProviderModelCapabilities = {
   structuredOutput: boolean;
   toolCalling: boolean;
   reasoning: boolean;
+  reasoningRequestControls: boolean;
   imageGeneration: boolean;
   maxImages: number;
   qualityTier: "fast" | "balanced" | "frontier";
@@ -56,6 +57,7 @@ export function resolveProviderModelCapabilities(
       structuredOutput: false,
       toolCalling: true,
       reasoning: premium,
+      reasoningRequestControls: false,
       imageGeneration: true,
       maxImages: premium ? 6 : 10,
       qualityTier: premium ? "frontier" : "balanced",
@@ -74,6 +76,7 @@ export function resolveProviderModelCapabilities(
       structuredOutput: true,
       toolCalling: true,
       reasoning: !lite || pro,
+      reasoningRequestControls: false,
       imageGeneration: false,
       maxImages: 20,
       qualityTier: pro ? "frontier" : lite ? "fast" : "balanced",
@@ -90,6 +93,7 @@ export function resolveProviderModelCapabilities(
       structuredOutput: false,
       toolCalling: true,
       reasoning: true,
+      reasoningRequestControls: false,
       imageGeneration: false,
       maxImages: 5,
       qualityTier: "balanced",
@@ -106,6 +110,7 @@ export function resolveProviderModelCapabilities(
       structuredOutput: true,
       toolCalling: true,
       reasoning: true,
+      reasoningRequestControls: true,
       imageGeneration: false,
       maxImages: 0,
       qualityTier: name.includes("120b") ? "frontier" : "balanced",
@@ -122,6 +127,7 @@ export function resolveProviderModelCapabilities(
       structuredOutput: false,
       toolCalling: true,
       reasoning: true,
+      reasoningRequestControls: false,
       imageGeneration: false,
       maxImages: 0,
       qualityTier: "frontier",
@@ -142,6 +148,7 @@ export function resolveProviderModelCapabilities(
     structuredOutput: provider !== "claude",
     toolCalling: provider !== "claude",
     reasoning: true,
+    reasoningRequestControls: name.includes("gpt-oss"),
     imageGeneration: false,
     maxImages: 0,
     qualityTier: local ? "balanced" : "frontier",

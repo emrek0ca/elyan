@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildGroqCompoundRequestExtensions,
+  extractGroqCompoundEvidence,
   isGroqCompoundModel,
   resolveGroqCompoundModel,
   shouldUseGroqCompound,
+  withGroqCompoundGuidance,
 } from "./groq-compound.js";
 
 const baseConfig = {
@@ -134,7 +136,11 @@ test("ISO ülke kodu search_settings'e girmez, ülke adı girer", () => {
       { ...base, GROQ_COMPOUND_SEARCH_COUNTRY: "tr" },
       "groq/compound",
     ),
-    {},
+    {
+      compound_custom: {
+        tools: { enabled_tools: ["web_search", "visit_website"] },
+      },
+    },
     "iki harfli kod düşürülmeli",
   );
   assert.deepEqual(
@@ -142,6 +148,78 @@ test("ISO ülke kodu search_settings'e girmez, ülke adı girer", () => {
       { ...base, GROQ_COMPOUND_SEARCH_COUNTRY: "turkey" },
       "groq/compound",
     ),
-    { search_settings: { country: "turkey" } },
+    {
+      search_settings: { country: "turkey" },
+      compound_custom: {
+        tools: { enabled_tools: ["web_search", "visit_website"] },
+      },
+    },
   );
+});
+
+test("Compound guidance keeps system instructions first and the user message last", () => {
+  const messages = withGroqCompoundGuidance(
+    [
+      { role: "system", content: "Base policy" },
+      { role: "user", content: "Güncel altın fiyatı nedir?" },
+      { role: "assistant", content: "stale assistant tail" },
+      { role: "system", content: "Late policy" },
+    ],
+    "groq/compound-mini",
+  );
+
+  assert.equal(messages[0]?.role, "system");
+  assert.match(messages[0]?.content ?? "", /Base policy/u);
+  assert.match(messages[0]?.content ?? "", /Late policy/u);
+  assert.equal(messages.at(-1)?.role, "user");
+  assert.equal(messages.filter((message) => message.role === "system").length, 1);
+});
+
+test("Compound tools are bounded by model depth and computation need", () => {
+  assert.deepEqual(
+    buildGroqCompoundRequestExtensions(baseConfig, "groq/compound-mini"),
+    {
+      compound_custom: { tools: { enabled_tools: ["web_search"] } },
+    },
+  );
+  assert.deepEqual(
+    buildGroqCompoundRequestExtensions(baseConfig, "groq/compound", {
+      requiresComputation: true,
+    }),
+    {
+      compound_custom: {
+        tools: {
+          enabled_tools: ["web_search", "visit_website", "code_interpreter"],
+        },
+      },
+    },
+  );
+});
+
+test("Compound evidence parses string tool output and plain text query arguments", () => {
+  const evidence = extractGroqCompoundEvidence({
+    choices: [
+      {
+        message: {
+          executed_tools: [
+            {
+              type: "web_search",
+              arguments: "query: güncel gram altın fiyatı",
+              output:
+                "TCMB Döviz Kurları\nhttps://www.tcmb.gov.tr/kurlar/today.xml\nAltın verisi https://example.com/gold.",
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(evidence.toolsUsed, ["web_search"]);
+  assert.deepEqual(evidence.searchQueries, ["güncel gram altın fiyatı"]);
+  assert.deepEqual(
+    evidence.citations.map((citation) => citation.url),
+    ["https://www.tcmb.gov.tr/kurlar/today.xml", "https://example.com/gold"],
+  );
+  assert.equal(evidence.citations[0]?.toolType, "web_search");
+  assert.equal(evidence.citations[0]?.query, "güncel gram altın fiyatı");
 });

@@ -36,6 +36,10 @@ function formatInZone(timeZone: string, at: Date): { time: string; date: string 
 export const localTimeProvider = defineFactProvider<TimeParams>({
   id: "local_time",
   dataClass: "realtime",
+  authority: "IANA time zone database",
+  commercialUse: "allowed",
+  allowStale: false,
+  units: ["local_time"],
   timeoutMs: 4_000,
   ttlMs: 30_000,
   intents: [

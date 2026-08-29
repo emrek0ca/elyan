@@ -32,6 +32,7 @@ import {
 import {
   buildAssistantCodeBlock,
   buildAssistantDocumentBlock,
+  buildAssistantBlockGroup,
   buildAssistantNextStepsBlock,
   buildAssistantTableBlock,
   normalizeAssistantMessageBlocks,
@@ -803,7 +804,7 @@ export function resolveCompletionAssistantBlocks(input: {
     text.replace(/\n{3,}/g, "\n\n").trim(),
   );
 
-  const blocks = normalizeAssistantMessageBlocks({
+  const normalizedCompletionBlocks = normalizeAssistantMessageBlocks({
     blocks: filterAssistantBlocksByIntent({
       blocks: assistantBlocks,
       prompt: input.prompt,
@@ -817,6 +818,28 @@ export function resolveCompletionAssistantBlocks(input: {
       }),
     ),
   });
+  const surfacePriority = (block: { type: string }) => {
+    if (["clarification", "approval_needed", "actionable", "proactive_touch"].includes(block.type)) return 6;
+    if (["dispatch_widget", "task_trace", "goal_progress", "status", "tool_call"].includes(block.type)) return 5;
+    if (["artifact", "file", "pdf_generate", "pdf_viewer"].includes(block.type)) return 4;
+    if (["table", "chart", "math_surface_3d"].includes(block.type)) return 3;
+    if (["web_search", "connector_result", "mail_list", "calendar_agenda", "drive_files", "notion_page", "github_activity", "slack_messages"].includes(block.type)) return 2;
+    return 1;
+  };
+  const blocks = normalizedCompletionBlocks.length <= 3
+    ? normalizedCompletionBlocks
+    : (() => {
+        const ranked = normalizedCompletionBlocks
+          .map((block, index) => ({ block, index, priority: surfacePriority(block) }))
+          .sort((left, right) => right.priority - left.priority || left.index - right.index);
+        const primary = ranked.slice(0, 2).sort((left, right) => left.index - right.index);
+        const overflow = ranked.slice(2).sort((left, right) => left.index - right.index);
+        const detail = buildAssistantBlockGroup(
+          overflow.map((item) => item.block),
+          { title: "Ayrıntılar", renderHints: { density: "compact", sectionRole: "detail" } },
+        );
+        return [...primary.map((item) => item.block), ...(detail ? [detail] : [])];
+      })();
   const comparison = deterministicNumericComparison(input);
   if (comparison) text = comparison;
   if (

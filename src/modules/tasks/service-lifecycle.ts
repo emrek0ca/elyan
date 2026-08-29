@@ -25,6 +25,24 @@ export function buildTaskRuntimeOwnershipUpdate(input: { runtimeConnectionId: st
 }
 
 export const TASK_DISPATCH_LEASE_MS = 45_000;
+export const CHAT_TASK_DEADLINE_MS = 4 * 60_000;
+export const DESKTOP_TASK_DEADLINE_MS = 30 * 60_000;
+export const LONG_TASK_DEADLINE_MS = 2 * 60 * 60_000;
+
+export type TaskExecutionClass = "chat" | "desktop" | "long";
+
+export function taskExecutionDeadline(input: {
+  executionClass: TaskExecutionClass;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const duration = input.executionClass === "chat"
+    ? CHAT_TASK_DEADLINE_MS
+    : input.executionClass === "long"
+      ? LONG_TASK_DEADLINE_MS
+      : DESKTOP_TASK_DEADLINE_MS;
+  return new Date(now.getTime() + duration);
+}
 /**
  * Onay bekleyen bir görevin yaşam süresi.
  *
@@ -476,6 +494,7 @@ export function buildTaskDispatchLeaseAckUpdate(
     leaseId: string;
     now?: Date;
     acceptedAt?: Date;
+    executionDeadlineAt?: Date;
   },
 ) {
   const now = input.now ?? new Date();
@@ -488,6 +507,8 @@ export function buildTaskDispatchLeaseAckUpdate(
     dispatchLeaseExpiresAt: null,
     dispatchAckAt: acceptedAt,
     startedAt: acceptedAt,
+    ...(input.executionDeadlineAt ? { executionDeadlineAt: input.executionDeadlineAt } : {}),
+    lastProgressAt: acceptedAt,
     updatedAt: now,
   } satisfies Partial<typeof tasks.$inferInsert>;
 }

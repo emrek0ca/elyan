@@ -84,7 +84,7 @@ test("AI data-sharing consent fails closed when the feature flag is enabled", as
       error.statusCode === 403 &&
       error.code === "AI_DATA_SHARING_CONSENT_REQUIRED",
   );
-  assert.equal(fixture.selectCount(), 4);
+  assert.equal(fixture.selectCount(), 5);
 });
 
 test("AI data-sharing consent allows an active grant when enforcement is enabled", async () => {
@@ -93,7 +93,7 @@ test("AI data-sharing consent allows an active grant when enforcement is enabled
     await assertAiDataSharingConsent(fixture.app as never, "user-1"),
     true,
   );
-  assert.equal(fixture.selectCount(), 4);
+  assert.equal(fixture.selectCount(), 5);
 });
 
 test("cloud speech consent always fails closed without an active grant", async () => {

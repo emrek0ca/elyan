@@ -505,14 +505,14 @@ function workOrderArtifactFormat(workOrder: DesktopWorkOrder): string {
       outputContract?.format,
       outputContract?.outputKind,
     ])?.toLocaleLowerCase("en-US") ?? "";
-  if (["pdf", "docx", "xlsx", "pptx", "svg"].includes(semanticFormat)) {
+  if (["pdf", "docx", "txt", "xlsx", "pptx", "png", "svg"].includes(semanticFormat)) {
     return semanticFormat;
   }
   const expectedFormat =
     workOrder.expectedOutputs
       .map((output) => output.format)
       .find((format) =>
-        ["pdf", "docx", "xlsx", "pptx", "svg"].includes(
+        ["pdf", "docx", "txt", "xlsx", "pptx", "png", "svg"].includes(
           format.toLocaleLowerCase("en-US"),
         ),
       )
@@ -528,7 +528,9 @@ function fallbackExtensionForCapability(
   if (capability === "spreadsheet_write") return "xlsx";
   if (capability === "presentation_write") return "pptx";
   if (capability === "canvas_write") return format === "svg" ? "svg" : "pdf";
-  if (capability === "document_write") return format === "pdf" ? "pdf" : "docx";
+  if (capability === "document_write") {
+    return ["pdf", "docx", "txt"].includes(format) ? format : "docx";
+  }
   return format || "txt";
 }
 
@@ -1656,7 +1658,7 @@ function compileSemanticFallbackSteps(
       sourceContext,
       outputPath: fallbackOutputPath(workOrder, capability),
     };
-    if (capability === "canvas_write") {
+    if (capability === "canvas_write" || capability === "document_write") {
       args.output_format = fallbackExtensionForCapability(capability, workOrder);
     }
     add({

@@ -24,6 +24,10 @@ type WeatherParams = { prompt: string };
 export const weatherProvider = defineFactProvider<WeatherParams>({
   id: "open_meteo",
   dataClass: "hourly",
+  authority: "Open-Meteo",
+  commercialUse: "conditional",
+  allowStale: true,
+  units: ["°C", "%", "km/h", "mm"],
   timeoutMs: 5_000,
   ttlMs: 10 * 60_000,
   fallbackDomain: "weather",

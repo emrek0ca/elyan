@@ -4,12 +4,22 @@ import { chatMessages, chatSessions, proactiveTriggers, userProactivePrefs } fro
 import {
   applyTurnProactiveOps,
   buildProactiveOpeningCompose,
+  classifyDeterministicFollowUp,
   evaluateProactivePolicy,
   claimNextDueProactiveTrigger,
   publishProactiveAssistantMessage,
   recordTurnFollowUps,
   resolveFollowUpDue,
 } from "./proactive-engine.js";
+
+test("deterministic follow-up classification handles Turkish diacritics and fixed time", () => {
+  const now = new Date("2026-08-28T08:00:00.000Z");
+  const explicit = classifyDeterministicFollowUp("Yarin deploy sonucunu sor", now);
+  assert.equal(explicit?.kind, "explicit");
+  assert.equal(explicit?.due.toISOString(), "2026-08-29T08:00:00.000Z");
+  const candidate = classifyDeterministicFollowUp("Bunu sonra ele aliriz", now);
+  assert.equal(candidate?.kind, "candidate");
+});
 
 test("typed proactive ops persist user mute and quiet-hour preferences", async () => {
   const writes: Array<{ table: unknown; values: Record<string, unknown> }> = [];

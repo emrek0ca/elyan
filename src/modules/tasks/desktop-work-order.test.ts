@@ -1477,3 +1477,41 @@ test("a writer step gets a producer no matter where its capability came from", (
 
   }
 });
+
+test("explicit desktop status becomes a compiled read-only step", () => {
+  const workOrder = buildDesktopWorkOrder({
+    message: "Masaüstü entegrasyonu çalışıyor mu?",
+    title: "Masaüstü durumu",
+    routeDecision: { capabilities: ["desktop_os.status"] } as never,
+    requestedCapabilities: ["desktop_os.status"],
+  } as never);
+  assert.deepEqual(
+    workOrder.planPreview.steps.map((step) => step.capability),
+    ["desktop_os.status"],
+  );
+  assert.equal(workOrder.planPreview.planSource, "deterministic_registry");
+});
+
+test("prompt-authored TXT does not add research and keeps exact format", () => {
+  const envelope = buildTypedUnderstandingEnvelope({
+    message: "İçine 'Elyan hazır.' yazan bir TXT dosyası oluştur ve masaüstüne kaydet",
+    intent: {
+      primaryIntent: "writing",
+      confidence: 0.9,
+      secondaryIntents: [],
+      reason: "test",
+    },
+    userId: "user-1",
+  } as never);
+  const workOrder = buildDesktopWorkOrder({
+    message: "İçine 'Elyan hazır.' yazan bir TXT dosyası oluştur ve masaüstüne kaydet",
+    title: "Elyan hazır",
+    routeDecision: { capabilities: ["document_write"] } as never,
+    requestedCapabilities: ["document_write"],
+    understandingEnvelope: envelope,
+  } as never);
+  assert.equal(workOrder.requiredCapabilities.includes("web_research"), false);
+  const writer = workOrder.planPreview.steps.find((step) => step.capability === "document_write");
+  assert.equal(writer?.args.output_format, "txt");
+  assert.match(String(writer?.args.outputPath), /\.txt$/u);
+});

@@ -16,6 +16,10 @@ type QuakeParams = { minMagnitude: number };
 export const earthquakeProvider = defineFactProvider<QuakeParams>({
   id: "usgs_earthquake",
   dataClass: "realtime",
+  authority: "United States Geological Survey",
+  commercialUse: "allowed",
+  allowStale: false,
+  units: ["magnitude"],
   timeoutMs: 5_000,
   ttlMs: 5 * 60_000,
   intents: [

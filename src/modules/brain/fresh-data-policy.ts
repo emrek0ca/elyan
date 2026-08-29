@@ -28,6 +28,11 @@ export type FreshDataPolicy = {
   reasons: string[];
 };
 
+export type FreshDataPolicyContext = {
+  socialTurn?: boolean;
+  publicKnowledgeRequest?: boolean;
+};
+
 export type FreshDataStatus =
   | "fresh"
   | "aging"
@@ -104,9 +109,11 @@ const REGULATION_PATTERN =
 const SOFTWARE_SECURITY_PATTERN =
   /(?<!\p{L})(cve-\d{4}-\d+|cve|vulnerability|zero.?day|security advisory|güvenlik açığı|guvenlik acigi|security fix)(?!\p{L})/iu;
 const SOFTWARE_RELEASE_PATTERN =
-  /(?<!\p{L})(son sürüm|son surum|latest version|release notes?|changelog|stable release|lts|deprecated|end of life|eol|npm|pypi|pub\.dev|crate|sdk|framework|library|kütüphane|kutuphane|paket|package)(?!\p{L})/iu;
+  /(?<!\p{L})(son\s+s[üu]r[üu]m\p{L}*|latest version|release notes?|changelog|stable release|lts|deprecated|end of life|eol|npm|pypi|pub\.dev|crate|sdk|framework|library|kütüphane|kutuphane|paket|package)(?!\p{L})/iu;
 const EXPLICIT_FRESHNESS_PATTERN =
   /(?<!\p{L})(bugün|bugun|şu an|su an|güncel|guncel|latest|recent|today|canlı|canli|anlık|anlik|son durum|doğrula|dogrula)(?!\p{L})/iu;
+const GENERAL_INFORMATION_REQUEST_PATTERN =
+  /\?|(?<!\p{L})(kim|nedir|neydi|ne\s+oldu|kaç|kac|hangi|nerede|where|who|what|when|how\s+many|bul|araştır|arastir|göster|goster|söyle|soyle|ver)(?!\p{L})/iu;
 
 const DOMAIN_CONFIG: Record<
   FreshDataDomain,
@@ -132,7 +139,7 @@ const DOMAIN_CONFIG: Record<
     allowStaleIfError: false,
     minimumSources: 2,
     minimumVerifiedSources: 2,
-    minimumDatedSources: 0,
+    minimumDatedSources: 1,
     preferredHosts: ["tcmb.gov.tr", "borsaistanbul.com", "kap.org.tr", "investing.com", "tradingview.com"],
     searchCategory: "general",
   },
@@ -277,15 +284,27 @@ export function classifyFreshDataDomain(prompt: string): {
   return { domain: "general", reasons: [] };
 }
 
-export function resolveFreshDataPolicy(prompt: string): FreshDataPolicy {
+export function resolveFreshDataPolicy(
+  prompt: string,
+  context?: FreshDataPolicyContext,
+): FreshDataPolicy {
   const classified = classifyFreshDataDomain(prompt);
+  const normalized = compactText(prompt);
+  const explicitFreshness = EXPLICIT_FRESHNESS_PATTERN.test(normalized);
+  const contextualGeneralFreshness =
+    context == null
+      ? explicitFreshness
+      : explicitFreshness &&
+        context.socialTurn !== true &&
+        (context.publicKnowledgeRequest === true ||
+          GENERAL_INFORMATION_REQUEST_PATTERN.test(normalized));
   const freshnessRequired =
-    classified.domain !== "general" || EXPLICIT_FRESHNESS_PATTERN.test(compactText(prompt));
+    classified.domain !== "general" || contextualGeneralFreshness;
   return freshDataPolicyForDomain(classified.domain, {
     freshnessRequired,
     reasons: [
       ...classified.reasons,
-      ...(EXPLICIT_FRESHNESS_PATTERN.test(compactText(prompt)) ? ["explicit_freshness"] : []),
+      ...(contextualGeneralFreshness ? ["explicit_freshness"] : []),
     ],
   });
 }

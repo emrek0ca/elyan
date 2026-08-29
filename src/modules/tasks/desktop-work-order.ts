@@ -1575,10 +1575,10 @@ function artifactContractForCapabilities(
     };
   }
   if (capabilities.includes("document_write")) {
-    const format =
-      requestedFormat?.toLocaleLowerCase("en-US") === "pdf"
-        ? "pdf"
-        : "docx";
+    const normalizedFormat = requestedFormat?.toLocaleLowerCase("en-US");
+    const format: "pdf" | "docx" | "txt" = ["pdf", "docx", "txt"].includes(normalizedFormat ?? "")
+      ? (normalizedFormat as "pdf" | "docx" | "txt")
+      : "docx";
     return {
       desiredKind: format,
       outputKind: "document",
@@ -1985,6 +1985,14 @@ function buildSteps(input: {
       args: { query: systemQuery },
     });
   }
+  if (input.capabilities.includes("desktop_os.status")) {
+    steps.push({
+      id: "step_desktop_status",
+      capability: "desktop_os.status",
+      description: "Yerel çalışma zamanı ve yetenek hazırlığı salt-okunur olarak doğrulanacak.",
+      args: {},
+    });
+  }
   if (input.capabilities.includes("desktop_os.processes")) {
     steps.push({
       id: "step_processes",
@@ -2285,10 +2293,19 @@ function buildSteps(input: {
               ? input.envelope?.output_contract?.outputFormat === "svg"
                 ? "svg"
                 : "pdf"
-              : input.envelope?.output_contract?.outputFormat === "pdf"
-                ? "pdf"
+              : ["pdf", "docx", "txt"].includes(
+                    String(input.envelope?.output_contract?.outputFormat ?? ""),
+                  )
+                ? String(input.envelope?.output_contract?.outputFormat)
                 : "docx";
       args.outputPath = `~/Desktop/${safeArtifactFilename(documentTitle)}.${extension}`;
+    }
+    if (capability === "document_write") {
+      args.output_format = ["pdf", "docx", "txt"].includes(
+        String(input.envelope?.output_contract?.outputFormat ?? ""),
+      )
+        ? input.envelope?.output_contract?.outputFormat
+        : "docx";
     }
     if (capability === "canvas_write") {
       const wantsPdf = input.envelope?.desired_outputs.some((output) => output.kind === "pdf") ?? false;
@@ -2509,10 +2526,15 @@ export function buildDesktopWorkOrder(input: {
     "ocr_read",
     "retrieve_context",
   ];
+  const promptProvidesDocumentBody =
+    input.understandingEnvelope?.output_contract?.sourceReference === "current_prompt" &&
+    (/["“”'‘’][^"“”'‘’]{3,}["“”'‘’]/u.test(message) ||
+      /(?:içine|icine|metin olarak|content)\s+.{3,}\s+(?:yaz|kaydet|ekle)/iu.test(message));
   if (
     writerCapabilities.some((capability) => capabilities.includes(capability)) &&
     !externalContentSources.some((capability) => capabilities.includes(capability)) &&
-    !capabilities.includes("math_solve")
+    !capabilities.includes("math_solve") &&
+    !promptProvidesDocumentBody
   ) {
     capabilities.push("web_research");
   }
@@ -2722,7 +2744,10 @@ export function buildDesktopWorkOrder(input: {
     approvalCapabilities.length > 0;
   const sourceReference = input.understandingEnvelope?.source_reference ?? "current_prompt";
   const deterministicReadOnlyStep =
-    deterministicSystemObservation;
+    deterministicSystemObservation ||
+    (steps.length === 1 &&
+      steps[0]?.capability === "desktop_os.status" &&
+      Object.keys(steps[0]?.args ?? {}).length === 0);
   const deterministicFileFindStep =
     steps.length === 1 &&
     steps[0]?.capability === "file_find" &&

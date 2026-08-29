@@ -19,8 +19,8 @@ test("self-contained typed table does not start RAG or web retrieval", () => {
     publicWebExplicitlyRequired: false,
     attachmentContextUsed: false,
   });
-  assert.equal(result.need, "none");
-  assert.deepEqual(result.sources, []);
+  assert.equal(result.source, "none");
+  assert.equal(result.contract, "elyan.knowledge_need.v2");
 });
 
 test("previous typed result is authoritative unless refresh is explicit", () => {
@@ -38,8 +38,8 @@ test("previous typed result is authoritative unless refresh is explicit", () => 
     publicWebExplicitlyRequired: false,
     attachmentContextUsed: false,
   });
-  assert.equal(result.need, "required");
-  assert.deepEqual(result.sources, ["conversation_reference"]);
+  assert.equal(result.source, "conversation");
+  assert.equal(result.evidenceRequired, true);
 });
 
 test("current-user identity questions use memory without public web", () => {
@@ -54,8 +54,7 @@ test("current-user identity questions use memory without public web", () => {
     publicWebExplicitlyRequired: false,
     attachmentContextUsed: false,
   });
-  assert.equal(result.need, "required");
-  assert.deepEqual(result.sources, ["memory"]);
+  assert.equal(result.source, "memory");
 });
 
 test("required knowledge stays insufficient when every admitted source is empty", () => {
@@ -79,9 +78,44 @@ test("required knowledge stays insufficient when every admitted source is empty"
       knowledgeNeed,
       referenceAvailable: false,
       memoryResultCount: 0,
+      providerEvidenceSufficient: false,
       retrievalEvidenceState: "insufficient",
       webEvidenceSufficient: false,
     }),
     "insufficient",
   );
+});
+
+test("typed provider wins before open web and keeps one fallback", () => {
+  const prompt = "Güncel dolar kuru nedir?";
+  const result = deriveKnowledgeNeed({
+    query: prompt,
+    classification: classifyIntent({ userId: "user_1", message: prompt }),
+    outputContract: compileOutputContract({ message: prompt }),
+    referenceAvailable: false,
+    socialTurn: false,
+    freshPublicDataRequired: true,
+    publicWebExplicitlyRequired: false,
+    attachmentContextUsed: false,
+    providerAvailable: true,
+  });
+  assert.equal(result.source, "provider");
+  assert.equal(result.fallback, "web");
+});
+
+test("stable Elyan knowledge uses corpus without opening web", () => {
+  const prompt = "Elyan masaüstü ne işe yarar?";
+  const result = deriveKnowledgeNeed({
+    query: prompt,
+    classification: classifyIntent({ userId: "user_1", message: prompt }),
+    outputContract: compileOutputContract({ message: prompt }),
+    referenceAvailable: false,
+    socialTurn: false,
+    freshPublicDataRequired: false,
+    publicWebExplicitlyRequired: false,
+    attachmentContextUsed: false,
+    corpusAvailable: true,
+  });
+  assert.equal(result.source, "corpus");
+  assert.equal(result.fallback, "model");
 });

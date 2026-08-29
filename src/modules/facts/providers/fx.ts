@@ -15,6 +15,10 @@ type FxParams = { code: string };
 export const fxProvider = defineFactProvider<FxParams>({
   id: "frankfurter",
   dataClass: "daily",
+  authority: "European Central Bank via Frankfurter",
+  commercialUse: "allowed",
+  allowStale: false,
+  units: ["TRY"],
   timeoutMs: 4_000,
   ttlMs: 60 * 60_000,
   fallbackDomain: "market",

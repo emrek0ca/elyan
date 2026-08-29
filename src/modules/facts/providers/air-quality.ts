@@ -17,6 +17,10 @@ type AirParams = { prompt: string };
 export const airQualityProvider = defineFactProvider<AirParams>({
   id: "open_meteo_air",
   dataClass: "hourly",
+  authority: "Open-Meteo",
+  commercialUse: "conditional",
+  allowStale: true,
+  units: ["AQI", "µg/m³"],
   timeoutMs: 5_000,
   ttlMs: 30 * 60_000,
   intents: [

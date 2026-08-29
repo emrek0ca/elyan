@@ -131,6 +131,7 @@ import {
   resolveMediaInputVisionCarrier,
 } from "./media-inputs.js";
 import { validateExecutionPlanWithGeminiFree } from "../brain/gemini-execution-validator.js";
+import { assertCloudMediaConsent } from "../consents/service.js";
 import { detectFabricatedActionClaim } from "../brain/action-claim-gate.js";
 import {
   deriveChartBlock,
@@ -212,7 +213,7 @@ import {
   type ChatReferenceContext,
 } from "../chat/chat-context-snapshot.js";
 import { coerceFiniteNumber } from "../chat/chart-data.js";
-import { applyGoalProgressBlocks } from "../goals/service.js";
+import { applyGoalProgressBlocks, syncGoalFromTaskLifecycle } from "../goals/service.js";
 import { recordStageDuration, startStage } from "../../lib/perf-telemetry.js";
 import {
   getSharedBrainTargetDeviceId,
@@ -273,6 +274,8 @@ import {
   TASK_DISPATCH_LEASE_MS,
   TASK_APPROVAL_TTL_MS,
   TASK_QUEUE_TTL_MS,
+  taskExecutionDeadline,
+  type TaskExecutionClass,
   MAX_ACTIVE_USER_APPROVALS,
   MAX_TASK_DISPATCH_ATTEMPTS,
   approvalRequestRevision,
@@ -368,6 +371,28 @@ const STALE_RUNTIME_TASK_AFTER_MS = 120_000;
 export const DESKTOP_PLAN_PENDING_RECOVERY_AFTER_MS = 90_000;
 const DESKTOP_PLAN_PENDING_SUMMARY =
   "Görev planlanıyor; masaüstü yürütmesi plan hazır olunca başlayacak.";
+
+const LONG_RUNNING_CAPABILITIES = new Set([
+  "video_process",
+  "media_process",
+  "dataset_train",
+  "model_train",
+  "deep_research",
+]);
+
+function classifyTaskExecution(input: {
+  sharedBrain: boolean;
+  capabilities: string[];
+  contract: unknown;
+}): TaskExecutionClass {
+  if (input.sharedBrain) return "chat";
+  const contract = readRecord(input.contract);
+  const execution = readRecord(contract?.execution);
+  const maxSteps = typeof execution?.maxSteps === "number" ? execution.maxSteps : 0;
+  return maxSteps >= 12 || input.capabilities.some((item) => LONG_RUNNING_CAPABILITIES.has(item))
+    ? "long"
+    : "desktop";
+}
 
 function visibleTextFromAssistantBlocks(
   blocks: AssistantMessageBlock[] | undefined,
@@ -4539,6 +4564,16 @@ export async function acknowledgeTaskDispatchLease(
         runtimeConnectionId: auth.connectionId,
         leaseId: input.leaseId,
         acceptedAt,
+        executionDeadlineAt: taskExecutionDeadline({
+          executionClass: classifyTaskExecution({
+            sharedBrain: false,
+            capabilities: Array.isArray(ownedTask.requestedCapabilities)
+              ? ownedTask.requestedCapabilities.map(String)
+              : [],
+            contract: readRecord(ownedTask.payload)?.taskExecutionContract,
+          }),
+          now: acceptedAt ?? new Date(),
+        }),
       }),
     )
     .where(
@@ -4916,6 +4951,48 @@ async function publishTaskEvent(
   });
 }
 
+type PendingTaskProgress = {
+  timer: ReturnType<typeof setTimeout>;
+  task: typeof tasks.$inferSelect;
+  payload: unknown;
+};
+
+const pendingTaskProgressByApp = new WeakMap<FastifyInstance, Map<string, PendingTaskProgress>>();
+
+function cancelPendingTaskProgress(app: FastifyInstance, taskId: string): void {
+  const pending = pendingTaskProgressByApp.get(app);
+  const current = pending?.get(taskId);
+  if (!current) return;
+  clearTimeout(current.timer);
+  pending?.delete(taskId);
+}
+
+function publishCoalescedTaskProgress(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  payload: unknown,
+): void {
+  let pending = pendingTaskProgressByApp.get(app);
+  if (!pending) {
+    pending = new Map();
+    pendingTaskProgressByApp.set(app, pending);
+  }
+  const previous = pending.get(task.id);
+  if (previous) clearTimeout(previous.timer);
+  const timer = setTimeout(() => {
+    pending?.delete(task.id);
+    void app.services.eventBus.publishVolatile({
+      topic: "task.updated",
+      userId: task.userId,
+      deviceId: task.targetDeviceId,
+      taskId: task.id,
+      payload: sanitizePublicTaskEventPayload(payload),
+    });
+  }, 750);
+  timer.unref?.();
+  pending.set(task.id, { timer, task, payload });
+}
+
 function staleRuntimeFailureForTarget(
   target: Awaited<ReturnType<typeof getUserDevice>> | null,
 ) {
@@ -5135,7 +5212,7 @@ export async function reconcileStaleRuntimeTasks(
         ),
         and(
           eq(tasks.status, "running" as TaskStatus),
-          lt(tasks.updatedAt, cutoff),
+          or(lt(tasks.executionDeadlineAt, now), lt(tasks.updatedAt, cutoff)),
         ),
         and(
           eq(tasks.status, "waiting_approval" as TaskStatus),
@@ -5182,6 +5259,66 @@ export async function reconcileStaleRuntimeTasks(
       ) {
         // Durable chat workers own their workload-aware 60/120/240 second
         // deadlines. The legacy runtime stale cutoff must not preempt them.
+        continue;
+      }
+      if (
+        task.status === "running" &&
+        task.executionDeadlineAt &&
+        task.executionDeadlineAt.getTime() <= now.getTime()
+      ) {
+        const message = task.checkpoint
+          ? "Görevin çalışma süresi doldu. Kaydedilen noktadan devam edebilirsin."
+          : "Görevin çalışma süresi doldu. Yeniden başlatabilirsin.";
+        const rows = await app.db
+          .update(tasks)
+          .set({
+            status: "failed",
+            summary: message,
+            error: "execution_deadline_exceeded",
+            completedAt: now,
+            updatedAt: now,
+            queuePosition: 0,
+            dispatchLeaseId: null,
+            dispatchLeaseIssuedAt: null,
+            dispatchLeaseExpiresAt: null,
+            dispatchAckAt: null,
+            runtimeConnectionId: null,
+          })
+          .where(and(eq(tasks.id, task.id), eq(tasks.status, "running")))
+          .returning();
+        const expiredTask = rows[0];
+        if (!expiredTask) continue;
+        await insertTaskEvent(app, {
+          taskId: expiredTask.id,
+          userId: expiredTask.userId,
+          status: "failed",
+          message,
+          payload: {
+            reason: "execution_deadline_exceeded",
+            checkpointAvailable: expiredTask.checkpoint != null,
+            stepRevision: expiredTask.stepRevision,
+          },
+        });
+        await publishTaskEvent(app, expiredTask, "task.updated", {
+          task: shapeTaskFeedItem(expiredTask),
+          reason: "execution_deadline_exceeded",
+        });
+        await syncGoalFromTaskLifecycle(app, {
+          userId: expiredTask.userId,
+          taskId: expiredTask.id,
+          status: "failed",
+          summary: message,
+          verified: false,
+          checkpointRevision: expiredTask.checkpoint ? expiredTask.stepRevision : null,
+        }).catch(() => null);
+        await syncChatTaskLifecycle(app, {
+          originalTask: task,
+          updatedTask: expiredTask,
+          message,
+        });
+        await reliability?.clearTaskDispatchLock(expiredTask.id);
+        await releaseChatGenerationAdmission(app, expiredTask.id);
+        reconciled.push(shapeTaskFeedItem(expiredTask));
         continue;
       }
       const target = await getUserDevice(app, task.userId, task.targetDeviceId);
@@ -6797,6 +6934,8 @@ async function markServerBrainTaskRunning(
       status: "running",
       error: null,
       startedAt: task.startedAt ?? now,
+      executionDeadlineAt: taskExecutionDeadline({ executionClass: "chat", now }),
+      lastProgressAt: now,
       updatedAt: now,
       queuePosition: 0,
     })
@@ -8188,6 +8327,14 @@ async function processSharedBrainChatTask(
     let completionMetadata = readServerBrainCompletionMetadata(
       inference.metadata,
     );
+    const promptAuthoritativeData = explicitPromptNumericPoints(input.prompt, {
+      outputKind: input.understanding.envelope?.output_contract?.outputKind,
+      outputFormat: input.understanding.envelope?.output_contract?.outputFormat,
+    }) != null;
+    const conversationReferenceEvidence =
+      referenceContext?.blocks.some(
+        (block) => block.type === "table" || block.type === "chart",
+      ) === true;
     let assistantResponseText = resolveNonEchoAssistantText({
       prompt: input.prompt,
       responseText: inference.text,
@@ -8222,6 +8369,8 @@ async function processSharedBrainChatTask(
               type,
             );
           }),
+        promptAuthoritativeData,
+        conversationReferenceEvidence,
         agentVerified: readAgentRunState(inference.metadata) === "completed",
       },
     });
@@ -8280,6 +8429,8 @@ async function processSharedBrainChatTask(
               String((block as { type?: unknown }).type ?? "").toLowerCase(),
             ),
           ),
+          promptAuthoritativeData,
+          conversationReferenceEvidence,
           agentVerified: readAgentRunState(repairInference.metadata) === "completed",
         },
       });
@@ -8294,7 +8445,9 @@ async function processSharedBrainChatTask(
         throw new AppError(
           502,
           "semantic_response_rejected",
-          "Yanıt doğrulama kapısından geçmedi; görev güvenli biçimde durduruldu.",
+          repairGate.evidenceState === "insufficient"
+            ? "Şu an güncel değeri güvenilir bir kaynaktan doğrulayamadım."
+            : "Bu yanıtı güvenilir biçimde doğrulayamadım. Lütfen tekrar dene.",
           {
             transient: false,
             retrySuggested: false,
@@ -9520,6 +9673,7 @@ type TaskInterventionContext = {
   previousPrompt: string;
   previousTitle: string;
   previousTargetDeviceId: string | null;
+  checkpoint: Record<string, unknown> | null;
 };
 
 async function resolveTaskInterventionContext(
@@ -9531,8 +9685,9 @@ async function resolveTaskInterventionContext(
 ): Promise<TaskInterventionContext | null> {
   const intervention = readRecord(input.metadata.intervention);
   const supersedesTaskId = String(intervention?.supersedesTaskId ?? "").trim();
+  const interventionKind = intervention?.kind;
   if (
-    intervention?.kind !== "redirect_after_cancel" ||
+    !["redirect_after_cancel", "resume_from_checkpoint"].includes(String(interventionKind)) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
       supersedesTaskId,
     )
@@ -9545,8 +9700,13 @@ async function resolveTaskInterventionContext(
     supersedesTaskId,
     input.userId,
   );
-  if (previousTask.status !== "canceled") {
-    throw conflict("Task must be canceled before it can be redirected");
+  const resumableCheckpoint = readRecord(previousTask.checkpoint);
+  if (
+    (interventionKind === "redirect_after_cancel" && previousTask.status !== "canceled") ||
+    (interventionKind === "resume_from_checkpoint" &&
+      (previousTask.status !== "failed" || previousTask.error !== "execution_deadline_exceeded" || !resumableCheckpoint))
+  ) {
+    throw conflict("Task cannot be resumed from the requested checkpoint");
   }
   const previousPayload = readRecord(previousTask.payload) ?? {};
   const previousPrompt = getTaskPrompt(previousPayload).trim();
@@ -9554,7 +9714,7 @@ async function resolveTaskInterventionContext(
     throw conflict("Canceled task has no redirectable goal");
   }
   input.metadata.intervention = {
-    kind: "redirect_after_cancel",
+    kind: interventionKind,
     supersedesTaskId,
   };
   return {
@@ -9567,6 +9727,7 @@ async function resolveTaskInterventionContext(
       typeof previousTask.targetDeviceId === "string"
         ? previousTask.targetDeviceId
         : null,
+    checkpoint: interventionKind === "resume_from_checkpoint" ? resumableCheckpoint : null,
   };
 }
 
@@ -9692,6 +9853,7 @@ export async function createTask(
                 previousTitle: interventionContext.previousTitle,
                 previousTargetDeviceId:
                   interventionContext.previousTargetDeviceId,
+                checkpoint: interventionContext.checkpoint,
               },
             }
           : {}),
@@ -10984,6 +11146,13 @@ export async function createTask(
           sourceImageCount: sourceImages.length,
         })
       ) {
+        const requestVisualIntent = readRecord(runningMetadata.visualIntent);
+        if (
+          requestVisualIntent?.clientSurface === "native_ios" ||
+          requestVisualIntent?.cloudMediaConsentVersion != null
+        ) {
+          await assertCloudMediaConsent(app, input.userId);
+        }
         const startedAtMs = Date.now();
         const completedTask = await completeServerBrainTask(app, {
           taskId: runningTask.id,
@@ -13040,6 +13209,8 @@ export async function updateTaskFromRuntime(
      * bloğundaki adımlara eşliyor; gelmediğinde davranış eskisiyle aynıdır.
      */
     progress?: {
+      stepRevision?: number;
+      checkpoint?: Record<string, unknown>;
       activeStepId?: string;
       steps: { id: string; status: string }[];
     };
@@ -13083,6 +13254,14 @@ export async function updateTaskFromRuntime(
         operator: input.operator,
       }
     : input.result;
+  const authoritativeProgress = input.progress &&
+    Number.isInteger(input.progress.stepRevision) &&
+    Number(input.progress.stepRevision) > Number(ownedTask.stepRevision ?? 0) &&
+    input.progress.checkpoint &&
+    typeof input.progress.checkpoint === "object" &&
+    !Array.isArray(input.progress.checkpoint)
+      ? input.progress
+      : null;
   if (
     shouldSkipDuplicateRuntimeProgressUpdate({
       task: ownedTask,
@@ -13136,6 +13315,13 @@ export async function updateTaskFromRuntime(
       : {}),
     ...(runtimeResult !== undefined
       ? { resultBlobId: runtimeResultBlob?.blobId ?? null }
+      : {}),
+    ...(authoritativeProgress
+      ? {
+          lastProgressAt: new Date(),
+          stepRevision: authoritativeProgress.stepRevision,
+          checkpoint: authoritativeProgress.checkpoint,
+        }
       : {}),
   };
 
@@ -13197,6 +13383,23 @@ export async function updateTaskFromRuntime(
     storedArtifacts.map((artifact) =>
       shapePublicArtifactRecord(app, artifact, ownedTask.userId),
     ),
+  );
+  const ownedPayload = readRecord(ownedTask.payload) ?? {};
+  const ownedMetadata = readRecord(ownedPayload.metadata) ?? {};
+  const taskContract = readRecord(
+    ownedPayload.taskExecutionContract ?? ownedMetadata.taskExecutionContract,
+  );
+  const outputContract = readRecord(taskContract?.output);
+  const artifactRequired = outputContract?.artifactRequired === true;
+  const verification = readRecord(runtimeResult?.verification);
+  const runtimeVerified =
+    verification?.passed === true ||
+    verification?.verified === true ||
+    runtimeResult?.verified === true;
+  const goalVerified = input.status === "completed" && (
+    artifactRequired
+      ? shapedArtifacts.length > 0 && runtimeVerified
+      : runtimeVerified || runtimeResult?.ok === true
   );
 
   // Backend-owned user policy is read at the approval boundary, so a mode
@@ -13262,21 +13465,48 @@ export async function updateTaskFromRuntime(
   updatedTask = currentBeforePublish;
   await resequenceDeviceQueue(app, updatedTask.targetDeviceId);
 
-  await insertTaskEvent(app, {
-    taskId: ownedTask.id,
-    userId: ownedTask.userId,
-    status: input.status,
-    message: input.message,
-    payload: {
-      summary: input.summary,
-      error: input.error,
-      approvalRequest: input.approvalRequest,
-      normalizedApprovalRequest,
-      operator: input.operator,
-      artifactCount: shapedArtifacts.length,
-      artifacts: shapedArtifacts,
-    },
-  });
+  const transientProgressOnly = input.status === "running" &&
+    ownedTask.status === "running" &&
+    authoritativeProgress != null &&
+    input.message == null &&
+    input.summary == null &&
+    input.error == null &&
+    input.approvalRequest == null &&
+    input.result == null &&
+    input.operator == null &&
+    shapedArtifacts.length === 0;
+
+  if (!transientProgressOnly) {
+    await insertTaskEvent(app, {
+      taskId: ownedTask.id,
+      userId: ownedTask.userId,
+      status: input.status,
+      message: input.message,
+      payload: {
+        summary: input.summary,
+        error: input.error,
+        approvalRequest: input.approvalRequest,
+        normalizedApprovalRequest,
+        operator: input.operator,
+        artifactCount: shapedArtifacts.length,
+        artifacts: shapedArtifacts,
+      },
+    });
+  }
+
+  if (!transientProgressOnly) {
+    await syncGoalFromTaskLifecycle(app, {
+      userId: ownedTask.userId,
+      taskId: ownedTask.id,
+      goalId: typeof taskContract?.goalId === "string" ? taskContract.goalId : null,
+      status: input.status,
+      artifactIds: shapedArtifacts
+        .map((artifact) => typeof artifact.id === "string" ? artifact.id : "")
+        .filter(Boolean),
+      summary: input.summary ?? input.message ?? input.error ?? null,
+      verified: goalVerified,
+    }).catch(() => null);
+  }
 
   if (trustedIdempotentDesktopTask) {
     await insertTaskEvent(app, {
@@ -13386,7 +13616,7 @@ export async function updateTaskFromRuntime(
     }).catch(() => undefined);
   }
 
-  await publishTaskEvent(app, updatedTask, "task.updated", {
+  const publicTaskUpdate = {
     task: shapeTaskFeedItem(updatedTask),
     artifactCount: shapedArtifacts.length,
     // Canlı adım ilerlemesi olduğu gibi iletilir. `shapeTaskFeedItem` görev
@@ -13394,8 +13624,14 @@ export async function updateTaskFromRuntime(
     // raporunda geliyor. Bu yüzden ayrı bir alan olarak taşınır — mobil
     // `task`/`payload`/kök sarmallarının hepsini deniyor, yani buradan
     // okunabilir.
-    ...(input.progress ? { progress: input.progress } : {}),
-  });
+    ...(authoritativeProgress ? { progress: authoritativeProgress } : {}),
+  };
+  if (transientProgressOnly) {
+    publishCoalescedTaskProgress(app, updatedTask, publicTaskUpdate);
+  } else {
+    cancelPendingTaskProgress(app, updatedTask.id);
+    await publishTaskEvent(app, updatedTask, "task.updated", publicTaskUpdate);
+  }
 
   if (shapedArtifacts.length > 0) {
     await publishTaskEvent(app, updatedTask, "task.artifacts", {

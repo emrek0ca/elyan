@@ -51,6 +51,23 @@ export type RetrievalSearchResult = {
   updatedAt: Date;
 };
 
+export type KnowledgeSearchScope = "visible" | "system_corpus";
+
+function knowledgeVisibility(
+  userId: string,
+  scope: KnowledgeSearchScope | undefined,
+) {
+  return scope === "system_corpus"
+    ? and(
+        eq(knowledgeChunks.scope, "shared"),
+        sql`${knowledgeDocuments.metadata}->>'elyanCorpusPurpose' = 'knowledge'`,
+      )
+    : or(
+        eq(knowledgeChunks.scope, "shared"),
+        eq(knowledgeChunks.ownerUserId, userId),
+      );
+}
+
 /* Arama katmanı case-folding: i-ailesi tek harfe iner (İ/I/ı → i) — C daemon
  * tr_lower tablosuyla birebir. NOT: hashed embedding bucket'ları tokenlere
  * bağlı; ı içeren ESKİ kayıtlı vektörler bu tokenler için kısmen eşleşmez
@@ -489,6 +506,7 @@ async function searchKnowledgeLexical(
     userId: string;
     query: string;
     limit: number;
+    scope?: KnowledgeSearchScope;
   },
 ): Promise<RetrievalSearchResult[]> {
   const normalizedQuery = input.query.trim();
@@ -523,7 +541,7 @@ async function searchKnowledgeLexical(
     .where(
       and(
         eq(knowledgeDocuments.status, "ready"),
-        or(eq(knowledgeChunks.scope, "shared"), eq(knowledgeChunks.ownerUserId, input.userId)),
+        knowledgeVisibility(input.userId, input.scope),
         or(...lexicalClauses),
       ),
     )
@@ -550,6 +568,8 @@ async function searchKnowledgeHybrid(
     userId: string;
     query: string;
     limit: number;
+    scope?: KnowledgeSearchScope;
+    queryVector?: number[] | null;
   },
 ): Promise<RetrievalSearchResult[]> {
   // Storage embedding strategy:
@@ -560,10 +580,16 @@ async function searchKnowledgeHybrid(
   // so the upgrade is incremental and zero-downtime.
   const v2ColumnReady = await ensureSemanticV2Column(app);
   const semanticQueryVector = v2ColumnReady
-    ? await embedQueryForStorage(input.query, app.log, `user:${input.userId}`).catch(() => null)
+    ? input.queryVector === undefined
+      ? await embedQueryForStorage(input.query, app.log, `user:${input.userId}`).catch(() => null)
+      : input.queryVector
     : null;
   const hashVector = buildVectorSql(await buildEmbedding(input.query));
   const candidateLimit = Math.max(input.limit * 6, 24);
+  const visibilitySql =
+    input.scope === "system_corpus"
+      ? sql`kc.scope = 'shared' and kd.metadata->>'elyanCorpusPurpose' = 'knowledge'`
+      : sql`(kc.scope = 'shared' or kc.owner_user_id = ${input.userId})`;
 
   let rows: unknown;
   if (semanticQueryVector) {
@@ -589,7 +615,7 @@ async function searchKnowledgeHybrid(
       from knowledge_chunks kc
       inner join knowledge_documents kd on kd.id = kc.document_id
       where kd.status = 'ready'
-        and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
+        and (${visibilitySql})
         and (kc.embedding is not null or kc.embedding_v2 is not null)
       order by
         case
@@ -617,7 +643,7 @@ async function searchKnowledgeHybrid(
       from knowledge_chunks kc
       inner join knowledge_documents kd on kd.id = kc.document_id
       where kd.status = 'ready'
-        and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
+        and (${visibilitySql})
         and (kc.embedding is not null or kc.embedding_v2 is not null)
       order by kc.embedding <=> ${hashVector}
       limit ${candidateLimit}
@@ -688,6 +714,8 @@ export async function searchKnowledge(
     query: string;
     limit: number;
     semanticRerankReady?: boolean;
+    scope?: KnowledgeSearchScope;
+    queryVector?: number[] | null;
   },
 ) {
   const hybridReady = await canUseHybridRetrieval(app);

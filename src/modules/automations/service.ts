@@ -4,6 +4,7 @@ import { devices, taskAutomations, tasks } from "../../db/schema.js";
 import { conflict, badRequest, notFound } from "../../lib/errors.js";
 import { assessTaskOutcome } from "../tasks/outcome-verdict.js";
 import { asRecord as readRecord } from "../../lib/record.js";
+import { sendUserPush } from "../notifications/push-sender.js";
 
 export type TaskAutomationRow = typeof taskAutomations.$inferSelect;
 
@@ -155,6 +156,7 @@ function shapeAutomation(row: TaskAutomationRow) {
     failureCount: row.failureCount,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    resourceRevision: row.updatedAt.getTime(),
   };
 }
 
@@ -433,4 +435,12 @@ export async function settleAutomationTask(
       updatedAt: new Date(),
     })
     .where(eq(taskAutomations.id, automation.id));
+  await sendUserPush(app, {
+    userId: input.userId,
+    kind: paused ? "automation.failed" : "automation.completed",
+    title: paused ? "Otomasyon tamamlanamadı" : "Otomasyon tamamlandı",
+    body: "Ayrıntıları görmek için Elyan'ı açın.",
+    data: { automationId: automation.id, taskId: input.task.id },
+    collapseKey: `automation:${automation.id}`,
+  }).catch(() => undefined);
 }

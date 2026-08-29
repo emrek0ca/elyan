@@ -470,12 +470,17 @@ export const tasks = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    executionDeadlineAt: timestamp("execution_deadline_at", { withTimezone: true }),
+    lastProgressAt: timestamp("last_progress_at", { withTimezone: true }),
+    stepRevision: integer("step_revision").notNull().default(0),
+    checkpoint: jsonb("checkpoint"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     userIdx: index("tasks_user_idx").on(table.userId),
     targetDeviceIdx: index("tasks_target_device_idx").on(table.targetDeviceId),
     statusIdx: index("tasks_status_idx").on(table.status),
+    executionDeadlineIdx: index("tasks_execution_deadline_idx").on(table.status, table.executionDeadlineAt),
     idempotencyIdx: uniqueIndex("tasks_user_idempotency_key_uidx").on(table.userId, table.idempotencyKey),
   }),
 );

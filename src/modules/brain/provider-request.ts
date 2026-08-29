@@ -2,8 +2,8 @@ import type { ResolvedAttachmentContextVisionImage } from "./attachment-context.
 import type { ChatCompletionTool } from "./tool-schemas.js";
 import {
   ANALYTICAL_GENERATION_TEMPERATURE,
-  isReasoningChannelModel,
 } from "./generation-policy.js";
+import { resolveProviderModelCapabilities } from "./provider-capabilities.js";
 import type { SharedBrainProvider } from "./runtime.js";
 import {
   buildTurnEnvelopeSystemInstruction,
@@ -359,7 +359,7 @@ export function buildRequestBody(
           ["gemini", "groq", "openai", "openrouter"].includes(provider)
         ? { response_format: { type: "json_object" } }
         : {}),
-    ...(isReasoningChannelModel(model)
+    ...(resolveProviderModelCapabilities(provider, model).reasoningRequestControls
       ? {
           reasoning_format: reasoningPolicy === "visible" ? "parsed" : "hidden",
           reasoning_effort:

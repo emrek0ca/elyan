@@ -91,11 +91,34 @@ async function readBoundedJson(
   return JSON.parse(text) as unknown;
 }
 
+async function readBoundedText(
+  response: Response,
+  maxBytes: number,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return (await response.text()).slice(0, maxBytes);
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value?.byteLength ?? 0;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new FactProviderHttpError("payload_too_large");
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 export async function fetchFactJson(input: {
   providerId: FactProviderId;
   url: string;
   timeoutMs: number;
   maxBytes?: number;
+  headers?: Record<string, string>;
 }): Promise<Record<string, unknown> | unknown[]> {
   if (isFactProviderCircuitOpen(input.providerId)) {
     throw new FactProviderHttpError("circuit_open");
@@ -109,15 +132,14 @@ export async function fetchFactJson(input: {
       headers: {
         accept: "application/json",
         "user-agent": "Elyan/1.0",
+        ...input.headers,
       },
     });
     if (!response.ok) {
-      recordFactProviderFailure(input.providerId);
       throw new FactProviderHttpError(`http_${response.status}`);
     }
     const payload = await readBoundedJson(response, input.maxBytes ?? MAX_BODY_BYTES);
     if (payload === null || typeof payload !== "object") {
-      recordFactProviderFailure(input.providerId);
       throw new FactProviderHttpError("invalid_payload");
     }
     recordFactProviderSuccess(input.providerId);
@@ -130,6 +152,52 @@ export async function fetchFactJson(input: {
     recordFactProviderFailure(input.providerId);
     throw new FactProviderHttpError(
       error instanceof Error && error.name === "AbortError" ? "timeout" : "network_error",
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchFactText(input: {
+  providerId: FactProviderId;
+  url: string;
+  timeoutMs: number;
+  maxBytes?: number;
+  headers?: Record<string, string>;
+}): Promise<string> {
+  if (isFactProviderCircuitOpen(input.providerId)) {
+    throw new FactProviderHttpError("circuit_open");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(500, input.timeoutMs));
+  try {
+    const response = await fetch(input.url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        accept: "application/xml,text/xml,text/plain",
+        "user-agent": "Elyan/1.0",
+        ...input.headers,
+      },
+    });
+    if (!response.ok) {
+      throw new FactProviderHttpError(`http_${response.status}`);
+    }
+    const text = await readBoundedText(response, input.maxBytes ?? MAX_BODY_BYTES);
+    recordFactProviderSuccess(input.providerId);
+    return text;
+  } catch (error) {
+    if (error instanceof FactProviderHttpError) {
+      if (error.reason !== "circuit_open") {
+        recordFactProviderFailure(input.providerId);
+      }
+      throw error;
+    }
+    recordFactProviderFailure(input.providerId);
+    throw new FactProviderHttpError(
+      error instanceof Error && error.name === "AbortError"
+        ? "timeout"
+        : "network_error",
     );
   } finally {
     clearTimeout(timer);

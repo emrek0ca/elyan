@@ -65,6 +65,7 @@ import { createMobilePushDispatcher } from "../modules/mobile/push.js";
 import { nlpDaemon } from "../lib/nlp-daemon.js";
 import { getPerfSnapshot, startPerfTelemetry } from "../lib/perf-telemetry.js";
 import { primeFactSelection } from "../modules/facts/select.js";
+import { primeBrainCorpusSelection } from "../modules/brain/corpus.js";
 import { asRecord as readRecord } from "../lib/record.js";
 
 function compactRealtimePayload(value: unknown): Record<string, unknown> {
@@ -569,8 +570,14 @@ export async function buildApp(envInput?: AppEnv) {
       // açılıyor ve tüm yeniden denemeler o cooldown'ın içine düşüyordu.
       // Yukarıdaki yorumun uyardığı hata: ısıtma sırası tek sahipli olmalı.
       if (factSelectionWarmupEnabled) {
-        const factCatalogReady = await primeFactSelection(app.log);
-        app.log.info({ ready: factCatalogReady }, "fact selection catalog warmed");
+        const [factCatalogReady, corpusCatalogReady] = await Promise.all([
+          primeFactSelection(app.log),
+          primeBrainCorpusSelection(app.log),
+        ]);
+        app.log.info(
+          { factCatalogReady, corpusCatalogReady },
+          "knowledge routing catalogs warmed",
+        );
       }
     })
     .catch(() => null);

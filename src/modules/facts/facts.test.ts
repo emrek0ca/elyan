@@ -11,6 +11,7 @@ import {
 } from "./http.js";
 import { FACT_PROVIDERS, getFactProvider } from "./registry.js";
 import { buildFactDirectAnswer } from "./direct-answer.js";
+import { buildFactOutputBlocks } from "./blocks.js";
 
 function appWith(config: Record<string, unknown>): FastifyInstance {
   return { config, log: { warn() {}, debug() {} } } as unknown as FastifyInstance;
@@ -56,8 +57,100 @@ test("every registered provider exposes a usable semantic catalog entry", () => 
       assert.ok(intent.split(" ").length >= 3, `${provider.id}: "${intent}" too short`);
     }
     assert.ok(provider.ttlMs > 0 && provider.timeoutMs > 0);
+    assert.ok(provider.authority.length > 2);
+    assert.ok(["allowed", "conditional"].includes(provider.commercialUse));
+    assert.equal(typeof provider.allowStale, "boolean");
     assert.equal(getFactProvider(provider.id), provider);
   }
+});
+
+test("market providers never allow stale values", () => {
+  for (const id of [
+    "alpha_vantage_metals",
+    "tcmb_fx",
+    "frankfurter",
+    "coingecko",
+  ] as const) {
+    assert.equal(getFactProvider(id)?.allowStale, false, id);
+  }
+});
+
+test("metals provider recognizes gold and a bounded history request", () => {
+  const provider = getFactProvider("alpha_vantage_metals");
+  assert.ok(provider);
+  assert.deepEqual(provider.extract("Güncel altın fiyatı nedir?"), {
+    symbol: "GOLD",
+    ticker: "XAU",
+    label: "Altın",
+    history: false,
+  });
+  assert.deepEqual(provider.extract("Altının son 30 gününü grafik yap"), {
+    symbol: "GOLD",
+    ticker: "XAU",
+    label: "Altın",
+    history: true,
+  });
+});
+
+test("FRED provider stays scoped to United States macro questions", () => {
+  const provider = getFactProvider("fred");
+  assert.ok(provider);
+  assert.deepEqual(provider.extract("ABD enflasyonu kaç?"), {
+    metric: {
+      seriesId: "CPIAUCSL",
+      label: "ABD tüketici enflasyonu",
+      unit: "% yıllık",
+      aliases: ["enflasyon", "inflation", "cpi"],
+      transform: "pc1",
+    },
+  });
+  assert.equal(provider.extract("Türkiye enflasyonu kaç?"), null);
+});
+
+test("EVDS provider handles only bounded historical currency series", () => {
+  const provider = getFactProvider("tcmb_evds");
+  assert.ok(provider);
+  assert.deepEqual(provider.extract("Doların son 30 gününü tablo yap"), {
+    code: "USD",
+    days: 30,
+  });
+  assert.deepEqual(provider.extract("Euro tarihsel kur grafiği"), {
+    code: "EUR",
+    days: 30,
+  });
+  assert.equal(provider.extract("Dolar kaç TL?"), null);
+});
+
+test("typed metal series produces deterministic table and chart blocks", () => {
+  const answer = {
+    providerId: "alpha_vantage_metals" as const,
+    dataClass: "daily" as const,
+    snippet: "XAU series",
+    directAnswer: "Altın serisi hazır.",
+    citation: {
+      title: "Gold",
+      url: "https://www.alphavantage.co/documentation/",
+      sourceHost: "alphavantage.co",
+      observedAt: "2026-08-29T12:00:00.000Z",
+    },
+    values: {
+      symbol: "XAU",
+      series: [
+        { date: "2026-08-28", usdPerOunce: 3400.5 },
+        { date: "2026-08-29", usdPerOunce: 3410.25 },
+      ],
+    },
+    confidence: 0.96,
+    ttlMs: 30_000,
+  };
+  const blocks = buildFactOutputBlocks({
+    answer,
+    tableRequested: true,
+    chartRequested: true,
+  }) as Array<{ type?: string; rows?: unknown[]; values?: unknown[] }>;
+  assert.deepEqual(blocks.map((block) => block.type), ["table", "chart"]);
+  assert.equal(blocks[0]?.rows?.length, 2);
+  assert.deepEqual(blocks[1]?.values, [3400.5, 3410.25]);
 });
 
 test("provider extract returns null when the turn lacks the entity", () => {

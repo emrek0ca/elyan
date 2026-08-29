@@ -9,6 +9,7 @@ export const CONSENT_VERSIONS = {
   privacy_policy: "2026-07-04",
   ai_data_sharing: "2026-07-04",
   cloud_speech: "2026-07-28",
+  cloud_media: "2026-08-28",
 } as const;
 
 export const consentTypeSchema = z.enum([
@@ -16,6 +17,7 @@ export const consentTypeSchema = z.enum([
   "privacy_policy",
   "ai_data_sharing",
   "cloud_speech",
+  "cloud_media",
 ]);
 
 export type ConsentType = z.infer<typeof consentTypeSchema>;
@@ -56,6 +58,19 @@ export function createCloudSpeechConsentRequiredError(): AppError {
   );
 }
 
+export function createCloudMediaConsentRequiredError(): AppError {
+  return new AppError(
+    403,
+    "CLOUD_MEDIA_CONSENT_REQUIRED",
+    "Görseli barındırılan modelde işlemek için açık izin gerekiyor.",
+    {
+      consentType: "cloud_media",
+      consentVersion: CONSENT_VERSIONS.cloud_media,
+      recipient: "Elyan hosted image processing",
+    },
+  );
+}
+
 async function readLatestConsent(
   app: FastifyInstance,
   userId: string,
@@ -85,6 +100,7 @@ function shapeConsentStatus(
     required: type === "terms_of_service" || type === "privacy_policy",
     requiredForCloudAI: type === "ai_data_sharing",
     requiredForCloudSpeech: type === "cloud_speech",
+    requiredForCloudMedia: type === "cloud_media",
     granted,
     version: CONSENT_VERSIONS[type],
     grantedAt: row?.grantedAt?.toISOString?.() ?? null,
@@ -93,17 +109,19 @@ function shapeConsentStatus(
 }
 
 export async function getConsentStatus(app: FastifyInstance, userId: string) {
-  const [terms, privacy, ai, cloudSpeech] = await Promise.all([
+  const [terms, privacy, ai, cloudSpeech, cloudMedia] = await Promise.all([
     readLatestConsent(app, userId, "terms_of_service"),
     readLatestConsent(app, userId, "privacy_policy"),
     readLatestConsent(app, userId, "ai_data_sharing"),
     readLatestConsent(app, userId, "cloud_speech"),
+    readLatestConsent(app, userId, "cloud_media"),
   ]);
   return {
     termsOfService: shapeConsentStatus("terms_of_service", terms),
     privacyPolicy: shapeConsentStatus("privacy_policy", privacy),
     aiDataSharing: shapeConsentStatus("ai_data_sharing", ai),
     cloudSpeech: shapeConsentStatus("cloud_speech", cloudSpeech),
+    cloudMedia: shapeConsentStatus("cloud_media", cloudMedia),
   };
 }
 
@@ -224,6 +242,17 @@ export async function assertCloudSpeechConsent(
   const row = await readLatestConsent(app, userId, "cloud_speech");
   if (!shapeConsentStatus("cloud_speech", row).granted) {
     throw createCloudSpeechConsentRequiredError();
+  }
+  return true;
+}
+
+export async function assertCloudMediaConsent(
+  app: FastifyInstance,
+  userId: string,
+): Promise<true> {
+  const row = await readLatestConsent(app, userId, "cloud_media");
+  if (!shapeConsentStatus("cloud_media", row).granted) {
+    throw createCloudMediaConsentRequiredError();
   }
   return true;
 }

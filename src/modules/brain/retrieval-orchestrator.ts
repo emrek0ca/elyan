@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import {
   searchKnowledge as searchKnowledgeCore,
+  type KnowledgeSearchScope,
   type RetrievalSearchResult,
 } from "./retrieval.js";
 import {
@@ -154,11 +155,20 @@ export function decomposeQuery(query: string): string[] {
 /** BM25 sınıfı keyword arama: Postgres FTS, turkish → simple fallback. */
 async function searchKnowledgeKeyword(
   app: FastifyInstance,
-  input: { userId: string; query: string; limit: number },
+  input: {
+    userId: string;
+    query: string;
+    limit: number;
+    scope?: KnowledgeSearchScope;
+  },
 ): Promise<RetrievalSearchResult[]> {
   const terms = keyTerms(input.query);
   if (terms.length === 0) return [];
   const tsQuery = terms.join(" ");
+  const visibilitySql =
+    input.scope === "system_corpus"
+      ? sql`kc.scope = 'shared' and kd.metadata->>'elyanCorpusPurpose' = 'knowledge'`
+      : sql`(kc.scope = 'shared' or kc.owner_user_id = ${input.userId})`;
   const run = async (config: string) => {
     const rows = await app.db.execute(sql`
       select
@@ -181,7 +191,7 @@ async function searchKnowledgeKeyword(
       from knowledge_chunks kc
       inner join knowledge_documents kd on kd.id = kc.document_id
       where kd.status = 'ready'
-        and (kc.scope = 'shared' or kc.owner_user_id = ${input.userId})
+        and (${visibilitySql})
         -- İfade 0044 GIN indeksiyle birebir aynı (content-only) — title
         -- eşleşmesini lexical/vector kolları zaten kapsıyor.
         and to_tsvector(${config}::regconfig, coalesce(kc.content, ''))
@@ -494,6 +504,8 @@ export async function searchKnowledge(
     query: string;
     limit: number;
     evidenceRequired?: boolean;
+    scope?: KnowledgeSearchScope;
+    queryVector?: number[] | null;
     neuralPolicy?: {
       neuralReady?: boolean;
       embeddingReady?: boolean;
@@ -520,10 +532,11 @@ export async function searchKnowledge(
 
   const [coreRuns, keywordRuns] = await Promise.all([
     Promise.all(
-      hops.map((hop) =>
+      hops.map((hop, index) =>
         searchKnowledgeCore(app, {
           ...input,
           query: hop,
+          queryVector: index === 0 ? input.queryVector : undefined,
           semanticRerankReady: semanticRerankAdmitted,
         }).catch(() => null),
       ),
@@ -562,6 +575,7 @@ export async function searchKnowledge(
         searchKnowledgeCore(app, {
           ...input,
           query: reformulated,
+          queryVector: undefined,
           semanticRerankReady: semanticRerankAdmitted,
         }).catch(() => null),
         searchKnowledgeKeyword(app, { ...input, query: reformulated }).catch(

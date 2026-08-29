@@ -43,6 +43,12 @@ const optionalBlankableUrl = () =>
     return value;
   }, z.string().url().optional());
 
+const optionalBlankableEmail = () =>
+  z.preprocess((value) => {
+    if (typeof value === "string" && value.trim() === "") return undefined;
+    return value;
+  }, z.string().email().optional());
+
 const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -179,6 +185,7 @@ const envSchema = z.object({
   // Tipli olgu sağlayıcıları (hava, hava kalitesi, kur, kripto, yerel saat,
   // deprem, resmî tatil). Kapatıldığında tüm bu turlar web aramasına düşer.
   ELYAN_FACT_PROVIDERS_ENABLED: booleanFlag(true),
+  ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED: booleanFlag(false),
   // SIFIR-TOKEN ŞERİDİ: sağlayıcı tipli ve tam bir cevap döndürdüğünde yanıt
   // model çağrılmadan, deterministik cümleyle basılır. Sesi şablonlaştırdığı
   // için varsayılan KAPALI; gecikme tabanı temizlendikten sonra açılmalı.
@@ -328,6 +335,11 @@ const envSchema = z.object({
   GROQ_COMPOUND_SEARCH_COUNTRY: z.string().optional(),
   GROQ_COMPOUND_INCLUDE_DOMAINS: z.string().optional(),
   GROQ_COMPOUND_EXCLUDE_DOMAINS: z.string().optional(),
+  TCMB_EVDS_API_KEY: z.string().optional(),
+  ALPHA_VANTAGE_API_KEY: z.string().optional(),
+  FRED_API_KEY: z.string().optional(),
+  COINGECKO_DEMO_API_KEY: z.string().optional(),
+  CROSSREF_MAILTO: optionalBlankableEmail(),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_BASE_URL: z
     .string()
@@ -766,6 +778,11 @@ export type AppEnv = ParsedEnv & {
   GROQ_COMPOUND_SEARCH_COUNTRY?: string;
   GROQ_COMPOUND_INCLUDE_DOMAINS?: string;
   GROQ_COMPOUND_EXCLUDE_DOMAINS?: string;
+  TCMB_EVDS_API_KEY?: string;
+  ALPHA_VANTAGE_API_KEY?: string;
+  FRED_API_KEY?: string;
+  COINGECKO_DEMO_API_KEY?: string;
+  CROSSREF_MAILTO?: string;
   GEMINI_API_KEY: string;
   GEMINI_BASE_URL: string;
   GEMINI_INTERACTIONS_BASE_URL: string;
@@ -837,6 +854,7 @@ export type AppEnv = ParsedEnv & {
   ELYAN_SHARED_BRAIN_PLANNING_MODEL: string;
   ELYAN_SHARED_BRAIN_KEEP_ALIVE: string;
   ELYAN_WEB_GROUNDING_ENABLED: boolean;
+  ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED: boolean;
   ELYAN_WEB_SEARCH_BASE_URL: string;
   ELYAN_WEB_GROUNDING_MAX_RESULTS: number;
   ELYAN_WEB_GROUNDING_TIMEOUT_MS: number;
@@ -1022,6 +1040,11 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     GROQ_COMPOUND_SEARCH_COUNTRY: parsed.GROQ_COMPOUND_SEARCH_COUNTRY,
     GROQ_COMPOUND_INCLUDE_DOMAINS: parsed.GROQ_COMPOUND_INCLUDE_DOMAINS,
     GROQ_COMPOUND_EXCLUDE_DOMAINS: parsed.GROQ_COMPOUND_EXCLUDE_DOMAINS,
+    TCMB_EVDS_API_KEY: parsed.TCMB_EVDS_API_KEY,
+    ALPHA_VANTAGE_API_KEY: parsed.ALPHA_VANTAGE_API_KEY,
+    FRED_API_KEY: parsed.FRED_API_KEY,
+    COINGECKO_DEMO_API_KEY: parsed.COINGECKO_DEMO_API_KEY,
+    CROSSREF_MAILTO: parsed.CROSSREF_MAILTO,
     GEMINI_API_KEY: parsed.GEMINI_API_KEY ?? "",
     GEMINI_BASE_URL:
       parsed.GEMINI_BASE_URL ??
@@ -1076,6 +1099,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     ELYAN_SHARED_BRAIN_PLANNING_MODEL: parsed.ELYAN_SHARED_BRAIN_PLANNING_MODEL,
     ELYAN_SHARED_BRAIN_KEEP_ALIVE: parsed.ELYAN_SHARED_BRAIN_KEEP_ALIVE,
     ELYAN_WEB_GROUNDING_ENABLED: parsed.ELYAN_WEB_GROUNDING_ENABLED,
+    ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED:
+      parsed.ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED,
     ELYAN_WEB_SEARCH_BASE_URL: parsed.ELYAN_WEB_SEARCH_BASE_URL,
     ELYAN_WEB_GROUNDING_MAX_RESULTS: parsed.ELYAN_WEB_GROUNDING_MAX_RESULTS,
     ELYAN_WEB_GROUNDING_TIMEOUT_MS: parsed.ELYAN_WEB_GROUNDING_TIMEOUT_MS,

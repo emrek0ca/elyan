@@ -80,6 +80,23 @@ test("buildRequestBody caps high reasoning effort when the token budget is tight
   assert.equal(body.reasoning_effort, "medium");
 });
 
+test("buildRequestBody never sends unsupported reasoning controls to Compound", () => {
+  const body = buildRequestBody(
+    "groq",
+    "groq/compound-mini",
+    [{ role: "user", content: "Güncel altın fiyatını bul" }],
+    1024,
+    undefined,
+    false,
+    [],
+    "hidden",
+    "high",
+  ) as Record<string, unknown>;
+
+  assert.equal("reasoning_format" in body, false);
+  assert.equal("reasoning_effort" in body, false);
+});
+
 test("buildRequestBody requests schema-constrained Gemini output", () => {
   const schema = {
     type: "object",

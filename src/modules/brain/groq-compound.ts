@@ -140,7 +140,36 @@ export function withGroqCompoundGuidance(
   model: unknown,
 ): SharedBrainConversationMessage[] {
   if (!isGroqCompoundModel(model)) return messages;
-  return [...messages, { role: "system", content: COMPOUND_EVIDENCE_DIRECTIVE }];
+  const systemContent = messages
+    .filter((message) => message.role === "system")
+    .map((message) => compactText(message.content))
+    .filter(Boolean)
+    .join("\n\n");
+  const conversation = messages.filter((message) => message.role !== "system");
+  let lastUserIndex = -1;
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    if (conversation[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const orderedConversation =
+    lastUserIndex >= 0 && lastUserIndex !== conversation.length - 1
+      ? [
+          ...conversation.slice(0, lastUserIndex),
+          ...conversation.slice(lastUserIndex + 1),
+          conversation[lastUserIndex],
+        ]
+      : conversation;
+  return [
+    {
+      role: "system",
+      content: systemContent.includes(COMPOUND_EVIDENCE_DIRECTIVE)
+        ? systemContent
+        : [systemContent, COMPOUND_EVIDENCE_DIRECTIVE].filter(Boolean).join("\n\n"),
+    },
+    ...orderedConversation,
+  ];
 }
 
 /**
@@ -151,6 +180,7 @@ export function withGroqCompoundGuidance(
 export function buildGroqCompoundRequestExtensions(
   config: GroqCompoundConfigSource,
   model: unknown,
+  options: { requiresComputation?: boolean } = {},
 ): Record<string, unknown> {
   if (!isGroqCompoundModel(model)) return {};
 
@@ -172,7 +202,13 @@ export function buildGroqCompoundRequestExtensions(
     searchSettings.country = country;
   }
 
-  if (Object.keys(searchSettings).length === 0) return {};
+  const enabledTools = isGroqCompoundModel(model) && compactText(model).includes("mini")
+    ? ["web_search"]
+    : [
+        "web_search",
+        "visit_website",
+        ...(options.requiresComputation === true ? ["code_interpreter"] : []),
+      ];
   // `search_settings` GÖVDENİN KÖKÜNDE olmalı.
   //
   // Eskiden `compound_custom.search_settings` altında gönderiliyordu ve Groq
@@ -180,12 +216,25 @@ export function buildGroqCompoundRequestExtensions(
   // döndürmüyordu, yani ayarın işe yaramadığı fark edilemiyordu. Kökte
   // gönderildiğinde aynı geçersiz değer 400 veriyor, yani gerçekten okunuyor.
   // Sonuç: ülke/alan-adı filtreleri bugüne kadar ölü konfigürasyondu.
-  return { search_settings: searchSettings };
+  return {
+    ...(Object.keys(searchSettings).length > 0
+      ? { search_settings: searchSettings }
+      : {}),
+    compound_custom: {
+      tools: {
+        enabled_tools: enabledTools,
+      },
+    },
+  };
 }
 
 export type GroqCompoundCitation = {
   title: string;
   url: string;
+  snippet?: string;
+  observedAt?: string;
+  toolType?: string;
+  query?: string;
 };
 
 export type GroqCompoundEvidence = {
@@ -204,10 +253,55 @@ function readExecutedTools(message: Record<string, unknown>): unknown[] {
 function collectCitationsFromOutput(
   output: unknown,
   citations: GroqCompoundCitation[],
+  context: { toolType?: string; query?: string } = {},
 ): void {
+  if (typeof output === "string") {
+    const urls = output.match(/https?:\/\/[^\s<>{}\[\]"']+/giu) ?? [];
+    for (const rawUrl of urls) {
+      const url = rawUrl.replace(/[),.;:!?]+$/u, "").slice(0, 2048);
+      if (!url) continue;
+      const offset = output.indexOf(rawUrl);
+      const before = output.slice(Math.max(0, offset - 180), offset);
+      const title = compactText(before.split(/\r?\n/u).at(-1)) || url;
+      const nearby = compactText(
+        output.slice(Math.max(0, offset - 240), Math.min(output.length, offset + rawUrl.length + 360)),
+      );
+      const observedAt = normalizeEvidenceTimestamp(
+        nearby.match(/\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b/u)?.[0],
+      );
+      citations.push({
+        title: title.slice(0, 240),
+        url,
+        ...(nearby ? { snippet: nearby.slice(0, 700) } : {}),
+        ...(observedAt ? { observedAt } : {}),
+        ...context,
+      });
+    }
+    return;
+  }
   if (!output || typeof output !== "object") return;
   const record = output as Record<string, unknown>;
-  const buckets = [record.results, record.search_results, record.citations];
+  const buckets = [
+    record.results,
+    record.search_results,
+    record.citations,
+    record.sources,
+  ];
+  const directUrl = compactText(record.url ?? record.link);
+  if (directUrl) {
+    const title = compactText(record.title ?? record.name) || directUrl;
+    const snippet = compactText(
+      record.snippet ?? record.content ?? record.description ?? record.text,
+    );
+    const observedAt = readEvidenceTimestamp(record);
+    citations.push({
+      title: title.slice(0, 240),
+      url: directUrl.slice(0, 2048),
+      ...(snippet ? { snippet: snippet.slice(0, 700) } : {}),
+      ...(observedAt ? { observedAt } : {}),
+      ...context,
+    });
+  }
   for (const bucket of buckets) {
     if (!Array.isArray(bucket)) continue;
     for (const entry of bucket) {
@@ -216,9 +310,56 @@ function collectCitationsFromOutput(
       const url = compactText(item.url ?? item.link);
       if (!url) continue;
       const title = compactText(item.title ?? item.name) || url;
-      citations.push({ title: title.slice(0, 240), url: url.slice(0, 2048) });
+      const snippet = compactText(
+        item.snippet ?? item.content ?? item.description ?? item.text,
+      );
+      const observedAt = readEvidenceTimestamp(item);
+      citations.push({
+        title: title.slice(0, 240),
+        url: url.slice(0, 2048),
+        ...(snippet ? { snippet: snippet.slice(0, 700) } : {}),
+        ...(observedAt ? { observedAt } : {}),
+        ...context,
+      });
     }
   }
+}
+
+function normalizeEvidenceTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const numeric = typeof value === "number" ? value : Number(value);
+  const parsed = Number.isFinite(numeric) && String(value).trim().length <= 13
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1_000 : numeric)
+    : new Date(String(value));
+  const time = parsed.getTime();
+  if (
+    !Number.isFinite(time) ||
+    parsed.getUTCFullYear() < 1990 ||
+    time > Date.now() + 24 * 60 * 60_000
+  ) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+function readEvidenceTimestamp(record: Record<string, unknown>): string | null {
+  for (const key of [
+    "observedAt",
+    "observed_at",
+    "publishedAt",
+    "published_at",
+    "publishedDate",
+    "published_date",
+    "last_updated_at",
+    "lastUpdatedAt",
+    "timestamp",
+    "date",
+    "time",
+  ]) {
+    const normalized = normalizeEvidenceTimestamp(record[key]);
+    if (normalized) return normalized;
+  }
+  return null;
 }
 
 function collectFromExecutedTools(
@@ -233,31 +374,68 @@ function collectFromExecutedTools(
     const toolRecord = tool as Record<string, unknown>;
     const type = compactText(toolRecord.type ?? toolRecord.name);
     if (type) toolsUsed.add(type.toLowerCase());
+    let toolQuery = "";
     const args = toolRecord.arguments;
     if (typeof args === "string" && args.trim()) {
       try {
         const parsed = JSON.parse(args) as Record<string, unknown>;
         const query = compactText(parsed.query ?? parsed.q);
-        if (query) searchQueries.push(query.slice(0, 240));
+        if (query) {
+          toolQuery = query.slice(0, 240);
+          searchQueries.push(toolQuery);
+        }
       } catch {
-        // arguments düz metinse sorgu olarak alma; gürültüyü önle.
+        const query = compactText(
+          args.match(/(?:query|q)\s*[:=]\s*["']?([^\n"']+)/iu)?.[1],
+        );
+        if (query) {
+          toolQuery = query.slice(0, 240);
+          searchQueries.push(toolQuery);
+        }
       }
     } else if (args && typeof args === "object") {
       const query = compactText((args as Record<string, unknown>).query);
-      if (query) searchQueries.push(query.slice(0, 240));
+      if (query) {
+        toolQuery = query.slice(0, 240);
+        searchQueries.push(toolQuery);
+      }
     }
-    collectCitationsFromOutput(toolRecord.output, citations);
-    collectCitationsFromOutput(toolRecord.search_results, citations);
+    const context = {
+      ...(type ? { toolType: type.toLowerCase() } : {}),
+      ...(toolQuery ? { query: toolQuery } : {}),
+    };
+    collectCitationsFromOutput(toolRecord.output, citations, context);
+    collectCitationsFromOutput(toolRecord.search_results, citations, context);
+    collectCitationsFromOutput(toolRecord, citations, context);
   }
 }
 
 function dedupeCitations(citations: GroqCompoundCitation[]): GroqCompoundCitation[] {
-  const seenUrls = new Set<string>();
-  return citations.filter((citation) => {
-    if (seenUrls.has(citation.url)) return false;
-    seenUrls.add(citation.url);
-    return true;
-  });
+  const byUrl = new Map<string, GroqCompoundCitation>();
+  for (const citation of citations) {
+    const current = byUrl.get(citation.url);
+    if (!current) {
+      byUrl.set(citation.url, citation);
+      continue;
+    }
+    byUrl.set(citation.url, {
+      ...current,
+      ...(citation.title.length > current.title.length
+        ? { title: citation.title }
+        : {}),
+      ...(!current.snippet && citation.snippet
+        ? { snippet: citation.snippet }
+        : {}),
+      ...(!current.observedAt && citation.observedAt
+        ? { observedAt: citation.observedAt }
+        : {}),
+      ...(!current.toolType && citation.toolType
+        ? { toolType: citation.toolType }
+        : {}),
+      ...(!current.query && citation.query ? { query: citation.query } : {}),
+    });
+  }
+  return [...byUrl.values()];
 }
 
 /**

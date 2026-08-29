@@ -7,8 +7,17 @@ import { knowledgeChunks, knowledgeDocuments } from "../../db/schema.js";
 import { indexKnowledgeChunksForDocument } from "./retrieval.js";
 import { nlpDaemon } from "../../lib/nlp-daemon.js";
 import { collapseWhitespace as compactText } from "../../lib/text.js";
+import {
+  embedQueryForStorage,
+  embedTextsForStorage,
+} from "./semantic-embedder.js";
+import {
+  searchKnowledge as searchKnowledgeOrchestrated,
+  type OrchestratedRetrieval,
+} from "./retrieval-orchestrator.js";
+import { retrievalResultsToEvidencePacket } from "./evidence-packet.js";
 
-export const ELYAN_BRAIN_CORPUS_VERSION = "2026-06-v1";
+export const ELYAN_BRAIN_CORPUS_VERSION = "2026-08-v2";
 
 export type BrainCorpusDomain =
   | "memory"
@@ -18,7 +27,11 @@ export type BrainCorpusDomain =
   | "language"
   | "data"
   | "reasoning"
-  | "safety";
+  | "safety"
+  | "product"
+  | "onboarding"
+  | "support"
+  | "tasks";
 
 type BrainCorpusSource = {
   id: string;
@@ -27,6 +40,8 @@ type BrainCorpusSource = {
   fileName: string;
   tags: string[];
   priority: number;
+  purpose: "policy" | "knowledge";
+  intents: string[];
 };
 
 export type BrainCorpusDocumentManifest = BrainCorpusSource & {
@@ -44,6 +59,8 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "memory.md",
     tags: ["memory", "episodic", "facts", "profile", "retention"],
     priority: 90,
+    purpose: "policy",
+    intents: [],
   },
   {
     id: "elyan.brain.skills",
@@ -52,6 +69,8 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "skills.md",
     tags: ["skills", "routing", "tools", "attachments", "desktop-runtime"],
     priority: 88,
+    purpose: "policy",
+    intents: [],
   },
   {
     id: "elyan.brain.design",
@@ -60,6 +79,8 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "design.md",
     tags: ["design", "website", "pdf", "presentation", "visual-output"],
     priority: 86,
+    purpose: "policy",
+    intents: [],
   },
   {
     id: "elyan.brain.code",
@@ -68,6 +89,8 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "code.md",
     tags: ["code", "debug", "tests", "architecture", "refactor"],
     priority: 86,
+    purpose: "policy",
+    intents: [],
   },
   {
     id: "elyan.brain.language",
@@ -76,6 +99,8 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "language.md",
     tags: ["language", "turkish", "english", "translation", "writing"],
     priority: 82,
+    purpose: "policy",
+    intents: [],
   },
   {
     id: "elyan.brain.data",
@@ -84,6 +109,8 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "data.md",
     tags: ["data", "documents", "tables", "charts", "citations"],
     priority: 84,
+    purpose: "policy",
+    intents: [],
   },
   {
     id: "elyan.brain.reasoning",
@@ -92,6 +119,8 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "reasoning.md",
     tags: ["reasoning", "planning", "verification", "uncertainty"],
     priority: 84,
+    purpose: "policy",
+    intents: [],
   },
   {
     id: "elyan.brain.safety",
@@ -100,8 +129,312 @@ const CORPUS_SOURCES: BrainCorpusSource[] = [
     fileName: "safety.md",
     tags: ["safety", "privacy", "permissions", "boundary", "disclosure"],
     priority: 92,
+    purpose: "policy",
+    intents: [],
+  },
+  {
+    id: "elyan.knowledge.product",
+    domain: "product",
+    title: "Elyan Product Architecture",
+    fileName: "product.md",
+    tags: ["elyan", "mobile", "backend", "desktop", "local-first", "privacy"],
+    priority: 98,
+    purpose: "knowledge",
+    intents: [
+      "Elyan nedir ve nasıl çalışır?",
+      "Elyan masaüstü ne işe yarar?",
+      "Mobil uygulama ile masaüstü arasındaki fark nedir?",
+      "Elyan özel verilerimi nerede işler?",
+    ],
+  },
+  {
+    id: "elyan.knowledge.onboarding",
+    domain: "onboarding",
+    title: "Elyan Onboarding Guide",
+    fileName: "onboarding.md",
+    tags: ["başlangıç", "eşleştirme", "cihaz", "izin", "ilk görev"],
+    priority: 96,
+    purpose: "knowledge",
+    intents: [
+      "Elyan'ı ilk kez nasıl kullanırım?",
+      "Masaüstü cihazımı nasıl eşleştiririm?",
+      "Mobil uygulamadan nasıl görev veririm?",
+      "İzin ve onay kartları nasıl çalışır?",
+    ],
+  },
+  {
+    id: "elyan.knowledge.support",
+    domain: "support",
+    title: "Elyan Support Guide",
+    fileName: "support.md",
+    tags: ["destek", "bağlantı", "görev", "bekliyor", "hata", "artifact"],
+    priority: 96,
+    purpose: "knowledge",
+    intents: [
+      "Masaüstü neden bağlı görünmüyor?",
+      "Görev neden bekliyor?",
+      "Üretilen dosyayı nereden indiririm?",
+      "Bir görev başarısız olduğunda ne yapmalıyım?",
+    ],
+  },
+  {
+    id: "elyan.knowledge.tasks",
+    domain: "tasks",
+    title: "Elyan Task Examples",
+    fileName: "tasks.md",
+    tags: ["örnek", "görev", "belge", "araştırma", "otomasyon", "çıktı"],
+    priority: 94,
+    purpose: "knowledge",
+    intents: [
+      "Elyan'a nasıl iyi görev verilir?",
+      "Belge veya tablo istemek için nasıl yazmalıyım?",
+      "Hangi görevleri sunucu yapar, hangilerini masaüstü yapar?",
+      "Görev sonucunu nasıl doğrularım?",
+    ],
   },
 ];
+
+export type BrainCorpusSelection = {
+  domain: BrainCorpusDomain;
+  score: number;
+  source: "semantic" | "registry";
+};
+
+const KNOWLEDGE_CORPUS_SOURCES = CORPUS_SOURCES.filter(
+  (source) => source.purpose === "knowledge",
+);
+const CORPUS_SEMANTIC_THRESHOLD = 0.82;
+const CORPUS_SEMANTIC_MARGIN = 0.012;
+let corpusIntentVectors: Array<{
+  source: BrainCorpusSource;
+  vectors: number[][];
+}> | null = null;
+let corpusIntentVectorsPromise: Promise<void> | null = null;
+
+function cosine(left: number[], right: number[]): number {
+  let dot = 0;
+  for (let index = 0; index < left.length && index < right.length; index += 1) {
+    dot += left[index] * right[index];
+  }
+  return dot;
+}
+
+async function ensureCorpusIntentVectors(
+  logger?: FastifyInstance["log"],
+): Promise<void> {
+  if (corpusIntentVectors) return;
+  if (!corpusIntentVectorsPromise) {
+    corpusIntentVectorsPromise = (async () => {
+      const built: Array<{ source: BrainCorpusSource; vectors: number[][] }> = [];
+      for (const source of KNOWLEDGE_CORPUS_SOURCES) {
+        const vectors = await embedTextsForStorage(
+          source.intents,
+          logger,
+          `corpus:intents:${source.id}`,
+          60_000,
+        );
+        if (!vectors) {
+          corpusIntentVectorsPromise = null;
+          return;
+        }
+        built.push({ source, vectors });
+      }
+      corpusIntentVectors = built;
+    })();
+  }
+  await corpusIntentVectorsPromise;
+}
+
+function registryCorpusSelection(prompt: string): BrainCorpusSelection[] {
+  const terms = new Set(
+    compactText(prompt)
+      .toLocaleLowerCase("tr-TR")
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((term) => term.length >= 3),
+  );
+  return KNOWLEDGE_CORPUS_SOURCES.map((source) => {
+    const descriptor = [source.title, ...source.tags, ...source.intents]
+      .join(" ")
+      .toLocaleLowerCase("tr-TR");
+    const overlap = [...terms].filter((term) => descriptor.includes(term)).length;
+    return {
+      domain: source.domain,
+      score: terms.size > 0 ? overlap / terms.size : 0,
+      source: "registry" as const,
+    };
+  })
+    .filter((entry) => entry.score >= 0.34)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 2);
+}
+
+export async function selectBrainCorpusDomains(input: {
+  prompt: string;
+  queryVector?: number[] | null;
+  logger?: FastifyInstance["log"];
+}): Promise<BrainCorpusSelection[]> {
+  await ensureCorpusIntentVectors(input.logger).catch(() => undefined);
+  const queryVector =
+    input.queryVector === undefined
+      ? await embedQueryForStorage(
+          input.prompt,
+          input.logger,
+          "corpus:query",
+          2_500,
+        ).catch(() => null)
+      : input.queryVector;
+  if (!queryVector || !corpusIntentVectors) {
+    return registryCorpusSelection(input.prompt);
+  }
+  const ranked = corpusIntentVectors
+    .map(({ source, vectors }) => ({
+      domain: source.domain,
+      score: vectors.reduce(
+        (best, vector) => Math.max(best, cosine(queryVector, vector)),
+        -1,
+      ),
+      source: "semantic" as const,
+    }))
+    .sort((left, right) => right.score - left.score);
+  const top = ranked[0];
+  if (!top || top.score < CORPUS_SEMANTIC_THRESHOLD) {
+    return registryCorpusSelection(input.prompt);
+  }
+  const runnerUp = ranked[1];
+  if (runnerUp && top.score - runnerUp.score < CORPUS_SEMANTIC_MARGIN) {
+    return registryCorpusSelection(input.prompt);
+  }
+  return [top];
+}
+
+export async function primeBrainCorpusSelection(
+  logger?: FastifyInstance["log"],
+): Promise<boolean> {
+  await ensureCorpusIntentVectors(logger).catch(() => undefined);
+  return corpusIntentVectors != null;
+}
+
+type StableCorpusCachePayload = Omit<OrchestratedRetrieval, "evidencePacket">;
+
+const STABLE_CORPUS_CACHE_TTL_MS = 24 * 60 * 60_000;
+const stableCorpusInflight = new WeakMap<
+  FastifyInstance,
+  Map<string, Promise<StableCorpusCachePayload>>
+>();
+
+function stableCorpusCacheKey(query: string, limit: number): string {
+  const digest = hashText(
+    `${ELYAN_BRAIN_CORPUS_VERSION}:${limit}:${compactText(query)
+      .toLocaleLowerCase("tr-TR")}`,
+  );
+  return `brain:stable-corpus:v2:${digest}`;
+}
+
+function normalizeStableCorpusCachePayload(
+  value: unknown,
+): StableCorpusCachePayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.results) || !record.orchestration) return null;
+  return {
+    retrievalMode: String(record.retrievalMode ?? "lexical_fallback"),
+    results: record.results.flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const result = item as Record<string, unknown>;
+      const updatedAt = new Date(String(result.updatedAt ?? ""));
+      if (!result.documentId || !result.chunkId || Number.isNaN(updatedAt.getTime())) {
+        return [];
+      }
+      return [{ ...result, updatedAt }] as OrchestratedRetrieval["results"];
+    }),
+    retrievalResultCount: Number(record.retrievalResultCount ?? 0),
+    degradedReason:
+      typeof record.degradedReason === "string" ? record.degradedReason : null,
+    orchestration: record.orchestration as OrchestratedRetrieval["orchestration"],
+  };
+}
+
+function hydrateStableCorpusResult(
+  userId: string,
+  query: string,
+  payload: StableCorpusCachePayload,
+): OrchestratedRetrieval {
+  return {
+    ...payload,
+    evidencePacket: retrievalResultsToEvidencePacket({
+      userId,
+      query,
+      results: payload.results.map((result) => ({
+        ...result,
+        metadata:
+          result.metadata &&
+          typeof result.metadata === "object" &&
+          !Array.isArray(result.metadata)
+            ? (result.metadata as Record<string, unknown>)
+            : {},
+      })),
+    }),
+  };
+}
+
+export async function searchStableBrainCorpus(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    query: string;
+    limit: number;
+    evidenceRequired: boolean;
+    queryVector?: number[] | null;
+    neuralPolicy?: {
+      neuralReady?: boolean;
+      embeddingReady?: boolean;
+      evaluationReady?: boolean;
+    };
+  },
+): Promise<OrchestratedRetrieval> {
+  const key = stableCorpusCacheKey(input.query, input.limit);
+  const store = app.services?.reliability?.store;
+  if (store) {
+    try {
+      const cached = await store.get(key);
+      const parsed = cached
+        ? normalizeStableCorpusCachePayload(JSON.parse(cached))
+        : null;
+      if (parsed) return hydrateStableCorpusResult(input.userId, input.query, parsed);
+    } catch {
+      // Cache failure must not block corpus retrieval.
+    }
+  }
+
+  let inflight = stableCorpusInflight.get(app);
+  if (!inflight) {
+    inflight = new Map();
+    stableCorpusInflight.set(app, inflight);
+  }
+  let pending = inflight.get(key);
+  if (!pending) {
+    pending = searchKnowledgeOrchestrated(app, {
+      ...input,
+      scope: "system_corpus",
+    })
+      .then(async ({ evidencePacket: _evidencePacket, ...payload }) => {
+        if (
+          store &&
+          payload.results.length > 0 &&
+          payload.orchestration.lowConfidence !== true
+        ) {
+          await store
+            .set(key, JSON.stringify(payload), STABLE_CORPUS_CACHE_TTL_MS)
+            .catch(() => undefined);
+        }
+        return payload;
+      })
+      .finally(() => inflight?.delete(key));
+    inflight.set(key, pending);
+  }
+  const payload = await pending;
+  return hydrateStableCorpusResult(input.userId, input.query, payload);
+}
 
 function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -430,6 +763,7 @@ export async function seedBrainCorpus(app: Pick<FastifyInstance, "db" | "log">) 
           elyanCorpusId: entry.id,
           elyanCorpusDomain: entry.domain,
           elyanCorpusVersion: entry.version,
+          elyanCorpusPurpose: entry.purpose,
           priority: entry.priority,
           tags: entry.tags,
           sourceFile: entry.fileName,
@@ -465,6 +799,7 @@ export async function seedBrainCorpus(app: Pick<FastifyInstance, "db" | "log">) 
           elyanCorpusId: entry.id,
           elyanCorpusDomain: entry.domain,
           elyanCorpusVersion: entry.version,
+          elyanCorpusPurpose: entry.purpose,
           sourceUri: entry.sourceUri,
         },
       })),

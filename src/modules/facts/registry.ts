@@ -1,10 +1,17 @@
 import { airQualityProvider } from "./providers/air-quality.js";
 import { cryptoProvider } from "./providers/crypto.js";
+import { crossrefProvider } from "./providers/crossref.js";
 import { earthquakeProvider } from "./providers/earthquake.js";
 import { fxProvider } from "./providers/fx.js";
+import { fredProvider } from "./providers/fred.js";
 import { holidayProvider } from "./providers/holidays.js";
 import { localTimeProvider } from "./providers/local-time.js";
+import { metNorwayProvider } from "./providers/met-norway.js";
+import { metalsProvider } from "./providers/metals.js";
+import { tcmbFxProvider } from "./providers/tcmb-fx.js";
+import { tcmbEvdsProvider } from "./providers/tcmb-evds.js";
 import { weatherProvider } from "./providers/weather.js";
+import { worldBankProvider } from "./providers/world-bank.js";
 import type { FactProvider, FactProviderId } from "./types.js";
 
 /**
@@ -16,13 +23,20 @@ import type { FactProvider, FactProviderId } from "./types.js";
  * doğrudur.
  */
 export const FACT_PROVIDERS: FactProvider<unknown>[] = [
+  metNorwayProvider,
   weatherProvider,
   airQualityProvider,
+  metalsProvider,
+  tcmbEvdsProvider,
+  tcmbFxProvider,
   fxProvider,
   cryptoProvider,
   localTimeProvider,
   earthquakeProvider,
   holidayProvider,
+  fredProvider,
+  worldBankProvider,
+  crossrefProvider,
 ];
 
 export function getFactProvider(id: FactProviderId): FactProvider<unknown> | null {

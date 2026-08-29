@@ -42,6 +42,7 @@ import type { SharedBrainWorkload } from "../brain/workloads.js";
 import { generateSharedBrainReply } from "../brain/inference.js";
 import { enhanceIntentWithGeminiFree } from "../brain/gemini-intent-router.js";
 import { responsePolicyForPrompt } from "../brain/response-policy.js";
+import { resolveFreshDataPolicy } from "../brain/fresh-data-policy.js";
 import { resolveVisualIntentContract } from "../brain/visual-intent-semantic.js";
 import {
   getSharedBrainTargetDevice,
@@ -64,6 +65,7 @@ import {
   buildUnderstandingConsensus,
   type UnderstandingConsensus,
 } from "./understanding-consensus.js";
+import { selectInformationNeed, type InformationNeed } from "../../core/understanding/information-need.js";
 import {
   asRecord as readRecord,
   recordArray as readArray,
@@ -226,6 +228,7 @@ export type CommandRouteDecision = {
   privacyLevel: "low" | "medium" | "high";
   shouldAskClarification: boolean;
   failClosedReason: string | null;
+  informationNeed?: InformationNeed;
   selectedWorkload: SharedBrainWorkload;
   // Kept optional for additive compatibility with persisted/manual route fixtures;
   // fresh decisions always populate the contract before workload selection.
@@ -686,10 +689,6 @@ const QUANTUM_CAPABILITIES = [
   "quantum_run_experiment",
   "quantum_compare_classical",
   "quantum_generate_report",
-];
-const PUBLIC_FRESH_RESEARCH_PATTERNS = [
-  /\b(güncel|guncel|son durum|latest|recent|today|bugün|bugun|şu an|su an|canlı|canli|fresh|current|doğrula|dogrula)\b/i,
-  /\b(kaynaklı|kaynaklarla|source-backed|sources?|atıf|atif|citation|araştır|arastir|research|web)\b/i,
 ];
 const PUBLIC_DEEP_RESEARCH_PATTERNS = [
   /\b(derin|deep|kapsamlı|kapsamli|literatür|literature|rapor|report|plan|strateji|strategy|karşılaştır|karsilastir|analiz et|analyze)\b/i,
@@ -1261,10 +1260,6 @@ function shouldOverrideModelServerRouteForDesktop(input: {
   return hasConcreteDesktopFallbackSignal(input.message, input.metadata);
 }
 
-function hasPublicFreshResearchSignal(message: string): boolean {
-  return matchesAny(message, PUBLIC_FRESH_RESEARCH_PATTERNS);
-}
-
 function hasPublicDeepResearchSignal(message: string): boolean {
   return matchesAny(message, PUBLIC_DEEP_RESEARCH_PATTERNS);
 }
@@ -1720,6 +1715,18 @@ function deriveSelectedWorkloadWithGuard(input: {
   ) {
     return { selectedWorkload: contractWorkload };
   }
+  if (
+    input.semanticContract.evidence.includes("fresh_public_research") &&
+    !isCompoundUnsafeSubject(input.message)
+  ) {
+    return {
+      selectedWorkload: input.semanticContract.evidence.includes(
+        "deep_public_research",
+      )
+        ? "public_deep_research"
+        : "public_research",
+    };
+  }
   // Structured workload rules live in a data-backed policy table so examples
   // can become fixtures instead of hidden routing branches.
   const prePlanningPolicyWorkload = selectPolicyWorkload(input.message, {
@@ -1913,6 +1920,7 @@ function buildDecision(input: {
   understandingConsensus?: UnderstandingConsensus;
   clarificationOverride?: boolean;
   speechAct?: CommandRouteDecision["speechAct"];
+  informationNeed?: InformationNeed;
 }): CommandRouteDecision {
   // The classification has already passed through the semantic/model resolver
   // in decideCommandRoute. Do not reinterpret raw text here: route, workload
@@ -2008,6 +2016,7 @@ function buildDecision(input: {
       (input.route === "pairing_required" || input.route === "unavailable"
         ? input.reason
         : null),
+    ...(input.informationNeed ? { informationNeed: input.informationNeed } : {}),
     selectedWorkload: workloadDecision.selectedWorkload,
     semanticContract: routedSemanticContract,
     ...(workloadDecision.qualityGuard
@@ -2229,14 +2238,6 @@ function determineMode(
     : "chat";
 }
 
-function isServerBrainPublicCapability(capability: string): boolean {
-  const normalized = String(capability ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s.]+/g, "_");
-  return normalized === "web_research";
-}
-
 function resolveDesktopUnavailableMessage(candidates: {
   selectedDevice: { canReceiveTasks: boolean } | null;
   canUseSelectedDevice: boolean;
@@ -2411,12 +2412,6 @@ function boundedAgentTextList(value: unknown, maxItems: number): string[] {
         ),
     ),
   ].slice(0, maxItems);
-}
-
-function missingInformationQuestion(value: readonly string[]): string | null {
-  const question = redactAgentText(value[0], 160).replace(/[.!]+$/u, "").trim();
-  if (!question) return null;
-  return question.endsWith("?") ? question : `${question}?`;
 }
 
 function boundedAgentIntent(value: unknown, fallback: string): string {
@@ -3239,6 +3234,29 @@ function isServerOwnedVisualTurn(
   );
 }
 
+function isServerOwnedPublicKnowledgeTurn(input: {
+  message: string;
+  metadata: Record<string, unknown>;
+  classification: IntentClassification;
+  semanticContract: SemanticContract;
+  runtimeMcpRequested: boolean;
+  explicitRuntimeCapabilityRequested: boolean;
+}): boolean {
+  const publicKnowledgeRequired = input.semanticContract.evidence.includes(
+    "fresh_public_research",
+  );
+  return (
+    publicKnowledgeRequired &&
+    input.semanticContract.surface === "server_brain" &&
+    input.semanticContract.privacyClass === "public" &&
+    input.classification.requiresLocalRuntime !== true &&
+    input.classification.privacyRisk !== "high" &&
+    !input.runtimeMcpRequested &&
+    !input.explicitRuntimeCapabilityRequested &&
+    !hasConcreteDesktopFallbackSignal(input.message, input.metadata)
+  );
+}
+
 function modelRouteHasLocalExecutionEvidence(route: TaskRoute): boolean {
   if (route.needsPrivateDesktopData) return true;
   const contract = route.semanticDesktopContract;
@@ -3564,6 +3582,13 @@ export async function decideCommandRoute(
     message: input.message,
     metadata,
   });
+  const freshDataPolicy = resolveFreshDataPolicy(message, {
+    socialTurn: isSocialChatPrompt(message),
+    publicKnowledgeRequest:
+      classification.primaryIntent === "research" ||
+      classification.requiresRetrieval ||
+      classification.requiresCitation,
+  });
   let understandingConsensus = buildUnderstandingConsensus({
     message,
     primary: semanticClassification,
@@ -3595,7 +3620,7 @@ export async function decideCommandRoute(
     classification,
     outputContract,
     additionalEvidence: [
-      ...(hasPublicFreshResearchSignal(message)
+      ...(freshDataPolicy.freshnessRequired
         ? ["fresh_public_research"]
         : []),
       ...(hasPublicDeepResearchSignal(message)
@@ -3658,7 +3683,7 @@ export async function decideCommandRoute(
       privacyClass: "public_text",
       requiresApproval: false,
       reason: clarificationReason,
-      userFacingMessage: "Bunu güvenle yapabilmem için hedef yüzeyi netleştirelim: masaüstünde mi çalıştırayım?",
+      userFacingMessage: "Bunu masaüstünde mi çalıştırayım?",
       primaryIntent: classification.primaryIntent,
       confidence: understandingConsensus.confidence,
       requiresLocalRuntime: false,
@@ -3670,6 +3695,18 @@ export async function decideCommandRoute(
       classification,
       understandingConsensus,
       clarificationOverride: true,
+      informationNeed: {
+        contract: "elyan.information_need.v1",
+        field: "target_surface",
+        impact: "target",
+        candidates: ["desktop"],
+        safeDefaultAvailable: false,
+        goalId: null,
+        stepId: null,
+        informationGain: 0.95,
+        urgency: "now",
+        question: "Bunu masaüstünde mi çalıştırayım?",
+      },
     });
   }
   const explicitRequestedCapabilities = uniqueSemanticCapabilities(
@@ -3678,6 +3715,12 @@ export async function decideCommandRoute(
   const runtimeMcpRequested = normalizeRuntimeCapabilities(
     explicitRequestedCapabilities,
   ).includes("mcp.call.tool");
+  const explicitRuntimeCapabilityRequested = explicitRequestedCapabilities.some(
+    (capability) =>
+      isDesktopOnlyCapability(capability) ||
+      capability.startsWith("mcp_") ||
+      capability.startsWith("quantum_"),
+  );
   const desktopDispatchRequested = metadata.desktopDispatch === true;
   const desktopDispatchDisabled = metadata.desktopDispatch === false;
   // Bu kullanıcının CANLI masaüstü çalışma zamanı var mı (bellek içi soket
@@ -3754,8 +3797,17 @@ export async function decideCommandRoute(
     classification.requiresLocalRuntime === true &&
     hasLiveDesktopRuntime &&
     !isDesktopAdviceOnlyRequest(message);
+  const serverOwnedPublicKnowledgeTurn = isServerOwnedPublicKnowledgeTurn({
+    message,
+    metadata,
+    classification,
+    semanticContract,
+    runtimeMcpRequested,
+    explicitRuntimeCapabilityRequested,
+  });
 
   const shouldConsultRouteModel =
+    !serverOwnedPublicKnowledgeTurn &&
     !runtimeMcpRequested &&
     (!desktopDispatchDisabled || unambiguousLocalTurn) &&
     explicitRequestedCapabilities.length === 0 &&
@@ -3829,10 +3881,12 @@ export async function decideCommandRoute(
   if (modelNeedsClarification) {
     const clarificationReason =
       "Model planı güvenli yürütme için gerekli bilgilerin eksik olduğunu belirledi.";
-    const clarificationQuestion = missingInformationQuestion(
-      modelMissingInformation,
-    );
-    if (!clarificationQuestion) {
+    const informationNeed = selectInformationNeed({
+      questions: modelMissingInformation,
+      knownContext: [message],
+      stepId: modelTaskRoute.semanticDecision?.steps?.[0]?.stepId ?? null,
+    });
+    if (!informationNeed) {
       throw new Error("structured_missing_information_question_invalid");
     }
     return buildDecision({
@@ -3852,7 +3906,7 @@ export async function decideCommandRoute(
       privacyClass: "public_text",
       requiresApproval: false,
       reason: clarificationReason,
-      userFacingMessage: clarificationQuestion,
+      userFacingMessage: informationNeed.question,
       primaryIntent: classification.primaryIntent,
       confidence: modelTaskRoute.semanticDecision?.confidence ?? classification.confidence,
       requiresLocalRuntime: false,
@@ -3864,6 +3918,7 @@ export async function decideCommandRoute(
       classification,
       understandingConsensus,
       clarificationOverride: true,
+      informationNeed,
     });
   }
   const modelServerDesktopOverride = shouldOverrideModelServerRouteForDesktop({
@@ -3931,7 +3986,7 @@ export async function decideCommandRoute(
   // capability names are untrusted free-form output and must not make a ready
   // desktop look incompatible. The catalog-grounded materializer selects tools
   // after routing; only explicit system/client capabilities gate admission.
-  const explicitRuntimeCapabilityRequested = baseRequestedCapabilities.some(
+  const effectiveExplicitRuntimeCapabilityRequested = baseRequestedCapabilities.some(
     (capability) =>
       isDesktopOnlyCapability(capability) ||
       capability.startsWith("mcp_") ||
@@ -3945,7 +4000,8 @@ export async function decideCommandRoute(
       metadata,
       classification,
       modelTaskRoute,
-      explicitRuntimeCapabilityRequested,
+      explicitRuntimeCapabilityRequested:
+        effectiveExplicitRuntimeCapabilityRequested,
       runtimeMcpRequested,
     },
   );
@@ -4061,7 +4117,7 @@ export async function decideCommandRoute(
     classifierRequiresReadyDesktop ||
     validatedLocalExecutionRequest ||
     evidenceAgreedLocalExecution ||
-    (!desktopDispatchDisabled && explicitRuntimeCapabilityRequested);
+    (!desktopDispatchDisabled && effectiveExplicitRuntimeCapabilityRequested);
 
   if (userWantsDesktop) {
     const needsPrivateDesktopData =
@@ -4292,6 +4348,8 @@ export async function decideCommandRoute(
   // Model-confirmed conversational/advisory turns stay on the server brain.
   const serverRouteReason = publicVisualDesktopOverride
     ? "Public visual output is handled by the server visual pipeline; desktop dispatch is only a preference."
+    : serverOwnedPublicKnowledgeTurn
+      ? "Current public knowledge is handled by the server evidence pipeline; desktop dispatch is only a preference."
     : modelTaskRoute?.reason ??
       "Sohbet veya bilgi isteği sunucu beyninde çözülecek.";
   return buildDecision({

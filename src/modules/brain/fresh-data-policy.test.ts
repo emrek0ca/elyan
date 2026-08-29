@@ -28,6 +28,23 @@ test("resolveFreshDataPolicy uses short TTL and no stale fallback for live marke
   assert.equal(policy.minimumVerifiedSources, 2);
 });
 
+test("resolveFreshDataPolicy separates current personal chat from current public facts", () => {
+  assert.equal(
+    resolveFreshDataPolicy("Bugün nasılsın?", {
+      socialTurn: true,
+      publicKnowledgeRequest: false,
+    }).freshnessRequired,
+    false,
+  );
+  assert.equal(
+    resolveFreshDataPolicy("Bugün Türkiye'de ne oldu?", {
+      socialTurn: false,
+      publicKnowledgeRequest: false,
+    }).freshnessRequired,
+    true,
+  );
+});
+
 test("sourceTrustScore prefers domain authorities without exceeding one", () => {
   const policy = resolveFreshDataPolicy("Güncel dolar kuru");
   assert.equal(

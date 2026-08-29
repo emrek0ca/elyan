@@ -119,6 +119,15 @@ test("output contract defaults explicit local research saves to a DOCX artifact"
   }
 });
 
+test("output contract preserves an explicit TXT artifact request", () => {
+  const contract = compileOutputContract({
+    message: "İçine 'Elyan hazır.' yazan bir TXT dosyası oluştur ve masaüstüne kaydet",
+  });
+  assert.equal(contract.outputKind, "document");
+  assert.equal(contract.outputFormat, "txt");
+  assert.equal(contract.requiresArtifact, true);
+});
+
 test("output contract does not grant an artifact for an explicitly negated save", () => {
   const contract = compileOutputContract({
     message: "Kedilerin yaşamını araştır ama kaydetme, burada anlat",

@@ -156,6 +156,7 @@ import { cognitiveMemoryRepository } from "./cognitive-memory-repository.js";
 import { isCognitiveFoundationEnabled } from "./cognitive-foundation-policy.js";
 import {
   applyTurnProactiveOps,
+  captureDeterministicFollowUp,
   recordTurnFollowUps,
 } from "./proactive-engine.js";
 import {
@@ -191,10 +192,10 @@ import {
 } from "./fast-context.js";
 import { resolveFreshDataPolicy } from "./fresh-data-policy.js";
 import {
-  buildBrainCorpusGuidanceBlock,
-  buildBrainCorpusRetrievalQuery,
-  detectBrainCorpusDomains,
+  searchStableBrainCorpus,
+  selectBrainCorpusDomains,
 } from "./corpus.js";
+import { embedQueryForStorage } from "./semantic-embedder.js";
 import {
   findRecentContinuityEpisode,
   maybeQueueMemoryExtractionJob,
@@ -338,6 +339,7 @@ import {
   EMPTY_GROQ_COMPOUND_EVIDENCE,
   type GroqCompoundEvidence,
 } from "./groq-compound.js";
+import { compoundEvidenceToWebGrounding } from "./compound-evidence-adapter.js";
 import { buildEcosystemContextBlock } from "./ecosystem-context.js";
 import {
   buildGeminiFreePublicOperationFrame,
@@ -450,8 +452,11 @@ import { parseStrictJsonObject } from "../skills/validator.js";
 import { getTurkicLanguagePromptHint } from "../../core/understanding/turkic-language.js";
 import { primeWidgetShapeSemantic } from "../../core/understanding/widget-shape-semantic.js";
 import { buildFactDirectAnswer, resolveFactEvidence } from "../facts/direct-answer.js";
+import { selectFactProviders } from "../facts/select.js";
 import { resolveFastPathMemory } from "./fast-path-memory.js";
 import type { FactAnswer } from "../facts/types.js";
+import { buildFactOutputBlocks } from "../facts/blocks.js";
+import { recordStableFactCandidate } from "../facts/learning.js";
 import {
   decideStructuredResponseDecision,
   isExplicitChartRequest,
@@ -3171,9 +3176,11 @@ function buildFactEvidencePromptBlock(
   // "fazladan bilgiyi özetle" sinyaline dönüşüp asıl sorunun cevabını
   // (canlıda: o anki sıcaklık) cevabın dışında bırakıyordu.
   if (input.webGroundingFactProviderId === answer.providerId) return null;
+  const structuredValues = JSON.stringify(answer.values).slice(0, 6_000);
   return [
     `Verified live data (${answer.citation.sourceHost}, observed ${answer.citation.observedAt}):`,
     answer.snippet,
+    structuredValues ? `Authoritative structured values: ${structuredValues}` : null,
     `Lead with the direct answer: ${answer.directAnswer}`,
     // ATIF TALİMATI KOŞULLUDUR. Canlı arıza (2026-08-19): bu blok kaynak adını
     // yazmayı koşulsuz istiyordu; tur MGM/Wikipedia arama sonuçlarından
@@ -3181,7 +3188,9 @@ function buildFactEvidencePromptBlock(
     // bir yerden, atıf başka yerden geldi. Kaynak adı ancak bu veri gerçekten
     // kullanıldığında ve YALNIZ bu veriden söylenir.
     `Use these exact numbers; never round or substitute them. Name ${answer.citation.sourceHost} only if your answer actually rests on the numbers above — if you answer from other evidence, cite that evidence instead. If the user asked for something this data does not cover, say so instead of guessing.`,
-  ].join("\n");
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }
 
 /**
@@ -3289,6 +3298,7 @@ async function describeDesktopRuntimeStateForPrompt(
   input: SharedBrainInferenceInput,
 ): Promise<string> {
   if (input.requestMetadata?.semanticRouteOnly === true) return "";
+  if (!shouldIncludeDesktopRuntimeContext(input)) return "";
   const userId = String(input.userId ?? "").trim();
   if (!userId) return "";
   try {
@@ -3321,6 +3331,20 @@ async function describeDesktopRuntimeStateForPrompt(
   } catch {
     return "";
   }
+}
+
+export function shouldIncludeDesktopRuntimeContext(
+  input: Pick<SharedBrainInferenceInput, "route" | "routeDecision">,
+): boolean {
+  return (
+    input.routeDecision?.requiredRuntime === "desktop" ||
+    input.routeDecision?.requiredRuntime === "both" ||
+    input.routeDecision?.taskRoute?.needsDesktop === true ||
+    input.routeDecision?.route === "desktop_runtime" ||
+    input.routeDecision?.route === "pairing_required" ||
+    input.route === "desktop_required" ||
+    input.route === "desktop_runtime"
+  );
 }
 
 /** Yetenek adlarını okunur ailelere indirger (ham 100+ ad prompt'a konmaz). */
@@ -6282,13 +6306,10 @@ export async function generateSharedBrainReply(
     app.config?.ELYAN_FAST_PATH_MEMORY_ENABLED !== false;
   const needsFastContext =
     factEligibleTurn && fastTextCandidate && skillMemoryAuthorized;
-  if (factEligibleTurn || needsFastContext) {
+  if (needsFastContext) {
     const fastContextDeadline = Date.now() + 320;
-    const [resolvedFact, resolvedMemory, canonicalFacts, fastDialogueSnapshot] =
+    const [resolvedMemory, canonicalFacts, fastDialogueSnapshot] =
       await Promise.all([
-      factEligibleTurn && input.factEvidence === undefined
-        ? resolveFactEvidence(app, { prompt: input.prompt }).catch(() => null)
-        : Promise.resolve(input.factEvidence ?? null),
       needsFastPathMemory
         ? resolveWithinDeadline(
             resolveFastPathMemory(app, {
@@ -6309,7 +6330,6 @@ export async function generateSharedBrainReply(
         ? resolveWithinDeadline(dialogueSnapshotPromise, fastContextDeadline)
         : Promise.resolve(null),
     ]);
-    if (input.factEvidence === undefined) input.factEvidence = resolvedFact;
     if (needsFastPathMemory) {
       input.fastPathMemory = resolvedMemory?.lines ?? null;
     }
@@ -6330,58 +6350,6 @@ export async function generateSharedBrainReply(
         }),
       };
     }
-  }
-  const factDirectAnswer = factEligibleTurn
-    ? await buildFactDirectAnswer(app, {
-        prompt: input.prompt,
-        answer: input.factEvidence,
-        desiredOutputKinds:
-          input.understandingContext?.understandingEnvelope?.desired_outputs.map(
-            (output) => output.kind,
-          ) ?? [],
-      }).catch(() => null)
-    : null;
-  if (factDirectAnswer) {
-    const deterministicFactResult: SharedBrainInferenceResult = {
-      text: factDirectAnswer.text,
-      provider: "elyan",
-      model: `deterministic-fact:${factDirectAnswer.answer.providerId}`,
-      latencyMs: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      totalTokens: 0,
-      metadata: {
-        route: input.route ?? "shared_brain",
-        workload,
-        provider: "elyan",
-        model: `deterministic-fact:${factDirectAnswer.answer.providerId}`,
-        deterministic: true,
-        fallbackUsed: false,
-        factProviderId: factDirectAnswer.answer.providerId,
-        factValues: factDirectAnswer.answer.values,
-        webGroundingUsed: true,
-        renderContract: {
-          version: "elyan_blocks.v2",
-          mode: "block_first",
-          canonicalSurface: "blocks",
-          legacyContent: "fallback_only",
-          hasVisibleBlocks: true,
-          visibleBlockTypes: ["web_search"],
-          textIsBlockWrapped: false,
-        },
-        blocks: [factDirectAnswer.block],
-      },
-    };
-    deterministicFactResult.metadata = applyClaimConfidenceMetadata(app, {
-      userId: input.userId,
-      route: input.route,
-      workload,
-      routeDecision: input.routeDecision ?? null,
-      requestMetadata: input.requestMetadata,
-      understandingContext: input.understandingContext,
-      metadata: deterministicFactResult.metadata,
-    });
-    return deterministicFactResult;
   }
   const mailOpenBlockAction = readMailOpenBlockAction(input.requestMetadata);
   const requestedToolName = readRequestedAgentToolName(input.requestMetadata);
@@ -7128,7 +7096,48 @@ export async function generateSharedBrainReply(
           }
         : null);
     const envelope = input.understandingContext?.understandingEnvelope;
-    const freshDataPolicy = resolveFreshDataPolicy(input.prompt);
+    const socialTurn = isSocialChatPrompt(input.prompt);
+    const freshDataPolicy = resolveFreshDataPolicy(input.prompt, {
+      socialTurn,
+      publicKnowledgeRequest:
+        understandingIntent?.primaryIntent === "research" ||
+        understandingIntent?.requiresRetrieval === true ||
+        understandingIntent?.requiresCitation === true,
+    });
+    const knowledgeQueryVector =
+      !socialTurn && !localReferenceTurn && input.attachmentContext?.used !== true
+        ? await embedQueryForStorage(
+            knowledgeQuery,
+            app.log,
+            `knowledge:query:${input.userId}`,
+            2_500,
+          ).catch(() => null)
+        : null;
+    const [factProviderShortlist, corpusSelections] = await Promise.all([
+      !socialTurn && !localReferenceTurn && input.attachmentContext?.used !== true
+        ? selectFactProviders({
+            prompt: knowledgeQuery,
+            queryVector: knowledgeQueryVector,
+            logger: app.log,
+          }).catch(() => [])
+        : Promise.resolve([]),
+      !freshDataPolicy.freshnessRequired &&
+      !socialTurn &&
+      !localReferenceTurn &&
+      input.attachmentContext?.used !== true
+        ? selectBrainCorpusDomains({
+            prompt: knowledgeQuery,
+            queryVector: knowledgeQueryVector,
+            logger: app.log,
+          }).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    const providerAvailable =
+      input.factEvidence != null ||
+      factProviderShortlist.length > 0 ||
+      freshDataPolicy.domain === "market" ||
+      freshDataPolicy.domain === "weather";
+    const brainCorpusDomains = corpusSelections.map((selection) => selection.domain);
     const knowledgeNeed = deriveKnowledgeNeed({
       query: knowledgeQuery,
       subject: envelope?.intent.subject ?? envelope?.intent.topic ?? null,
@@ -7138,14 +7147,35 @@ export async function generateSharedBrainReply(
       classification: understandingIntent,
       outputContract,
       referenceAvailable: authoritativeReferenceContext != null,
-      socialTurn: isSocialChatPrompt(input.prompt),
+      socialTurn,
       freshPublicDataRequired: freshDataPolicy.freshnessRequired,
       publicWebExplicitlyRequired:
         input.skillWebGroundingRequired === true ||
         explicitUrl ||
         semanticWebToolSelected,
       attachmentContextUsed: input.attachmentContext?.used === true,
+      providerAvailable,
+      corpusAvailable: corpusSelections.length > 0,
+      multiSourceResearch:
+        understandingIntent?.primaryIntent === "research" &&
+        decomposeQuery(knowledgeQuery).length > 1,
     });
+    if (knowledgeNeed.source === "provider" && input.factEvidence === undefined) {
+      input.factEvidence = await resolveFactEvidence(app, {
+        prompt: knowledgeQuery,
+        domain: freshDataPolicy.domain,
+        shortlist: factProviderShortlist,
+        queryVector: knowledgeQueryVector,
+      }).catch(() => null);
+    }
+    const providerEvidenceSufficient =
+      input.factEvidence != null &&
+      input.factEvidence.source?.verificationState === "verified";
+    const compoundOwnSearchPlanned =
+      knowledgeNeed.source === "web" &&
+      app.config.ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED === true &&
+      providerCandidates[0]?.provider === "groq" &&
+      isGroqCompoundModel(providerCandidates[0]?.preferredModels[0]);
     const fastContextWithKnowledgeNeed = attachKnowledgeNeedToFastContext(
       input.requestMetadata?.fastContext,
       knowledgeNeed,
@@ -7157,6 +7187,60 @@ export async function generateSharedBrainReply(
         ? { fastContext: fastContextWithKnowledgeNeed }
         : {}),
     };
+    const factDirectAnswer =
+      knowledgeNeed.source === "provider" && factEligibleTurn
+        ? await buildFactDirectAnswer(app, {
+            prompt: input.prompt,
+            answer: input.factEvidence,
+            desiredOutputKinds:
+              input.understandingContext?.understandingEnvelope?.desired_outputs.map(
+                (output) => output.kind,
+              ) ?? [],
+          }).catch(() => null)
+        : null;
+    if (factDirectAnswer) {
+      const deterministicFactResult: SharedBrainInferenceResult = {
+        text: factDirectAnswer.text,
+        provider: "elyan",
+        model: `deterministic-fact:${factDirectAnswer.answer.providerId}`,
+        latencyMs: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        metadata: {
+          route: input.route ?? "shared_brain",
+          workload,
+          provider: "elyan",
+          model: `deterministic-fact:${factDirectAnswer.answer.providerId}`,
+          deterministic: true,
+          fallbackUsed: false,
+          knowledgeNeed,
+          factProviderId: factDirectAnswer.answer.providerId,
+          factValues: factDirectAnswer.answer.values,
+          webGroundingUsed: false,
+          renderContract: {
+            version: "elyan_blocks.v2",
+            mode: "block_first",
+            canonicalSurface: "blocks",
+            legacyContent: "fallback_only",
+            hasVisibleBlocks: true,
+            visibleBlockTypes: ["web_search"],
+            textIsBlockWrapped: false,
+          },
+          blocks: [factDirectAnswer.block],
+        },
+      };
+      deterministicFactResult.metadata = applyClaimConfidenceMetadata(app, {
+        userId: input.userId,
+        route: input.route,
+        workload,
+        routeDecision: input.routeDecision ?? null,
+        requestMetadata: input.requestMetadata,
+        understandingContext: input.understandingContext,
+        metadata: deterministicFactResult.metadata,
+      });
+      return deterministicFactResult;
+    }
     // Knowledge augmentation may still serve private memory or the local
     // corpus, but public web access has its own fail-closed admission gate.
     // A balanced workload alone is never permission to browse.
@@ -7170,17 +7254,18 @@ export async function generateSharedBrainReply(
       !skillToolPolicyActive || skillTools.has("memory.query");
     const webAuthorized =
       !skillToolPolicyActive || skillTools.has("web.search");
-    const knowledgeSources = new Set(knowledgeNeed.sources);
-    const retrievalRequested = knowledgeSources.has("private_corpus");
-    const memoryRequested = knowledgeSources.has("memory");
-    const webRequested = knowledgeSources.has("public_web");
+    const retrievalRequested = knowledgeNeed.source === "corpus";
+    const memoryRequested = knowledgeNeed.source === "memory";
+    const webRequested =
+      knowledgeNeed.source === "web" ||
+      (knowledgeNeed.source === "provider" &&
+        !providerEvidenceSufficient &&
+        knowledgeNeed.fallback === "web");
     const shouldAugment =
       !localReferenceTurn &&
       ((retrievalRequested && retrievalAuthorized) ||
         (memoryRequested && memoryAuthorized) ||
         (webRequested && webAuthorized && webGroundingAllowed));
-    const brainCorpusDomains = detectBrainCorpusDomains(knowledgeQuery);
-    const retrievalQuery = buildBrainCorpusRetrievalQuery(knowledgeQuery);
     const retrievalNeuralPolicy = buildRetrievalNeuralPolicy(input.brainProfile);
     // KANIT TOPLAMA, İLK TOKEN'IN ÖNÜNDE DURUYOR.
     //
@@ -7194,15 +7279,16 @@ export async function generateSharedBrainReply(
     const endAugmentationStage = shouldAugment
       ? startStage("chat.knowledge_augmentation")
       : null;
-    const [retrieval, memory, webGrounding] = shouldAugment
+    const [retrieval, memory, initialWebGrounding] = shouldAugment
       ? await Promise.all([
           retrievalRequested && retrievalAuthorized
-            ? searchKnowledge(app, {
+            ? searchStableBrainCorpus(app, {
                 userId: input.userId,
-                query: retrievalQuery,
+                query: knowledgeQuery,
                 limit: planBrainProfile.retrievalFanout,
                 neuralPolicy: retrievalNeuralPolicy,
-                evidenceRequired: knowledgeNeed.need === "required",
+                evidenceRequired: knowledgeNeed.evidenceRequired,
+                queryVector: knowledgeQueryVector,
               }).catch(() => ({
                 retrievalMode: "lexical_fallback" as const,
                 results: [],
@@ -7231,12 +7317,16 @@ export async function generateSharedBrainReply(
           // Kanıt fazının üç kolu paralel ama toplam en yavaşına eşit. Web
           // kolu ağ üzerinden çalışan tek koldur ve p95'te 7,3 saniyeye
           // çıkıyordu; hangisinin yavaş olduğunu söyleyen sayaç yoktu.
-          webRequested && webAuthorized && webGroundingAllowed
+          webRequested &&
+          webAuthorized &&
+          webGroundingAllowed &&
+          (!compoundOwnSearchPlanned || input.factEvidence != null)
             ? withStageTiming("augment.web", searchPublicWebGrounding(app, {
                 prompt: webGroundingPrompt,
                 workload,
                 attachmentContextUsed: input.attachmentContext?.used === true,
                 forceSearch: input.skillWebGroundingRequired === true,
+                factAnswer: input.factEvidence,
               })).catch(() =>
                 buildUnavailableWebGroundingResult({
                   enabled:
@@ -7248,9 +7338,12 @@ export async function generateSharedBrainReply(
               )
             : Promise.resolve(
                 buildUnavailableWebGroundingResult({
-                  enabled: false,
+                  enabled:
+                    compoundOwnSearchPlanned && webGroundingAllowed,
                   prompt: webGroundingPrompt,
-                  degradedReason: null,
+                  degradedReason: compoundOwnSearchPlanned
+                    ? "compound_evidence_pending"
+                    : null,
                 }),
               ),
         ])
@@ -7273,6 +7366,7 @@ export async function generateSharedBrainReply(
             degradedReason: null,
           }),
         ];
+    let webGrounding = initialWebGrounding;
     endAugmentationStage?.();
     let endPromptBuildStage: (() => void) | null = startStage("chat.prompt_build");
     if (
@@ -7287,7 +7381,7 @@ export async function generateSharedBrainReply(
     const retrievalEvidenceState = retrievalRequested
       ? retrieval.results.length > 0 && !retrievalOrchestration.lowConfidence
         ? "verified"
-        : knowledgeNeed.need === "required"
+        : knowledgeNeed.evidenceRequired
           ? "insufficient"
           : "none"
       : "none";
@@ -7296,14 +7390,15 @@ export async function generateSharedBrainReply(
       webGrounding.results.length > 0 &&
       (knowledgeNeed.freshness !== "current" ||
         webGrounding.freshData.evidence.sufficient);
-    const knowledgeEvidenceState = resolveKnowledgeEvidenceState({
+    let knowledgeEvidenceState = resolveKnowledgeEvidenceState({
       knowledgeNeed,
       referenceAvailable: authoritativeReferenceContext != null,
       memoryResultCount: memory.results.length,
+      providerEvidenceSufficient,
       retrievalEvidenceState,
       webEvidenceSufficient,
     });
-    const effectiveRetrievalLowConfidence =
+    let effectiveRetrievalLowConfidence =
       retrievalOrchestration.lowConfidence ||
       knowledgeEvidenceState === "insufficient";
     if (input.onDelta && effectiveRetrievalLowConfidence) {
@@ -7628,8 +7723,8 @@ export async function generateSharedBrainReply(
       retrieval.results.map((result) => result.documentId),
     ).size;
     const groundingUsed = documentSourceCount > 0;
-    const webSourceCount = webGrounding.results.length;
-    const webGroundingUsed = webGrounding.used && webSourceCount > 0;
+    let webSourceCount = webGrounding.results.length;
+    let webGroundingUsed = webGrounding.used && webSourceCount > 0;
     const selfCheck = buildSelfCheck({
       workload,
       memoryCount: memory.results.length,
@@ -7754,14 +7849,7 @@ export async function generateSharedBrainReply(
     const loadOptionalMemoryContext = !fastTextTurn;
     const [corpusGuidanceBlock, continuityBlock, behaviorLearningBlock] =
       await Promise.all([
-        retrievalAuthorized && !retrievalRequested
-          ? !fastTextTurn
-            ? buildBrainCorpusGuidanceBlock(
-                knowledgeQuery,
-                brainCorpusDomains,
-              ).catch(() => null)
-            : Promise.resolve(null)
-          : Promise.resolve(null),
+        Promise.resolve(null),
         // Fresh-session continuity and behavior lessons are useful enrichment,
         // but neither belongs before the first token of a fast conversational
         // turn. The compact client/session snapshot remains authoritative for
@@ -7816,9 +7904,9 @@ export async function generateSharedBrainReply(
     // Ekosistem farkındalığı: model Elyan'ın mobil+sunucu+masaüstü TEK
     // sistem olduğunu ve elindeki yetenekleri BİLSİN. Liste manifest'ten
     // türetilir; elle tutulsa yeni yetenek eklenince prompt yalan söylerdi.
-    const ecosystemContextBlock = buildEcosystemContextBlock({
-      desktopPaired: null,
-    });
+    const ecosystemContextBlock = shouldIncludeDesktopRuntimeContext(input)
+      ? buildEcosystemContextBlock({ desktopPaired: null })
+      : null;
     const systemPrompt = buildStructuredSystemPrompt(
       retrievalBlock == null &&
         gatedMemoryBlock == null &&
@@ -7878,14 +7966,14 @@ export async function generateSharedBrainReply(
     const effectiveSystemPrompt = desktopRuntimeStateLine
       ? `${systemPrompt}\n\n${desktopRuntimeStateLine}`
       : systemPrompt;
-    const messages = buildConversation(
+    let messages = buildConversation(
       {
         ...input,
         conversation: boundedConversation,
       },
       effectiveSystemPrompt,
     );
-    const prompt = buildPromptFromConversation(messages);
+    let prompt = buildPromptFromConversation(messages);
     void warmOllamaModelIfNeeded(app, runtime, baseModel).catch((error) => {
       app.log.debug?.(
         {
@@ -8162,6 +8250,8 @@ export async function generateSharedBrainReply(
       stream: boolean,
     ): SharedBrainRequestAttempt[] => {
       const path = getNativeChatPath(provider);
+      const compoundModel = provider === "groq" && isGroqCompoundModel(model);
+      const modelTurnEnvelopeEnabled = turnEnvelopeEnabled && !compoundModel;
       const body = {
         ...buildRequestBody(
           provider,
@@ -8185,14 +8275,18 @@ export async function generateSharedBrainReply(
         // Model bir Groq Compound modeli DEĞİLse boş nesne (no-op); değilse
         // yapılandırılmış arama ayarlarını (alan/ülke filtresi) gövdeye ekler.
         ...(provider === "groq"
-          ? buildGroqCompoundRequestExtensions(app.config, model)
+          ? buildGroqCompoundRequestExtensions(app.config, model, {
+              requiresComputation:
+                requestsTableOutput(input.prompt) ||
+                requestsChartOutput(input.prompt),
+            })
           : {}),
       };
       const structuredAttempt = buildSharedBrainRequestAttempt({
         provider,
         path,
         body,
-        turnEnvelopeEnabled,
+        turnEnvelopeEnabled: modelTurnEnvelopeEnabled,
         proactiveOpsEnabled: app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true,
       });
       const requiresNonStreamingReplacement =
@@ -8258,7 +8352,7 @@ export async function generateSharedBrainReply(
         provider,
         path: compatibilityPath,
         body: compatibilityBody,
-        turnEnvelopeEnabled,
+        turnEnvelopeEnabled: modelTurnEnvelopeEnabled,
         proactiveOpsEnabled: app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true,
       });
       return [
@@ -8279,6 +8373,65 @@ export async function generateSharedBrainReply(
       isVisionProviderTurn,
       webGroundingUsed: webGrounding.used,
     });
+
+    let compoundFallbackSearchUsed = false;
+    const loadCompoundFallbackEvidence = async (): Promise<void> => {
+      if (
+        app.config.ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED !== true ||
+        compoundFallbackSearchUsed ||
+        webGroundingUsed ||
+        !webRequested ||
+        !webAuthorized ||
+        !webGroundingAllowed
+      ) {
+        return;
+      }
+      compoundFallbackSearchUsed = true;
+      webGrounding = await withStageTiming(
+        "augment.web.compound_fallback",
+        searchPublicWebGrounding(app, {
+          prompt: webGroundingPrompt,
+          workload,
+          attachmentContextUsed: input.attachmentContext?.used === true,
+          forceSearch: true,
+          factAnswer: input.factEvidence,
+        }),
+      ).catch(() =>
+        buildUnavailableWebGroundingResult({
+          enabled: app.config.ELYAN_WEB_GROUNDING_ENABLED,
+          prompt: webGroundingPrompt,
+          degradedReason: "compound_fallback_search_unavailable",
+        }),
+      );
+      webSourceCount = webGrounding.results.length;
+      webGroundingUsed = webGrounding.used && webSourceCount > 0;
+      knowledgeEvidenceState = resolveKnowledgeEvidenceState({
+      knowledgeNeed,
+      referenceAvailable: authoritativeReferenceContext != null,
+      memoryResultCount: memory.results.length,
+      providerEvidenceSufficient,
+      retrievalEvidenceState,
+      webEvidenceSufficient: webGroundingUsed,
+      });
+      effectiveRetrievalLowConfidence =
+        retrievalOrchestration.lowConfidence ||
+        knowledgeEvidenceState === "insufficient";
+      const groundingPrompt =
+        buildWebGroundingPromptBlock(webGrounding) ??
+        buildWebGroundingAbstentionBlock(webGrounding);
+      if (!groundingPrompt) return;
+      const systemIndex = messages.findIndex((message) => message.role === "system");
+      if (systemIndex >= 0) {
+        messages = messages.map((message, index) =>
+          index === systemIndex
+            ? { ...message, content: `${message.content}\n\n${groundingPrompt}` }
+            : message,
+        );
+      } else {
+        messages = [{ role: "system", content: groundingPrompt }, ...messages];
+      }
+      prompt = buildPromptFromConversation(messages);
+    };
 
     // Kanıt toplandıktan SONRA, sağlayıcıya gidene kadar geçen süre: istem
     // kurma, bağlam paketleme, araç kataloğu. Ölçülmemişti ve bir turun
@@ -8318,6 +8471,11 @@ export async function generateSharedBrainReply(
         : uniqueCandidateModels;
 
       for (const attemptedModel of candidateModelAttempts) {
+        const attemptedModelTimeoutMs = isGroqCompoundModel(attemptedModel)
+          ? attemptedModel.toLowerCase().includes("mini")
+            ? Math.min(timeoutMs, 5_000)
+            : Math.min(timeoutMs, 12_000)
+          : timeoutMs;
         if (
           candidate.provider === "groq" &&
           (await isGroqProviderModelCooling(app, attemptedModel))
@@ -8505,8 +8663,10 @@ export async function generateSharedBrainReply(
                     ...attempt.body,
                     stream: true,
                   },
-                  timeoutMs,
-                  workloadProfile.firstDeltaBudgetMs,
+                  attemptedModelTimeoutMs,
+                  isGroqCompoundModel(attemptedModel)
+                    ? attemptedModelTimeoutMs
+                    : workloadProfile.firstDeltaBudgetMs,
                   async (chunk) => {
                     streamFinishReason =
                       extractResponseFinishReason(chunk) ?? streamFinishReason;
@@ -8667,7 +8827,7 @@ export async function generateSharedBrainReply(
                         attempt.path,
                       ),
                       continuationBody,
-                      timeoutMs,
+                      attemptedModelTimeoutMs,
                       null,
                       async (chunk) => {
                         streamFinishReason =
@@ -8956,6 +9116,7 @@ export async function generateSharedBrainReply(
                 // çıktı biçimi ister ve ikisi aynı istekte çakışır.
                 if (
                   app.config.ELYAN_SERVER_TOOL_LOOP_ENABLED === true &&
+                  !isGroqCompoundModel(attemptedModel) &&
                   !attempt.turnEnvelopeMode &&
                   !machineJsonRoute &&
                   !input.responseSchemaOverride &&
@@ -8998,7 +9159,7 @@ export async function generateSharedBrainReply(
                       taskId: input.taskId ?? null,
                       workload,
                       allowlist: serverToolAllowlist,
-                      timeoutMs,
+                      timeoutMs: attemptedModelTimeoutMs,
                       requestKeySeed:
                         input.providerKeySeed ??
                         `${input.userId}:${input.taskId ?? ""}`,
@@ -9371,6 +9532,9 @@ export async function generateSharedBrainReply(
             // continue with the next configured provider, but must not hit a
             // rate-limited provider again immediately.
             if (attemptFailure.failureClass === "rate_limited") {
+              if (isGroqCompoundModel(attemptedModel)) {
+                break;
+              }
               continue providerLoop;
             }
 
@@ -9392,6 +9556,9 @@ export async function generateSharedBrainReply(
 
         if (successfulProvider) {
           break;
+        }
+        if (isGroqCompoundModel(attemptedModel)) {
+          await loadCompoundFallbackEvidence();
         }
         if (
           candidate.provider === "groq" &&
@@ -9573,6 +9740,42 @@ export async function generateSharedBrainReply(
           ...buildWebGroundingMetadata(webGrounding),
         },
       );
+    }
+
+    const groqCompoundEvidence = readGroqCompoundEvidence(
+      payload,
+      successfulModel,
+    );
+    const compoundGrounding =
+      app.config.ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED === true
+        ? compoundEvidenceToWebGrounding({
+            evidence: groqCompoundEvidence,
+            prompt: webGroundingPrompt,
+            existing: webGrounding,
+          })
+        : null;
+    if (compoundGrounding) {
+      webGrounding = compoundGrounding;
+      webSourceCount = webGrounding.results.length;
+      webGroundingUsed = webGrounding.used && webSourceCount > 0;
+      knowledgeEvidenceState = resolveKnowledgeEvidenceState({
+      knowledgeNeed,
+      referenceAvailable: authoritativeReferenceContext != null,
+      memoryResultCount: memory.results.length,
+      providerEvidenceSufficient,
+      retrievalEvidenceState,
+      webEvidenceSufficient: webGroundingUsed,
+      });
+      effectiveRetrievalLowConfidence =
+        retrievalOrchestration.lowConfidence ||
+        knowledgeEvidenceState === "insufficient";
+    }
+    if (
+      isGroqCompoundModel(successfulModel) &&
+      app.config.ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED === true &&
+      !webGroundingUsed
+    ) {
+      await loadCompoundFallbackEvidence();
     }
 
     let payloadRecord =
@@ -10022,9 +10225,10 @@ export async function generateSharedBrainReply(
     const webGroundingBlocks = buildWebGroundingBlocks(webGrounding);
     // Groq Compound canlı kaynak kullandıysa atıflarını da göster. Non-streaming
     // ham payload'dan, streaming'de sentezlenen taşıyıcıdan okunur (birleşik).
-    const groqCompoundBlocks = buildGroqCompoundBlocks(
-      readGroqCompoundEvidence(payload, successfulModel),
-    );
+    const groqCompoundBlocks =
+      webGrounding.source === "groq_compound"
+        ? []
+        : buildGroqCompoundBlocks(groqCompoundEvidence);
 
     // Model çıktısındaki {"type":...} typed JSON bloklarını HER ZAMAN text'ten
     // ayıkla. Per-prompt sınıflandırıcı (responseDecision) yalnızca modelden
@@ -10122,6 +10326,16 @@ export async function generateSharedBrainReply(
     const finalTextBlocks = machineJsonRoute
       ? []
       : buildAssistantMessageBlocks(finalText);
+    const factOutputBlocks = buildFactOutputBlocks({
+      answer: input.factEvidence,
+      tableRequested: requestsTableOutput(input.prompt),
+      chartRequested: requestsChartOutput(input.prompt),
+    });
+    const authoritativeFactBlockTypes = new Set(
+      factOutputBlocks.map((block) =>
+        String((block as { type?: unknown }).type ?? ""),
+      ),
+    );
     // "Kaynak güveni düşük" uyarı kutusu KALDIRILDI: neredeyse her cevabın
     // başında beliriyor, ekranı kaplıyor ve gerçek bir eylem önermiyordu.
     // Düşük kapsama hâlâ `retrievalOrchestration.lowConfidence` üzerinden
@@ -10132,8 +10346,10 @@ export async function generateSharedBrainReply(
       ...groqCompoundBlocks,
       ...attachmentInsightBlocks,
       ...finalTextBlocks,
+      ...factOutputBlocks,
       ...extractedTypedBlocks.filter((block) => {
         const type = String((block as { type?: unknown }).type ?? "");
+        if (authoritativeFactBlockTypes.has(type)) return false;
         // Connector widgets are authoritative adapter output only. Keep the
         // legacy type readable from history, but never accept it (or a
         // source-widget imitation) from model-generated JSON.
@@ -10141,6 +10357,7 @@ export async function generateSharedBrainReply(
       }),
       ...lowConfidenceBlocks,
     ];
+    let deterministicFollowUpCapture: Awaited<ReturnType<typeof captureDeterministicFollowUp>> = null;
     const modelRoute = buildModelRouteDecision({
       provider: successfulProvider,
       model: successfulModel,
@@ -10173,7 +10390,8 @@ export async function generateSharedBrainReply(
         streamed: Boolean(
           (payload as Record<string, unknown> | null)?.streamed,
         ),
-        turnEnvelopeEnabled,
+        turnEnvelopeEnabled:
+          turnEnvelopeEnabled && !isGroqCompoundModel(successfulModel),
         turnEnvelopeMode: successfulTurnEnvelopeMode,
         turnEnvelopeParseOk,
         legacyTextMode:
@@ -10268,6 +10486,8 @@ export async function generateSharedBrainReply(
         retrievalSemanticCandidateCount:
           retrievalTelemetry.semanticCandidateCount,
         ...retrievalOrchestrationMetadata,
+        retrievalLowConfidence: effectiveRetrievalLowConfidence,
+        knowledgeEvidenceState,
         rerankUsed: retrievalTelemetry.rerankUsed,
         workerOffloaded:
           retrievalTelemetry.rerankUsed === true ||
@@ -10279,6 +10499,14 @@ export async function generateSharedBrainReply(
         webSourceCount,
         webGroundingDegradedReason: webGrounding.degradedReason,
         ...buildWebGroundingMetadata(webGrounding),
+        groqCompoundToolCount: groqCompoundEvidence.toolsUsed.length,
+        groqCompoundCitationCount: groqCompoundEvidence.citations.length,
+        compoundFallbackSearchUsed,
+        publicEvidenceRouterVersion:
+          app.config.ELYAN_PUBLIC_EVIDENCE_ROUTER_V1_ENABLED === true
+            ? "v1"
+            : null,
+        factEvidenceSource: input.factEvidence?.source ?? null,
         cloudVisionUsed: clientVisionImages.length > 0,
         cloudVisionImageCount: clientVisionImages.length,
         constitutionVersion: ELYAN_CONSTITUTION_VERSION,
@@ -10309,6 +10537,11 @@ export async function generateSharedBrainReply(
           : {}),
       },
     };
+    void recordStableFactCandidate(app, {
+      userId: input.userId,
+      taskId: input.taskId,
+      answer: input.factEvidence,
+    }).catch(() => undefined);
     let agentToolResults: AgentToolResult[] = serverToolLoopSteps.map(
       (step) => ({
         tool: step.tool,
@@ -11039,6 +11272,25 @@ export async function generateSharedBrainReply(
     }
 
     if (
+      app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true &&
+      !input.internalEvaluation?.refinementPass &&
+      !input.internalEvaluation?.skipReviewLogging
+    ) {
+      deterministicFollowUpCapture = await captureDeterministicFollowUp(app, {
+        userId: input.userId,
+        sessionId: resolveDialogueStateSessionId(input.requestMetadata),
+        message: input.prompt,
+      }).catch(() => null);
+      if (deterministicFollowUpCapture?.block) {
+        assistantMetadataBlocks = [
+          ...assistantMetadataBlocks.filter((block) => (block as { type?: string }).type !== "proactive_touch"),
+          deterministicFollowUpCapture.block,
+        ] as typeof assistantMetadataBlocks;
+        result.metadata.blocks = assistantMetadataBlocks;
+      }
+    }
+
+    if (
       app.config.ELYAN_DIALOGUE_STATE_ENABLED === true &&
       !isCognitiveFoundationEnabled(app, input.userId) &&
       !input.internalEvaluation?.refinementPass &&
@@ -11073,6 +11325,7 @@ export async function generateSharedBrainReply(
       app.config.ELYAN_PROACTIVE_ENGINE_ENABLED === true &&
       turnEnvelope &&
       turnEnvelope.follow_ups.length > 0 &&
+      deterministicFollowUpCapture?.kind !== "explicit" &&
       !input.internalEvaluation?.refinementPass &&
       !input.internalEvaluation?.skipReviewLogging
     ) {

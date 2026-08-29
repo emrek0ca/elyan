@@ -2312,25 +2312,265 @@
               "type": "object"
             },
             "interaction": {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "permission",
-                    "clarification"
+              "anyOf": [
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "availableActions": {
+                      "prefixItems": [
+                        {
+                          "const": "answer",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "contract": {
+                      "const": "elyan.interaction.v1",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "clarification",
+                      "type": "string"
+                    },
+                    "question": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000,
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskRunId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "contract",
+                    "id",
+                    "taskId",
+                    "taskRunId",
+                    "revision",
+                    "expiresAt",
+                    "resolution",
+                    "kind",
+                    "availableActions"
                   ],
-                  "type": "string"
+                  "type": "object"
                 },
-                "question": {
-                  "maxLength": 500,
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "availableActions": {
+                      "prefixItems": [
+                        {
+                          "const": "approve",
+                          "type": "string"
+                        },
+                        {
+                          "const": "reject",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "contract": {
+                      "const": "elyan.interaction.v1",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "permission",
+                      "type": "string"
+                    },
+                    "question": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000,
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskRunId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "contract",
+                    "id",
+                    "taskId",
+                    "taskRunId",
+                    "revision",
+                    "expiresAt",
+                    "resolution",
+                    "kind",
+                    "availableActions"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "availableActions": {
+                      "prefixItems": [
+                        {
+                          "const": "approve",
+                          "type": "string"
+                        },
+                        {
+                          "const": "reject",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "contract": {
+                      "const": "elyan.interaction.v1",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "approval",
+                      "type": "string"
+                    },
+                    "question": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000,
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskRunId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "contract",
+                    "id",
+                    "taskId",
+                    "taskRunId",
+                    "revision",
+                    "expiresAt",
+                    "resolution",
+                    "kind",
+                    "availableActions"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
+              ]
             },
             "needsApproval": {
               "type": "boolean"
@@ -7493,25 +7733,265 @@
               "type": "object"
             },
             "interaction": {
-              "additionalProperties": false,
-              "properties": {
-                "kind": {
-                  "enum": [
-                    "permission",
-                    "clarification"
+              "anyOf": [
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "availableActions": {
+                      "prefixItems": [
+                        {
+                          "const": "answer",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "contract": {
+                      "const": "elyan.interaction.v1",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "clarification",
+                      "type": "string"
+                    },
+                    "question": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000,
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskRunId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "contract",
+                    "id",
+                    "taskId",
+                    "taskRunId",
+                    "revision",
+                    "expiresAt",
+                    "resolution",
+                    "kind",
+                    "availableActions"
                   ],
-                  "type": "string"
+                  "type": "object"
                 },
-                "question": {
-                  "maxLength": 500,
-                  "minLength": 1,
-                  "type": "string"
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "availableActions": {
+                      "prefixItems": [
+                        {
+                          "const": "approve",
+                          "type": "string"
+                        },
+                        {
+                          "const": "reject",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "contract": {
+                      "const": "elyan.interaction.v1",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "permission",
+                      "type": "string"
+                    },
+                    "question": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000,
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskRunId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "contract",
+                    "id",
+                    "taskId",
+                    "taskRunId",
+                    "revision",
+                    "expiresAt",
+                    "resolution",
+                    "kind",
+                    "availableActions"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": {},
+                  "properties": {
+                    "availableActions": {
+                      "prefixItems": [
+                        {
+                          "const": "approve",
+                          "type": "string"
+                        },
+                        {
+                          "const": "reject",
+                          "type": "string"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "contract": {
+                      "const": "elyan.interaction.v1",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "approval",
+                      "type": "string"
+                    },
+                    "question": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "resolution": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "revision": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000,
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "taskRunId": {
+                      "maxLength": 255,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "contract",
+                    "id",
+                    "taskId",
+                    "taskRunId",
+                    "revision",
+                    "expiresAt",
+                    "resolution",
+                    "kind",
+                    "availableActions"
+                  ],
+                  "type": "object"
                 }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
+              ]
             },
             "needsApproval": {
               "type": "boolean"
@@ -8549,7 +9029,7 @@
     "web_search": "WebSearchBlock"
   },
   "x-elyan-envelope-version": 1,
-  "x-elyan-schema-digest": "05322b4e57ec90f3580b62ca4fc5449c03f32447830db3aced2dd512797d9c62",
+  "x-elyan-schema-digest": "7d9f8a3d4c7ea1c63644ee387123af8697331e2fe8ddc99d6b9b02ddf079c81d",
   "x-elyan-source-widget-types": [
     "mail_list",
     "mail_detail",

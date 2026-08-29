@@ -47,6 +47,10 @@ export type MobileTaskFeedRow = {
   startedAt?: Date | null;
   completedAt?: Date | null;
   canceledAt?: Date | null;
+  executionDeadlineAt?: Date | null;
+  lastProgressAt?: Date | null;
+  stepRevision?: number | null;
+  checkpoint?: unknown;
   updatedAt: Date;
 };
 
@@ -204,7 +208,13 @@ export function shapeTaskFeedItem(
     startedAt: task.startedAt ?? null,
     completedAt: task.completedAt ?? null,
     canceledAt: task.canceledAt ?? null,
+    executionDeadlineAt: task.executionDeadlineAt ?? null,
+    lastProgressAt: task.lastProgressAt ?? null,
+    stepRevision: task.stepRevision ?? 0,
+    checkpointAvailable: task.checkpoint != null,
     updatedAt: task.updatedAt,
+    resourceRevision:
+      task.updatedAt instanceof Date ? task.updatedAt.getTime() : 0,
   };
 }
 

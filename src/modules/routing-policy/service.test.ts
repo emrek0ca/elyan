@@ -2591,6 +2591,86 @@ test("decideCommandRoute keeps a plain chat turn on the server brain even with a
   assert.equal(decision.route, "server_brain");
 });
 
+test("decideCommandRoute does not turn current social chat into public research", async () => {
+  const app = createDesktopReadyApp(["web_research"]);
+  const decision = await decideCommandRoute(app as never, {
+    userId: "current-social-chat-user",
+    message: "Bugün nasılsın?",
+    source: "mobile",
+    metadata: { desktopDispatch: true },
+    routeContinuity: "desktop_runtime",
+  });
+
+  assert.equal(decision.route, "server_brain");
+  assert.notEqual(decision.selectedWorkload, "public_research");
+  assert.equal(
+    decision.semanticContract?.evidence.includes("fresh_public_research"),
+    false,
+  );
+});
+
+test("decideCommandRoute keeps current public knowledge domains on the server despite desktop preference", async () => {
+  const prompts = [
+    "Merhaba bugünün haberleri nedir Türkiye'deki?",
+    "Güncel gram altın fiyatı kaç TL?",
+    "İstanbul hava durumu nasıl?",
+    "Galatasaray maç sonucu kaç kaç?",
+    "CVE-2026-1234 için güncel durum nedir?",
+    "React'in son sürümü nedir?",
+  ];
+
+  for (const message of prompts) {
+    const app = createDesktopReadyApp(["web_research"]);
+    Object.assign(app.config, { ELYAN_ROUTE_MODEL_ACCEPT_BUDGET_MS: 0 });
+    let consulted = 0;
+    Object.assign(app.services, {
+      realtimeHub: {
+        isRuntimeConnected: () => true,
+        hasConnectedRuntimeForUser: () => true,
+      },
+      commandRouteModel: {
+        decide: async () => {
+          consulted += 1;
+          return {
+            target: "desktop_runtime" as const,
+            operationalRoute: "desktop_runtime" as const,
+            executionPlan: ["desktop_runtime" as const],
+            reason: "A desktop can browse the web.",
+            needsDesktop: true,
+            needsPrivateDesktopData: false,
+            needsUserApproval: false,
+            requiredCapabilities: [],
+          };
+        },
+      },
+    });
+
+    const decision = await decideCommandRoute(app as never, {
+      userId: "public-knowledge-route-user",
+      message,
+      source: "mobile",
+      metadata: { desktopDispatch: true },
+      routeContinuity: "desktop_runtime",
+    });
+
+    assert.equal(consulted, 0, message);
+    assert.equal(decision.route, "server_brain", message);
+    assert.equal(decision.requiredRuntime, "server", message);
+    assert.equal(decision.taskRoute?.needsDesktop, false, message);
+    assert.equal(decision.selectedWorkload, "public_research", message);
+    assert.equal(
+      decision.semanticContract?.evidence.includes("fresh_public_research"),
+      true,
+      message,
+    );
+    assert.equal(
+      decision.semanticContract?.requiredCapabilities.includes("web_research"),
+      true,
+      message,
+    );
+  }
+});
+
 // Canlı üretim ölçümü (2026-08-08, gerçek kodla backend container'ında):
 //   CLS        intent=computer, requiresLocalRuntime=true  (tur doğru anlaşıldı)
 //   DEV        masaüstü online=true, canReceiveTasks=true  (cihaz hazır)

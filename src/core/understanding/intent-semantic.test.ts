@@ -62,6 +62,23 @@ test("semantic contract preserves explicit document creation as an artifact requ
   assert.equal(contract.sideEffect, "none");
 });
 
+test("fresh public evidence makes web research a typed capability independent of lexical intent", () => {
+  const message = "Merhaba bugünün haberleri nedir Türkiye'deki?";
+  const contract = buildSemanticContract({
+    classification: classifyIntent({
+      userId: "user-1",
+      message,
+      routeContext: "command_route",
+      source: "mobile",
+    }),
+    outputContract: compileOutputContract({ message }),
+    additionalEvidence: ["fresh_public_research"],
+  });
+
+  assert.equal(contract.surface, "server_brain");
+  assert.equal(contract.requiredCapabilities.includes("web_research"), true);
+});
+
 test("route finalization changes only trusted runtime fields and keeps the contract typed", () => {
   const contract = contractFor("Masaüstümdeki raporu aç");
   const finalized = finalizeSemanticContractForRoute({

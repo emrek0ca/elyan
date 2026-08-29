@@ -68,3 +68,18 @@ test("semantic gate accepts an honest evidence limitation", () => {
   assert.equal(result.accepted, true);
   assert.equal(result.evidenceState, "insufficient");
 });
+
+test("semantic gate accepts prompt-authoritative numeric table data", () => {
+  const result = evaluateSemanticResponseGate({
+    prompt: "2021: 10, 2022: 20, 2023: 30.44 değerlerini tablo yap",
+    text: "En yüksek değer 2023 yılında 30.44.",
+    workload: "mobile_chat_fast",
+    blocks: [{ type: "table", blockId: "table-1" }],
+    evidence: {
+      artifactEvidence: true,
+      promptAuthoritativeData: true,
+    },
+  });
+  assert.equal(result.accepted, true);
+  assert.equal(result.evidenceState, "verified");
+});

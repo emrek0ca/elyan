@@ -864,6 +864,30 @@ test("weather grounding uses structured REST data before web search", async () =
           },
         });
       }
+      if (parsed.hostname === "api.met.no") {
+        return Response.json({
+          properties: {
+            timeseries: [
+              {
+                time: new Date().toISOString(),
+                data: {
+                  instant: {
+                    details: {
+                      air_temperature: 31,
+                      relative_humidity: 45,
+                      wind_speed: 3.2,
+                    },
+                  },
+                  next_1_hours: {
+                    summary: { symbol_code: "clearsky_day" },
+                    details: { precipitation_amount: 0 },
+                  },
+                },
+              },
+            ],
+          },
+        });
+      }
       throw new Error(`Unexpected web-search request: ${url}`);
     },
     async () =>
@@ -874,14 +898,18 @@ test("weather grounding uses structured REST data before web search", async () =
       }),
   );
 
-  assert.equal(result.source, "open_meteo");
+  assert.equal(result.source, "met_norway");
   assert.equal(result.used, true);
   assert.equal(result.confidence, "high");
   assert.equal(result.freshData.evidence.sufficient, true);
   assert.equal(result.results[0]?.verificationState, "verified");
   assert.match(result.results[0]?.snippet ?? "", /sıcaklık 31 °C/iu);
-  assert.match(result.results[0]?.snippet ?? "", /hissedilen 33\.8 °C/iu);
-  assert.ok(requestedUrls.every((url) => url.includes("open-meteo.com")));
+  assert.match(result.results[0]?.snippet ?? "", /durum clearsky day/iu);
+  assert.ok(
+    requestedUrls.every((url) =>
+      url.includes("open-meteo.com") || url.includes("api.met.no"),
+    ),
+  );
   assert.doesNotMatch(buildWebGroundingPromptBlock(result) ?? "", /EVIDENCE GUARD/iu);
 });
 
@@ -900,15 +928,15 @@ test("fiat grounding uses structured JSON REST data before web search", async ()
       const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       requestedUrls.push(url);
       const parsed = new URL(url);
-      if (parsed.hostname !== "api.frankfurter.app") {
+      if (parsed.hostname !== "www.tcmb.gov.tr") {
         throw new Error(`Unexpected web-search request: ${url}`);
       }
-      return Response.json({
-        amount: 1,
-        base: "USD",
-        date: new Date().toISOString().slice(0, 10),
-        rates: { TRY: 42.75 },
-      });
+      const today = new Date();
+      const date = `${String(today.getUTCMonth() + 1).padStart(2, "0")}/${String(today.getUTCDate()).padStart(2, "0")}/${today.getUTCFullYear()}`;
+      return new Response(
+        `<Tarih_Date Date="${date}"><Currency CurrencyCode="USD"><ForexSelling>42.75</ForexSelling></Currency></Tarih_Date>`,
+        { status: 200, headers: { "content-type": "application/xml" } },
+      );
     },
     () => searchPublicWebGrounding(app, {
       prompt: "Bugünkü dolar kaç TL?",
@@ -916,10 +944,10 @@ test("fiat grounding uses structured JSON REST data before web search", async ()
       bypassCache: true,
     }),
   );
-  assert.equal(result.source, "frankfurter");
+  assert.equal(result.source, "tcmb_fx");
   assert.equal(result.used, true);
   assert.match(result.results[0]?.snippet ?? "", /1 USD = 42\.75 TRY/u);
-  assert.ok(requestedUrls.every((url) => url.includes("api.frankfurter.app")));
+  assert.ok(requestedUrls.every((url) => url.includes("www.tcmb.gov.tr")));
 });
 
 test("crypto grounding uses structured JSON REST data before web search", async () => {

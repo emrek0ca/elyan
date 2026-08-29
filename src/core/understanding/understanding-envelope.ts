@@ -886,8 +886,8 @@ function buildDesiredOutputs(input: {
     const format = input.outputContract.outputFormat;
     if (input.outputContract.outputKind === "document") {
       addDesiredOutput(outputs, {
-        kind: format === "docx" ? "docx" : "pdf",
-        format: format === "docx" ? "docx" : "pdf",
+        kind: format === "docx" || format === "txt" ? format : "pdf",
+        format: format === "docx" || format === "txt" ? format : "pdf",
         target: artifactTarget,
         confidence: input.outputContract.confidence,
         constraints: [

@@ -6,6 +6,7 @@ import {
   detectBrainCorpusDomains,
   ELYAN_BRAIN_CORPUS_VERSION,
   getBrainCorpusManifest,
+  selectBrainCorpusDomains,
 } from "./corpus.js";
 import { shapePublicBrainProfile } from "./service.js";
 
@@ -29,14 +30,36 @@ test("brain corpus guidance is empty when no domain matches", async () => {
 test("brain corpus manifest is versioned and hash-backed", async () => {
   const manifest = await getBrainCorpusManifest();
 
-  assert.equal(manifest.length, 8);
+  assert.equal(manifest.length, 12);
   assert.equal(new Set(manifest.map((item) => item.id)).size, manifest.length);
   assert.ok(manifest.every((item) => item.version === ELYAN_BRAIN_CORPUS_VERSION));
   assert.ok(manifest.every((item) => /^[a-f0-9]{64}$/.test(item.contentHash)));
   assert.deepEqual(
     manifest.map((item) => item.domain).sort(),
-    ["code", "data", "design", "language", "memory", "reasoning", "safety", "skills"],
+    [
+      "code",
+      "data",
+      "design",
+      "language",
+      "memory",
+      "onboarding",
+      "product",
+      "reasoning",
+      "safety",
+      "skills",
+      "support",
+      "tasks",
+    ],
   );
+});
+
+test("stable product questions select the knowledge corpus from registry metadata", async () => {
+  const selected = await selectBrainCorpusDomains({
+    prompt: "Elyan masaüstü ne işe yarar?",
+    queryVector: null,
+  });
+  assert.equal(selected[0]?.domain, "product");
+  assert.equal(selected[0]?.source, "registry");
 });
 
 test("brain corpus domain mapper selects relevant domains", () => {

@@ -35,6 +35,7 @@ import {
   resolveReasoningEffort,
   shouldUseLegacyMemoryPrompt,
   shouldUseResponseCache,
+  shouldIncludeDesktopRuntimeContext,
   unsafeResponseRepairFallback,
 } from "./inference.js";
 import { looksLikeLeakedToolCallText } from "./turn-envelope.js";
@@ -7430,6 +7431,36 @@ test("answer prompt follows the semantic server route instead of a UI toggle", (
     /semantic router assigned this turn to the server brain/u,
   );
   assert.doesNotMatch(prompt, /laptop toggle|user-controlled/u);
+});
+
+test("server-owned public answers do not receive desktop runtime context", () => {
+  assert.equal(
+    shouldIncludeDesktopRuntimeContext({
+      route: "shared_brain",
+      routeDecision: {
+        route: "server_brain",
+        requiredRuntime: "server",
+        taskRoute: {
+          target: "server_brain",
+          operationalRoute: "server_brain",
+          executionPlan: ["server_brain"],
+          reason: "Current public information uses server evidence.",
+          needsDesktop: false,
+          needsPrivateDesktopData: false,
+          needsUserApproval: false,
+          requiredCapabilities: [],
+        },
+      } as never,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldIncludeDesktopRuntimeContext({
+      route: "desktop_runtime",
+      routeDecision: null,
+    }),
+    true,
+  );
 });
 
 test("answer prompt distinguishes routed desktop execution from unavailable runtime", () => {

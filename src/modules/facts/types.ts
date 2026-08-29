@@ -26,14 +26,39 @@ import type { FastifyBaseLogger } from "fastify";
 export type FactProviderId =
   | "open_meteo"
   | "open_meteo_air"
+  | "met_norway"
+  | "tcmb_fx"
+  | "tcmb_evds"
   | "frankfurter"
+  | "alpha_vantage_metals"
   | "coingecko"
   | "local_time"
   | "usgs_earthquake"
-  | "nager_holidays";
+  | "nager_holidays"
+  | "fred"
+  | "world_bank"
+  | "crossref";
 
 /** Veri sınıfı — TTL ve tazelik beklentisini birlikte taşır. */
-export type FactDataClass = "realtime" | "hourly" | "daily";
+export type FactDataClass =
+  | "realtime"
+  | "hourly"
+  | "daily"
+  | "monthly"
+  | "annual";
+
+export type FactSourceDescriptor = {
+  authority: string;
+  dataClass: FactDataClass;
+  observedAt: string;
+  retrievedAt: string;
+  expiresAt: string;
+  units: string[];
+  requiresSecret: boolean;
+  commercialUse: "allowed" | "conditional";
+  sourceHash: string;
+  verificationState: "verified" | "partial";
+};
 
 export type FactCitation = {
   title: string;
@@ -55,14 +80,22 @@ export type FactAnswer = {
   directAnswer: string;
   citation: FactCitation;
   /** Kart/tipli blok üretimi için yapılandırılmış değerler. */
-  values: Record<string, string | number>;
+  values: Record<string, unknown>;
   confidence: number;
   ttlMs: number;
+  source?: FactSourceDescriptor;
 };
 
 export type FactResolveContext = {
   timeoutMs: number;
   logger?: Pick<FastifyBaseLogger, "warn" | "debug">;
+  secrets: {
+    alphaVantageApiKey?: string;
+    tcmbEvdsApiKey?: string;
+    fredApiKey?: string;
+    coinGeckoDemoApiKey?: string;
+    crossrefMailto?: string;
+  };
 };
 
 export type FactProvider<P = unknown> = {
@@ -73,6 +106,11 @@ export type FactProvider<P = unknown> = {
    */
   intents: string[];
   dataClass: FactDataClass;
+  authority: string;
+  requiresSecret?: keyof FactResolveContext["secrets"];
+  commercialUse: "allowed" | "conditional";
+  allowStale: boolean;
+  units?: string[];
   timeoutMs: number;
   ttlMs: number;
   /**

@@ -27,6 +27,8 @@ export type ProactiveEventName =
   | "disabled"
   | "enabled"
   | "dismissed"
+  | "track"
+  | "snoozed"
   | "night_job_planned"
   | "night_job_settled";
 

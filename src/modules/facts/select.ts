@@ -167,18 +167,22 @@ export type FactSelection = {
 
 export async function selectFactProviders(input: {
   prompt: string;
+  queryVector?: number[] | null;
   logger?: Pick<FastifyBaseLogger, "warn" | "info" | "debug">;
 }): Promise<FactSelection[]> {
   await ensureIntentVectors(input.logger);
   if (!intentVectors) return [];
   // Sorgu gömme KRİTİK YOLDADIR; sınırsız beklemesi turu rehin alır.
   // Zaman aşımında seçim yapılmaz ve domain yedeği devralır.
-  const queryVector = await embedQueryForStorage(
-    input.prompt,
-    input.logger,
-    "facts:query",
-    SELECTION_EMBED_TIMEOUT_MS,
-  );
+  const queryVector =
+    input.queryVector === undefined
+      ? await embedQueryForStorage(
+          input.prompt,
+          input.logger,
+          "facts:query",
+          SELECTION_EMBED_TIMEOUT_MS,
+        )
+      : input.queryVector;
   if (!queryVector) return [];
 
   const scored = intentVectors

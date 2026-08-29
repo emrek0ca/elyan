@@ -78,6 +78,7 @@ import {
   rejectBrainInteractionCorrection,
 } from "./review.js";
 import { runBrainBenchmark } from "./benchmark.js";
+import { createGoal, publishContinuityRevision } from "../goals/service.js";
 
 async function assertAdmin(
   app: FastifyInstance,
@@ -95,16 +96,26 @@ async function assertAdmin(
 
 const proactiveAckBodySchema = z.object({
   triggerId: z.string().uuid(),
-  action: z.enum(["opened", "dismissed"]),
+  action: z.enum(["opened", "track", "dismissed", "snoozed"]),
+  revision: z.number().int().positive().optional(),
+  snoozeUntil: z.string().datetime().optional(),
   surface: z.string().min(1).max(40).optional(),
 });
 
 async function readOwnedProactiveTrigger(
   app: FastifyInstance,
   input: { userId: string; triggerId: string },
-): Promise<{ id: string; kind: string } | null> {
+): Promise<{ id: string; kind: string; sessionId: string | null; status: string; due: Date; payload: unknown; updatedAt: Date } | null> {
   const rows = await app.db
-    .select({ id: proactiveTriggers.id, kind: proactiveTriggers.kind })
+    .select({
+      id: proactiveTriggers.id,
+      kind: proactiveTriggers.kind,
+      sessionId: proactiveTriggers.sessionId,
+      status: proactiveTriggers.status,
+      due: proactiveTriggers.due,
+      payload: proactiveTriggers.payload,
+      updatedAt: proactiveTriggers.updatedAt,
+    })
     .from(proactiveTriggers)
     .where(
       and(
@@ -144,6 +155,102 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
       reply.code(404);
       return { error: "trigger_not_found" };
     }
+    if (body.revision && body.revision !== owned.updatedAt.getTime()) {
+      reply.code(409);
+      return { error: "stale_proactive_revision" };
+    }
+
+    if (body.action === "track") {
+      if (!body.revision) {
+        reply.code(409);
+        return { error: "proactive_revision_required" };
+      }
+      if (owned.status !== "candidate") {
+        reply.code(409);
+        return { error: "proactive_trigger_not_actionable" };
+      }
+      const payload = owned.payload && typeof owned.payload === "object" && !Array.isArray(owned.payload)
+        ? owned.payload as Record<string, unknown>
+        : {};
+      const topic = typeof payload.topic === "string" && payload.topic.trim()
+        ? payload.topic.trim()
+        : "Takip";
+      const trackedAt = new Date();
+      const tracked = await app.db.update(proactiveTriggers).set({
+        status: "pending",
+        createdBy: "user",
+        updatedAt: trackedAt,
+      }).where(and(
+        eq(proactiveTriggers.id, owned.id),
+        eq(proactiveTriggers.userId, auth.sub),
+        eq(proactiveTriggers.status, "candidate"),
+        eq(proactiveTriggers.updatedAt, owned.updatedAt),
+      )).returning({ id: proactiveTriggers.id });
+      if (!tracked[0]) {
+        reply.code(409);
+        return { error: "proactive_trigger_not_actionable" };
+      }
+      try {
+        await createGoal(app, {
+          userId: auth.sub,
+          sessionId: owned.sessionId ?? undefined,
+          title: topic,
+          description: "Kullanıcı tarafından onaylanan takip",
+          scheduleHint: "on_next_message",
+          dueAt: owned.due,
+        });
+      } catch (error) {
+        await app.db.update(proactiveTriggers).set({
+          status: "candidate",
+          createdBy: "model",
+          updatedAt: new Date(),
+        }).where(and(
+          eq(proactiveTriggers.id, owned.id),
+          eq(proactiveTriggers.userId, auth.sub),
+          eq(proactiveTriggers.status, "pending"),
+          eq(proactiveTriggers.updatedAt, trackedAt),
+        ));
+        throw error;
+      }
+    } else if (body.action === "dismissed") {
+      const dismissed = await app.db.update(proactiveTriggers).set({
+        status: "canceled",
+        canceledAt: new Date(),
+        updatedAt: new Date(),
+      }).where(and(
+        eq(proactiveTriggers.id, owned.id),
+        eq(proactiveTriggers.userId, auth.sub),
+        eq(proactiveTriggers.status, owned.status),
+      )).returning({ id: proactiveTriggers.id });
+      if (!dismissed[0]) {
+        reply.code(409);
+        return { error: "proactive_trigger_not_actionable" };
+      }
+    } else if (body.action === "snoozed") {
+      if (!body.revision) {
+        reply.code(409);
+        return { error: "proactive_revision_required" };
+      }
+      const snoozeUntil = body.snoozeUntil ? new Date(body.snoozeUntil) : new Date(Date.now() + 24 * 60 * 60_000);
+      if (owned.status !== "pending" || snoozeUntil.getTime() <= Date.now()) {
+        reply.code(409);
+        return { error: "proactive_trigger_not_actionable" };
+      }
+      const snoozed = await app.db.update(proactiveTriggers).set({
+        status: "pending",
+        due: snoozeUntil,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(proactiveTriggers.id, owned.id),
+        eq(proactiveTriggers.userId, auth.sub),
+        eq(proactiveTriggers.status, "pending"),
+        eq(proactiveTriggers.updatedAt, owned.updatedAt),
+      )).returning({ id: proactiveTriggers.id });
+      if (!snoozed[0]) {
+        reply.code(409);
+        return { error: "proactive_trigger_not_actionable" };
+      }
+    }
 
     await recordProactiveEvent(app, {
       userId: auth.sub,
@@ -153,8 +260,14 @@ export const brainRoutes: FastifyPluginAsync = async (app) => {
       source: "user",
       detail: body.surface ? { surface: body.surface } : {},
     });
+    if (body.action !== "opened") {
+      await publishContinuityRevision(app, {
+        userId: auth.sub,
+        sessionId: owned.sessionId ?? undefined,
+      });
+    }
 
-    return { ok: true };
+    return { ok: true, action: body.action };
   });
 
   app.get("/profile", async (request, reply) => {

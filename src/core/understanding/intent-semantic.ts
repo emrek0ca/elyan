@@ -590,10 +590,14 @@ function requiredCapabilitiesForContract(input: {
   classification: IntentClassification;
   artifact: SemanticContract["artifact"];
   sideEffect: SemanticContract["sideEffect"];
+  evidence: string[];
 }): string[] {
   const capabilities: string[] = [];
   const primary = input.classification.primaryIntent;
   if (primary === "research" || input.classification.requiresCitation) {
+    capabilities.push("web_research");
+  }
+  if (input.evidence.includes("fresh_public_research")) {
     capabilities.push("web_research");
   }
   if (primary === "document") capabilities.push("document.read");
@@ -674,6 +678,7 @@ export function buildSemanticContract(input: {
       classification: input.classification,
       artifact,
       sideEffect,
+      evidence,
     }),
     needsApproval: sideEffect === "write" || sideEffect === "destructive",
     confidence,

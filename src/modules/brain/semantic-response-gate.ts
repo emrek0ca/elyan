@@ -17,6 +17,8 @@ export type SemanticResponseGateInput = {
     toolCallCount?: number;
     verifiedEvidenceCount?: number;
     artifactEvidence?: boolean;
+    promptAuthoritativeData?: boolean;
+    conversationReferenceEvidence?: boolean;
     agentVerified?: boolean;
     retrievalLowConfidence?: boolean;
     knowledgeEvidenceState?: "none" | "verified" | "insufficient";
@@ -170,7 +172,12 @@ export function evaluateSemanticResponseGate(
         input.understandingEnvelope?.output_contract?.outputKind ?? "artifact",
       )
     : "chat_reply";
-  const evidenceState = evidence.knowledgeEvidenceState === "insufficient"
+  const hasAuthoritativeInlineEvidence =
+    evidence.promptAuthoritativeData === true ||
+    evidence.conversationReferenceEvidence === true;
+  const evidenceState = hasAuthoritativeInlineEvidence
+    ? "verified"
+    : evidence.knowledgeEvidenceState === "insufficient"
     ? "insufficient"
     : evidence.knowledgeEvidenceState === "verified"
       ? "verified"

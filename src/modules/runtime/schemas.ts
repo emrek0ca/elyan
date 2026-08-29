@@ -103,6 +103,8 @@ export const runtimeTaskUpdateBodySchema = z
      */
     progress: z
       .object({
+        stepRevision: z.number().int().positive().optional(),
+        checkpoint: boundedJsonRecordSchema.optional(),
         activeStepId: z.string().trim().max(120).optional(),
         steps: z
           .array(

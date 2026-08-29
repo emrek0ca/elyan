@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { and, asc, eq, lte, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
@@ -11,7 +11,7 @@ import {
 import { sendUserPush } from "../notifications/push-sender.js";
 import { recordProactiveEvent } from "./proactive-metrics.js";
 import type { TurnEnvelope } from "./turn-envelope.js";
-import { truncateText as compactText } from "../../lib/text.js";
+import { foldTurkishDiacritics, truncateText as compactText } from "../../lib/text.js";
 
 type FollowUp = TurnEnvelope["follow_ups"][number];
 
@@ -31,6 +31,96 @@ export type RecordFollowUpsResult = {
   created: number;
   skipped: number;
 };
+
+type DeterministicFollowUpCapture = {
+  kind: "explicit" | "candidate";
+  triggerId: string;
+  revision: number;
+  block: Record<string, unknown> | null;
+};
+
+export function classifyDeterministicFollowUp(message: string, now = new Date()): { kind: "explicit" | "candidate"; topic: string; due: Date } | null {
+  const text = message.trim().replace(/\s+/g, " ");
+  const folded = foldTurkishDiacritics(text);
+  const explicit = /(hatirlat|takip et|sonucunu sor|yarin .* sor|devam etmemizi hatirlat)/.test(folded);
+  const candidate = /(bunu|sunu|konuyu).{0,40}(sonra|daha sonra).{0,30}(ele al|bak|don|devam)/.test(folded);
+  if (!explicit && !candidate) return null;
+  const tomorrow = /(yarin|tomorrow)/.test(folded);
+  const due = new Date(now.getTime() + (tomorrow ? 24 : 2) * 60 * 60_000);
+  const topic = compactText(
+    text
+      .replace(/(?:yarın|yarin|tomorrow|hatırlat|hatirlat|takip et|sonucunu sor)/gi, "")
+      .replace(/\s+/g, " ")
+      .trim() || "Bu konu",
+    240,
+  );
+  return { kind: explicit ? "explicit" : "candidate", topic, due };
+}
+
+export async function captureDeterministicFollowUp(
+  app: FastifyInstance,
+  input: { userId: string; sessionId?: string | null; message: string; now?: Date },
+): Promise<DeterministicFollowUpCapture | null> {
+  const now = input.now ?? new Date();
+  const intent = classifyDeterministicFollowUp(input.message, now);
+  const sessionId = safeSessionId(input.sessionId);
+  if (!intent || !sessionId) return null;
+  const subjectHash = createHash("sha256")
+    .update(`${input.userId}:${sessionId}:${intent.topic.toLocaleLowerCase("tr-TR")}:${intent.due.toISOString().slice(0, 10)}`)
+    .digest("hex")
+    .slice(0, 32);
+  const dedupeKey = `followup:${subjectHash}`;
+  const existing = await app.db
+    .select({ id: proactiveTriggers.id, updatedAt: proactiveTriggers.updatedAt, status: proactiveTriggers.status })
+    .from(proactiveTriggers)
+    .where(and(
+      eq(proactiveTriggers.userId, input.userId),
+      eq(proactiveTriggers.dedupeKey, dedupeKey),
+      inArray(proactiveTriggers.status, ["candidate", "pending", "running", "fired", "canceled"]),
+    ))
+    .limit(1);
+  if (existing[0]) return null;
+  const question = `“${compactText(intent.topic, 100)}” konusunu takip edeyim mi?`;
+  const rows = await app.db
+    .insert(proactiveTriggers)
+    .values({
+      userId: input.userId,
+      sessionId,
+      kind: "follow_up",
+      due: intent.due,
+      status: intent.kind === "explicit" ? "pending" : "candidate",
+      createdBy: intent.kind === "explicit" ? "user" : "model",
+      dedupeKey,
+      payload: {
+        source: "turn_envelope",
+        topic: intent.topic,
+        nudge: intent.kind === "explicit" ? `${intent.topic} için takip zamanı.` : question,
+        dueHint: intent.due.toISOString(),
+        explicit: intent.kind === "explicit",
+        privacy: "identifier_only_push",
+      },
+      updatedAt: now,
+    })
+    .returning({ id: proactiveTriggers.id, updatedAt: proactiveTriggers.updatedAt });
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    kind: intent.kind,
+    triggerId: row.id,
+    revision: row.updatedAt.getTime(),
+    block: intent.kind === "candidate"
+      ? {
+          type: "proactive_touch",
+          blockId: `followup_${row.id}`,
+          title: "Bunu takip edebilirim",
+          body: question,
+          triggerId: row.id,
+          revision: row.updatedAt.getTime(),
+          availableActions: ["track", "dismissed"],
+        }
+      : null,
+  };
+}
 
 export async function applyTurnProactiveOps(
   app: FastifyInstance,
@@ -524,14 +614,6 @@ const PROACTIVE_PUSH_TITLE = "Elyan";
  */
 const SENSITIVE_PUSH_BODY = "Sana bir önerim var.";
 
-function triggerPrefersOpaquePush(trigger: ProactiveTriggerRow): boolean {
-  const payload =
-    trigger.payload && typeof trigger.payload === "object" && !Array.isArray(trigger.payload)
-      ? (trigger.payload as Record<string, unknown>)
-      : {};
-  return payload.privacy === "sensitive";
-}
-
 /**
  * A trigger the policy refused. Quiet hours only postpone; every other reason
  * retires the trigger. Both paths are recorded so the suppression mix is
@@ -582,19 +664,20 @@ async function deliverProactivePush(
     content: string;
   },
 ): Promise<void> {
+  const payload = input.trigger.payload && typeof input.trigger.payload === "object" && !Array.isArray(input.trigger.payload)
+    ? input.trigger.payload as Record<string, unknown>
+    : {};
+  if (input.trigger.createdBy !== "user" && payload.explicit !== true) return;
   const result = await sendUserPush(app, {
     userId: input.trigger.userId,
     kind: `proactive.${input.trigger.kind}`,
     title: PROACTIVE_PUSH_TITLE,
-    body: triggerPrefersOpaquePush(input.trigger)
-      ? SENSITIVE_PUSH_BODY
-      : input.content,
+    body: SENSITIVE_PUSH_BODY,
     collapseKey: `proactive:${input.sessionId}`,
     // `sessionId` alone is what the mobile deep-link parser needs to open the
     // right conversation; nothing else about the content travels.
     data: {
       sessionId: input.sessionId,
-      messageId: input.messageId,
       triggerId: input.trigger.id,
     },
   }).catch((error) => {

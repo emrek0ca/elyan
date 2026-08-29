@@ -248,6 +248,20 @@ test("resolveCompletionAssistantBlocks deduplicates repeated typed blocks", () =
   assert.equal(blocks.filter((block) => block.type === "table").length, 1);
 });
 
+test("resolveCompletionAssistantBlocks caps a chat turn at three useful blocks", () => {
+  const result = resolveCompletionAssistantBlocks({
+    prompt: "Özetle",
+    responseText: "Kısa sonuç.",
+    assistantBlocks: [
+      { type: "summary", summary: "Bir" },
+      { type: "next_steps", items: ["İki"] },
+      { type: "context_signal", label: "Üç" },
+      { type: "capability_unavailable", capability: "Dört" },
+    ],
+  });
+  assert.equal(result.blocks.length, 3);
+});
+
 test("stripPromptEchoFromAssistantText removes prompt-only assistant output", () => {
   assert.equal(
     stripPromptEchoFromAssistantText({

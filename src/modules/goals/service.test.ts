@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { goalEvents } from "../../db/schema.js";
+import { goalEvents, proactiveTriggers } from "../../db/schema.js";
 import {
   applyGoalProgressBlocks,
   createGoal,
@@ -62,7 +62,9 @@ class GoalsDb {
   readonly events: Array<Record<string, unknown>> = [];
 
   select() {
-    return new Query(this.rows);
+    return {
+      from: (table: unknown) => new Query(table === proactiveTriggers ? [] : this.rows),
+    };
   }
 
   insert(table?: unknown) {

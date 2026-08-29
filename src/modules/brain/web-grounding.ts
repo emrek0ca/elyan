@@ -49,7 +49,13 @@ export type WebGroundingSearchResult = {
   publishedAt?: string;
   observedAt: string;
   freshnessStatus: FreshDataStatus;
-  searchProvider?: "duckduckgo_html" | "brave" | "searxng" | FactProviderId;
+  searchProvider?:
+    | "duckduckgo_html"
+    | "brave"
+    | "searxng"
+    | "gdelt"
+    | "groq_compound"
+    | FactProviderId;
   pageContent?: string;
 };
 
@@ -63,7 +69,13 @@ export type WebGroundingResult = {
   used: boolean;
   query: string;
   queries: string[];
-  source: "duckduckgo_html" | "brave" | "searxng" | FactProviderId;
+  source:
+    | "duckduckgo_html"
+    | "brave"
+    | "searxng"
+    | "gdelt"
+    | "groq_compound"
+    | FactProviderId;
   results: WebGroundingSearchResult[];
   degradedReason: string | null;
   confidence: "high" | "medium" | "low";
@@ -405,6 +417,15 @@ const WEB_QUERY_STOPWORDS = new Set([
   "today",
   "latest",
   "recent",
+  "güncel",
+  "guncel",
+  "kaç",
+  "kac",
+  "fiyat",
+  "fiyatı",
+  "fiyati",
+  "price",
+  "rate",
   "resmi",
   "official",
   "kaynak",
@@ -855,7 +876,7 @@ function freshDataEnvelopeForResult(input: {
   });
 }
 
-function applyDomainEvidenceGuards(result: WebGroundingResult): WebGroundingResult {
+export function applyDomainEvidenceGuards(result: WebGroundingResult): WebGroundingResult {
   if (result.freshData.domain !== "market" || !result.used) {
     return result;
   }
@@ -1287,6 +1308,96 @@ type SearXNGResult = {
   published_date?: string;
 };
 
+type GdeltArticle = {
+  url?: string;
+  title?: string;
+  seendate?: string;
+  domain?: string;
+};
+
+async function fetchGdeltNewsQuery(
+  query: string,
+  policy: FreshDataPolicy,
+  timeoutMs: number,
+): Promise<{
+  query: string;
+  results: WebGroundingSearchResult[];
+  degradedReason: string | null;
+}> {
+  const url = new URL("https://api.gdeltproject.org/api/v2/doc/doc");
+  url.searchParams.set("query", query);
+  url.searchParams.set("mode", "artlist");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("maxrecords", "10");
+  url.searchParams.set("sort", "datedesc");
+  url.searchParams.set("timespan", "2d");
+  const { controller, timeout } = createTimedAbortController(timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        "user-agent": "Elyan/1.0",
+      },
+    });
+    if (!response.ok) {
+      return {
+        query,
+        results: [],
+        degradedReason: `gdelt_http_${response.status}`,
+      };
+    }
+    const payload = await readBoundedJsonObject(response);
+    const articles = Array.isArray(payload?.articles)
+      ? (payload.articles as GdeltArticle[])
+      : [];
+    const results = articles.flatMap((article) => {
+      if (
+        typeof article?.url !== "string" ||
+        typeof article.title !== "string" ||
+        !isSafePublicHttpUrl(article.url)
+      ) {
+        return [];
+      }
+      const publishedAt = normalizePublishedAt(article.seendate);
+      return [
+        withSourceAuthority(
+          {
+            title: compactText(article.title).slice(0, 240),
+            url: article.url,
+            snippet: "",
+            sourceHost:
+              compactText(article.domain) || hostFromUrl(article.url),
+            searchProvider: "gdelt" as const,
+            ...(publishedAt ? { publishedAt } : {}),
+            verificationState: "unverified" as const,
+            queryHits: 1,
+            score: 0.4,
+          },
+          policy,
+          publishedAt,
+        ),
+      ];
+    });
+    return {
+      query,
+      results,
+      degradedReason: results.length === 0 ? "gdelt_no_results" : null,
+    };
+  } catch (error) {
+    return {
+      query,
+      results: [],
+      degradedReason:
+        error instanceof Error && error.name === "AbortError"
+          ? "gdelt_timeout"
+          : "gdelt_failed",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchSearXNGQuery(
   app: FastifyInstance,
   query: string,
@@ -1502,6 +1613,11 @@ async function fetchSearchQuery(
     results: WebGroundingSearchResult[];
     degradedReason: string | null;
   }>> = [];
+  if (policy.domain === "news") {
+    attempts.push((timeoutMs) =>
+      fetchGdeltNewsQuery(query, policy, timeoutMs),
+    );
+  }
   if (app.config.ELYAN_SEARCH_PROVIDER === "searxng" && app.config.SEARXNG_BASE_URL) {
     attempts.push((timeoutMs) => fetchSearXNGQuery(app, query, policy, timeoutMs));
     if (app.config.BRAVE_SEARCH_API_KEY) {
@@ -1731,7 +1847,7 @@ async function verifyResultViaHtml(
 function scoreResult(input: WebGroundingSearchResult): number {
   const verificationBoost =
     input.verificationState === "verified" ? 0.35 : input.verificationState === "partial" ? 0.12 : 0;
-  const queryHitBoost = Math.min(input.queryHits, 3) * 0.22;
+  const queryHitBoost = Math.min(input.queryHits, 3) * 0.1;
   const snippetBoost = input.snippet ? 0.08 : 0;
   const sourceAuthority = input.sourceAuthority ?? classifySourceAuthority(input.sourceHost || hostFromUrl(input.url));
   const authorityBoost =
@@ -1756,6 +1872,29 @@ function scoreResult(input: WebGroundingSearchResult): number {
     trustAdjustment +
     freshnessAdjustment
   ).toFixed(4));
+}
+
+function applySubjectRelevance(
+  result: WebGroundingSearchResult,
+  query: string,
+): WebGroundingSearchResult {
+  const terms = stripQueryNoise(query)
+    .split(/\s+/u)
+    .map((term) => term.toLocaleLowerCase("tr-TR").replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter((term) => term.length > 2 && !WEB_QUERY_STOPWORDS.has(term));
+  if (terms.length === 0) return result;
+  const haystack = `${result.title} ${result.snippet} ${result.sourceHost}`.toLocaleLowerCase("tr-TR");
+  const matches = terms.filter((term) => haystack.includes(term)).length;
+  const numericEvidence = /\d+(?:[.,]\d+)?\s*(?:₺|tl|try|usd|eur|%|°c|gram|ons)/iu.test(
+    `${result.title} ${result.snippet}`,
+  );
+  return {
+    ...result,
+    score:
+      result.score +
+      (matches === 0 ? -1.2 : Math.min(0.75, matches * 0.25)) +
+      (numericEvidence ? 0.25 : 0),
+  };
 }
 
 function confidenceFromResults(results: WebGroundingSearchResult[]): "high" | "medium" | "low" {
@@ -2132,6 +2271,7 @@ export async function searchPublicWebGrounding(
     workload: SharedBrainWorkload;
     bypassCache?: boolean;
     attachmentContextUsed?: boolean;
+    factAnswer?: FactAnswer | null;
     /** Internal skill contract: require search unless an explicit safety/locality rule denies it. */
     forceSearch?: boolean;
   },
@@ -2270,16 +2410,19 @@ export async function searchPublicWebGrounding(
   // eskiden burada gömülü duran `/bitcoin|btc/` sınıfı regex'ler kaldırıldı.
   //
   // Katman `null` dönerse hiçbir şey değişmez — tur normal aramaya devam eder.
-  const factResolution = await withStructuredApiInflight(
-    app,
-    `facts:${cacheKey}`,
-    () =>
-      resolveFactAnswer(app, {
-        prompt: query,
-        domain: freshDataPolicy.domain,
-        bypassCache: input.bypassCache === true,
-      }),
-  );
+  const factResolution = input.factAnswer
+    ? {
+        answer: input.factAnswer,
+        selection: "semantic" as const,
+        cacheState: "fresh" as const,
+      }
+    : await withStructuredApiInflight(app, `facts:${cacheKey}`, () =>
+        resolveFactAnswer(app, {
+          prompt: query,
+          domain: freshDataPolicy.domain,
+          bypassCache: input.bypassCache === true,
+        }),
+      );
   if (factResolution) {
     const answer = factResolution.answer;
     // Piyasa/olgu turlarında tek yetkili kaynak yeterlidir: sayı sağlayıcının
@@ -2424,7 +2567,7 @@ export async function searchPublicWebGrounding(
           const current = merged.get(key);
           if (!current) {
             const normalizedResult = normalizeResultForFreshDataPolicy(
-              result,
+              applySubjectRelevance(result, query),
               freshDataPolicy,
               requestedAt.toISOString(),
             );

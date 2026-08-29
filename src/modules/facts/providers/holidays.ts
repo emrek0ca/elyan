@@ -23,6 +23,10 @@ type HolidayParams = { code: string; name: string; year: number };
 export const holidayProvider = defineFactProvider<HolidayParams>({
   id: "nager_holidays",
   dataClass: "daily",
+  authority: "Nager.Date",
+  commercialUse: "allowed",
+  allowStale: true,
+  units: ["date"],
   timeoutMs: 4_000,
   ttlMs: 24 * 60 * 60_000,
   intents: [

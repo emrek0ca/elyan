@@ -100,6 +100,7 @@ export const understandingDesiredOutputKindValues = [
   "chat_reply",
   "pdf",
   "docx",
+  "txt",
   "xlsx",
   "table",
   "chart",

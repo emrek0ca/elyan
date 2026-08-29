@@ -13,7 +13,15 @@ import {
   isApprovalRequestExpired,
   normalizeTaskApprovalRequest,
   shouldAutoApproveDesktopTask,
+  taskExecutionDeadline,
 } from "./service-lifecycle.js";
+
+test("taskExecutionDeadline applies bounded class deadlines", () => {
+  const now = new Date("2030-01-01T00:00:00.000Z");
+  assert.equal(taskExecutionDeadline({ executionClass: "chat", now }).toISOString(), "2030-01-01T00:04:00.000Z");
+  assert.equal(taskExecutionDeadline({ executionClass: "desktop", now }).toISOString(), "2030-01-01T00:30:00.000Z");
+  assert.equal(taskExecutionDeadline({ executionClass: "long", now }).toISOString(), "2030-01-01T02:00:00.000Z");
+});
 
 test("shouldAutoApproveDesktopTask trusts only backend mode plus explicit idempotent classification", () => {
   assert.equal(shouldAutoApproveDesktopTask({

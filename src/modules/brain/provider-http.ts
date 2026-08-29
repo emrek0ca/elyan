@@ -48,8 +48,15 @@ function providerRequestHeaders(
   provider: SharedBrainProvider,
   url: string,
   requestKeySeed?: string,
+  model?: unknown,
 ): Record<string, string> {
   const headers = buildProviderHeaders(app, provider, requestKeySeed);
+  if (
+    provider === "groq" &&
+    String(model ?? "").toLowerCase().startsWith("groq/compound")
+  ) {
+    headers["Groq-Model-Version"] = "latest";
+  }
   if (provider !== "gemini" || !url.includes("/interactions")) {
     return headers;
   }
@@ -216,7 +223,13 @@ export async function postJson(
     await acquireProviderRequestPermit(app, provider, Date.now(), requestKeySeed);
     return await fetch(url, {
       method: "POST",
-      headers: providerRequestHeaders(app, provider, url, requestKeySeed),
+      headers: providerRequestHeaders(
+        app,
+        provider,
+        url,
+        requestKeySeed,
+        body.model,
+      ),
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -261,7 +274,13 @@ export async function postStreamingJson(
     const requestUrl = providerRequestUrl(provider, url, true);
     const response = await fetch(requestUrl, {
       method: "POST",
-      headers: providerRequestHeaders(app, provider, requestUrl, requestKeySeed),
+      headers: providerRequestHeaders(
+        app,
+        provider,
+        requestUrl,
+        requestKeySeed,
+        body.model,
+      ),
       body: JSON.stringify(body),
       signal: controller.signal,
     });

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { buildAssistantWebSearchBlock } from "../chat/message-blocks.js";
 import { resolveFactAnswer } from "./service.js";
+import type { FactSelection } from "./select.js";
 import type { FactAnswer } from "./types.js";
 
 /**
@@ -51,11 +52,18 @@ export function isFactDirectAnswerEnabled(app: FastifyInstance): boolean {
  */
 export async function resolveFactEvidence(
   app: FastifyInstance,
-  input: { prompt: string; domain?: string },
+  input: {
+    prompt: string;
+    domain?: string;
+    shortlist?: FactSelection[];
+    queryVector?: number[] | null;
+  },
 ): Promise<FactAnswer | null> {
   const resolution = await resolveFactAnswer(app, {
     prompt: input.prompt,
     domain: input.domain,
+    shortlist: input.shortlist,
+    queryVector: input.queryVector,
   });
   return resolution?.answer ?? null;
 }

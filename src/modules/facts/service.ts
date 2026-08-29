@@ -1,10 +1,56 @@
 import type { FastifyInstance } from "fastify";
+import { createHash } from "node:crypto";
 import { recordStageDuration } from "../../lib/perf-telemetry.js";
 import { readFactCache, revalidateFactInBackground, writeFactCache } from "./cache.js";
 import { isFactProviderCircuitOpen } from "./http.js";
 import { FACT_PROVIDERS } from "./registry.js";
-import { selectFactProviders } from "./select.js";
+import { selectFactProviders, type FactSelection } from "./select.js";
 import type { FactAnswer, FactProvider } from "./types.js";
+
+const inflight = new Map<string, Promise<FactAnswer | null>>();
+
+function factSecrets(app: FastifyInstance) {
+  return {
+    alphaVantageApiKey: app.config.ALPHA_VANTAGE_API_KEY || undefined,
+    tcmbEvdsApiKey: app.config.TCMB_EVDS_API_KEY || undefined,
+    fredApiKey: app.config.FRED_API_KEY || undefined,
+    coinGeckoDemoApiKey: app.config.COINGECKO_DEMO_API_KEY || undefined,
+    crossrefMailto: app.config.CROSSREF_MAILTO || undefined,
+  };
+}
+
+function withSourceDescriptor(
+  provider: FactProvider<unknown>,
+  answer: FactAnswer,
+): FactAnswer {
+  if (answer.source) return answer;
+  const retrievedAt = new Date().toISOString();
+  const sourceHash = createHash("sha256")
+    .update(
+      JSON.stringify({
+        providerId: answer.providerId,
+        sourceHost: answer.citation.sourceHost,
+        observedAt: answer.citation.observedAt,
+        values: answer.values,
+      }),
+    )
+    .digest("hex");
+  return {
+    ...answer,
+    source: {
+      authority: provider.authority,
+      dataClass: answer.dataClass,
+      observedAt: answer.citation.observedAt,
+      retrievedAt,
+      expiresAt: new Date(Date.now() + answer.ttlMs).toISOString(),
+      units: provider.units ?? [],
+      requiresSecret: provider.requiresSecret != null,
+      commercialUse: provider.commercialUse,
+      sourceHash,
+      verificationState: answer.confidence >= 0.85 ? "verified" : "partial",
+    },
+  };
+}
 
 /**
  * Olgu katmanının tek giriş noktası.
@@ -41,6 +87,8 @@ async function resolveWithProvider(
   bypassCache: boolean,
 ): Promise<{ answer: FactAnswer; cacheState: "miss" | "fresh" | "stale" } | null> {
   if (isFactProviderCircuitOpen(provider.id)) return null;
+  const secrets = factSecrets(app);
+  if (provider.requiresSecret && !secrets[provider.requiresSecret]) return null;
   const params = provider.extract(prompt);
   if (params === null || params === undefined) return null;
   const key = `${provider.id}:${provider.cacheKey(params)}`;
@@ -52,24 +100,41 @@ async function resolveWithProvider(
   // diğerinin turunda önbellekten dönüyordu.
   const cached = bypassCache ? null : await readFactCache(app, key);
   if (cached?.state === "fresh") {
-    return { answer: cached.answer, cacheState: "fresh" };
+    return {
+      answer: withSourceDescriptor(provider, cached.answer),
+      cacheState: "fresh",
+    };
   }
 
   const fetchFresh = async (): Promise<FactAnswer | null> => {
-    const answer = await provider.resolve(
-      { timeoutMs: provider.timeoutMs, logger: app.log },
-      params,
-    );
+    const inflightKey = `${key}:${bypassCache ? "bypass" : "cached"}`;
+    let request = inflight.get(inflightKey);
+    if (!request) {
+      request = provider
+        .resolve(
+          { timeoutMs: provider.timeoutMs, logger: app.log, secrets },
+          params,
+        )
+        .then((answer) =>
+          answer ? withSourceDescriptor(provider, answer) : null,
+        )
+        .finally(() => inflight.delete(inflightKey));
+      inflight.set(inflightKey, request);
+    }
+    const answer = await request;
     if (answer && !bypassCache) await writeFactCache(app, key, answer);
     return answer;
   };
 
-  if (cached?.state === "stale") {
+  if (cached?.state === "stale" && provider.allowStale) {
     // Bayat cevabı ANINDA ver, tazelemeyi arkada çalıştır.
     revalidateFactInBackground(key, async () => {
       await fetchFresh().catch(() => null);
     });
-    return { answer: cached.answer, cacheState: "stale" };
+    return {
+      answer: withSourceDescriptor(provider, cached.answer),
+      cacheState: "stale",
+    };
   }
 
   try {
@@ -89,7 +154,13 @@ async function resolveWithProvider(
 
 export async function resolveFactAnswer(
   app: FastifyInstance,
-  input: { prompt: string; domain?: string; bypassCache?: boolean },
+  input: {
+    prompt: string;
+    domain?: string;
+    bypassCache?: boolean;
+    shortlist?: FactSelection[];
+    queryVector?: number[] | null;
+  },
 ): Promise<FactResolution | null> {
   if (!isEnabled(app)) return null;
   const prompt = String(input.prompt ?? "").trim();
@@ -103,7 +174,13 @@ export async function resolveFactAnswer(
     // Kısa liste seçimi ile SAĞLAYICI DENEMELERİ ayrı ölçülür: 841 ms'lik
     // olgu maliyetinin hangisinden geldiği ölçülmeden bilinemezdi.
     const endSelectStage = recordFactStageNamed("facts.select");
-    const shortlist = await selectFactProviders({ prompt, logger: app.log });
+    const shortlist =
+      input.shortlist ??
+      (await selectFactProviders({
+        prompt,
+        queryVector: input.queryVector,
+        logger: app.log,
+      }));
     endSelectStage();
     const attempted = new Set<string>();
     for (const candidate of shortlist) {

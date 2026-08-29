@@ -32,6 +32,7 @@ export type OutputKind =
 export type OutputFormat =
   | "pdf"
   | "docx"
+  | "txt"
   | "xlsx"
   | "table"
   | "chart"
@@ -58,7 +59,7 @@ export type OutputContractInput = {
   metadata?: Record<string, unknown> | null;
 };
 
-const DOCUMENT_FORMATS = new Set<OutputFormat>(["pdf", "docx"]);
+const DOCUMENT_FORMATS = new Set<OutputFormat>(["pdf", "docx", "txt"]);
 const TABLE_FORMATS = new Set<OutputFormat>(["xlsx", "table"]);
 const IMAGE_FORMATS = new Set<OutputFormat>([
   "png",
@@ -146,6 +147,7 @@ function metadataFormat(metadata: Record<string, unknown> | null): OutputFormat 
   if (
     value === "pdf" ||
     value === "docx" ||
+    value === "txt" ||
     value === "xlsx" ||
     value === "table" ||
     value === "chart" ||
@@ -170,7 +172,10 @@ function isOutputFormatMention(
   // output.  Only accept the format when it is attached to an output relation
   // or an output verb: "PDF yap", "Word'e çevir", "PDF olarak ver".
   if (
-    /^(?:\s+|['’]?)(?:e|a|ye|ya|olarak|formatında|formatinda|dosyasına|dosyasina|file|document)\b/iu.test(
+    /^(?:\s+|['’]?)(?:e|a|ye|ya|olarak|formatında|formatinda|dosyasına|dosyasina|file|document)(?!\p{L})/iu.test(
+      after,
+    ) ||
+    /^\s+dosyas[ıi](?!\p{L}).{0,24}(?:oluştur|olustur|hazırla|hazirla|üret|uret|yaz|kaydet|create|write|save)/iu.test(
       after,
     ) ||
     /^\s*(?:sonra|ardından|ardindan)\s+(?:pdf|docx|word|xlsx|excel)\b/iu.test(
@@ -191,6 +196,7 @@ function inferFormat(text: string, metadata: Record<string, unknown> | null): Ou
   const explicitFormatMatches = [
     { format: "pdf" as const, match: /\bpdf(?:'e|e)?\b/iu.exec(text) },
     { format: "docx" as const, match: /\b(?:docx|word|doc)\b/iu.exec(text) },
+    { format: "txt" as const, match: /\b(?:txt|plain\s+text|düz\s+metin|duz\s+metin)\b/iu.exec(text) },
     { format: "xlsx" as const, match: /\b(?:xlsx|excel\p{L}{0,6}|spreadsheet|csv)\b/iu.exec(text) },
     { format: "table" as const, match: /\b(?:tablo|table)\b/iu.exec(text) },
     { format: "chart" as const, match: /\b(?:grafik|chart|plot|çizelge|cizelge)\b/iu.exec(text) },
@@ -205,7 +211,7 @@ function inferFormat(text: string, metadata: Record<string, unknown> | null): Ou
   // File formats outrank a later generic widget noun: "Excel tablo yap"
   // requests an XLSX artifact, while "tablo" only describes its shape.
   const fileFormat = explicitFormatMatches.find((item) =>
-    ["pdf", "docx", "xlsx"].includes(item.format),
+    ["pdf", "docx", "txt", "xlsx"].includes(item.format),
   );
   if (fileFormat) return fileFormat.format;
   if (explicitFormatMatches.at(-1)) return explicitFormatMatches.at(-1)!.format;

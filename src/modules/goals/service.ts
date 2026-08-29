@@ -1,6 +1,6 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, or } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { chatSessions, goalEvents, sessionGoals } from "../../db/schema.js";
+import { chatSessions, goalEvents, proactiveTriggers, sessionGoals } from "../../db/schema.js";
 import type {
   SessionGoalScheduleHint,
   SessionGoalStatus,
@@ -22,10 +22,17 @@ export type GoalProgress = {
   completedSteps?: string[];
   nextAction?: string | null;
   blockers?: string[];
+  waitingOn?: "user" | "desktop" | "tool" | "verification" | null;
+  evidenceRefs?: string[];
+  lastVerifiedAt?: string | null;
+  source?: "user" | "model" | "task" | "tool";
+  confidence?: number;
 };
 
 export type ActiveGoalContext = {
   id: string;
+  sessionId: string | null;
+  taskId: string | null;
   title: string;
   description: string;
   status: SessionGoalStatus;
@@ -34,6 +41,27 @@ export type ActiveGoalContext = {
   progress: GoalProgress;
   scheduleHint: SessionGoalScheduleHint | null;
   dueAt: Date | null;
+  resourceRevision: number;
+  waitingOn: GoalProgress["waitingOn"];
+  nextAction: string | null;
+  evidenceState: "none" | "observed" | "verified";
+};
+
+export type ContinuityState = {
+  contract: "elyan.continuity_state.v1";
+  resourceRevision: number;
+  activeGoal: ActiveGoalContext | null;
+  waitingOn: GoalProgress["waitingOn"];
+  nextAction: string | null;
+  openLoops: string[];
+  scheduledFollowUps: Array<{
+    id: string;
+    revision: number;
+    dueAt: string;
+    topic: string;
+    status: string;
+  }>;
+  evidenceState: "none" | "observed" | "verified";
 };
 
 export type GoalExecutionEvent = {
@@ -68,20 +96,129 @@ function normalizeProgress(value: unknown): GoalProgress {
     blockers: Array.isArray(record.blockers)
       ? record.blockers.map(String).filter(Boolean).slice(0, DEFAULT_MAX_STEPS)
       : undefined,
+    waitingOn: ["user", "desktop", "tool", "verification"].includes(String(record.waitingOn))
+      ? record.waitingOn as GoalProgress["waitingOn"]
+      : null,
+    evidenceRefs: Array.isArray(record.evidenceRefs)
+      ? [...new Set(record.evidenceRefs.map(String).filter(Boolean))].slice(0, 20)
+      : [],
+    lastVerifiedAt:
+      typeof record.lastVerifiedAt === "string" && Number.isFinite(Date.parse(record.lastVerifiedAt))
+        ? record.lastVerifiedAt
+        : null,
+    source: ["user", "model", "task", "tool"].includes(String(record.source))
+      ? record.source as GoalProgress["source"]
+      : undefined,
+    confidence:
+      typeof record.confidence === "number" && Number.isFinite(record.confidence)
+        ? Math.max(0, Math.min(1, record.confidence))
+        : undefined,
   };
 }
 
 function shapeGoal(row: typeof sessionGoals.$inferSelect): ActiveGoalContext {
+  const progress = normalizeProgress(row.progress);
   return {
     id: row.id,
+    sessionId: row.sessionId ?? null,
+    taskId: row.taskId ?? null,
     title: row.title,
     description: row.description,
     status: row.status,
     currentStep: row.currentStep,
     maxSteps: row.maxSteps,
-    progress: normalizeProgress(row.progress),
+    progress,
     scheduleHint: row.scheduleHint,
     dueAt: row.dueAt,
+    resourceRevision: row.updatedAt.getTime(),
+    waitingOn: progress.waitingOn ?? null,
+    nextAction: progress.nextAction ?? null,
+    evidenceState: progress.lastVerifiedAt
+      ? "verified"
+      : (progress.evidenceRefs?.length ?? 0) > 0
+        ? "observed"
+        : "none",
+  };
+}
+
+async function publishGoalRevision(
+  app: FastifyInstance,
+  userId: string,
+  goal: ActiveGoalContext,
+): Promise<void> {
+  if (!app.services?.eventBus) return;
+  await app.services.eventBus.publish({
+    topic: "goal.updated",
+    userId,
+    taskId: goal.taskId ?? undefined,
+    payload: {
+      contract: "elyan.continuity_event.v1",
+      resourceRevision: goal.resourceRevision,
+      sessionId: goal.sessionId,
+      goal,
+    },
+  });
+  await publishContinuityRevision(app, {
+    userId,
+    sessionId: goal.sessionId ?? undefined,
+  });
+}
+
+function readTriggerPayload(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function triggerRevision(updatedAt: Date): number {
+  return updatedAt.getTime();
+}
+
+async function buildContinuityState(
+  app: FastifyInstance,
+  input: { userId: string; sessionId?: string; goals: ActiveGoalContext[] },
+): Promise<ContinuityState> {
+  const conditions = [
+    eq(proactiveTriggers.userId, input.userId),
+    eq(proactiveTriggers.status, "pending"),
+  ];
+  if (input.sessionId) conditions.push(eq(proactiveTriggers.sessionId, input.sessionId));
+  const triggerRows = await app.db
+    .select()
+    .from(proactiveTriggers)
+    .where(and(...conditions))
+    .orderBy(asc(proactiveTriggers.due))
+    .limit(20);
+  const activeGoal = input.goals.find((goal) => goal.status === "active") ?? null;
+  const scheduledFollowUps = triggerRows.map((row) => {
+    const payload = readTriggerPayload(row.payload);
+    return {
+      id: row.id,
+      revision: triggerRevision(row.updatedAt),
+      dueAt: row.due.toISOString(),
+      topic: compactText(String(payload.topic ?? "Takip"), 240),
+      status: row.status,
+    };
+  });
+  const resourceRevision = Math.max(
+    0,
+    ...input.goals.map((goal) => goal.resourceRevision),
+    ...triggerRows.map((row) => triggerRevision(row.updatedAt)),
+  );
+  const progress = activeGoal?.progress ?? {};
+  return {
+    contract: "elyan.continuity_state.v1",
+    resourceRevision,
+    activeGoal,
+    waitingOn: progress.waitingOn ?? null,
+    nextAction: progress.nextAction ?? null,
+    openLoops: [...new Set([...(progress.blockers ?? []), ...(progress.nextAction ? [progress.nextAction] : [])])].slice(0, 12),
+    scheduledFollowUps,
+    evidenceState: progress.lastVerifiedAt
+      ? "verified"
+      : (progress.evidenceRefs?.length ?? 0) > 0
+        ? "observed"
+        : "none",
   };
 }
 
@@ -184,7 +321,9 @@ export async function createGoal(
       fromState: null, toState: "open",
     });
   }
-  return { goal: shapeGoal(rows[0]) };
+  const goal = shapeGoal(rows[0]);
+  await publishGoalRevision(app, input.userId, goal);
+  return { goal };
 }
 
 export async function listGoals(
@@ -206,7 +345,152 @@ export async function listGoals(
     .where(and(...conditions))
     .orderBy(desc(sessionGoals.updatedAt))
     .limit(input.limit);
-  return { goals: rows.map(shapeGoal) };
+  const goals = rows.map(shapeGoal);
+  const continuity = await buildContinuityState(app, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+    goals,
+  });
+  return {
+    goals,
+    continuity,
+    resourceRevision: continuity.resourceRevision,
+  };
+}
+
+export async function publishContinuityRevision(
+  app: FastifyInstance,
+  input: { userId: string; sessionId?: string },
+): Promise<ContinuityState> {
+  const snapshot = await listGoals(app, {
+    userId: input.userId,
+    sessionId: input.sessionId,
+    limit: 50,
+  });
+  if (!app.services?.eventBus) return snapshot.continuity;
+  await app.services.eventBus.publish({
+    topic: "continuity.updated",
+    userId: input.userId,
+    payload: {
+      contract: "elyan.continuity_event.v1",
+      resourceRevision: snapshot.resourceRevision,
+      sessionId: input.sessionId ?? null,
+      continuity: snapshot.continuity,
+    },
+  });
+  return snapshot.continuity;
+}
+
+export async function syncGoalFromTaskLifecycle(
+  app: FastifyInstance,
+  input: {
+    userId: string;
+    taskId: string;
+    goalId?: string | null;
+    status: string;
+    artifactIds?: string[];
+    summary?: string | null;
+    verified?: boolean;
+    checkpointRevision?: number | null;
+    now?: Date;
+  },
+): Promise<ActiveGoalContext | null> {
+  const rows = await app.db
+    .select()
+    .from(sessionGoals)
+    .where(and(
+      eq(sessionGoals.userId, input.userId),
+      input.goalId
+        ? or(eq(sessionGoals.id, input.goalId), eq(sessionGoals.taskId, input.taskId))
+        : eq(sessionGoals.taskId, input.taskId),
+    ))
+    .orderBy(desc(sessionGoals.updatedAt))
+    .limit(1);
+  const goal = rows[0];
+  if (!goal || goal.status === "done" || goal.status === "canceled") return null;
+
+  const now = input.now ?? new Date();
+  const previous = normalizeProgress(goal.progress);
+  const evidenceRefs = [...new Set([
+    ...(previous.evidenceRefs ?? []),
+    `task:${input.taskId}`,
+    ...(input.artifactIds ?? []).map((id) => `artifact:${id}`),
+    ...(input.checkpointRevision && input.checkpointRevision > 0
+      ? [`checkpoint:${input.taskId}:${input.checkpointRevision}`]
+      : []),
+  ])].slice(-20);
+  const terminal = ["completed", "failed", "canceled"].includes(input.status);
+  const completed = input.status === "completed" && input.verified === true;
+  const waitingOn: GoalProgress["waitingOn"] = input.status === "waiting_approval"
+    ? "user"
+    : ["queued", "assigned", "running"].includes(input.status)
+      ? "desktop"
+      : input.status === "completed" && !completed
+        ? "verification"
+        : null;
+  const nextAction = completed
+    ? null
+    : input.status === "waiting_approval"
+      ? "Kullanıcı yanıtını bekle"
+      : input.status === "completed"
+        ? "Çıktıyı doğrula"
+        : input.checkpointRevision && input.checkpointRevision > 0
+          ? "Kaydedilen noktadan devam et"
+        : terminal
+          ? compactText(input.summary ?? "Görevi gözden geçir", 400)
+          : "Görev sonucunu bekle";
+  const nextStatus: SessionGoalStatus = completed
+    ? "done"
+    : terminal
+      ? "paused"
+      : "active";
+  const progress: GoalProgress = {
+    ...previous,
+    nextAction,
+    waitingOn,
+    evidenceRefs,
+    lastVerifiedAt: completed ? now.toISOString() : previous.lastVerifiedAt ?? null,
+    source: "task",
+    confidence: 1,
+  };
+  const updated = await app.db
+    .update(sessionGoals)
+    .set({
+      taskId: input.taskId,
+      status: nextStatus,
+      progress: mergeGoalEngineState(
+        progress,
+        completed ? "completed" : terminal ? "waiting" : waitingOn ? "waiting" : "executing",
+      ),
+      updatedAt: now,
+    })
+    .where(and(
+      eq(sessionGoals.id, goal.id),
+      eq(sessionGoals.userId, input.userId),
+      eq(sessionGoals.status, goal.status),
+      eq(sessionGoals.updatedAt, goal.updatedAt),
+    ))
+    .returning();
+  if (!updated[0]) return null;
+  if (app.config?.ELYAN_GOAL_STATE_V2_ENABLED === true) {
+    const from = readGoalEngineState(goal.progress);
+    const to = completed ? "completed" : terminal || waitingOn ? "waiting" : "executing";
+    await appendGoalEvent(app, {
+      goalId: goal.id,
+      userId: input.userId,
+      eventType: `task.${input.status}`,
+      fromState: from,
+      toState: to,
+      payload: {
+        taskId: input.taskId,
+        evidenceRefs,
+        verified: completed,
+      },
+    });
+  }
+  const shaped = shapeGoal(updated[0]);
+  await publishGoalRevision(app, input.userId, shaped);
+  return shaped;
 }
 
 export async function getActiveGoalForContext(
@@ -360,7 +644,9 @@ export async function updateGoal(
       payload: { status: input.status },
     });
   }
-  return { goal: shapeGoal(rows[0]) };
+  const goal = shapeGoal(rows[0]);
+  await publishGoalRevision(app, input.userId, goal);
+  return { goal };
 }
 
 export async function advanceGoal(
@@ -440,7 +726,9 @@ export async function advanceGoal(
     });
   }
 
-  return { goal: shapeGoal(updated[0]) };
+  const goal = shapeGoal(updated[0]);
+  await publishGoalRevision(app, input.userId, goal);
+  return { goal };
 }
 
 function flattenBlocks(blocks: unknown[]): unknown[] {

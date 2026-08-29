@@ -15,6 +15,10 @@ type CryptoParams = { id: string; symbol: string };
 export const cryptoProvider = defineFactProvider<CryptoParams>({
   id: "coingecko",
   dataClass: "realtime",
+  authority: "CoinGecko",
+  commercialUse: "conditional",
+  allowStale: false,
+  units: ["TRY", "USD"],
   timeoutMs: 4_000,
   ttlMs: 60_000,
   fallbackDomain: "market",
@@ -44,6 +48,9 @@ export const cryptoProvider = defineFactProvider<CryptoParams>({
         url: url.toString(),
         timeoutMs: context.timeoutMs,
         maxBytes: 100_000,
+        headers: context.secrets.coinGeckoDemoApiKey
+          ? { "x-cg-demo-api-key": context.secrets.coinGeckoDemoApiKey }
+          : undefined,
       }),
     );
     const quote = readRecord(payload?.[params.id]);

@@ -1,19 +1,24 @@
 import type { OutputContract } from "../../core/understanding/output-contract.js";
 import type { IntentClassification } from "../../core/understanding/types.js";
 
-export const KNOWLEDGE_NEED_CONTRACT = "elyan.knowledge_need.v1" as const;
+export const KNOWLEDGE_NEED_CONTRACT = "elyan.knowledge_need.v2" as const;
 
 export type KnowledgeNeedSource =
-  | "conversation_reference"
+  | "none"
+  | "conversation"
   | "memory"
-  | "private_corpus"
-  | "public_web";
+  | "provider"
+  | "corpus"
+  | "web";
+
+export type KnowledgeNeedFallback = "none" | "model" | "web" | "abstain";
 
 export type KnowledgeNeed = {
   contract: typeof KNOWLEDGE_NEED_CONTRACT;
-  need: "none" | "optional" | "required";
-  sources: KnowledgeNeedSource[];
+  source: KnowledgeNeedSource;
   freshness: "none" | "stable" | "current";
+  evidenceRequired: boolean;
+  fallback: KnowledgeNeedFallback;
   query: {
     subject: string | null;
     entities: string[];
@@ -31,18 +36,25 @@ export function resolveKnowledgeEvidenceState(input: {
   knowledgeNeed: KnowledgeNeed;
   referenceAvailable: boolean;
   memoryResultCount: number;
+  providerEvidenceSufficient: boolean;
   retrievalEvidenceState: "none" | "verified" | "insufficient";
   webEvidenceSufficient: boolean;
 }): "none" | "verified" | "insufficient" {
-  const sourceSatisfied = input.knowledgeNeed.sources.some((source) => {
-    if (source === "conversation_reference") return input.referenceAvailable;
-    if (source === "memory") return input.memoryResultCount > 0;
-    if (source === "private_corpus") return input.retrievalEvidenceState === "verified";
-    return input.webEvidenceSufficient;
-  });
-  if (input.knowledgeNeed.need === "none") return "none";
+  const sourceSatisfied =
+    input.knowledgeNeed.source === "conversation"
+      ? input.referenceAvailable
+      : input.knowledgeNeed.source === "memory"
+        ? input.memoryResultCount > 0
+        : input.knowledgeNeed.source === "provider"
+          ? input.providerEvidenceSufficient
+          : input.knowledgeNeed.source === "corpus"
+            ? input.retrievalEvidenceState === "verified"
+            : input.knowledgeNeed.source === "web"
+              ? input.webEvidenceSufficient
+              : true;
+  if (input.knowledgeNeed.source === "none") return "none";
   if (sourceSatisfied) return "verified";
-  return input.knowledgeNeed.need === "required" ? "insufficient" : "none";
+  return input.knowledgeNeed.evidenceRequired ? "insufficient" : "none";
 }
 
 function compact(value: unknown, max = 500): string {
@@ -52,6 +64,17 @@ function compact(value: unknown, max = 500): string {
 
 function unique(values: readonly unknown[], max: number): string[] {
   return [...new Set(values.map((value) => compact(value, 240)).filter(Boolean))].slice(0, max);
+}
+
+function result(input: {
+  source: KnowledgeNeedSource;
+  freshness: KnowledgeNeed["freshness"];
+  evidenceRequired: boolean;
+  fallback: KnowledgeNeedFallback;
+  query: KnowledgeNeed["query"];
+  reason: string;
+}): KnowledgeNeed {
+  return { contract: KNOWLEDGE_NEED_CONTRACT, ...input };
 }
 
 export function deriveKnowledgeNeed(input: {
@@ -66,6 +89,9 @@ export function deriveKnowledgeNeed(input: {
   freshPublicDataRequired: boolean;
   publicWebExplicitlyRequired: boolean;
   attachmentContextUsed: boolean;
+  providerAvailable?: boolean;
+  corpusAvailable?: boolean;
+  multiSourceResearch?: boolean;
 }): KnowledgeNeed {
   const query = compact(input.query);
   const queryShape = {
@@ -79,24 +105,24 @@ export function deriveKnowledgeNeed(input: {
     input.referenceAvailable &&
     (sourceReference === "previous_answer" || sourceReference === "latest_artifact");
   if (referencedTurn && !input.freshPublicDataRequired && !input.publicWebExplicitlyRequired) {
-    return {
-      contract: KNOWLEDGE_NEED_CONTRACT,
-      need: "required",
-      sources: ["conversation_reference"],
+    return result({
+      source: "conversation",
       freshness: "none",
+      evidenceRequired: true,
+      fallback: "abstain",
       query: queryShape,
       reason: "authoritative_conversation_reference",
-    };
+    });
   }
   if (input.socialTurn || input.attachmentContextUsed) {
-    return {
-      contract: KNOWLEDGE_NEED_CONTRACT,
-      need: "none",
-      sources: [],
+    return result({
+      source: "none",
       freshness: "none",
+      evidenceRequired: false,
+      fallback: "model",
       query: queryShape,
       reason: input.socialTurn ? "social_turn" : "attachment_is_authority",
-    };
+    });
   }
   const selfContainedStructuredInput =
     sourceReference === "current_prompt" &&
@@ -104,69 +130,67 @@ export function deriveKnowledgeNeed(input: {
     !input.freshPublicDataRequired &&
     !input.publicWebExplicitlyRequired;
   if (selfContainedStructuredInput) {
-    return {
-      contract: KNOWLEDGE_NEED_CONTRACT,
-      need: "none",
-      sources: [],
+    return result({
+      source: "none",
       freshness: "none",
+      evidenceRequired: false,
+      fallback: "model",
       query: queryShape,
       reason: "self_contained_structured_input",
-    };
+    });
   }
-  if (input.freshPublicDataRequired || input.publicWebExplicitlyRequired) {
-    return {
-      contract: KNOWLEDGE_NEED_CONTRACT,
-      need: "required",
-      sources: ["public_web"],
-      freshness: "current",
-      query: queryShape,
-      reason: "fresh_public_evidence_required",
-    };
-  }
-  const classification = input.classification;
-  if (classification?.reason === "user_identity_query") {
-    return {
-      contract: KNOWLEDGE_NEED_CONTRACT,
-      need: "required",
-      sources: ["memory"],
+  if (input.classification?.reason === "user_identity_query") {
+    return result({
+      source: "memory",
       freshness: "stable",
+      evidenceRequired: true,
+      fallback: "abstain",
       query: queryShape,
       reason: "current_user_memory_required",
-    };
+    });
+  }
+  if (input.providerAvailable) {
+    return result({
+      source: "provider",
+      freshness: input.freshPublicDataRequired ? "current" : "stable",
+      evidenceRequired: true,
+      fallback: input.freshPublicDataRequired ? "web" : "abstain",
+      query: queryShape,
+      reason: "typed_provider_selected",
+    });
+  }
+  if (input.corpusAvailable && !input.freshPublicDataRequired) {
+    return result({
+      source: "corpus",
+      freshness: "stable",
+      evidenceRequired: false,
+      fallback: "model",
+      query: queryShape,
+      reason: "stable_corpus_selected",
+    });
   }
   if (
-    classification?.primaryIntent === "research" ||
-    classification?.requiresRetrieval === true ||
-    classification?.requiresCitation === true
+    input.freshPublicDataRequired ||
+    input.publicWebExplicitlyRequired ||
+    input.multiSourceResearch
   ) {
-    return {
-      contract: KNOWLEDGE_NEED_CONTRACT,
-      need: "required",
-      sources: ["private_corpus", "public_web"],
-      freshness: "stable",
+    return result({
+      source: "web",
+      freshness: input.freshPublicDataRequired ? "current" : "stable",
+      evidenceRequired: true,
+      fallback: "abstain",
       query: queryShape,
-      reason: "factual_evidence_required",
-    };
+      reason: input.multiSourceResearch
+        ? "multi_source_research_required"
+        : "public_web_evidence_required",
+    });
   }
-  if (
-    classification?.primaryIntent === "document" ||
-    classification?.primaryIntent === "writing"
-  ) {
-    return {
-      contract: KNOWLEDGE_NEED_CONTRACT,
-      need: "optional",
-      sources: ["private_corpus"],
-      freshness: "stable",
-      query: queryShape,
-      reason: "optional_corpus_context",
-    };
-  }
-  return {
-    contract: KNOWLEDGE_NEED_CONTRACT,
-    need: "none",
-    sources: [],
+  return result({
+    source: "none",
     freshness: "none",
+    evidenceRequired: false,
+    fallback: "model",
     query: queryShape,
-    reason: "self_contained_turn",
-  };
+    reason: "self_contained_or_model_knowledge",
+  });
 }
