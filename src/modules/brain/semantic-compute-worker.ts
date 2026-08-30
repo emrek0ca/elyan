@@ -19,10 +19,33 @@ type Extractor = (
 
 const extractors = new Map<string, Promise<Extractor>>();
 
-const semanticModelCacheDir = process.env.ELYAN_SEMANTIC_MODEL_CACHE_DIR?.trim();
-if (semanticModelCacheDir) {
-  env.cacheDir = semanticModelCacheDir;
-}
+/**
+ * MODEL ÖNBELLEĞİ `node_modules` İÇİNDE DURMAMALI.
+ *
+ * `@huggingface/transformers` varsayılan olarak modeli
+ * `node_modules/@huggingface/transformers/.cache` altına indirir. Orası
+ * `npm ci`'nin SİLDİĞİ yerdir ve 118 MB'lık model her kurulumda gider.
+ *
+ * Üretimde bu sorun yok: Dockerfile `ELYAN_SEMANTIC_MODEL_CACHE_DIR`i
+ * ayarlıyor ve modeli imaja gömüyor. Bedeli YEREL geliştirme ödüyordu ve
+ * bedel görünürden büyüktü — `deploy-v1-release.sh` ilk adımda `npm ci`
+ * koşuyor, sonra test kapısı silinmiş önbellekle çalışıyor, dört eşzamanlı
+ * test süreci aynı 118 MB'ı indirmek için yarışıyor ve gömmeye bağlı testler
+ * bütçelerini aşıp düşüyor. ÖLÇÜLDÜ (2026-08-30): kapı düştüğünde `onnx/`
+ * altında farklı PID'lerden 20 yarım `.tmp` dosyası vardı.
+ *
+ * Asıl tehlike testlerin düşmesi değil, kapının bu yüzden ATLANMASIydı:
+ * `--skip-local-gate` alışkanlık hâline gelirse gerçek bir gerileme fark
+ * edilmeden geçer.
+ *
+ * Varsayılan, Dockerfile'ın kullandığı isimle aynı tutuluyor ki iki ortam
+ * arasında ayrışma olmasın.
+ */
+const DEFAULT_SEMANTIC_MODEL_CACHE_DIR = ".semantic-model-cache";
+const semanticModelCacheDir =
+  process.env.ELYAN_SEMANTIC_MODEL_CACHE_DIR?.trim() ||
+  DEFAULT_SEMANTIC_MODEL_CACHE_DIR;
+env.cacheDir = semanticModelCacheDir;
 
 const semanticModelsLocalOnly =
   process.env.ELYAN_SEMANTIC_MODEL_LOCAL_ONLY === "true";

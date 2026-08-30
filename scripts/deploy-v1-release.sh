@@ -150,7 +150,7 @@ else
 fi
 
 echo "==> Remote backup to ${BACKUP_DIR}"
-run_remote "umask 077 && install -d -m 700 '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && tar --exclude='./.codex-backups' --exclude='./.codex-worktrees' --exclude='./node_modules' --exclude='./dist' --exclude='./.blob-store' --exclude='./.git' --exclude='./docs/release/evidence' --exclude='./.claude' --exclude='./.DS_Store' --exclude='*/__pycache__' -czf '${BACKUP_DIR}/release-source.tgz' . && sha256sum '${BACKUP_DIR}/release-source.tgz' > '${BACKUP_DIR}/release-source.tgz.sha256'"
+run_remote "umask 077 && install -d -m 700 '${BACKUP_DIR}' && cd '${REMOTE_DIR}' && tar --exclude='./.codex-backups' --exclude='./.codex-worktrees' --exclude='./node_modules' --exclude='./dist' --exclude='./.blob-store' --exclude='./.semantic-model-cache' --exclude='./.git' --exclude='./docs/release/evidence' --exclude='./.claude' --exclude='./.DS_Store' --exclude='*/__pycache__' -czf '${BACKUP_DIR}/release-source.tgz' . && sha256sum '${BACKUP_DIR}/release-source.tgz' > '${BACKUP_DIR}/release-source.tgz.sha256'"
 
 echo "==> Sync release candidate"
 rsync -az --delete \
@@ -160,6 +160,7 @@ rsync -az --delete \
   --exclude .codex-backups \
   --exclude .codex-worktrees \
   --exclude .blob-store \
+  --exclude .semantic-model-cache \
   --exclude .DS_Store \
   --exclude .claude \
   --exclude docs/release/evidence \

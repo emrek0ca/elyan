@@ -8,3 +8,6 @@ dist
 coverage
 drizzle/*.local.json
 .codex-worktrees/
+
+# Semantik model önbelleği: node_modules dışında durur ki `npm ci` silmesin.
+.semantic-model-cache/
