@@ -45,6 +45,25 @@ export type BrainDecisionObservationInput = {
   blockSchemaValid?: boolean | null;
   semanticGateResult?: string | null;
   evidenceState?: string | null;
+  /**
+   * HANGİ BİLGİ KATMANI SEÇİLDİ VE NEDEN.
+   *
+   * Kayıt bugüne kadar `evidenceState`i (kanıt yeterli miydi) tutuyordu ama
+   * KARARIN KENDİSİNİ tutmuyordu. "Kanıt yetersizdi" cümlesi, yanlış katmana
+   * gidildiği için mi yoksa doğru katmanda gerçekten veri olmadığı için mi
+   * olduğunu söylemiyor. İkisi taban tabana zıt düzeltmeler gerektirir.
+   */
+  knowledgeSource?: string | null;
+  knowledgeReason?: string | null;
+  /**
+   * KARARIN VERİLDİĞİ ANDA YETENEKLER AYAKTA MIYDI.
+   *
+   * Gömme işçisi öldüğünde sağlayıcı/korpus seçimi sözcük eşleşmesine düşüyor
+   * ve sistem sessizce körleşiyor. Bu alan olmadan, sonradan bakıldığında
+   * "kötü yönlendirme" ile "yönlendirme körken alındı" ayırt edilemez —
+   * ve körlemesine alınmış kararlardan ders çıkarmak modeli BOZAR.
+   */
+  knowledgeEmbeddingState?: string | null;
   staleWriteRejected?: boolean | null;
   acceptedMs?: number | null;
   firstDeltaMs?: number | null;
@@ -140,6 +159,19 @@ export function buildBrainDecisionObservation(
       : {}),
     ...(input.semanticGateResult != null
       ? { semantic_gate_result: safeNullableText(input.semanticGateResult) }
+      : {}),
+    ...(input.knowledgeSource != null
+      ? { knowledge_source: safeNullableText(input.knowledgeSource) }
+      : {}),
+    ...(input.knowledgeReason != null
+      ? { knowledge_reason: safeNullableText(input.knowledgeReason) }
+      : {}),
+    ...(input.knowledgeEmbeddingState != null
+      ? {
+          knowledge_embedding_state: safeNullableText(
+            input.knowledgeEmbeddingState,
+          ),
+        }
       : {}),
     ...(input.evidenceState != null
       ? { evidence_state: safeNullableText(input.evidenceState) }

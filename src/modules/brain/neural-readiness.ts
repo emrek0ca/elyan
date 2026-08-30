@@ -5,6 +5,7 @@ import {
   readVerifiedQuantumBenchmark,
 type VerifiedQuantumBenchmark,
 } from "./quantum-benchmark.js";
+import { getSemanticEmbeddingHealth } from "./semantic-compute-client.js";
 import {
   asRecord as readRecord,
   recordNumber as readNumber,
@@ -289,14 +290,27 @@ export async function getNeuralBrainReadiness(app: FastifyInstance) {
     latestRuntimeQuantumBenchmark;
   const latestQuantumScore = latestQuantumBenchmark?.score ?? null;
   const activeTrainingJobs = Number(activeRows[0]?.count ?? 0);
-  const embeddingReady = trainingWorkerReady;
+  // GÖMME HAZIRLIĞI, GÖMME YOLUNDAN OKUNUR — ML worker'ın kalp atışından
+  // DEĞİL. Eski hâli (`embeddingReady = trainingWorkerReady`) yanlış şeyi
+  // ölçüyordu: semantik hesaplama işçisi `ERR_DLOPEN_FAILED` ile ölmüşken
+  // rapor "gömme hazır" diyordu ve her tur sessizce sözcük eşleşmesine
+  // düşüyordu. Bozulmanın görünmemesinin sebebi buydu.
+  const embeddingHealth = getSemanticEmbeddingHealth();
+  const embeddingReady =
+    trainingWorkerReady && embeddingHealth.enabled && !embeddingHealth.cooldownActive;
   const evaluationReady = trainingWorkerReady && (latestEvaluationScore !== null || latestQualityCompositeScore !== null);
   const quantumLearningReady = trainingWorkerReady && latestQuantumScore !== null;
   const neuralReady =
     trainingWorkerReady && Math.max(latestEvaluationScore ?? 0, latestQualityCompositeScore ?? 0) >= 0.72;
   const brainBlockingReasons = [
     trainingWorkerReady ? null : "ml_worker_unavailable",
-    embeddingReady ? null : "embedding_worker_unavailable",
+    embeddingReady
+      ? null
+      : !embeddingHealth.enabled
+        ? "embedding_worker_disabled"
+        : embeddingHealth.cooldownActive
+          ? "embedding_worker_cooldown"
+          : "embedding_worker_unavailable",
     evaluationReady ? null : "evaluation_pending",
     quantumLearningReady ? null : "quantum_learning_pending",
   ].filter((value): value is string => Boolean(value));

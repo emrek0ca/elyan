@@ -10042,6 +10042,13 @@ export async function generateSharedBrainReply(
         : null,
       toolSelectionSource,
       toolSelectionMs,
+      // Karar + kararın verildiği andaki yetenek + sonucu, TEK kayıtta.
+      // Üçü ayrı yerlerde durduğu sürece "yanlış katmana gidildi" ile
+      // "doğru katmanda veri yoktu" ayırt edilemiyordu.
+      knowledgeSource: knowledgeNeed.source,
+      knowledgeReason: knowledgeNeed.reason,
+      knowledgeEmbeddingState: typedSourceProbe?.embeddingState ?? "not_probed",
+      evidenceState: knowledgeEvidenceState,
       result: fallbackUsed ? "fallback" : "success",
       durationMs: latencyMs,
       semanticContract: input.routeDecision?.semanticContract,

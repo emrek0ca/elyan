@@ -113,6 +113,38 @@ function inCooldown(): boolean {
   return Date.now() < cooldownUntil;
 }
 
+/**
+ * GÖMME YOLUNUN GERÇEK SAĞLIĞI.
+ *
+ * `getNeuralBrainReadiness` bugüne kadar `embeddingReady`yi ML worker'ın
+ * KALP ATIŞINDAN türetiyordu. Bu yanlış şeyi ölçüyor: semantik hesaplama
+ * işçisi ölebilir (üretimde `ERR_DLOPEN_FAILED` ile öldü) ve ML worker
+ * bundan habersiz sağlam kalabilir — hazırlık raporu "gömme hazır" der,
+ * oysa her tur sözcük eşleşmesine düşüyordur.
+ *
+ * Bozulmanın AYLARCA görünmemesi bu yüzden mümkündü: sağlık sinyali
+ * ölçmesi gereken şeyi ölçmüyordu.
+ */
+export function getSemanticEmbeddingHealth(): {
+  enabled: boolean;
+  cooldownActive: boolean;
+  cooldownUntil: string | null;
+  consecutiveFailures: number;
+  failedBatches: number;
+  timeouts: number;
+} {
+  return {
+    enabled: workerEnabled(),
+    cooldownActive: inCooldown(),
+    cooldownUntil: cooldownUntil > Date.now()
+      ? new Date(cooldownUntil).toISOString()
+      : null,
+    consecutiveFailures,
+    failedBatches: metricCounts.failedBatches,
+    timeouts: metricCounts.timeouts,
+  };
+}
+
 function recordSuccess(): void {
   consecutiveFailures = 0;
 }

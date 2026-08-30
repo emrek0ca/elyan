@@ -60,6 +60,24 @@ export type TypedSourceProbe = {
    */
   queryVector: number[] | null | undefined;
   cacheState: "hit" | "miss";
+  /**
+   * KARAR HANGİ YETENEKLE VERİLDİ.
+   *
+   * Gömme işçisi öldüğünde sağlayıcı ve korpus seçimi sessizce sözcük
+   * eşleşmesine düşüyor: sistem ÇALIŞMAYA DEVAM EDİYOR ama körleşiyor ve
+   * bunu kimse görmüyor. Üretimde tam olarak bu yaşandı (2026-08-30,
+   * `ERR_DLOPEN_FAILED`) — ancak logda tesadüfen fark edildi.
+   *
+   * Üç durum ayrı tutulur, çünkü karışırlarsa sinyal değersizleşir:
+   *   available   → gömme hesaplandı, seçim tam yetenekle yapıldı
+   *   unavailable → gömme denendi ve BAŞARISIZ, seçim körlemesine yapıldı
+   *   cached      → bu turda gömme denenmedi; önceki bir turun kararı okundu
+   *
+   * `cached`, `available` sayılamaz: kayıt eski bir yetenek durumunu taşır.
+   * Öğrenme tarafı için de kritik — körlemesine verilmiş bir karardan,
+   * bilgiyle verilmiş bir karar gibi ders çıkarılmamalı.
+   */
+  embeddingState: "available" | "unavailable" | "cached";
 };
 
 function selectionCacheKey(query: string, probeCorpus: boolean): string {
@@ -169,5 +187,15 @@ export async function probeTypedKnowledgeSources(
       value.corpusDomains.length > 0,
   });
 
-  return { ...hydrateSelection(cached), queryVector: computedVector, cacheState };
+  return {
+    ...hydrateSelection(cached),
+    queryVector: computedVector,
+    cacheState,
+    embeddingState:
+      cacheState === "hit"
+        ? "cached"
+        : computedVector != null
+          ? "available"
+          : "unavailable",
+  };
 }
