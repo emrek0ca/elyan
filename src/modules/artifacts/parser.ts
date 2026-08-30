@@ -164,12 +164,27 @@ export function parseArtifactIntent(input: {
   understandingEnvelope?: UnderstandingEnvelope | null;
 }): ArtifactIntent {
   const text = compactText(input.userRequest);
-  const requiresDesktopRuntime =
-    hasLocalPrivateDataRequest(text) ||
-    input.understandingEnvelope?.risk.local_private === true ||
+  // EK VARSA DOSYA ZATEN BURADA.
+  //
+  // ÖLÇÜLEN ARIZA: "Ekteki son pdf'i özetle" masaüstü gerektiriyor sanılıyordu.
+  // Kelime deseni "son pdf"e takılıyor ve kullanıcı, dosyayı AZ ÖNCE kendi
+  // eliyle yüklemiş olmasına rağmen "bunun için masaüstü uygulaması lazım"
+  // cevabı alıyordu. Bu, olmayan bir engelin arkasında bırakmaktır.
+  //
+  // Kelime deseni bir İPUCUDUR; ekin varlığı ise bir OLGUDUR. Olgu ipucunu
+  // yener. Tipli yetenek katmanı açıkça masaüstü derse (dosya sistemine
+  // yazmak gibi) o karar korunur — orada ek, isteği karşılamaya yetmez.
+  const attachmentPresent =
+    readRecord(input.metadata)?.attachmentContextUsed === true;
+  const typedDesktopCapability =
     input.understandingEnvelope?.required_capabilities.some(
       (capability) => capability.executionSurface === "desktop",
     ) === true;
+  const requiresDesktopRuntime =
+    typedDesktopCapability ||
+    (!attachmentPresent &&
+      (hasLocalPrivateDataRequest(text) ||
+        input.understandingEnvelope?.risk.local_private === true));
   const type = detectArtifactType(text, input.metadata, input.understandingEnvelope);
   const envelopeType = outputKindFromEnvelope(input.understandingEnvelope);
   const source = envelopeType

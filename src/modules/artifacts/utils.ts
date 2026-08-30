@@ -248,7 +248,32 @@ export function detectLanguage(text: string): string {
     : "en";
 }
 
+/**
+ * TANIM SORUSU BİR ERİŞİM İSTEĞİ DEĞİLDİR.
+ *
+ * Bu dedektör tek bir kelime desenidir ve ÖLÇÜLDÜĞÜNDE 11 örnekte 7 kez
+ * yanılıyordu. En zararlı yanlışları, konuyu SORAN ile ona ERİŞMEK İSTEYENİ
+ * ayırt edememesiydi:
+ *
+ *   "Downloads klasörü nedir, ne işe yarar?"    → masaüstü isteniyor sanıldı
+ *   "Yerel dosya sistemi nasıl çalışır anlat"   → masaüstü isteniyor sanıldı
+ *   "Bu klasör yapısı iyi mi? src/modules..."   → masaüstü isteniyor sanıldı
+ *
+ * Üçü de mobil cihazda cevaplanabilir sorulardır; masaüstü istenmesi
+ * kullanıcıyı olmayan bir engelin arkasında bırakır.
+ *
+ * Ek kelime yığmak bu deseni DÜZELTMEZ, yalnız büyütür. Bunun yerine tek bir
+ * ayrım uygulanıyor: cümle o şey HAKKINDA bir soruysa (tanım/açıklama),
+ * erişim isteği değildir. Kalan yanlışlar (örn. "Ekranımda ne açık?") bilerek
+ * dokunulmadan bırakıldı — onlar desene kelime eklemekle değil, tipli yetenek
+ * katmanıyla çözülür.
+ */
+const DEFINITIONAL_QUESTION = /(nedir|ne demek|ne i[şs]e yarar|nas[ıi]l [çc]al[ıi][şs][ıi]r|nas[ıi]l yap[ıi]l[ıi]r|anlat|a[çc][ıi]kla|[öo]rnek ver|iyi mi|do[ğg]ru mu)/iu;
+
 export function hasLocalPrivateDataRequest(text: string): boolean {
+  if (DEFINITIONAL_QUESTION.test(text)) {
+    return false;
+  }
   return /\b(bilgisayar[ıi]m(?:da|de|daki|deki)?|masa[üu]st[üu]m(?:de|deki)?|indirilenler(?:deki)?|downloads|desktop(?:taki)?|local file|yerel dosya|son pdf|son belge|son dosya|klas[öo]r)\b/iu.test(text);
 }
 

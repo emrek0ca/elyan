@@ -5858,9 +5858,12 @@ async function completeServerBrainTask(
     userRequest: prompt,
     responseText: visibleResponseText,
     assistantBlocks: resolvedAssistantBlocks,
-    metadata: input.knowledgeNeed
-      ? { ...payloadMetadata, knowledgeNeed: input.knowledgeNeed }
-      : payloadMetadata,
+    metadata: {
+      ...payloadMetadata,
+      ...(input.knowledgeNeed ? { knowledgeNeed: input.knowledgeNeed } : {}),
+      // Ek varsa DOSYA ZATEN BURADA: o tur masaüstü çalışma zamanı istemez.
+      attachmentContextUsed: input.attachmentContextUsed === true,
+    },
     understandingEnvelope:
       extractUnderstandingEnvelopeFromMetadata(payloadMetadata),
     userId: input.userId,
