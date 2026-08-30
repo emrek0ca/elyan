@@ -91,10 +91,40 @@ export function summarizeCapabilityFamilies(
  * `desktopPaired` false ise masaüstü işleri yapılamayacağı DÜRÜSTÇE söylenir —
  * model "yaptım" diyemesin, ama "yapabilirim, cihazı bağla" diyebilsin.
  */
+/**
+ * ELYAN'IN O ANDAKİ KENDİ DURUMU — ÖLÇÜLEN, İDDİA EDİLEN DEĞİL.
+ *
+ * Bu blok bugüne kadar STATİK yeteneği anlatıyordu (masaüstü neler yapabilir).
+ * Elyan'ın KENDİ katmanlarının o an ayakta olup olmadığını hiç söylemiyordu.
+ * Sonuç: gömme işçisi öldüğünde kaynak seçimi körlemesine çalışıyor, cevap
+ * sessizce kötüleşiyor ve Elyan bunu bilmediği için kullanıcıya da
+ * söyleyemiyordu — üretimde tam olarak bu yaşandı (`ERR_DLOPEN_FAILED`).
+ *
+ * Satır YALNIZ bozulma varken eklenir. Her turda "her şey yolunda" demek
+ * gürültüdür ve modelin dikkatini bölerdi. Modülün mevcut ilkesi burada da
+ * geçerli: bilinmiyorsa bir şey iddia edilmez.
+ */
+export type RuntimeDegradation = {
+  /** Kaynak seçimi gömme olmadan yapıldı: seçim körlemesine. */
+  knowledgeSelectionBlind?: boolean;
+};
+
+function degradationLines(degraded?: RuntimeDegradation): string[] {
+  if (degraded?.knowledgeSelectionBlind !== true) return [];
+  return [
+    "ŞU ANKİ KISITIN: anlamsal kaynak seçimin çalışmıyor, bu turda kaynakları " +
+      "kelime eşleşmesiyle seçtin. Konuyla ilgili tipli kaynağı veya kayıtlı " +
+      "bilgiyi bulamamış olabilirsin. Kullanıcı neden böyle cevapladığını " +
+      "sorarsa bunu DÜRÜSTÇE söyle; uydurma bir gerekçe verme.",
+    "",
+  ];
+}
+
 export function buildEcosystemContextBlock(input: {
   /** true: bağlı · false: bağlı değil · null: bilinmiyor (iddia edilmez). */
   desktopPaired: boolean | null;
   manifest?: readonly DesktopCapabilityManifestEntry[];
+  degraded?: RuntimeDegradation;
 }): string {
   const families = summarizeCapabilityFamilies(
     input.manifest ?? DESKTOP_CAPABILITY_MANIFEST,
@@ -135,6 +165,7 @@ export function buildEcosystemContextBlock(input: {
       "masaüstünde yürür.",
     ...(desktopLine ? [desktopLine] : []),
     "",
+    ...degradationLines(input.degraded),
     "ELİNDEKİ YETENEK AİLELERİ (masaüstünde çalışır):",
     ...familyLines,
     "",

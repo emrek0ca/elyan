@@ -302,6 +302,7 @@ import {
   type SharedBrainProvider,
 } from "./runtime.js";
 import {
+  getSharedBrainFallbackWorkload,
   getSharedBrainWorkloadProfile,
   type SharedBrainWorkload,
 } from "./workloads.js";
@@ -7943,7 +7944,16 @@ export async function generateSharedBrainReply(
     // sistem olduğunu ve elindeki yetenekleri BİLSİN. Liste manifest'ten
     // türetilir; elle tutulsa yeni yetenek eklenince prompt yalan söylerdi.
     const ecosystemContextBlock = shouldIncludeDesktopRuntimeContext(input)
-      ? buildEcosystemContextBlock({ desktopPaired: null })
+      ? buildEcosystemContextBlock({
+          desktopPaired: null,
+          // Ölçülen durum: bu turda gömme denendi ve BAŞARISIZ olduysa kaynak
+          // seçimi körlemesine yapıldı. Önbellekten okunan karar (`cached`)
+          // bu sayılmaz — o, önceki bir turun sağlam kararıdır.
+          degraded: {
+            knowledgeSelectionBlind:
+              typedSourceProbe?.embeddingState === "unavailable",
+          },
+        })
       : null;
     const systemPrompt = buildStructuredSystemPrompt(
       retrievalBlock == null &&
@@ -12270,6 +12280,94 @@ async function tryGenerateSkillReply(
   };
 }
 
+/**
+ * KAÇIŞ KAPAĞI TANIMLIYDI AMA HİÇ AÇILMIYORDU.
+ *
+ * Her iş yükü profilinde `fallbackWorkload` alanı var ve
+ * `getSharedBrainFallbackWorkload` dışa açık — ama kod tabanında TEK BİR
+ * TÜKETİCİSİ YOKTU. Tam donanımlı bir yedek yol, hiç kullanılmıyordu.
+ *
+ * Bedeli canlıda ölçüldü (2026-08-30, görev d3d62fa8): "Bunu bana pdf olarak
+ * verir misin" turunda `document_generate` sağlayıcı zincirini tüketti ve
+ * kullanıcı "Şu anda düşünme servisine ulaşamıyorum" gördü. O iş yükünün
+ * `fallbackWorkload`'u `document_analysis` olarak ZATEN tanımlıydı ve
+ * denenmedi. Cevapsız kalmak, daha basit bir cevaptan iyi değildir.
+ *
+ * Kapı DAR tutuldu, çünkü her arıza yeniden denemeyi hak etmez:
+ *
+ *   ÇIKTI ŞEKLİ arızası (invalid_output / boş akış) → yeniden dene.
+ *     Model istenen biçimi üretemedi; DAHA BASİT bir sözleşmeyle üretebilir.
+ *
+ *   KAPASİTE arızası (rate_limited, devre açık, kimlik) → DENEME.
+ *     Sağlayıcı zaten yüklü; ikinci bir tur yalnız kullanıcıyı bekletir ve
+ *     yükü artırır.
+ *
+ * Tek sıçrama: yedeğin yedeği denenmez. `internalEvaluation.refinementPass`
+ * işareti ikinci turu iç geçiş olarak damgalar, böylece özyineleme olamaz.
+ */
+export function resolveWorkloadFallbackRetry(
+  error: unknown,
+  input: SharedBrainInferenceInput,
+): SharedBrainWorkload | null {
+  if (!(error instanceof AppError) || error.code !== "server_brain_unavailable") {
+    return null;
+  }
+  if (input.internalEvaluation?.refinementPass === true) return null;
+  const currentWorkload = input.workload;
+  if (!currentWorkload) return null;
+  const fallback = getSharedBrainFallbackWorkload(currentWorkload);
+  if (!fallback || fallback === currentWorkload) return null;
+
+  const details = readMetadataRecord(error.details);
+  const failureClass = String(details?.failureClass ?? "");
+  const attemptFailures = Array.isArray(details?.attemptFailures)
+    ? details.attemptFailures
+    : [];
+  const outputShapeFailure =
+    failureClass === "invalid_output" ||
+    attemptFailures.some((entry) => {
+      const record = readMetadataRecord(entry);
+      const reason = String(record?.reason ?? "");
+      const outcome = String(record?.outcome ?? "");
+      return (
+        outcome === "invalid_output" ||
+        reason.includes("json_validate_failed") ||
+        reason.includes("empty_stream_response")
+      );
+    });
+  return outputShapeFailure ? fallback : null;
+}
+
+async function generateSharedBrainReplyWithWorkloadFallback(
+  app: FastifyInstance,
+  input: SharedBrainInferenceInput,
+): Promise<SharedBrainInferenceResult> {
+  try {
+    return await generateSharedBrainReply(app, input);
+  } catch (error) {
+    const fallbackWorkload = resolveWorkloadFallbackRetry(error, input);
+    if (!fallbackWorkload) throw error;
+    app.log.warn(
+      {
+        workload: input.workload,
+        fallbackWorkload,
+        failureClass: readMetadataRecord(
+          error instanceof AppError ? error.details : null,
+        )?.failureClass,
+      },
+      "shared brain retrying on fallback workload",
+    );
+    return generateSharedBrainReply(app, {
+      ...input,
+      workload: fallbackWorkload,
+      internalEvaluation: {
+        ...input.internalEvaluation,
+        refinementPass: true,
+      },
+    });
+  }
+}
+
 export async function generateGovernedSharedBrainReply(
   app: FastifyInstance,
   input: SharedBrainInferenceInput,
@@ -12644,7 +12742,7 @@ export async function generateGovernedSharedBrainReply(
   // kontrolü, deterministik konektör denemesi, beceri yolu. Ölçülmemişti.
   endGovernedPreStage();
   const endCoreStage = startStage("chat.core_inference");
-  const inference = await generateSharedBrainReply(app, input);
+  const inference = await generateSharedBrainReplyWithWorkloadFallback(app, input);
   const factualityToolEvidence = inference.metadata.toolEvidence;
   endCoreStage();
   const endGovernedPostStage = startStage("chat.governed_post");
