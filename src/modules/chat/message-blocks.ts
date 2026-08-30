@@ -3125,10 +3125,28 @@ export function evaluateAssistantBlockQuality(input: {
   ).length;
   schemaInvalidBlockCount += normalizedSchemaInvalidCount;
 
-  const unrequestedTableBlockCount =
+  // `forbidden` GERÇEKTEN YASAK DEMEK.
+  //
+  // Bu sayaç ihlali ÖLÇÜYOR ve `unrequested_table_block` olarak kaydediyordu —
+  // sonra ihlal yine de kullanıcıya gidiyordu. Politikanın adı "forbidden",
+  // davranışı "kaydedilmiş uyarı"ydı. Bir sözleşme uygulanmıyorsa sözleşme
+  // değildir; hesaplanıp yok sayılan bir alan, olmayan bir alandan kötüdür,
+  // çünkü okuyan onun tuttuğunu sanır.
+  //
+  // Yalnız `forbidden` uygulanır. `explicit_only` altında tablo BİLEREK
+  // serbesttir (bkz. structured-output-policy: "gerçek çok satırlı veri
+  // kümesi gerektirir, yasak durum değil") ve orada bir şey değişmez.
+  //
+  // İçerik kaybolmaz: tablo düz metne çevrilip metnin sonuna eklenir.
+  // `forbidden` bugün yalnız belge turlarında çıkıyor ve asıl içeriği
+  // `document_block` taşıyor; yine de veriyi atmak yerine düzyazıya indirmek
+  // her iki durumda da doğru.
+  const forbiddenTableBlocks =
     input.tablePolicy === "forbidden"
-      ? normalizedBlocks.filter((block) => block.type === "table").length
-      : 0;
+      ? normalizedBlocks.filter((block) => block.type === "table")
+      : [];
+  const unrequestedTableBlockCount = forbiddenTableBlocks.length;
+
   const contentBlockOverlapCount =
     normalizedBlocks.some((block) => block.type === "table") &&
     looksLikeMarkdownTable(input.content ?? "")
@@ -3390,14 +3408,35 @@ export function validateAssistantBlockContract(input: {
   tablePolicy?: "forbidden" | "explicit_only";
   qualityBlocks?: unknown;
 }): AssistantBlockContractValidationResult {
-  const blocks =
+  const composed =
     input.mode === "normalize"
       ? normalizeAssistantMessageBlocks(input)
       : composeAssistantMessageBlocks(input);
+  // `forbidden` GERÇEKTEN YASAK DEMEK — ÖLÇÜLEN DEĞİL, UYGULANAN.
+  //
+  // Bu politika hesaplanıyor, ihlali `unrequested_table_block` olarak
+  // KAYDEDİLİYOR, sonra ihlal yine de kullanıcıya gönderiliyordu. Adı
+  // "forbidden", davranışı "kaydedilmiş uyarı"ydı. Uygulanmayan bir sözleşme
+  // sözleşme değildir; okuyan kişi onun tuttuğunu sanır ve o yanlış varsayım
+  // üstüne kod yazar.
+  //
+  // YALNIZ `forbidden` uygulanır. `explicit_only` altında tablo BİLEREK
+  // serbesttir (structured-output-policy: "gerçek çok satırlı veri kümesi
+  // gerektirir, yasak durum değil") ve orada hiçbir şey değişmez. Bugün
+  // `forbidden` yalnız belge turlarında çıkıyor; orada asıl içeriği
+  // `document_block` taşır, yani başıboş bir tablo widget'ı düşmekle veri
+  // kaybolmaz.
+  const blocks =
+    input.tablePolicy === "forbidden"
+      ? composed.filter((block) => block.type !== "table")
+      : composed;
   const blockQuality = evaluateAssistantBlockQuality({
     blocks: input.qualityBlocks ?? input.blocks,
     content: input.content,
-    normalizedBlocks: blocks,
+    // Değerlendirici FİLTRELENMEMİŞ listeyi görür: ihlali kaydetmek için
+    // ihlalin kendisini görmesi gerekir. Uygulama aşağıda, ölçüm burada —
+    // ikisi karışırsa yasak tablo sessizce düşer ve model asla öğrenmez.
+    normalizedBlocks: composed,
     tablePolicy: input.tablePolicy,
   });
 
